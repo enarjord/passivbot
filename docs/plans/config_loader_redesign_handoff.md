@@ -247,7 +247,7 @@ Responsibilities:
 
 This is where keys like:
 
-- `forager_volume_ema_span` -> internal/runtime `filter_volume_ema_span`
+- `forager_volume_ema_span_1m` -> internal/runtime `filter_volume_ema_span_1m`
 
 should be created if still needed.
 

@@ -139,8 +139,8 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
     assert "backtest" not in prepared
     assert prepared["live"]["user"] == "test_user"
-    assert prepared["bot"]["long"]["filter_volume_ema_span"] == pytest.approx(
-        prepared["bot"]["long"]["forager"]["volume_ema_span"]
+    assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == pytest.approx(
+        prepared["bot"]["long"]["forager"]["volume_ema_span_1m"]
     )
     assert prepared["_raw"] == raw_snapshot
     assert prepared["_raw_effective"]["live"]["user"] == "test_user"
@@ -149,15 +149,15 @@ def test_prepare_config_preserves_raw_snapshot_and_effective_input():
 
 def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     config = get_template_config()
-    config["bot"]["long"]["forager"].pop("volume_ema_span", None)
-    config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span", None)
+    config["bot"]["long"]["forager"].pop("volume_ema_span_1m", None)
+    config["optimize"]["bounds"]["long"]["forager"].pop("volume_ema_span_1m", None)
 
     _ensure_bot_defaults_and_bounds(config, verbose=False)
 
-    assert config["bot"]["long"]["forager"]["volume_ema_span"] == pytest.approx(
-        get_template_config()["bot"]["long"]["forager"]["volume_ema_span"]
+    assert config["bot"]["long"]["forager"]["volume_ema_span_1m"] == pytest.approx(
+        get_template_config()["bot"]["long"]["forager"]["volume_ema_span_1m"]
     )
-    assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span"] == [360, 2880, 10]
+    assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"] == [360, 2880, 10]
 
 
 def test_rename_config_keys_moves_legacy_fields():
@@ -620,7 +620,7 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
         "bot": {
             "long": {
                 "filter_noisiness_rolling_window": 42,
-                "filter_volatility_ema_span": 84,
+                "filter_volatility_ema_span_1m": 84,
                 "filter_volume_rolling_window": 21,
             },
             "short": {"filter_volume_rolling_window": 11},
@@ -636,14 +636,14 @@ def test_apply_backward_compatibility_renames_moves_filter_keys():
     _apply_backward_compatibility_renames(config, verbose=False)
 
     assert "filter_noisiness_rolling_window" not in config["bot"]["long"]
-    assert config["bot"]["long"]["forager_volatility_ema_span"] == 84
-    assert config["bot"]["long"]["forager_volume_ema_span"] == 21
-    assert config["bot"]["short"]["forager_volume_ema_span"] == 11
+    assert config["bot"]["long"]["forager_volatility_ema_span_1m"] == 84
+    assert config["bot"]["long"]["forager_volume_ema_span_1m"] == 21
+    assert config["bot"]["short"]["forager_volume_ema_span_1m"] == 11
     bounds = config["optimize"]["bounds"]
     assert "long_filter_noisiness_rolling_window" not in bounds
-    assert bounds["long_forager_volatility_ema_span"] == [10, 20]
+    assert bounds["long_forager_volatility_ema_span_1m"] == [10, 20]
     assert "short_filter_volume_rolling_window" not in bounds
-    assert bounds["short_forager_volume_ema_span"] == [30, 40]
+    assert bounds["short_forager_volume_ema_span_1m"] == [30, 40]
 
 
 def test_compile_runtime_config_adds_internal_forager_aliases():
@@ -653,9 +653,9 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert "risk_wel_enforcer_threshold" not in config["bot"]["long"]
     assert "unstuck_threshold" not in config["bot"]["long"]
     assert "hsl_red_threshold" not in config["bot"]["long"]
-    assert "forager_volume_ema_span" not in config["bot"]["long"]
-    assert "filter_volume_ema_span" not in config["bot"]["long"]
-    assert "long_filter_volume_ema_span" not in config["optimize"]["bounds"]
+    assert "forager_volume_ema_span_1m" not in config["bot"]["long"]
+    assert "filter_volume_ema_span_1m" not in config["bot"]["long"]
+    assert "long_filter_volume_ema_span_1m" not in config["optimize"]["bounds"]
 
     compiled = compile_runtime_config(config, runtime="live")
 
@@ -669,15 +669,15 @@ def test_compile_runtime_config_adds_internal_forager_aliases():
     assert compiled["bot"]["long"]["hsl_red_threshold"] == config["bot"]["long"]["hsl"][
         "red_threshold"
     ]
-    assert compiled["bot"]["long"]["filter_volume_ema_span"] == config["bot"]["long"][
+    assert compiled["bot"]["long"]["filter_volume_ema_span_1m"] == config["bot"]["long"][
         "forager"
-    ]["volume_ema_span"]
-    assert compiled["bot"]["long"]["forager_volume_ema_span"] == config["bot"]["long"]["forager"][
-        "volume_ema_span"
+    ]["volume_ema_span_1m"]
+    assert compiled["bot"]["long"]["forager_volume_ema_span_1m"] == config["bot"]["long"]["forager"][
+        "volume_ema_span_1m"
     ]
-    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == config["bot"]["long"][
+    assert compiled["bot"]["long"]["filter_volatility_ema_span_1m"] == config["bot"]["long"][
         "forager"
-    ]["volatility_ema_span"]
+    ]["volatility_ema_span_1m"]
     assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(config, "long")["ema_span_0"]
 
 

@@ -1302,11 +1302,10 @@ mod core {
                 require_forager_input(
                     s.symbol_idx,
                     "forager_volume_score",
-                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span).ok_or(
-                        OrchestratorError::MissingEma {
+                    ema_lookup(&s.emas.m1.volume, side.bot_params.filter_volume_ema_span_1m)
+                        .ok_or(OrchestratorError::MissingEma {
                             symbol_idx: s.symbol_idx,
-                        },
-                    )?,
+                        })?,
                 )?
             } else {
                 0.0
@@ -1317,7 +1316,7 @@ mod core {
                     "forager_volatility_score",
                     ema_lookup(
                         &s.emas.m1.log_range,
-                        side.bot_params.filter_volatility_ema_span,
+                        side.bot_params.filter_volatility_ema_span_1m,
                     )
                     .ok_or(OrchestratorError::MissingEma {
                         symbol_idx: s.symbol_idx,
@@ -2998,9 +2997,9 @@ mod core {
             let mut bp = BotParams::default();
             bp.ema_span_0 = 10.0;
             bp.ema_span_1 = 20.0;
-            bp.entry_volatility_ema_span_hours = 1.0;
-            bp.filter_volume_ema_span = 10.0;
-            bp.filter_volatility_ema_span = 10.0;
+            bp.entry_volatility_ema_span_1h = 1.0;
+            bp.filter_volume_ema_span_1m = 10.0;
+            bp.filter_volatility_ema_span_1m = 10.0;
             bp.total_wallet_exposure_limit = 1.0;
             bp.n_positions = 1;
             bp.wallet_exposure_limit = 1.0;
@@ -3918,8 +3917,8 @@ mod core {
             global_bp.long.total_wallet_exposure_limit = 1000.0;
             global_bp.long.n_positions = 4;
             global_bp.long.forager_volume_drop_pct = 0.0;
-            global_bp.long.filter_volume_ema_span = 10.0;
-            global_bp.long.filter_volatility_ema_span = 10.0;
+            global_bp.long.filter_volume_ema_span_1m = 10.0;
+            global_bp.long.filter_volatility_ema_span_1m = 10.0;
             // disable short for this test
             global_bp.short.total_wallet_exposure_limit = 0.0;
             global_bp.short.n_positions = 0;

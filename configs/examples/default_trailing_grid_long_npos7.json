@@ -180,9 +180,9 @@
                     "volatility": 0.71,
                     "volume": 0.23
                 },
-                "volatility_ema_span": 226,
+                "volatility_ema_span_1m": 226,
                 "volume_drop_pct": 0.43,
-                "volume_ema_span": 2850
+                "volume_ema_span_1m": 2850
             },
             "hsl": {
                 "cooldown_minutes_after_red": 2101,
@@ -211,8 +211,8 @@
                 "trailing_martingale": {
                     "ema_span_0": 770,
                     "ema_span_1": 210,
-                    "volatility_ema_span_hours": 1690,
-                    "volatility_ema_span_minutes": 60.0,
+                    "volatility_ema_span_1h": 1690,
+                    "volatility_ema_span_1m": 60.0,
                     "entry": {
                         "double_down_factor": 0.73,
                         "initial_ema_dist": 0.0097,
@@ -253,9 +253,9 @@
                     "volatility": 0.7252747252747253,
                     "volume": 0.054945054945054944
                 },
-                "volatility_ema_span": 392,
+                "volatility_ema_span_1m": 392,
                 "volume_drop_pct": 0.69,
-                "volume_ema_span": 2640
+                "volume_ema_span_1m": 2640
             },
             "hsl": {
                 "cooldown_minutes_after_red": 1471,
@@ -284,8 +284,8 @@
                 "trailing_martingale": {
                     "ema_span_0": 100,
                     "ema_span_1": 100,
-                    "volatility_ema_span_hours": 672,
-                    "volatility_ema_span_minutes": 60.0,
+                    "volatility_ema_span_1h": 672,
+                    "volatility_ema_span_1m": 60.0,
                     "entry": {
                         "double_down_factor": 0.5,
                         "initial_ema_dist": -0.01,
@@ -478,7 +478,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -488,7 +488,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -554,12 +554,12 @@
                             1440,
                             10
                         ],
-                        "volatility_ema_span_hours": [
+                        "volatility_ema_span_1h": [
                             672,
                             2016,
                             1
                         ],
-                        "volatility_ema_span_minutes": [
+                        "volatility_ema_span_1m": [
                             5,
                             720,
                             1
@@ -705,7 +705,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -715,7 +715,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -781,12 +781,12 @@
                             1440,
                             10
                         ],
-                        "volatility_ema_span_hours": [
+                        "volatility_ema_span_1h": [
                             672,
                             2016,
                             1
                         ],
-                        "volatility_ema_span_minutes": [
+                        "volatility_ema_span_1m": [
                             5,
                             720,
                             1

@@ -193,8 +193,8 @@ Recommended canonical shape:
         "we_excess_allowance_pct": 0.0
       },
       "forager": {
-        "volume_ema_span": 360.0,
-        "volatility_ema_span": 60.0,
+        "volume_ema_span_1m": 360.0,
+        "volatility_ema_span_1m": 60.0,
         "volume_drop_pct": 0.5,
         "score_weights": {
           "volume": 0.0,
@@ -233,8 +233,8 @@ Recommended canonical shape:
         "we_excess_allowance_pct": 0.0
       },
       "forager": {
-        "volume_ema_span": 360.0,
-        "volatility_ema_span": 60.0,
+        "volume_ema_span_1m": 360.0,
+        "volatility_ema_span_1m": 60.0,
         "volume_drop_pct": 0.5,
         "score_weights": {
           "volume": 0.0,
@@ -334,8 +334,8 @@ pub struct SharedBotParams {
     pub risk_twel_enforcer_threshold: f64,
     pub risk_wel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
-    pub forager_volume_ema_span: f64,
-    pub forager_volatility_ema_span: f64,
+    pub forager_volume_ema_span_1m: f64,
+    pub forager_volatility_ema_span_1m: f64,
     pub forager_volume_drop_pct: f64,
     pub forager_score_weights: ForagerScoreWeights,
     pub unstuck_close_pct: f64,

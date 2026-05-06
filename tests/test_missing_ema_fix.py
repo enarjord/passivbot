@@ -188,17 +188,17 @@ def _rust_bot_params(**overrides):
         "entry_weight_volatility_1m": 0.0,
         "entry_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_hours": 0.0,
-        "entry_volatility_ema_span_minutes": 60.0,
+        "entry_volatility_ema_span_1h": 0.0,
+        "entry_volatility_ema_span_1m": 60.0,
         "entry_initial_ema_dist": 0.0,
         "entry_initial_qty_pct": 0.1,
         "entry_trailing_double_down_factor": 0.0,
         "entry_trailing_retracement_pct": 0.0,
         "entry_trailing_grid_ratio": 0.0,
         "entry_trailing_threshold_pct": 0.0,
-        "filter_volatility_ema_span": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span": 10.0,
+        "filter_volume_ema_span_1m": 10.0,
         "filter_volume_drop_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
@@ -221,8 +221,8 @@ def _rust_strategy_params(**overrides):
     params = {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
-        "volatility_ema_span_hours": 0.0,
-        "volatility_ema_span_minutes": 60.0,
+        "volatility_ema_span_1h": 0.0,
+        "volatility_ema_span_1m": 60.0,
         "entry": {
             "double_down_factor": 1.0,
             "initial_ema_dist": 0.0,
@@ -248,7 +248,7 @@ def _rust_strategy_params(**overrides):
         },
     }
     legacy_map = {
-        "entry_volatility_ema_span_hours": ("volatility_ema_span_hours",),
+        "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
         "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
     }
     for key, value in overrides.items():
@@ -405,28 +405,28 @@ class _BundleReproBot:
             return 10.0
         if key == "ema_span_1":
             return 20.0
-        if key in {"entry_volatility_ema_span_hours", "volatility_ema_span_hours"}:
+        if key in {"entry_volatility_ema_span_1h", "volatility_ema_span_1h"}:
             return self.entry_h1_span_hours
         return 0.0
 
     def _strategy_params_to_rust_dict(self, pside, symbol=None):
         return _rust_strategy_params(
-            entry_volatility_ema_span_hours=self.entry_h1_span_hours,
+            entry_volatility_ema_span_1h=self.entry_h1_span_hours,
             entry_weight_volatility_1h=1.0 if self.entry_h1_span_hours > 0.0 else 0.0,
         )
 
     def _strategy_value(self, pside, key, symbol=None):
         params = self._strategy_params_to_rust_dict(pside, symbol)
-        if key == "volatility_ema_span_hours":
+        if key == "volatility_ema_span_1h":
             return params[key]
-        if key == "entry_volatility_ema_span_hours":
-            return params["volatility_ema_span_hours"]
+        if key == "entry_volatility_ema_span_1h":
+            return params["volatility_ema_span_1h"]
         return params[key]
 
     def bot_value(self, pside, key):
-        if key == "filter_volume_ema_span":
+        if key == "filter_volume_ema_span_1m":
             return 10.0
-        if key == "filter_volatility_ema_span":
+        if key == "filter_volatility_ema_span_1m":
             return 10.0
         return 0.0
 

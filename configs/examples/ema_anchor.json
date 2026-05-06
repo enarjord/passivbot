@@ -37,9 +37,9 @@
         "long": {
             "forager": {
                 "score_weights": {"ema_readiness":0.0,"volatility":1.0,"volume":0.0},
-                "volatility_ema_span": 225,
+                "volatility_ema_span_1m": 225,
                 "volume_drop_pct": 0.57,
-                "volume_ema_span": 520
+                "volume_ema_span_1m": 520
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
@@ -67,12 +67,12 @@
                     "ema_span_0": 100,
                     "ema_span_1": 570,
                     "entry_double_down_factor": 0,
-                    "entry_volatility_ema_span_hours": 24,
+                    "entry_volatility_ema_span_1h": 24,
                     "offset": 0.015,
                     "offset_psize_weight": 0.7,
                     "offset_volatility_1h_weight": 0,
                     "offset_volatility_1m_weight": 0,
-                    "offset_volatility_ema_span_minutes": 60
+                    "offset_volatility_ema_span_1m": 60
                 }
             },
             "unstuck": {
@@ -86,9 +86,9 @@
         "short": {
             "forager": {
                 "score_weights": {"ema_readiness":0.0,"volatility":1.0,"volume":0.0},
-                "volatility_ema_span": 10,
+                "volatility_ema_span_1m": 10,
                 "volume_drop_pct": 0.5,
-                "volume_ema_span": 360
+                "volume_ema_span_1m": 360
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
@@ -116,12 +116,12 @@
                     "ema_span_0": 63,
                     "ema_span_1": 636,
                     "entry_double_down_factor": 0,
-                    "entry_volatility_ema_span_hours": 24,
+                    "entry_volatility_ema_span_1h": 24,
                     "offset": 0.0115,
                     "offset_psize_weight": 0.74,
                     "offset_volatility_1h_weight": 0,
                     "offset_volatility_1m_weight": 0,
-                    "offset_volatility_ema_span_minutes": 60
+                    "offset_volatility_ema_span_1m": 60
                 }
             },
             "unstuck": {
@@ -211,9 +211,9 @@
                     "score_weights_ema_readiness": [0,1,0.01],
                     "score_weights_volatility": [0,1,0.01],
                     "score_weights_volume": [0,1,0.01],
-                    "volatility_ema_span": [10,720,1],
+                    "volatility_ema_span_1m": [10,720,1],
                     "volume_drop_pct": [0.4,1,0.01],
-                    "volume_ema_span": [360,2880,10]
+                    "volume_ema_span_1m": [360,2880,10]
                 },
                 "hsl": {
                     "cooldown_minutes_after_red": [1,2880,10],
@@ -234,12 +234,12 @@
                         "ema_span_0": [30,2880,1],
                         "ema_span_1": [30,2880,1],
                         "entry_double_down_factor": [0,2,0.01],
-                        "entry_volatility_ema_span_hours": [1,672,1],
+                        "entry_volatility_ema_span_1h": [1,672,1],
                         "offset": [0.0001,0.02,0.0001],
                         "offset_psize_weight": [0,5,0.0001],
                         "offset_volatility_1h_weight": [0,20,0.1],
                         "offset_volatility_1m_weight": [0,20,0.1],
-                        "offset_volatility_ema_span_minutes": [5,720,1]
+                        "offset_volatility_ema_span_1m": [5,720,1]
                     }
                 },
                 "unstuck": {
@@ -254,9 +254,9 @@
                     "score_weights_ema_readiness": [0,1,0.01],
                     "score_weights_volatility": [0,1,0.01],
                     "score_weights_volume": [0,1,0.01],
-                    "volatility_ema_span": [10,720,1],
+                    "volatility_ema_span_1m": [10,720,1],
                     "volume_drop_pct": [0.4,1,0.01],
-                    "volume_ema_span": [360,2880,10]
+                    "volume_ema_span_1m": [360,2880,10]
                 },
                 "hsl": {
                     "cooldown_minutes_after_red": [1,2880,10],
@@ -277,12 +277,12 @@
                         "ema_span_0": [10,2880,1],
                         "ema_span_1": [10,2880,1],
                         "entry_double_down_factor": [0,2,0.01],
-                        "entry_volatility_ema_span_hours": [1,672,1],
+                        "entry_volatility_ema_span_1h": [1,672,1],
                         "offset": [0.0001,0.02,0.0001],
                         "offset_psize_weight": [0,5,0.0001],
                         "offset_volatility_1h_weight": [0,20,0.1],
                         "offset_volatility_1m_weight": [0,20,0.1],
-                        "offset_volatility_ema_span_minutes": [5,720,1]
+                        "offset_volatility_ema_span_1m": [5,720,1]
                     }
                 },
                 "unstuck": {

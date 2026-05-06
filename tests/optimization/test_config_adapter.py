@@ -167,7 +167,7 @@ class TestConfigAdapter:
         assert spec["strategy_kind"] == "ema_anchor"
         assert spec["defaults"]["long"]["base_qty_pct"] == 0.01
         assert spec["defaults"]["short"]["offset"] == 0.002
-        assert spec["defaults"]["long"]["offset_volatility_ema_span_minutes"] == 60.0
+        assert spec["defaults"]["long"]["offset_volatility_ema_span_1m"] == 60.0
         assert spec["optimize_bounds"]["long_offset"] == [0.0, 0.05, 0.0001]
         assert spec["optimize_bounds"]["long_offset_volatility_1m_weight"] == [0.0, 40.0, 0.1]
         assert any(
@@ -247,9 +247,9 @@ class TestConfigAdapter:
                             "ema_span_0": 55.0,
                             "ema_span_1": 144.0,
                             "offset": 0.002,
-                            "offset_volatility_ema_span_minutes": 30.0,
+                            "offset_volatility_ema_span_1m": 30.0,
                             "offset_volatility_1m_weight": 2.0,
-                            "entry_volatility_ema_span_hours": 12.0,
+                            "entry_volatility_ema_span_1h": 12.0,
                             "offset_volatility_1h_weight": 1.5,
                             "offset_psize_weight": 0.1,
                         }
@@ -264,9 +264,9 @@ class TestConfigAdapter:
                             "ema_span_0": 34.0,
                             "ema_span_1": 89.0,
                             "offset": 0.003,
-                            "offset_volatility_ema_span_minutes": 45.0,
+                            "offset_volatility_ema_span_1m": 45.0,
                             "offset_volatility_1m_weight": 3.0,
-                            "entry_volatility_ema_span_hours": 18.0,
+                            "entry_volatility_ema_span_1h": 18.0,
                             "offset_volatility_1h_weight": 0.5,
                             "offset_psize_weight": 0.2,
                         }

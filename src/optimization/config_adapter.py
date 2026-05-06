@@ -18,10 +18,10 @@ from config.strategy import get_active_strategy_config, normalize_strategy_kind
 from optimization.bounds import Bound
 
 OPTIMIZABLE_BOT_KEY_PATHS = {
-    "long_forager_volume_ema_span": ("bot", "long", "forager", "volume_ema_span"),
-    "long_filter_volume_ema_span": ("bot", "long", "forager", "volume_ema_span"),
-    "long_forager_volatility_ema_span": ("bot", "long", "forager", "volatility_ema_span"),
-    "long_filter_volatility_ema_span": ("bot", "long", "forager", "volatility_ema_span"),
+    "long_forager_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
+    "long_filter_volume_ema_span_1m": ("bot", "long", "forager", "volume_ema_span_1m"),
+    "long_forager_volatility_ema_span_1m": ("bot", "long", "forager", "volatility_ema_span_1m"),
+    "long_filter_volatility_ema_span_1m": ("bot", "long", "forager", "volatility_ema_span_1m"),
     "long_forager_score_weights_volume": ("bot", "long", "forager", "score_weights", "volume"),
     "long_forager_score_weights_ema_readiness": (
         "bot",
@@ -52,17 +52,17 @@ OPTIMIZABLE_BOT_KEY_PATHS = {
         "score_weights",
         "volatility",
     ),
-    "short_forager_volume_ema_span": ("bot", "short", "forager", "volume_ema_span"),
-    "short_filter_volume_ema_span": ("bot", "short", "forager", "volume_ema_span"),
-    "short_forager_volatility_ema_span": ("bot", "short", "forager", "volatility_ema_span"),
-    "short_filter_volatility_ema_span": ("bot", "short", "forager", "volatility_ema_span"),
+    "short_forager_volume_ema_span_1m": ("bot", "short", "forager", "volume_ema_span_1m"),
+    "short_filter_volume_ema_span_1m": ("bot", "short", "forager", "volume_ema_span_1m"),
+    "short_forager_volatility_ema_span_1m": ("bot", "short", "forager", "volatility_ema_span_1m"),
+    "short_filter_volatility_ema_span_1m": ("bot", "short", "forager", "volatility_ema_span_1m"),
 }
 
 DEPRECATED_OPTIMIZE_BOUND_ALIASES = {
-    "long_filter_volume_ema_span": "long_forager_volume_ema_span",
-    "long_filter_volatility_ema_span": "long_forager_volatility_ema_span",
-    "short_filter_volume_ema_span": "short_forager_volume_ema_span",
-    "short_filter_volatility_ema_span": "short_forager_volatility_ema_span",
+    "long_filter_volume_ema_span_1m": "long_forager_volume_ema_span_1m",
+    "long_filter_volatility_ema_span_1m": "long_forager_volatility_ema_span_1m",
+    "short_filter_volume_ema_span_1m": "short_forager_volume_ema_span_1m",
+    "short_filter_volatility_ema_span_1m": "short_forager_volatility_ema_span_1m",
 }
 
 

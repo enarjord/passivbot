@@ -137,7 +137,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0": 48,
                         "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 12,
+                        "entry_volatility_ema_span_1h": 12,
                         "offset": 0.003,
                     }
                 }
@@ -147,7 +147,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0": 48,
                         "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 12,
+                        "entry_volatility_ema_span_1h": 12,
                         "offset": 0.003,
                     }
                 }
@@ -184,7 +184,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0": 48,
                         "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 12,
+                        "entry_volatility_ema_span_1h": 12,
                         "offset": 0.01,
                     }
                 }
@@ -194,7 +194,7 @@ def test_dataset_signature_changes_for_dataset_affecting_config():
                     "ema_anchor": {
                         "ema_span_0": 48,
                         "ema_span_1": 60,
-                        "entry_volatility_ema_span_hours": 12,
+                        "entry_volatility_ema_span_1h": 12,
                         "offset": 0.003,
                     }
                 }

@@ -36,8 +36,8 @@ def test_clean_config_removes_internal_sections_and_keeps_user_values():
     assert "_raw_effective" not in cleaned
     assert cleaned["bot"]["long"]["risk"]["n_positions"] == 5
     assert cleaned["bot"]["short"]["risk"]["n_positions"] == 3
-    assert cleaned["bot"]["long"]["forager"]["volume_ema_span"] == template["bot"]["long"]["forager"][
-        "volume_ema_span"
+    assert cleaned["bot"]["long"]["forager"]["volume_ema_span_1m"] == template["bot"]["long"]["forager"][
+        "volume_ema_span_1m"
     ]
     assert (
         cleaned["bot"]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]

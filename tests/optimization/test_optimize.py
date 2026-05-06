@@ -703,8 +703,8 @@ class TestIndividualToConfig:
                         "total_wallet_exposure_limit": 0.55,
                     },
                     "forager": {
-                        "volume_ema_span": 520,
-                        "volatility_ema_span": 225,
+                        "volume_ema_span_1m": 520,
+                        "volatility_ema_span_1m": 225,
                         "volume_drop_pct": 0.57,
                         "score_weights": {
                             "volume": 0.0,
@@ -736,8 +736,8 @@ class TestIndividualToConfig:
                         "total_wallet_exposure_limit": 0.25,
                     },
                     "forager": {
-                        "volume_ema_span": 360,
-                        "volatility_ema_span": 10,
+                        "volume_ema_span_1m": 360,
+                        "volatility_ema_span_1m": 10,
                         "volume_drop_pct": 0.5,
                         "score_weights": {
                             "volume": 0.2,
@@ -822,8 +822,8 @@ class TestIndividualToConfig:
                 "long": {
                     "risk": {"n_positions": 1, "total_wallet_exposure_limit": 0.9},
                     "forager": {
-                        "volume_ema_span": 520,
-                        "volatility_ema_span": 225,
+                        "volume_ema_span_1m": 520,
+                        "volatility_ema_span_1m": 225,
                         "score_weights": {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0},
                     },
                     "strategy": {
@@ -834,8 +834,8 @@ class TestIndividualToConfig:
                 "short": {
                     "risk": {"n_positions": 2, "total_wallet_exposure_limit": 0.1},
                     "forager": {
-                        "volume_ema_span": 10,
-                        "volatility_ema_span": 20,
+                        "volume_ema_span_1m": 10,
+                        "volatility_ema_span_1m": 20,
                         "score_weights": {"volume": 0.1, "ema_readiness": 0.2, "volatility": 0.7},
                     },
                     "strategy": {

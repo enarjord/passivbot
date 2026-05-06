@@ -346,8 +346,8 @@ def test_format_config_preserves_nested_strategy_bounds_before_hydration():
 def test_format_config_legacy_omissions_disable_newer_bot_features():
     current = copy.deepcopy(_template())
     trailing_martingale = current["bot"]["long"]["strategy"]["trailing_martingale"]
-    trailing_martingale.pop("volatility_ema_span_hours")
-    trailing_martingale.pop("volatility_ema_span_minutes")
+    trailing_martingale.pop("volatility_ema_span_1h")
+    trailing_martingale.pop("volatility_ema_span_1m")
     for key in (
         "threshold_volatility_1h_weight",
         "threshold_volatility_1m_weight",
@@ -357,8 +357,8 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
         trailing_martingale["entry"].pop(key)
     for key in ("threshold_volatility_1h_weight", "retracement_base_pct"):
         trailing_martingale["close"].pop(key)
-    current["bot"]["long"]["forager"].pop("volatility_ema_span")
-    current["bot"]["long"]["forager"].pop("volume_ema_span")
+    current["bot"]["long"]["forager"].pop("volatility_ema_span_1m")
+    current["bot"]["long"]["forager"].pop("volume_ema_span_1m")
     current["bot"]["long"]["hsl"].pop("panic_close_order_type")
     current["bot"]["long"]["risk"].pop("total_exposure_enforcer_threshold")
     current["bot"]["long"]["risk"].pop("we_excess_allowance_pct")
@@ -372,16 +372,16 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
 
     long_cfg = out["bot"]["long"]
     long_strategy = long_cfg["strategy"]["trailing_martingale"]
-    assert long_strategy["volatility_ema_span_hours"] == pytest.approx(1690)
-    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(60.0)
+    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(1690)
+    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(60.0)
     assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(2.4)
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(0.0)
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(0.135)
     assert long_strategy["entry"]["retracement_base_pct"] == pytest.approx(0.0)
     assert long_strategy["close"]["threshold_volatility_1h_weight"] == pytest.approx(1.0)
     assert long_strategy["close"]["retracement_base_pct"] == pytest.approx(0.0)
-    assert long_cfg["forager"]["volatility_ema_span"] == pytest.approx(225.0)
-    assert long_cfg["forager"]["volume_ema_span"] == pytest.approx(520.0)
+    assert long_cfg["forager"]["volatility_ema_span_1m"] == pytest.approx(225.0)
+    assert long_cfg["forager"]["volume_ema_span_1m"] == pytest.approx(520.0)
     assert long_cfg["hsl"]["panic_close_order_type"] == "limit"
     assert long_cfg["risk"]["total_exposure_enforcer_threshold"] == pytest.approx(1.0)
     assert long_cfg["risk"]["we_excess_allowance_pct"] == pytest.approx(0.37)

@@ -21,6 +21,12 @@ Canonical v8 config path:
 bot.<side>.strategy.trailing_martingale
 ```
 
+Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
+for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
+`volatility_ema_span_1m`, `volatility_ema_span_1h`, `forager_volume_ema_span_1m`, and
+`forager_volatility_ema_span_1m`. Generic strategy EMA spans such as `ema_span_0` and `ema_span_1`
+remain unsuffixed because their timeframe comes from the strategy's base candle stream.
+
 ## Trailing Martingale Semantics
 
 Entries and closes use threshold/retracement fields.

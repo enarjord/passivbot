@@ -32,17 +32,17 @@ CLIFF_EDGE_THRESHOLD_KEYS = (
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
-    "forager_volatility_ema_span": "filter_volatility_ema_span",
-    "forager_volume_ema_span": "filter_volume_ema_span",
+    "forager_volatility_ema_span_1m": "filter_volatility_ema_span_1m",
+    "forager_volume_ema_span_1m": "filter_volume_ema_span_1m",
     "forager_volume_drop_pct": "filter_volume_drop_pct",
 }
 
 FORAGER_CANONICAL_TO_INTERNAL_BOUND_KEYS = {
-    "long_forager_volatility_ema_span": "long_filter_volatility_ema_span",
-    "long_forager_volume_ema_span": "long_filter_volume_ema_span",
+    "long_forager_volatility_ema_span_1m": "long_filter_volatility_ema_span_1m",
+    "long_forager_volume_ema_span_1m": "long_filter_volume_ema_span_1m",
     "long_forager_volume_drop_pct": "long_filter_volume_drop_pct",
-    "short_forager_volatility_ema_span": "short_filter_volatility_ema_span",
-    "short_forager_volume_ema_span": "short_filter_volume_ema_span",
+    "short_forager_volatility_ema_span_1m": "short_filter_volatility_ema_span_1m",
+    "short_forager_volume_ema_span_1m": "short_filter_volume_ema_span_1m",
     "short_forager_volume_drop_pct": "short_filter_volume_drop_pct",
 }
 
@@ -652,18 +652,18 @@ def validate_forager_config(
             )
 
         if pside_enabled and (normalized["volume"] > 0.0 or drop_pct > 0.0):
-            volume_span = float(forager_cfg["volume_ema_span"])
+            volume_span = float(forager_cfg["volume_ema_span_1m"])
             if not math.isfinite(volume_span) or volume_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volume_ema_span must be > 0 when "
+                    f"bot.{pside}.forager.volume_ema_span_1m must be > 0 when "
                     "forager volume ranking or volume pruning is enabled"
                 )
 
         if pside_enabled and normalized["volatility"] > 0.0:
-            volatility_span = float(forager_cfg["volatility_ema_span"])
+            volatility_span = float(forager_cfg["volatility_ema_span_1m"])
             if not math.isfinite(volatility_span) or volatility_span <= 0.0:
                 raise ValueError(
-                    f"bot.{pside}.forager.volatility_ema_span must be > 0 when "
+                    f"bot.{pside}.forager.volatility_ema_span_1m must be > 0 when "
                     "forager volatility ranking is enabled"
                 )
 

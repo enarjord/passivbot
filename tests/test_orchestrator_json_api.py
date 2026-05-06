@@ -24,8 +24,8 @@ ADAPTIVE_STRATEGY_KEYS = {
     "close_weight_volatility_1m",
     "entry_grid_double_down_factor",
     "entry_grid_spacing_pct",
-    "entry_volatility_ema_span_hours",
-    "entry_volatility_ema_span_minutes",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_1m",
     "entry_weight_volatility_1h",
     "entry_weight_volatility_1m",
     "entry_we_weight",
@@ -55,8 +55,8 @@ LEGACY_STRATEGY_KEY_MAP = {
     "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
     "entry_grid_double_down_factor": ("entry", "double_down_factor"),
     "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
-    "entry_volatility_ema_span_hours": ("volatility_ema_span_hours",),
-    "entry_volatility_ema_span_minutes": ("volatility_ema_span_minutes",),
+    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
+    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
     "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
     "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
     "entry_we_weight": ("entry", "threshold_we_weight"),
@@ -72,8 +72,8 @@ def adaptive_strategy_params(**overrides):
     base = {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
-        "volatility_ema_span_hours": 0.0,
-        "volatility_ema_span_minutes": 60.0,
+        "volatility_ema_span_1h": 0.0,
+        "volatility_ema_span_1m": 60.0,
         "entry": {
             "double_down_factor": 1.0,
             "initial_ema_dist": 0.0,
@@ -119,9 +119,9 @@ def _split_bot_and_adaptive_strategy_overrides(overrides):
 
 def bot_params(**overrides):
     base = {
-        "filter_volatility_ema_span": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span": 10.0,
+        "filter_volume_ema_span_1m": 10.0,
         "filter_volume_drop_pct": 0.0,
         "n_positions": 1,
         "total_wallet_exposure_limit": 1.0,
@@ -802,9 +802,9 @@ def test_ema_anchor_volatility_weights_widen_quotes():
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
         "offset": 0.01,
-        "offset_volatility_ema_span_minutes": 15.0,
+        "offset_volatility_ema_span_1m": 15.0,
         "offset_volatility_1m_weight": 2.0,
-        "entry_volatility_ema_span_hours": 8.0,
+        "entry_volatility_ema_span_1h": 8.0,
         "offset_volatility_1h_weight": 3.0,
         "offset_psize_weight": 0.0,
     }
@@ -1019,8 +1019,8 @@ def test_forager_respects_n_positions_selects_one_coin():
             "total_wallet_exposure_limit": 1.0,
             "filter_volume_drop_pct": 0.5,
             "filter_volatility_drop_pct": 0.0,
-            "filter_volume_ema_span": 10.0,
-            "filter_volatility_ema_span": 10.0,
+            "filter_volume_ema_span_1m": 10.0,
+            "filter_volatility_ema_span_1m": 10.0,
         }
     )
 
@@ -1040,8 +1040,8 @@ def test_forager_respects_n_positions_selects_one_coin():
         long_bp={
             "filter_volume_drop_pct": 0.5,
             "filter_volatility_drop_pct": 0.0,
-            "filter_volume_ema_span": 10.0,
-            "filter_volatility_ema_span": 10.0,
+            "filter_volume_ema_span_1m": 10.0,
+            "filter_volatility_ema_span_1m": 10.0,
         },
     )
     sym1 = make_symbol(
@@ -1060,8 +1060,8 @@ def test_forager_respects_n_positions_selects_one_coin():
         long_bp={
             "filter_volume_drop_pct": 0.5,
             "filter_volatility_drop_pct": 0.0,
-            "filter_volume_ema_span": 10.0,
-            "filter_volatility_ema_span": 10.0,
+            "filter_volume_ema_span_1m": 10.0,
+            "filter_volatility_ema_span_1m": 10.0,
         },
     )
 

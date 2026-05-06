@@ -13,8 +13,8 @@ PB_MULTI_FIELD_MAP = {
     "rentry_pprice_dist_wallet_exposure_weighting": "entry_we_weight",
     "ema_span_0": "ema_span_0",
     "ema_span_1": "ema_span_1",
-    "filter_noisiness_rolling_window": "forager_volatility_ema_span",
-    "filter_volume_rolling_window": "forager_volume_ema_span",
+    "filter_noisiness_rolling_window": "forager_volatility_ema_span_1m",
+    "filter_volume_rolling_window": "forager_volume_ema_span_1m",
 }
 PB_MULTI_FIELD_MAP_INV = {v: k for k, v in PB_MULTI_FIELD_MAP.items()}
 

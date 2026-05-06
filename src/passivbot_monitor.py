@@ -812,8 +812,8 @@ def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
         "entry_weight_volatility_1h": "entry.threshold_volatility_1h_weight",
         "entry_weight_volatility_1m": "entry.threshold_volatility_1m_weight",
         "entry_we_weight": "entry.threshold_we_weight",
-        "entry_volatility_ema_span_hours": "volatility_ema_span_hours",
-        "entry_volatility_ema_span_minutes": "volatility_ema_span_minutes",
+        "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
+        "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
         "close_grid_markup_start": "close.threshold_base_pct",
         "close_grid_markup_end": "close.threshold_base_pct",
         "close_grid_qty_pct": "close.qty_pct",
@@ -863,7 +863,7 @@ def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
     if not isinstance(symbol_entry, dict):
         return 0.0
     try:
-        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_hours", symbol)
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol)
     except Exception:
         return 0.0
     try:
@@ -880,7 +880,7 @@ def _monitor_m1_entry_logrange(self, pside: str, symbol: str) -> float:
     if not isinstance(symbol_entry, dict):
         return 0.0
     try:
-        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_minutes", symbol)
+        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1m", symbol)
     except Exception:
         return 0.0
     try:

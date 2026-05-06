@@ -18,9 +18,9 @@ BOT_GROUP_FIELD_MAP = {
     },
     "forager": {
         "score_weights": "forager_score_weights",
-        "volatility_ema_span": "forager_volatility_ema_span",
+        "volatility_ema_span_1m": "forager_volatility_ema_span_1m",
         "volume_drop_pct": "forager_volume_drop_pct",
-        "volume_ema_span": "forager_volume_ema_span",
+        "volume_ema_span_1m": "forager_volume_ema_span_1m",
     },
     "hsl": {
         "cooldown_minutes_after_red": "hsl_cooldown_minutes_after_red",

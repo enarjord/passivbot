@@ -421,9 +421,9 @@ pub struct BotParams {
     #[serde(default)]
     pub entry_grid_spacing_pct: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_hours: f64,
+    pub entry_volatility_ema_span_1h: f64,
     #[serde(default)]
-    pub entry_volatility_ema_span_minutes: f64,
+    pub entry_volatility_ema_span_1m: f64,
     #[serde(default)]
     pub entry_weight_volatility_1h: f64,
     #[serde(default)]
@@ -442,8 +442,8 @@ pub struct BotParams {
     pub entry_trailing_grid_ratio: f64,
     #[serde(default)]
     pub entry_trailing_threshold_pct: f64,
-    pub filter_volatility_ema_span: f64,
-    pub filter_volume_ema_span: f64,
+    pub filter_volatility_ema_span_1m: f64,
+    pub filter_volume_ema_span_1m: f64,
     #[serde(default, skip_serializing, rename = "filter_volatility_drop_pct")]
     pub _legacy_filter_volatility_drop_pct: f64,
     #[serde(default, alias = "filter_volume_drop_pct")]
@@ -506,8 +506,8 @@ impl Default for BotParams {
             close_weight_volatility_1m: 0.0,
             entry_grid_double_down_factor: 0.0,
             entry_grid_spacing_pct: 0.0,
-            entry_volatility_ema_span_hours: 0.0,
-            entry_volatility_ema_span_minutes: 0.0,
+            entry_volatility_ema_span_1h: 0.0,
+            entry_volatility_ema_span_1m: 0.0,
             entry_weight_volatility_1h: 0.0,
             entry_weight_volatility_1m: 0.0,
             entry_we_weight: 0.0,
@@ -517,8 +517,8 @@ impl Default for BotParams {
             entry_trailing_retracement_pct: 0.0,
             entry_trailing_grid_ratio: 0.0,
             entry_trailing_threshold_pct: 0.0,
-            filter_volatility_ema_span: 0.0,
-            filter_volume_ema_span: 0.0,
+            filter_volatility_ema_span_1m: 0.0,
+            filter_volume_ema_span_1m: 0.0,
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_volume_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),

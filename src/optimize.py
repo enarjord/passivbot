@@ -304,7 +304,7 @@ def _stamp_optimizer_warmup(config: dict, mss: dict, coins: list[str]) -> None:
     ``prepare_hlcvs_mss`` stamps those fields from
     ``compute_per_coin_warmup_minutes(config)``, which reads ``bot.*``
     directly and knows nothing about bounds. When a user's template bot has
-    large decorative values (e.g. ``entry_volatility_ema_span_hours=1690``)
+    large decorative values (e.g. ``entry_volatility_ema_span_1h=1690``)
     but the bounds pin those fields low, every optimizer backtest ends up
     trading on a window sized for the template — not for the search space.
     This helper corrects the stamping by synthesizing a max-bounds

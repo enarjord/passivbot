@@ -56,16 +56,16 @@ def _base_config(**overrides):
             "long": {
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
-                "forager_volume_ema_span": 2000.0,
-                "forager_volatility_ema_span": 100.0,
-                "entry_volatility_ema_span_hours": 1.0,
+                "forager_volume_ema_span_1m": 2000.0,
+                "forager_volatility_ema_span_1m": 100.0,
+                "entry_volatility_ema_span_1h": 1.0,
             },
             "short": {
                 "ema_span_0": 100.0,
                 "ema_span_1": 100.0,
-                "forager_volume_ema_span": 360.0,
-                "forager_volatility_ema_span": 10.0,
-                "entry_volatility_ema_span_hours": 1.0,
+                "forager_volume_ema_span_1m": 360.0,
+                "forager_volatility_ema_span_1m": 10.0,
+                "entry_volatility_ema_span_1h": 1.0,
             },
         },
         "live": {
@@ -127,7 +127,7 @@ class TestCacheHashIndependence:
         """Two configs differing only in EMA spans produce the same cache hash."""
         cfg_a = _base_config()
         cfg_b = copy.deepcopy(cfg_a)
-        cfg_b["bot"]["long"]["entry_volatility_ema_span_hours"] = 500.0
+        cfg_b["bot"]["long"]["entry_volatility_ema_span_1h"] = 500.0
 
         hash_a = get_cache_hash(cfg_a, "binance")
         hash_b = get_cache_hash(cfg_b, "binance")

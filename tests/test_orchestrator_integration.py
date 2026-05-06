@@ -30,8 +30,8 @@ ADAPTIVE_STRATEGY_KEYS = {
     "close_weight_volatility_1m",
     "entry_grid_double_down_factor",
     "entry_grid_spacing_pct",
-    "entry_volatility_ema_span_hours",
-    "entry_volatility_ema_span_minutes",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_1m",
     "entry_weight_volatility_1h",
     "entry_weight_volatility_1m",
     "entry_we_weight",
@@ -61,8 +61,8 @@ LEGACY_STRATEGY_KEY_MAP = {
     "close_weight_volatility_1m": ("close", "threshold_volatility_1m_weight"),
     "entry_grid_double_down_factor": ("entry", "double_down_factor"),
     "entry_grid_spacing_pct": ("entry", "threshold_base_pct"),
-    "entry_volatility_ema_span_hours": ("volatility_ema_span_hours",),
-    "entry_volatility_ema_span_minutes": ("volatility_ema_span_minutes",),
+    "entry_volatility_ema_span_1h": ("volatility_ema_span_1h",),
+    "entry_volatility_ema_span_1m": ("volatility_ema_span_1m",),
     "entry_weight_volatility_1h": ("entry", "threshold_volatility_1h_weight"),
     "entry_weight_volatility_1m": ("entry", "threshold_volatility_1m_weight"),
     "entry_we_weight": ("entry", "threshold_we_weight"),
@@ -79,8 +79,8 @@ def adaptive_strategy_params(**overrides):
     base = {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
-        "volatility_ema_span_hours": 0.0,
-        "volatility_ema_span_minutes": 60.0,
+        "volatility_ema_span_1h": 0.0,
+        "volatility_ema_span_1m": 60.0,
         "entry": {
             "double_down_factor": 1.0,
             "initial_ema_dist": 0.0,
@@ -143,17 +143,17 @@ def bot_params(**overrides):
         "entry_weight_volatility_1m": 0.0,
         "entry_we_weight": 0.0,
         "entry_grid_spacing_pct": 0.02,
-        "entry_volatility_ema_span_hours": 0.0,
-        "entry_volatility_ema_span_minutes": 60.0,
+        "entry_volatility_ema_span_1h": 0.0,
+        "entry_volatility_ema_span_1m": 60.0,
         "entry_initial_ema_dist": 0.0,
         "entry_initial_qty_pct": 0.1,
         "entry_trailing_double_down_factor": 0.0,
         "entry_trailing_retracement_pct": 0.0,
         "entry_trailing_grid_ratio": 0.0,
         "entry_trailing_threshold_pct": 0.0,
-        "filter_volatility_ema_span": 10.0,
+        "filter_volatility_ema_span_1m": 10.0,
         "filter_volatility_drop_pct": 0.0,
-        "filter_volume_ema_span": 10.0,
+        "filter_volume_ema_span_1m": 10.0,
         "filter_volume_drop_pct": 0.0,
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
@@ -671,7 +671,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volatility_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volatility_ema_span": 1.0,
+                        "filter_volatility_ema_span_1m": 1.0,
                     },
                 )
             ],
@@ -700,7 +700,7 @@ class TestOrchestratorMultiSymbol:
                     ),
                     long_bp={
                         "filter_volume_drop_pct": 0.5,  # Filter if < 50% of avg
-                        "filter_volume_ema_span": 10.0,
+                        "filter_volume_ema_span_1m": 10.0,
                     },
                 )
             ],

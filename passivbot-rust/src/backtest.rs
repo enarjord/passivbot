@@ -1345,29 +1345,30 @@ impl<'a> Backtest<'a> {
                     }
                 }
 
-                let vol_span_long = self.bot_params_master.long.filter_volume_ema_span as f64;
-                let vol_span_short = self.bot_params_master.short.filter_volume_ema_span as f64;
-                let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span as f64;
-                let lr_span_short = self.bot_params_master.short.filter_volatility_ema_span as f64;
+                let vol_span_long = self.bot_params_master.long.filter_volume_ema_span_1m as f64;
+                let vol_span_short = self.bot_params_master.short.filter_volume_ema_span_1m as f64;
+                let lr_span_long = self.bot_params_master.long.filter_volatility_ema_span_1m as f64;
+                let lr_span_short =
+                    self.bot_params_master.short.filter_volatility_ema_span_1m as f64;
 
                 debug_assert_eq!(
-                    self.bot_params[idx].long.filter_volume_ema_span as f64, vol_span_long,
-                    "coin {} long filter_volume_ema_span differs from master",
+                    self.bot_params[idx].long.filter_volume_ema_span_1m as f64, vol_span_long,
+                    "coin {} long filter_volume_ema_span_1m differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].short.filter_volume_ema_span as f64, vol_span_short,
-                    "coin {} short filter_volume_ema_span differs from master",
+                    self.bot_params[idx].short.filter_volume_ema_span_1m as f64, vol_span_short,
+                    "coin {} short filter_volume_ema_span_1m differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].long.filter_volatility_ema_span as f64, lr_span_long,
-                    "coin {} long filter_volatility_ema_span differs from master",
+                    self.bot_params[idx].long.filter_volatility_ema_span_1m as f64, lr_span_long,
+                    "coin {} long filter_volatility_ema_span_1m differs from master",
                     idx
                 );
                 debug_assert_eq!(
-                    self.bot_params[idx].short.filter_volatility_ema_span as f64, lr_span_short,
-                    "coin {} short filter_volatility_ema_span differs from master",
+                    self.bot_params[idx].short.filter_volatility_ema_span_1m as f64, lr_span_short,
+                    "coin {} short filter_volatility_ema_span_1m differs from master",
                     idx
                 );
 
@@ -4859,16 +4860,16 @@ fn calc_ema_alphas(
         },
         // EMA spans for the volume/log range filters (alphas precomputed from spans)
         vol_alpha_long: clamp_alpha(
-            2.0 / (bot_params_pair.long.filter_volume_ema_span as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.long.filter_volume_ema_span_1m as f64 / interval_f + 1.0),
         ),
         vol_alpha_short: clamp_alpha(
-            2.0 / (bot_params_pair.short.filter_volume_ema_span as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.short.filter_volume_ema_span_1m as f64 / interval_f + 1.0),
         ),
         log_range_alpha_long: clamp_alpha(
-            2.0 / (bot_params_pair.long.filter_volatility_ema_span as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.long.filter_volatility_ema_span_1m as f64 / interval_f + 1.0),
         ),
         log_range_alpha_short: clamp_alpha(
-            2.0 / (bot_params_pair.short.filter_volatility_ema_span as f64 / interval_f + 1.0),
+            2.0 / (bot_params_pair.short.filter_volatility_ema_span_1m as f64 / interval_f + 1.0),
         ),
         volatility_ema_1m_alpha_long: {
             let span =
@@ -7743,10 +7744,10 @@ mod tests {
         bp.long.ema_span_1 = 200.0;
         bp.short.ema_span_0 = 50.0;
         bp.short.ema_span_1 = 150.0;
-        bp.long.filter_volume_ema_span = 300.0;
-        bp.short.filter_volume_ema_span = 400.0;
-        bp.long.filter_volatility_ema_span = 500.0;
-        bp.short.filter_volatility_ema_span = 600.0;
+        bp.long.filter_volume_ema_span_1m = 300.0;
+        bp.short.filter_volume_ema_span_1m = 400.0;
+        bp.long.filter_volatility_ema_span_1m = 500.0;
+        bp.short.filter_volatility_ema_span_1m = 600.0;
         let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
@@ -7803,16 +7804,16 @@ mod tests {
     fn test_make_orchestrator_ema_slots_assigns_fixed_positions() {
         let strategy_pair = StrategyParamsPair {
             long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
-                offset_volatility_ema_span_minutes: 30.0,
+                offset_volatility_ema_span_1m: 30.0,
                 offset_volatility_1m_weight: 2.0,
-                entry_volatility_ema_span_hours: 12.0,
+                entry_volatility_ema_span_1h: 12.0,
                 offset_volatility_1h_weight: 1.0,
                 ..Default::default()
             }),
             short: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
-                offset_volatility_ema_span_minutes: 45.0,
+                offset_volatility_ema_span_1m: 45.0,
                 offset_volatility_1m_weight: 3.0,
-                entry_volatility_ema_span_hours: 18.0,
+                entry_volatility_ema_span_1h: 18.0,
                 offset_volatility_1h_weight: 0.5,
                 ..Default::default()
             }),
@@ -7868,8 +7869,8 @@ mod tests {
     fn test_ema_alpha_hourly_volatility_not_adjusted() {
         // entry_volatility spans are in hours and calendar-based; should NOT change with interval
         let mut bp = BotParamsPair::default();
-        bp.long.entry_volatility_ema_span_hours = 24.0;
-        bp.short.entry_volatility_ema_span_hours = 48.0;
+        bp.long.entry_volatility_ema_span_1h = 24.0;
+        bp.short.entry_volatility_ema_span_1h = 48.0;
         let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
 
         let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
@@ -7897,15 +7898,15 @@ fn calc_warmup_bars(bot_params: &[BotParamsPair], strategy_params: &[StrategyPar
         let spans_long = [
             long_span_0,
             long_span_1,
-            pair.long.filter_volume_ema_span as f64,
-            pair.long.filter_volatility_ema_span as f64,
+            pair.long.filter_volume_ema_span_1m as f64,
+            pair.long.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.long).unwrap_or(0.0) * 60.0,
         ];
         let spans_short = [
             short_span_0,
             short_span_1,
-            pair.short.filter_volume_ema_span as f64,
-            pair.short.filter_volatility_ema_span as f64,
+            pair.short.filter_volume_ema_span_1m as f64,
+            pair.short.filter_volatility_ema_span_1m as f64,
             strategy_entry_volatility_span_hours(&strategy_pair.short).unwrap_or(0.0) * 60.0,
         ];
         for span in spans_long.iter().chain(spans_short.iter()) {

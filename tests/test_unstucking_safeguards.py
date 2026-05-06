@@ -417,9 +417,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self._bp_defaults = {
                 "ema_span_0": 1.0,
                 "ema_span_1": 2.0,
-                "entry_volatility_ema_span_hours": 0.0,
-                "entry_volatility_ema_span_minutes": 60.0,
-        "entry_volatility_ema_span_minutes": 60.0,
+                "entry_volatility_ema_span_1h": 0.0,
+                "entry_volatility_ema_span_1m": 60.0,
+        "entry_volatility_ema_span_1m": 60.0,
                 "entry_grid_spacing_pct": 0.0,
                 "entry_initial_qty_pct": 0.0,
                 "entry_grid_double_down_factor": 1.0,
@@ -454,8 +454,8 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "n_positions": 0,
                 "total_wallet_exposure_limit": 0.0,
                 "risk_twel_enforcer_threshold": 0.0,
-                "filter_volume_ema_span": 0.0,
-                "filter_volatility_ema_span": 0.0,
+                "filter_volume_ema_span_1m": 0.0,
+                "filter_volatility_ema_span_1m": 0.0,
                 "forager_volume_drop_pct": 0.0,
                 "forager_score_weights": {
                     "volume": 0.0,

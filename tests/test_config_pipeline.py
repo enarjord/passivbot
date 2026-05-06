@@ -61,11 +61,11 @@ def test_prepare_config_canonical_omits_runtime_aliases():
     assert "risk_wel_enforcer_threshold" not in prepared["bot"]["long"]
     assert "unstuck_threshold" not in prepared["bot"]["long"]
     assert "hsl_red_threshold" not in prepared["bot"]["long"]
-    assert "forager_volume_ema_span" not in prepared["bot"]["long"]
-    assert "filter_volume_ema_span" not in prepared["bot"]["long"]
-    assert "filter_volatility_ema_span" not in prepared["bot"]["long"]
-    assert "long_filter_volume_ema_span" not in prepared["optimize"]["bounds"]
-    assert "long_filter_volatility_ema_span" not in prepared["optimize"]["bounds"]
+    assert "forager_volume_ema_span_1m" not in prepared["bot"]["long"]
+    assert "filter_volume_ema_span_1m" not in prepared["bot"]["long"]
+    assert "filter_volatility_ema_span_1m" not in prepared["bot"]["long"]
+    assert "long_filter_volume_ema_span_1m" not in prepared["optimize"]["bounds"]
+    assert "long_filter_volatility_ema_span_1m" not in prepared["optimize"]["bounds"]
     assert prepared["live"]["strategy_kind"] == "trailing_martingale"
     assert "ema_span_0" not in get_template_config()["bot"]["long"]
     assert "entry_grid_spacing_pct" not in get_template_config()["bot"]["short"]
@@ -118,15 +118,15 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
     assert compiled["bot"]["long"]["hsl_red_threshold"] == canonical["bot"]["long"]["hsl"][
         "red_threshold"
     ]
-    assert compiled["bot"]["long"]["forager_volume_ema_span"] == canonical["bot"]["long"]["forager"][
-        "volume_ema_span"
+    assert compiled["bot"]["long"]["forager_volume_ema_span_1m"] == canonical["bot"]["long"]["forager"][
+        "volume_ema_span_1m"
     ]
-    assert compiled["bot"]["long"]["filter_volume_ema_span"] == canonical["bot"]["long"]["forager"][
-        "volume_ema_span"
+    assert compiled["bot"]["long"]["filter_volume_ema_span_1m"] == canonical["bot"]["long"]["forager"][
+        "volume_ema_span_1m"
     ]
-    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == canonical["bot"]["long"][
+    assert compiled["bot"]["long"]["filter_volatility_ema_span_1m"] == canonical["bot"]["long"][
         "forager"
-    ]["volatility_ema_span"]
+    ]["volatility_ema_span_1m"]
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
     assert compiled["optimize"]["bounds"] == canonical["optimize"]["bounds"]
     assert _strategy_side(compiled, "long")["ema_span_0"] == _strategy_side(canonical, "long")[
@@ -243,8 +243,8 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
 
     template = get_template_config()
     assert prepared["backtest"]["market_order_slippage_pct"] == template["backtest"]["market_order_slippage_pct"]
-    assert prepared["bot"]["long"]["filter_volume_ema_span"] == template["bot"]["long"]["forager"][
-        "volume_ema_span"
+    assert prepared["bot"]["long"]["filter_volume_ema_span_1m"] == template["bot"]["long"]["forager"][
+        "volume_ema_span_1m"
     ]
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
         template, "long", "trailing_martingale"
@@ -522,8 +522,8 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     source = get_template_config()
     trailing_martingale = source["bot"]["long"]["strategy"]["trailing_martingale"]
     risk = source["bot"]["long"]["risk"]
-    trailing_martingale.pop("volatility_ema_span_hours")
-    trailing_martingale.pop("volatility_ema_span_minutes")
+    trailing_martingale.pop("volatility_ema_span_1h")
+    trailing_martingale.pop("volatility_ema_span_1m")
     for key in ("threshold_volatility_1h_weight", "threshold_volatility_1m_weight", "threshold_we_weight"):
         trailing_martingale["entry"].pop(key)
     for key in (
@@ -538,8 +538,8 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    assert long_strategy["volatility_ema_span_hours"] == pytest.approx(1690)
-    assert long_strategy["volatility_ema_span_minutes"] == pytest.approx(60.0)
+    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(1690)
+    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(60.0)
     assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(2.4)
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(0.0)
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(0.135)
@@ -602,8 +602,8 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
         "ema_readiness": 0.0,
         "volatility": 0.0,
     }
-    source["bot"]["long"]["forager"]["volume_ema_span"] = 0.0
-    source["bot"]["long"]["forager"]["volatility_ema_span"] = 0.0
+    source["bot"]["long"]["forager"]["volume_ema_span_1m"] = 0.0
+    source["bot"]["long"]["forager"]["volatility_ema_span_1m"] = 0.0
     source["bot"]["long"]["forager"]["volume_drop_pct"] = 0.0
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
@@ -613,5 +613,5 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
         "ema_readiness": 1.0,
         "volatility": 0.0,
     }
-    assert prepared["bot"]["long"]["forager"]["volume_ema_span"] == 0.0
-    assert prepared["bot"]["long"]["forager"]["volatility_ema_span"] == 0.0
+    assert prepared["bot"]["long"]["forager"]["volume_ema_span_1m"] == 0.0
+    assert prepared["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 0.0

@@ -5,8 +5,8 @@
         trailing_martingale: {
           ema_span_0: 2.0
           ema_span_1: 4.0
-          volatility_ema_span_hours: 0.0
-          volatility_ema_span_minutes: 60.0
+          volatility_ema_span_1h: 0.0
+          volatility_ema_span_1m: 60.0
           entry: {
             double_down_factor: 1.0
             initial_ema_dist: -0.001
@@ -33,9 +33,9 @@
         }
       }
       forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
-      forager_volatility_ema_span: 0.0
+      forager_volatility_ema_span_1m: 0.0
       forager_volume_drop_pct: 0.0
-      forager_volume_ema_span: 1.0
+      forager_volume_ema_span_1m: 1.0
       hsl_cooldown_minutes_after_red: 1.0
       hsl_ema_span_minutes: 1.0
       hsl_enabled: true
@@ -60,8 +60,8 @@
         trailing_martingale: {
           ema_span_0: 0.0
           ema_span_1: 0.0
-          volatility_ema_span_hours: 0.0
-          volatility_ema_span_minutes: 60.0
+          volatility_ema_span_1h: 0.0
+          volatility_ema_span_1m: 60.0
           entry: {
             double_down_factor: 0.5
             initial_ema_dist: -0.01
@@ -88,9 +88,9 @@
         }
       }
       forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
-      forager_volatility_ema_span: 0.0
+      forager_volatility_ema_span_1m: 0.0
       forager_volume_drop_pct: 0.0
-      forager_volume_ema_span: 0.0
+      forager_volume_ema_span_1m: 0.0
       n_positions: 1.0
       total_wallet_exposure_limit: 0.0
     }

@@ -573,13 +573,13 @@ fn calc_ema_anchor_quote_series(
     let ema_alpha_0 = clamp_alpha(2.0 / (params.ema_span_0 + 1.0));
     let ema_alpha_1 = clamp_alpha(2.0 / (params.ema_span_1 + 1.0));
     let ema_alpha_2 = clamp_alpha(2.0 / ((params.ema_span_0 * params.ema_span_1).sqrt() + 1.0));
-    let vol_1m_alpha = if params.offset_volatility_ema_span_minutes > 0.0 {
-        clamp_alpha(2.0 / (params.offset_volatility_ema_span_minutes + 1.0))
+    let vol_1m_alpha = if params.offset_volatility_ema_span_1m > 0.0 {
+        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1m + 1.0))
     } else {
         0.0
     };
-    let vol_1h_alpha = if params.entry_volatility_ema_span_hours > 0.0 {
-        clamp_alpha(2.0 / (params.entry_volatility_ema_span_hours + 1.0))
+    let vol_1h_alpha = if params.entry_volatility_ema_span_1h > 0.0 {
+        clamp_alpha(2.0 / (params.entry_volatility_ema_span_1h + 1.0))
     } else {
         0.0
     };
@@ -681,9 +681,9 @@ fn calc_ema_anchor_quote_series(
     ema_span_0,
     ema_span_1,
     offset,
-    offset_volatility_ema_span_minutes,
+    offset_volatility_ema_span_1m,
     offset_volatility_1m_weight,
-    entry_volatility_ema_span_hours,
+    entry_volatility_ema_span_1h,
     offset_volatility_1h_weight,
     offset_psize_weight
 ))]
@@ -700,9 +700,9 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
     ema_span_0: f64,
     ema_span_1: f64,
     offset: f64,
-    offset_volatility_ema_span_minutes: f64,
+    offset_volatility_ema_span_1m: f64,
     offset_volatility_1m_weight: f64,
-    entry_volatility_ema_span_hours: f64,
+    entry_volatility_ema_span_1h: f64,
     offset_volatility_1h_weight: f64,
     offset_psize_weight: f64,
 ) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
@@ -713,9 +713,9 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
         ema_span_1,
         entry_double_down_factor: 0.0,
         offset,
-        offset_volatility_ema_span_minutes,
+        offset_volatility_ema_span_1m,
         offset_volatility_1m_weight,
-        entry_volatility_ema_span_hours,
+        entry_volatility_ema_span_1h,
         offset_volatility_1h_weight,
         offset_psize_weight,
     };
@@ -1720,8 +1720,8 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
     Ok(serde_json::json!({
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
-        "volatility_ema_span_hours": extract_value::<f64>(dict, "volatility_ema_span_hours")?,
-        "volatility_ema_span_minutes": extract_value::<f64>(dict, "volatility_ema_span_minutes")?,
+        "volatility_ema_span_1h": extract_value::<f64>(dict, "volatility_ema_span_1h")?,
+        "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
         "entry": {
             "double_down_factor": extract_value::<f64>(entry, "double_down_factor")?,
             "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
@@ -1755,9 +1755,9 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
         "entry_double_down_factor": extract_optional_f64(dict, "entry_double_down_factor")?,
         "offset": extract_value::<f64>(dict, "offset")?,
-        "offset_volatility_ema_span_minutes": extract_optional_f64(dict, "offset_volatility_ema_span_minutes")?,
+        "offset_volatility_ema_span_1m": extract_optional_f64(dict, "offset_volatility_ema_span_1m")?,
         "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
-        "entry_volatility_ema_span_hours": extract_optional_f64(dict, "entry_volatility_ema_span_hours")?,
+        "entry_volatility_ema_span_1h": extract_optional_f64(dict, "entry_volatility_ema_span_1h")?,
         "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
         "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
     }))
@@ -1886,17 +1886,14 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         close_weight_volatility_1m: extract_optional_f64(dict, "close_weight_volatility_1m")?,
         entry_grid_double_down_factor: extract_optional_f64(dict, "entry_grid_double_down_factor")?,
         entry_grid_spacing_pct: extract_optional_f64(dict, "entry_grid_spacing_pct")?,
-        entry_volatility_ema_span_hours: match dict.get_item("entry_volatility_ema_span_hours")? {
+        entry_volatility_ema_span_1h: match dict.get_item("entry_volatility_ema_span_1h")? {
             Some(item) => item.extract::<f64>()?,
             None => match dict.get_item("entry_log_range_ema_span_hours")? {
                 Some(item) => item.extract::<f64>()?,
                 None => 0.0,
             },
         },
-        entry_volatility_ema_span_minutes: extract_optional_f64(
-            dict,
-            "entry_volatility_ema_span_minutes",
-        )?,
+        entry_volatility_ema_span_1m: extract_optional_f64(dict, "entry_volatility_ema_span_1m")?,
         entry_weight_volatility_1h: extract_optional_f64(dict, "entry_weight_volatility_1h")?,
         entry_weight_volatility_1m: extract_optional_f64(dict, "entry_weight_volatility_1m")?,
         entry_we_weight: extract_optional_f64(dict, "entry_we_weight")?,
@@ -1912,22 +1909,22 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         )?,
         entry_trailing_grid_ratio: extract_optional_f64(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
-        filter_volatility_ema_span: extract_value_with_fallback(
+        filter_volatility_ema_span_1m: extract_value_with_fallback(
             dict,
-            "forager_volatility_ema_span",
-            "filter_volatility_ema_span",
+            "forager_volatility_ema_span_1m",
+            "filter_volatility_ema_span_1m",
         )
         .or_else(|_| {
             extract_value_with_fallback(
                 dict,
-                "filter_volatility_ema_span",
+                "filter_volatility_ema_span_1m",
                 "filter_log_range_ema_span",
             )
         })?,
-        filter_volume_ema_span: extract_value_with_fallback(
+        filter_volume_ema_span_1m: extract_value_with_fallback(
             dict,
-            "forager_volume_ema_span",
-            "filter_volume_ema_span",
+            "forager_volume_ema_span_1m",
+            "filter_volume_ema_span_1m",
         )?,
         _legacy_filter_volatility_drop_pct: 0.0,
         forager_volume_drop_pct: extract_value_with_fallback(

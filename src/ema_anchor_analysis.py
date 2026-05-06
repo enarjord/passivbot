@@ -118,9 +118,9 @@ def _calc_quote_series(
         ema_span_0=float(params["ema_span_0"]),
         ema_span_1=float(params["ema_span_1"]),
         offset=float(params["offset"]),
-        offset_volatility_ema_span_minutes=float(params["offset_volatility_ema_span_minutes"]),
+        offset_volatility_ema_span_1m=float(params["offset_volatility_ema_span_1m"]),
         offset_volatility_1m_weight=float(params["offset_volatility_1m_weight"]),
-        entry_volatility_ema_span_hours=float(params["entry_volatility_ema_span_hours"]),
+        entry_volatility_ema_span_1h=float(params["entry_volatility_ema_span_1h"]),
         offset_volatility_1h_weight=float(params["offset_volatility_1h_weight"]),
         offset_psize_weight=float(params["offset_psize_weight"]),
     )

@@ -151,9 +151,9 @@
                     "volatility": 0.5555555555555556,
                     "volume": 0.26262626262626265
                 },
-                "volatility_ema_span": 689,
+                "volatility_ema_span_1m": 689,
                 "volume_drop_pct": 0.79,
-                "volume_ema_span": 2190
+                "volume_ema_span_1m": 2190
             },
             "hsl": {
                 "cooldown_minutes_after_red": 156,
@@ -194,10 +194,10 @@
                     "entry_trailing_grid_ratio": -0.49,
                     "entry_trailing_retracement_pct": 0.0265,
                     "entry_trailing_threshold_pct": 0.0266,
-                    "entry_volatility_ema_span_hours": 1930,
+                    "entry_volatility_ema_span_1h": 1930,
                     "close_weight_volatility_1h": 0.0,
                     "close_weight_volatility_1m": 0.0,
-                    "entry_volatility_ema_span_minutes": 60.0,
+                    "entry_volatility_ema_span_1m": 60.0,
                     "entry_weight_volatility_1h": 15.9,
                     "entry_we_weight": 3.42,
                     "entry_weight_volatility_1m": 0.0
@@ -217,9 +217,9 @@
                     "volatility": 0.30303030303030304,
                     "volume": 0.010101010101010102
                 },
-                "volatility_ema_span": 438,
+                "volatility_ema_span_1m": 438,
                 "volume_drop_pct": 0.79,
-                "volume_ema_span": 780
+                "volume_ema_span_1m": 780
             },
             "hsl": {
                 "cooldown_minutes_after_red": 2780,
@@ -260,10 +260,10 @@
                     "entry_trailing_grid_ratio": 0.17,
                     "entry_trailing_retracement_pct": 0.0247,
                     "entry_trailing_threshold_pct": 0.00648,
-                    "entry_volatility_ema_span_hours": 1450,
+                    "entry_volatility_ema_span_1h": 1450,
                     "close_weight_volatility_1h": 0.0,
                     "close_weight_volatility_1m": 0.0,
-                    "entry_volatility_ema_span_minutes": 60.0,
+                    "entry_volatility_ema_span_1m": 60.0,
                     "entry_weight_volatility_1h": 30.9,
                     "entry_we_weight": 3.6,
                     "entry_weight_volatility_1m": 0.0
@@ -378,7 +378,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -388,7 +388,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -524,7 +524,7 @@
                             0.015,
                             1e-05
                         ],
-                        "entry_volatility_ema_span_hours": [
+                        "entry_volatility_ema_span_1h": [
                             672,
                             2016,
                             1
@@ -539,7 +539,7 @@
                             40,
                             0.1
                         ],
-                        "entry_volatility_ema_span_minutes": [
+                        "entry_volatility_ema_span_1m": [
                             5,
                             720,
                             1
@@ -601,7 +601,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -611,7 +611,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -747,7 +747,7 @@
                             0.015,
                             1e-05
                         ],
-                        "entry_volatility_ema_span_hours": [
+                        "entry_volatility_ema_span_1h": [
                             672,
                             2016,
                             1
@@ -762,7 +762,7 @@
                             40,
                             0.1
                         ],
-                        "entry_volatility_ema_span_minutes": [
+                        "entry_volatility_ema_span_1m": [
                             5,
                             720,
                             1

@@ -117,8 +117,8 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "forager_volume_ema_span",
-        "forager_volatility_ema_span",
+        "forager_volume_ema_span_1m",
+        "forager_volatility_ema_span_1m",
     ]
 
     for _, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
@@ -132,14 +132,14 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
                 max_minutes,
                 _to_float(strategy.get("ema_span_0")),
                 _to_float(strategy.get("ema_span_1")),
-                _to_float(strategy.get("offset_volatility_ema_span_minutes")),
-                _to_float(strategy.get("volatility_ema_span_minutes")),
+                _to_float(strategy.get("offset_volatility_ema_span_1m")),
+                _to_float(strategy.get("volatility_ema_span_1m")),
             )
             if not is_valid:
                 return 0
             log_span_minutes = max(
-                _to_float(strategy.get("entry_volatility_ema_span_hours")) * 60.0,
-                _to_float(strategy.get("volatility_ema_span_hours")) * 60.0,
+                _to_float(strategy.get("entry_volatility_ema_span_1h")) * 60.0,
+                _to_float(strategy.get("volatility_ema_span_1h")) * 60.0,
             )
             max_minutes, is_valid = _accumulate_max_minutes(max_minutes, log_span_minutes)
             if not is_valid:
@@ -152,22 +152,22 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     bound_keys_minutes = [
         "long_ema_span_0",
         "long_ema_span_1",
-        "long_offset_volatility_ema_span_minutes",
-        "long_volatility_ema_span_minutes",
-        "long_forager_volume_ema_span",
-        "long_forager_volatility_ema_span",
+        "long_offset_volatility_ema_span_1m",
+        "long_volatility_ema_span_1m",
+        "long_forager_volume_ema_span_1m",
+        "long_forager_volatility_ema_span_1m",
         "short_ema_span_0",
         "short_ema_span_1",
-        "short_offset_volatility_ema_span_minutes",
-        "short_volatility_ema_span_minutes",
-        "short_forager_volume_ema_span",
-        "short_forager_volatility_ema_span",
+        "short_offset_volatility_ema_span_1m",
+        "short_volatility_ema_span_1m",
+        "short_forager_volume_ema_span_1m",
+        "short_forager_volatility_ema_span_1m",
     ]
     bound_keys_hours = [
-        "long_entry_volatility_ema_span_hours",
-        "long_volatility_ema_span_hours",
-        "short_entry_volatility_ema_span_hours",
-        "short_volatility_ema_span_hours",
+        "long_entry_volatility_ema_span_1h",
+        "long_volatility_ema_span_1h",
+        "short_entry_volatility_ema_span_1h",
+        "short_volatility_ema_span_1h",
     ]
 
     for key in bound_keys_minutes:
@@ -199,8 +199,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     minute_fields = [
         "ema_span_0",
         "ema_span_1",
-        "forager_volume_ema_span",
-        "forager_volatility_ema_span",
+        "forager_volume_ema_span_1m",
+        "forager_volatility_ema_span_1m",
     ]
     for coin, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
         max_minutes = 0.0
@@ -216,8 +216,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
                     max_minutes,
                     _to_float(strategy.get("ema_span_0")),
                     _to_float(strategy.get("ema_span_1")),
-                    _to_float(strategy.get("offset_volatility_ema_span_minutes")),
-                    _to_float(strategy.get("volatility_ema_span_minutes")),
+                    _to_float(strategy.get("offset_volatility_ema_span_1m")),
+                    _to_float(strategy.get("volatility_ema_span_1m")),
                 )
                 if not is_valid:
                     per_coin[coin] = 0
@@ -225,8 +225,8 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
                 max_minutes, is_valid = _accumulate_max_minutes(
                     max_minutes,
                     max(
-                        _to_float(strategy.get("entry_volatility_ema_span_hours")) * 60.0,
-                        _to_float(strategy.get("volatility_ema_span_hours")) * 60.0,
+                        _to_float(strategy.get("entry_volatility_ema_span_1h")) * 60.0,
+                        _to_float(strategy.get("volatility_ema_span_1h")) * 60.0,
                     ),
                 )
                 if not is_valid:

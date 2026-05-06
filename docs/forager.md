@@ -21,8 +21,8 @@ This lets you control the tradeoff between liquidity, volatility, and entry read
 For each side (`bot.long` and `bot.short`), forager uses:
 
 - `forager_volume_drop_pct`
-- `forager_volume_ema_span`
-- `forager_volatility_ema_span`
+- `forager_volume_ema_span_1m`
+- `forager_volatility_ema_span_1m`
 - `forager_score_weights`
 - `ema_span_0`
 - `ema_span_1`
@@ -53,14 +53,14 @@ The canonical shortlist logic now lives in Rust and is shared by live selection 
 
 ### Volume
 
-`forager_volume_ema_span` controls the 1m EMA of quote volume used in ranking and pruning.
+`forager_volume_ema_span_1m` controls the 1m EMA of quote volume used in ranking and pruning.
 
 - Higher is better.
 - If `forager_volume_drop_pct > 0`, volume is required even if the volume score weight is zero.
 
 ### Volatility
 
-`forager_volatility_ema_span` controls the 1m EMA of log range:
+`forager_volatility_ema_span_1m` controls the 1m EMA of log range:
 
 `log_range = ln(high / low)`
 
@@ -153,4 +153,4 @@ The only fallback philosophy accepted in Passivbot for critical indicator paths 
 
 - Canonical shortlist scoring and selection live in Rust.
 - Python is responsible for gathering market data, building payloads, and calling Rust.
-- The canonical config names are `forager_volume_ema_span` and `forager_volatility_ema_span`.
+- The canonical config names are `forager_volume_ema_span_1m` and `forager_volatility_ema_span_1m`.

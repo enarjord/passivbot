@@ -148,9 +148,9 @@
                     "volatility": 1.0,
                     "volume": 0.0
                 },
-                "volatility_ema_span": 225,
+                "volatility_ema_span_1m": 225,
                 "volume_drop_pct": 0.57,
-                "volume_ema_span": 520
+                "volume_ema_span_1m": 520
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
@@ -179,8 +179,8 @@
                 "trailing_martingale": {
                     "ema_span_0": 770,
                     "ema_span_1": 210,
-                    "volatility_ema_span_hours": 1690,
-                    "volatility_ema_span_minutes": 60.0,
+                    "volatility_ema_span_1h": 1690,
+                    "volatility_ema_span_1m": 60.0,
                     "entry": {
                         "double_down_factor": 0.73,
                         "initial_ema_dist": 0.0097,
@@ -221,9 +221,9 @@
                     "volatility": 1.0,
                     "volume": 0.0
                 },
-                "volatility_ema_span": 10,
+                "volatility_ema_span_1m": 10,
                 "volume_drop_pct": 0.5,
-                "volume_ema_span": 360
+                "volume_ema_span_1m": 360
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
@@ -252,8 +252,8 @@
                 "trailing_martingale": {
                     "ema_span_0": 100,
                     "ema_span_1": 100,
-                    "volatility_ema_span_hours": 672,
-                    "volatility_ema_span_minutes": 60.0,
+                    "volatility_ema_span_1h": 672,
+                    "volatility_ema_span_1m": 60.0,
                     "entry": {
                         "double_down_factor": 0.5,
                         "initial_ema_dist": -0.01,
@@ -426,7 +426,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -436,7 +436,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -502,12 +502,12 @@
                             1440,
                             10
                         ],
-                        "volatility_ema_span_hours": [
+                        "volatility_ema_span_1h": [
                             672,
                             2016,
                             1
                         ],
-                        "volatility_ema_span_minutes": [
+                        "volatility_ema_span_1m": [
                             5,
                             720,
                             1
@@ -653,7 +653,7 @@
                         1,
                         0.01
                     ],
-                    "volatility_ema_span": [
+                    "volatility_ema_span_1m": [
                         10,
                         720,
                         1
@@ -663,7 +663,7 @@
                         1,
                         0.01
                     ],
-                    "volume_ema_span": [
+                    "volume_ema_span_1m": [
                         360,
                         2880,
                         10
@@ -729,12 +729,12 @@
                             1440,
                             10
                         ],
-                        "volatility_ema_span_hours": [
+                        "volatility_ema_span_1h": [
                             672,
                             2016,
                             1
                         ],
-                        "volatility_ema_span_minutes": [
+                        "volatility_ema_span_1m": [
                             5,
                             720,
                             1

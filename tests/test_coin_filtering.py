@@ -188,7 +188,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
+        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False
@@ -211,7 +211,7 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
     bot.positions = {}
     bot.bot_value = (
         lambda _pside, key: 12.0
-        if key in ("filter_volatility_ema_span", "filter_volume_ema_span")
+        if key in ("filter_volatility_ema_span_1m", "filter_volume_ema_span_1m")
         else 0.0
     )
     bot.has_position = lambda *_args, **_kwargs: False

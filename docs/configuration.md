@@ -235,7 +235,7 @@ The canonical V8 strategy kind is `trailing_martingale`. It replaces the v7 `tra
   - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
 - **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
-- **strategy.trailing_martingale.volatility_ema_span_hours**, **volatility_ema_span_minutes**:
+- **strategy.trailing_martingale.volatility_ema_span_1h**, **volatility_ema_span_1m**:
   - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
   - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
 - **strategy.trailing_martingale.entry.initial_ema_dist**:
@@ -300,9 +300,9 @@ Forager coin selection now uses a two-stage model: coarse volume pruning, then w
 
 - **forager_volume_drop_pct**: Coarse low-volume prune. Drops the lowest relative-volume fraction before final ranking, while still retaining enough candidates to fill the configured slots.
   - Example: `forager_volume_drop_pct = 0.1` drops the bottom 10% by relative volume. Set to `0` to skip the prune stage.
-- **forager_volatility_ema_span / forager_volume_ema_span**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
+- **forager_volatility_ema_span_1m / forager_volume_ema_span_1m**: Number of minutes to look into the past to compute the 1m volatility (log-range) and quote-volume EMAs used by forager mode.
   - Log range is computed from 1m OHLCVs as `mean(ln(high / low))`.
-  - These spans control the raw inputs to forager ranking; they are separate from `entry_volatility_ema_span_hours`, which is used for entry logic.
+  - These spans control the raw inputs to forager ranking; they are separate from `entry_volatility_ema_span_1h`, which is used for entry logic.
 - **forager_score_weights**: Final weighted forager ranking weights.
   - Required keys: `volume`, `ema_readiness`, `volatility`.
   - Default: `{"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}`.
@@ -322,7 +322,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        ema_span_0, ema_span_1, volatility_ema_span_hours, volatility_ema_span_minutes,
+        ema_span_0, ema_span_1, volatility_ema_span_1h, volatility_ema_span_1m,
         entry.double_down_factor, entry.initial_ema_dist, entry.initial_qty_pct,
         entry.threshold_base_pct, entry.threshold_we_weight,
         entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,

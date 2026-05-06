@@ -33,8 +33,8 @@ pub enum GridClosePriceAnchor {
 pub struct TrailingGridParams {
     pub ema_span_0: f64,
     pub ema_span_1: f64,
-    pub volatility_ema_span_hours: f64,
-    pub volatility_ema_span_minutes: f64,
+    pub volatility_ema_span_1h: f64,
+    pub volatility_ema_span_1m: f64,
     pub entry: TrailingGridEntryParams,
     pub close: TrailingGridCloseParams,
 }
@@ -73,8 +73,8 @@ impl TrailingGridParams {
         Self {
             ema_span_0: bot_params.ema_span_0,
             ema_span_1: bot_params.ema_span_1,
-            volatility_ema_span_hours: bot_params.entry_volatility_ema_span_hours,
-            volatility_ema_span_minutes: bot_params.entry_volatility_ema_span_minutes,
+            volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
+            volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
             entry: TrailingGridEntryParams {
                 double_down_factor: bot_params.entry_grid_double_down_factor,
                 initial_ema_dist: bot_params.entry_initial_ema_dist,
@@ -122,9 +122,9 @@ pub struct EmaAnchorParams {
     pub ema_span_1: f64,
     pub entry_double_down_factor: f64,
     pub offset: f64,
-    pub offset_volatility_ema_span_minutes: f64,
+    pub offset_volatility_ema_span_1m: f64,
     pub offset_volatility_1m_weight: f64,
-    pub entry_volatility_ema_span_hours: f64,
+    pub entry_volatility_ema_span_1h: f64,
     pub offset_volatility_1h_weight: f64,
     pub offset_psize_weight: f64,
 }
@@ -137,9 +137,9 @@ impl Default for EmaAnchorParams {
             ema_span_1: 800.0,
             entry_double_down_factor: 0.0,
             offset: 0.002,
-            offset_volatility_ema_span_minutes: 60.0,
+            offset_volatility_ema_span_1m: 60.0,
             offset_volatility_1m_weight: 0.0,
-            entry_volatility_ema_span_hours: 24.0,
+            entry_volatility_ema_span_1h: 24.0,
             offset_volatility_1h_weight: 0.0,
             offset_psize_weight: 0.1,
         }
@@ -272,15 +272,15 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
 
 pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_hours),
-        StrategyParams::EmaAnchor(params) => Some(params.entry_volatility_ema_span_hours),
+        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_1h),
+        StrategyParams::EmaAnchor(params) => Some(params.entry_volatility_ema_span_1h),
     }
 }
 
 pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Option<f64> {
     match params {
-        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_minutes),
-        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_minutes),
+        StrategyParams::TrailingGrid(params) => Some(params.volatility_ema_span_1m),
+        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1m),
     }
 }
 
@@ -298,11 +298,10 @@ pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
                 || params.entry.retracement_volatility_1m_weight != 0.0
                 || params.close.threshold_volatility_1m_weight != 0.0
                 || params.close.retracement_volatility_1m_weight != 0.0)
-                && params.volatility_ema_span_minutes > 0.0
+                && params.volatility_ema_span_1m > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
-            params.offset_volatility_1m_weight != 0.0
-                && params.offset_volatility_ema_span_minutes > 0.0
+            params.offset_volatility_1m_weight != 0.0 && params.offset_volatility_ema_span_1m > 0.0
         }
     }
 }
@@ -314,11 +313,10 @@ pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
                 || params.entry.retracement_volatility_1h_weight != 0.0
                 || params.close.threshold_volatility_1h_weight != 0.0
                 || params.close.retracement_volatility_1h_weight != 0.0)
-                && params.volatility_ema_span_hours > 0.0
+                && params.volatility_ema_span_1h > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
-            params.offset_volatility_1h_weight != 0.0
-                && params.entry_volatility_ema_span_hours > 0.0
+            params.offset_volatility_1h_weight != 0.0 && params.entry_volatility_ema_span_1h > 0.0
         }
     }
 }

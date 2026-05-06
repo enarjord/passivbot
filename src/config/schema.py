@@ -27,9 +27,9 @@ def _get_shared_bot_defaults():
                     "volatility": 1.0,
                     "volume": 0.0,
                 },
-                "volatility_ema_span": 225,
+                "volatility_ema_span_1m": 225,
                 "volume_drop_pct": 0.57,
-                "volume_ema_span": 520,
+                "volume_ema_span_1m": 520,
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
@@ -66,9 +66,9 @@ def _get_shared_bot_defaults():
                     "volatility": 1.0,
                     "volume": 0.0,
                 },
-                "volatility_ema_span": 10,
+                "volatility_ema_span_1m": 10,
                 "volume_drop_pct": 0.5,
-                "volume_ema_span": 360,
+                "volume_ema_span_1m": 360,
             },
             "hsl": {
                 "cooldown_minutes_after_red": 0,
