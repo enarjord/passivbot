@@ -10,7 +10,7 @@ It is written as an execution document for this branch, not as a historical desi
 Completed on this branch:
 
 - Pass 0: contract and compatibility policy locked in docs
-- Pass 1: canonical strategy names are `trailing_grid` and `ema_anchor`
+- Pass 1: canonical strategy names are `trailing_martingale` and `ema_anchor`
 - Pass 2: `ema_anchor` uses strategy-specific order tags
 - Pass 3: one-way `ema_anchor` emission rule is enforced via shared post-processing
 - Pass 4/5: canonical strategy config moved under `bot.<side>.strategy.<kind>` with active-only
@@ -117,7 +117,7 @@ These are not open questions for this branch anymore.
 ### Strategy names
 
 - Canonical strategy kinds are:
-  - `trailing_grid`
+  - `trailing_martingale`
   - `ema_anchor`
 - These names are used directly with no branch-local alias layer.
 
@@ -156,7 +156,7 @@ These are not open questions for this branch anymore.
   - `bot.<side>.hsl`
   - `bot.<side>.unstuck`
 - Strategy params live in fixed namespaces:
-  - `bot.<side>.strategy.trailing_grid`
+  - `bot.<side>.strategy.trailing_martingale`
   - `bot.<side>.strategy.ema_anchor`
 - The full reference schema contains all supported strategy subtrees.
 - User configs may omit inactive strategy subtrees.
@@ -180,7 +180,7 @@ Reference shape:
 ```json
 {
   "live": {
-    "strategy_kind": "trailing_grid"
+    "strategy_kind": "trailing_martingale"
   },
   "bot": {
     "long": {
@@ -189,7 +189,7 @@ Reference shape:
       "hsl": {},
       "unstuck": {},
       "strategy": {
-        "trailing_grid": {},
+        "trailing_martingale": {},
         "ema_anchor": {}
       }
     },
@@ -199,7 +199,7 @@ Reference shape:
       "hsl": {},
       "unstuck": {},
       "strategy": {
-        "trailing_grid": {},
+        "trailing_martingale": {},
         "ema_anchor": {}
       }
     }
@@ -212,7 +212,7 @@ Reference shape:
         "hsl": {},
         "unstuck": {},
         "strategy": {
-          "trailing_grid": {},
+          "trailing_martingale": {},
           "ema_anchor": {}
         }
       },
@@ -222,7 +222,7 @@ Reference shape:
         "hsl": {},
         "unstuck": {},
         "strategy": {
-          "trailing_grid": {},
+          "trailing_martingale": {},
           "ema_anchor": {}
         }
       }
@@ -261,7 +261,7 @@ Commit intent:
 Tasks:
 
 1. Rename strategy kinds everywhere to the final canonical names:
-   - `trailing_grid`
+   - `trailing_martingale`
    - `ema_anchor`
 2. Remove old constants, spec identifiers, tests, config examples, and docs references.
 3. Update Rust strategy registry and Python adapters to use only the new names.
@@ -324,7 +324,7 @@ Tasks:
    - `bot.<side>.forager`
    - `bot.<side>.hsl`
    - `bot.<side>.unstuck`
-   - `bot.<side>.strategy.trailing_grid`
+   - `bot.<side>.strategy.trailing_martingale`
    - `bot.<side>.strategy.ema_anchor`
 2. Remove the top-level canonical `strategy` section.
 3. Update normalization, hydration, projection, validation, and runtime compilation.
@@ -401,7 +401,7 @@ Commit intent:
 
 Tasks:
 
-1. Refresh examples for `trailing_grid` and `ema_anchor`.
+1. Refresh examples for `trailing_martingale` and `ema_anchor`.
 2. Make smoke/example configs reusable and current.
 3. Remove old naming and old schema examples from docs.
 

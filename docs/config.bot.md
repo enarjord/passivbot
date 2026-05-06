@@ -17,14 +17,21 @@ Throughout:
   In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
 
-## Initial Entry & Grid Re-entries
+## Trailing Martingale Entries
 
 ```text
 alpha(span)         = 2 / (span + 1)
-entry_vol_term      = volatility_ema_1h * entry_weight_volatility_1h
-                    + volatility_ema_1m * entry_weight_volatility_1m
-entry_we_term       = (wel / wel_base) * entry_we_weight
-entry_multiplier    = max(1, 1 + entry_vol_term + entry_we_term)
+entry_threshold_vol_term =
+    volatility_ema_1h * entry.threshold_volatility_1h_weight
+  + volatility_ema_1m * entry.threshold_volatility_1m_weight
+entry_threshold_we_term = (wel / wel_base) * entry.threshold_we_weight
+entry_threshold_multiplier = max(1, 1 + entry_threshold_vol_term + entry_threshold_we_term)
+
+entry_retracement_vol_term =
+    volatility_ema_1h * entry.retracement_volatility_1h_weight
+  + volatility_ema_1m * entry.retracement_volatility_1m_weight
+entry_retracement_we_term = (wel / wel_base) * entry.retracement_we_weight
+entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_retracement_we_term)
 
 initial_price(pside) =
     long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
@@ -34,108 +41,71 @@ initial_qty(balance) =
     max(min_qty,
         balance * wel_base * entry_initial_qty_pct / initial_price)
 
-next_grid_price(pside, k) =
-    long  : last_fill_price * (1 - entry_grid_spacing_pct * entry_multiplier)^k
-    short : last_fill_price * (1 + entry_grid_spacing_pct * entry_multiplier)^k
+effective_entry_threshold =
+    entry.threshold_base_pct * entry_threshold_multiplier
 
-next_grid_qty(last_fill_qty) =
-    last_fill_qty * entry_grid_double_down_factor
+effective_entry_retracement =
+    max(0, entry.retracement_base_pct) * entry_retracement_multiplier
+
+next_entry_price(pside) =
+    long  : pos.price * (1 - effective_entry_threshold)
+    short : pos.price * (1 + effective_entry_threshold)
+
+next_entry_qty(last_fill_qty) =
+    last_fill_qty * entry.double_down_factor
 ```
 
-* Grid orders are generated until the wallet exposure implied by the next order would exceed
+* Re-entry orders are generated until the wallet exposure implied by the next order would exceed
   `wel_base` (plus safeguards).
-* `entry_grid_double_down_factor > 0` multiplies each successive re-entry quantity; values
+* `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
   `< 1` still increase size if the preceding fill was larger than the remaining gap to the
   exposure cap.
-* Grid re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
+* When `entry.retracement_base_pct <= 0`, re-entries are passive recursive limit orders.
+* When `entry.retracement_base_pct > 0`, the threshold condition must be reached first and the
+  order is emitted after retracement confirmation.
+* Re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
   current order literal instead of pulling future size forward into an inflated terminal step.
 
-## Trailing Entries
+Trailing extrema are reset for the coin+pside after any fill. Passivbot tracks its own trailing
+state from 1m OHLCVs and does not use exchange-native trailing order types.
 
-Trailing entries activate after the position experiences a favourable excursion followed by
-a pullback.
-
-```text
-threshold = entry_trailing_threshold_pct * entry_multiplier
-
-retracement = entry_trailing_retracement_pct * entry_multiplier
-
-wel_ratio = wallet_exposure(...) / wel_base
-
-triggered_when(pside == long):
-    high_since_entry    > pos.price * (1 + threshold)
-    and
-    low_since_threshold < high_since_entry * (1 - retracement)
-
-reentry_price(long)  = min(best_bid,
-                           pos.price * (1 - threshold + retracement))
-reentry_price(short) = max(best_ask,
-                           pos.price * (1 + threshold - retracement))
-
-reentry_qty = max(initial_qty, calc_reentry_qty(...) *
-                 entry_trailing_double_down_factor)
-```
-
-Trailing entries are skipped when the resulting exposure would break the wallet-exposure
-limit (or the TWEL enforcer, see below).
-
-## Take-profit Grid (Close Orders)
+## Trailing Martingale Closes
 
 ```text
-close_vol_term       = volatility_ema_1h * close_weight_volatility_1h
-                     + volatility_ema_1m * close_weight_volatility_1m
-close_multiplier     = max(1, 1 + close_vol_term)
-markup_center        = (close_grid_markup_start + close_grid_markup_end) / 2
-markup_half_width    = (close_grid_markup_start - close_grid_markup_end) / 2
-effective_markup_start = markup_center + markup_half_width * close_multiplier
-effective_markup_end   = markup_center - markup_half_width * close_multiplier
+close_threshold =
+    close.threshold_base_pct
+  + (wel / wel_base) * close.threshold_we_weight
+  + volatility_ema_1h * close.threshold_volatility_1h_weight
+  + volatility_ema_1m * close.threshold_volatility_1m_weight
 
-tp_prices(pside, i in [0, n)):
-    step   = (effective_markup_end - effective_markup_start) / (n - 1)
-    markup = effective_markup_start + i * step
+close_retracement_multiplier =
+    max(1,
+        1
+      + volatility_ema_1h * close.retracement_volatility_1h_weight
+      + volatility_ema_1m * close.retracement_volatility_1m_weight)
 
-    long  : pos.price * (1 + markup)
-    short : pos.price * (1 - markup)
-
-tp_qty(pside, i) = full_pos_size * close_grid_qty_pct
+close_retracement =
+    max(0, close.retracement_base_pct) * close_retracement_multiplier
 ```
-
-`n ≈ 1 / close_grid_qty_pct`.  Quantities are trimmed so the sum equals the current position
-size, and any leftover exposure is assigned to the TP closest to `markup_start`.
-
-For `trailing_grid`, the grid-close anchor can now be selected with
-`bot.<side>.strategy.trailing_grid.grid_close_price_anchor`:
-
-* `position_price` / `pprice`: anchor the close grid to `pos.price` (existing behavior).
-* `ema_band` / `ema_band_upper` for longs: anchor the close grid to `EMA_high`.
-* `ema_band` / `ema_band_lower` for shorts: anchor the close grid to `EMA_low`.
-
-Only grid closes use this anchor. Trailing closes still use `pos.price` so the trailing bundle
-remains restart-safe and side effects stay local to the grid-close ladder.
-
-## Trailing Closes
-
-Trailing closes mirror the trailing-entry logic with the parameters
-`close_trailing_*`.  For longs:
 
 ```text
-close_vol_term   = volatility_ema_1h * close_weight_volatility_1h
-                 + volatility_ema_1m * close_weight_volatility_1m
-close_multiplier = max(1, 1 + close_vol_term)
-
-threshold_close   = close_trailing_threshold_pct * close_multiplier
-retracement_close = close_trailing_retracement_pct * close_multiplier
-
-triggered_when:
-    high_since_entry  > pos.price * (1 + threshold_close)
-    and
-    low_since_high    < high_since_entry * (1 - retracement_close)
-
-close_price = max(best_bid, high_since_entry * (1 - retracement_close))
-close_qty   = full_pos_size * close_trailing_qty_pct
+if close.retracement_base_pct <= 0:
+    close_price(long)  = max(best_bid, pos.price * (1 + close_threshold))
+    close_price(short) = min(best_ask, pos.price * (1 - close_threshold))
+else:
+    triggered_when(long):
+        high_since_open >= pos.price * (1 + close_threshold)
+        and
+        low_since_high <= high_since_open * (1 - close_retracement)
 ```
 
-Short trailing closes invert the inequalities and use the symmetric formulas.
+Close orders are recursive when `close.threshold_we_weight != 0`: compute a slice up to
+`close.qty_pct`, simulate it filled, recompute `wel / wel_base`, then repeat until the position is
+exhausted or the close ladder is complete. If `close.retracement_base_pct <= 0` and
+`close.threshold_we_weight == 0`, all recursive closes would have the same price, so Rust emits one
+full-position close instead of redundant same-price slices. The removed v7
+`close_grid_markup_start` / `close_grid_markup_end` linear TP grid is intentionally not part of the
+V8 strategy contract.
 
 ## Auto-Unstucking
 

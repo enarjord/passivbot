@@ -56,6 +56,11 @@ Working target for `refactor/rust-strategy-runtime-plan`.
 - [x] Remove dev-branch-only compatibility shims from `format_config`.
 - [x] Update example configs to v8 schema.
 - [x] Update user docs and changelog.
+- [x] Document v8 as a clean strategy-schema break for future reviewers/agents.
+- [x] Document the recursive close single-order shortcut:
+  - when close trailing is disabled and `close.threshold_we_weight == 0.0`, same-price recursive
+    closes collapse to one full-position resting close
+  - the v7 `close_grid_markup_start` / `close_grid_markup_end` TP grid is intentionally removed
 
 ## Deferred
 

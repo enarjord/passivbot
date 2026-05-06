@@ -212,87 +212,68 @@ Key HSL analysis metrics:
   - Backtest denominator is controlled by `backtest.dynamic_wel_by_tradability`.
   - See more: `docs/risk_management.md`.
 
-### Grid Entry Parameters
+### Trailing Martingale Entries
 
-Passivbot can be configured to create a grid of entry orders, with prices and quantities determined by the following parameters:
+The canonical V8 strategy kind is `trailing_martingale`. It replaces the v7 `trailing_grid` schema with threshold/retracement fields. If retracement is disabled, threshold behaves like recursive DCA/grid spacing. If retracement is enabled, threshold is the required excursion and retracement is the confirmation move.
 
-- **entry_grid_double_down_factor**:
-  - Quantity of the next grid entry is position size times the double down factor.
+- **strategy.trailing_martingale.entry.double_down_factor**:
+  - Quantity of the next re-entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
-  - Also applies to trailing entries.
-- **entry_grid_spacing_pct**, **entry_we_weight**:
-  - Grid re-entry prices are determined as follows:
-    - `next_reentry_price_long = pos_price * (1 - entry_grid_spacing_pct * multiplier)`
-    - `next_reentry_price_short = pos_price * (1 + entry_grid_spacing_pct * multiplier)`
-  - `multiplier = max(1, 1 + entry_we_weight * wallet_exposure_ratio + volatility_component)`
-  - Setting `entry_we_weight` > 0 widens grid spacing, trailing-entry threshold, and trailing-entry retracement as the position approaches the effective wallet exposure limit.
-- **entry_weight_volatility_1h**, **entry_weight_volatility_1m**, **entry_volatility_ema_span_hours**, **entry_volatility_ema_span_minutes**:
-  - The `volatility_component` is derived from EMAs of per-candle log range `ln(high/low)` on 1h and 1m candles.
-  - Positive volatility weights widen entry grid spacing and trailing-entry threshold/retracement in volatile markets. A value of `0` disables that horizon.
-- **entry_initial_ema_dist**:
+- **strategy.trailing_martingale.entry.threshold_base_pct**:
+  - Re-entry threshold from the current position price.
+  - If entry retracement is disabled:
+    - `next_reentry_price_long = pos_price * (1 - effective_threshold)`
+    - `next_reentry_price_short = pos_price * (1 + effective_threshold)`
+  - If entry retracement is enabled, price must first move at least this far in the favorable direction before the retracement condition may place an order.
+- **strategy.trailing_martingale.entry.threshold_we_weight**, **threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+  - Entry threshold is widened multiplicatively:
+    - `effective_threshold = threshold_base_pct * max(1, 1 + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight)`
+  - `we_ratio = wallet_exposure / effective_wallet_exposure_limit`.
+  - Positive weights make entries less eager as exposure or volatility rises.
+- **strategy.trailing_martingale.entry.retracement_base_pct**:
+  - If `<= 0.0`, trailing confirmation is disabled and entries are passive recursive limit orders.
+  - If `> 0.0`, the bot waits for a favorable excursion past the threshold and then for a pullback by the effective retracement before placing the entry.
+- **strategy.trailing_martingale.entry.retracement_we_weight**, **retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
+  - Entry retracement is widened multiplicatively with the same `max(1, 1 + ...)` style as entry threshold.
+- **strategy.trailing_martingale.volatility_ema_span_hours**, **volatility_ema_span_minutes**:
+  - Volatility is the EMA of per-candle log range `ln(high / low)` on 1h and 1m candles.
+  - A volatility weight of `0` disables that horizon for the affected threshold or retracement.
+- **strategy.trailing_martingale.entry.initial_ema_dist**:
   - Offset from lower/upper EMA band.
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
   - Short initial entry/long unstuck close prices are upper EMA band plus offset.
   - See `ema_span_0`/`ema_span_1`.
-- **entry_initial_qty_pct**:
-  - `initial_entry_cost = balance * wallet_exposure_limit * entry_initial_qty_pct`
-- **entry_trailing_double_down_factor**:
-  - Multiplier controlling how aggressively trailing re-entries ramp up. As with the grid equivalent, any positive value increases the size of successive fills (higher values grow them faster).
-- **entry_trailing_threshold_pct**, **entry_trailing_retracement_pct**:
-  - Same semantics as the trailing-close parameters below, but applied to trailing entries. The bot waits for a favorable move (`threshold_pct`) and subsequent pullback (`retracement_pct`) before firing a trailing re-entry.
-  - Entry trailing threshold and retracement use the same `entry_we_weight` and volatility multiplier as grid spacing.
+- **strategy.trailing_martingale.entry.initial_qty_pct**:
+  - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
 
-### Trailing Parameters
+### Trailing Martingale Closes
 
-The same logic applies to both trailing entries and trailing closes.
+Close threshold/retracement mirrors entries, but close threshold is additive so it can intentionally move through break-even or negative markup as wallet exposure rises.
 
-- **trailing_grid_ratio**:
-  - Sets trailing and grid allocations.
-  - If `trailing_grid_ratio = 0.0`, grid orders only.
-  - If `trailing_grid_ratio = 1.0` or `trailing_grid_ratio = -1.0`, trailing orders only.
-  - If `trailing_grid_ratio > 0.0`, trailing orders first, then grid orders.
-  - If `trailing_grid_ratio < 0.0`, grid orders first, then trailing orders.
-    - Example: `trailing_grid_ratio = 0.3`: Trailing orders until position is 30% full, then grid orders for the rest.
-    - Example: `trailing_grid_ratio = -0.9`: Grid orders until position is `(1 - 0.9) = 10%` full, then trailing orders for the rest.
-    - Example: `trailing_grid_ratio = -0.12`: Grid orders until position is `(1 - 0.12) = 88%` full, then trailing orders for the rest.
-- **trailing_retracement_pct**, **trailing_threshold_pct**:
-  - Two conditions trigger a trailing order: 1) threshold and 2) retracement.
-  - If `trailing_threshold_pct <= 0.0`, the threshold condition is always triggered.
-  - For long positions:
-    - `if highest price since position change > position price * (1 + trailing_threshold_pct)`, the first condition is met.
-    - `if lowest price since highest price < highest price since position change * (1 - trailing_retracement_pct)`, the second condition is met. Place order.
-  - Passivbot tracks its own trailing prices and does not use special trailing order types from the exchange.
-  - Trailing price tracker resets when the position changes (add to or partially close).
-  - Trailing price tracking is based on 1m OHLCVs, updated on each new whole minute.
+- **strategy.trailing_martingale.close.qty_pct**:
+  - Recursive close sizing fraction.
+  - When close retracement is disabled and the close threshold does not depend on wallet exposure, recursive closes collapse to the same price. Rust intentionally emits one full-position close in that case because multiple same-price slices are redundant.
+  - When close threshold depends on wallet exposure, `qty_pct` controls the recursive ladder: each synthetic close fill lowers `we_ratio`, then the next close is recomputed.
+- **strategy.trailing_martingale.close.threshold_base_pct**:
+  - Base close distance from position price.
+  - With retracement disabled, this acts as the resting close markup:
+    - `close_price_long = pos_price * (1 + effective_threshold)`
+    - `close_price_short = pos_price * (1 - effective_threshold)`
+  - With retracement enabled, this is the first trailing condition: market price must first reach the threshold before retracement can trigger the close.
+- **strategy.trailing_martingale.close.threshold_we_weight**:
+  - Close threshold is adjusted additively by exposure:
+    - `effective_threshold = threshold_base_pct + we_ratio * threshold_we_weight + volatility_1h * threshold_volatility_1h_weight + volatility_1m * threshold_volatility_1m_weight`
+  - Negative values make closes more eager as position exposure grows, including break-even or negative-markup closes.
+  - Positive values make closes less eager as exposure grows.
+- **strategy.trailing_martingale.close.threshold_volatility_1h_weight**, **threshold_volatility_1m_weight**:
+  - Positive values shift close thresholds farther from position price during volatile periods.
+- **strategy.trailing_martingale.close.retracement_base_pct**:
+  - If `<= 0.0`, close trailing is disabled and closes are resting limit orders.
+  - If `> 0.0`, the bot waits for price to reach the close threshold and then retrace by the effective retracement.
+- **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
+  - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
 
-### Grid Close Parameters
-
-- **close_grid_markup_start**, **close_grid_markup_end**, **close_grid_qty_pct**:
-  - Take Profit (TP) prices are linearly spaced between:
-    - `pos_price * (1 + markup_start)` to `pos_price * (1 + markup_end)` for **long**.
-    - `pos_price * (1 - markup_start)` to `pos_price * (1 - markup_end)` for **short**.
-  - The TP direction depends on the relative values of `markup_start` and `markup_end`:
-    - If `markup_start > markup_end`: TP grid is built **backwards** (starting at higher price and descending for long / ascending for short).
-    - If `markup_start < markup_end`: TP grid is built **forwards** (starting at lower price and ascending for long / descending for short).
-  - Example (**long**, backwards TP): If `pos_price = 100`, `markup_start = 0.01`, `markup_end = 0.005`, and `close_grid_qty_pct = 0.2`, TP prices are: `[101.0, 100.9, 100.8, 100.7, 100.6]`.
-  - Example (**long**, forwards TP): If `markup_start = 0.005`, `markup_end = 0.01`, TP prices are: `[100.5, 100.6, 100.7, 100.8, 100.9]`.
-  - Example (**short**, forwards TP): If `pos_price = 100`, `markup_start = 0.005`, `markup_end = 0.01`, TP prices are: `[99.5, 99.4, 99.3, 99.2, 99.1]`.
-  - Example (**short**, backwards TP): If `markup_start = 0.01`, `markup_end = 0.005`, TP prices are: `[99.0, 99.1, 99.2, 99.3, 99.4]`.
-  - Quantity per order is `full pos size * close_grid_qty_pct`.
-  - Note: Full position size refers to the maxed-out size. If the actual position is smaller, fewer than `1 / close_grid_qty_pct` orders may be created.
-  - The TP grid is filled in order from `markup_start` to `markup_end`, allocating each slice up to the respective quantity:
-    - First TP up to `close_grid_qty_pct * full_pos_size`.
-    - Second TP from `close_grid_qty_pct` to `2 * close_grid_qty_pct`, etc.
-  - Example: If `full_pos_size = 100` and `long_pos_size = 55`, and prices are built backwards, then TP orders might be `[15@100.8, 20@100.9, 20@101.0]`.
-  - If position exceeds full position size, excess size is added to the TP order closest to `markup_start`.
-    - Example: If `long_pos_size = 130` and grid is forwards, TP orders are `[50@100.5, 20@100.6, 20@100.7, 20@100.8, 20@100.9]`.
-
-### Trailing Close Parameters
-
-- **close_trailing_grid_ratio**: See Trailing Parameters above.
-- **close_trailing_qty_pct**: Close quantity is `full pos size * close_trailing_qty_pct`.
-- **close_trailing_retracement_pct**: See Trailing Parameters above.
-- **close_trailing_threshold_pct**: See Trailing Parameters above.
+The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of V8 behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`.
 
 ### Unstuck Parameters
 
@@ -338,26 +319,35 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - Whole configs may be loaded with parameter "override_config_path". May either be full path to config, or filename for alternate config file from the same directory as master config file.
   - Specific override parameters take precedence over override parameters loaded from external config.
   - Only a subset of config parameters are eligible for overriding master config:
-    - config.bot.long/short:
+    - `config.bot.long/short.strategy.trailing_martingale`:
       ```
       [
-        close_grid_markup_end, close_grid_markup_start, close_grid_qty_pct, close_trailing_grid_ratio, close_trailing_qty_pct,
-    close_trailing_retracement_pct, close_trailing_threshold_pct, ema_span_0, ema_span_1,
-        entry_grid_double_down_factor, entry_grid_spacing_pct, entry_we_weight,
-        entry_weight_volatility_1h, entry_weight_volatility_1m, entry_volatility_ema_span_hours,
-        entry_volatility_ema_span_minutes, entry_initial_ema_dist,
-        entry_initial_qty_pct, entry_trailing_double_down_factor, entry_trailing_grid_ratio, entry_trailing_retracement_pct,
-        entry_trailing_threshold_pct, unstuck_close_pct, unstuck_ema_dist, unstuck_threshold, wallet_exposure_limit
+        ema_span_0, ema_span_1, volatility_ema_span_hours, volatility_ema_span_minutes,
+        entry.double_down_factor, entry.initial_ema_dist, entry.initial_qty_pct,
+        entry.threshold_base_pct, entry.threshold_we_weight,
+        entry.threshold_volatility_1h_weight, entry.threshold_volatility_1m_weight,
+        entry.retracement_base_pct, entry.retracement_we_weight,
+        entry.retracement_volatility_1h_weight, entry.retracement_volatility_1m_weight,
+        close.qty_pct, close.threshold_base_pct, close.threshold_we_weight,
+        close.threshold_volatility_1h_weight, close.threshold_volatility_1m_weight,
+        close.retracement_base_pct,
+        close.retracement_volatility_1h_weight, close.retracement_volatility_1m_weight
       ]
       ```
-    -config.live:
+    - `config.bot.long/short` shared groups:
+      ```
+      [
+        risk.*, forager.*, hsl.*, unstuck.*, wallet_exposure_limit
+      ]
+      ```
+    - `config.live`:
     ```
     [forced_mode_long, forced_mode_short, leverage]
     ```
   - Examples:
     - `{"COIN1": {"override_config_path": "path/to/override_config.json"}}` -- Will attempt to load "path/to/override_config.json" and apply all eligible parameters from there for COIN1
-    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", {"bot": {"long": {"close_grid_markup_start": 0.005}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply `{"bot": {"long": {"close_grid_markup_start": 0.005}}}` after.
-    - `{"COIN3": {"bot": {"short": {"entry_initial_qty_pct": 0.01}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
+    - `{"COIN2": {"override_config_path": "path/to/other_override_config.json", "bot": {"long": {"strategy": {"trailing_martingale": {"close": {"threshold_base_pct": 0.005}}}}}}}` -- Will attempt to load `"path/to/other_override_config.json"` first, and apply the given close threshold override after.
+    - `{"COIN3": {"bot": {"short": {"strategy": {"trailing_martingale": {"entry": {"initial_qty_pct": 0.01}}}}}, "live": {"forced_mode_long": "panic"}}}` -- Will apply given overrides for COIN3.
 - **forced_modes**:
   - Choices: `[n (normal), m (manual), gs (graceful_stop), t (tp_only), p (panic)]`.
     - **Normal mode**: Passivbot manages the position as normal.
@@ -532,9 +522,8 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
-  - **"lossless_close_trailing"**: Ensures trailing stops are profitable by enforcing `close_trailing_threshold_pct` > `close_trailing_retracement_pct`. This prevents the retracement from triggering before reaching the minimum profit threshold.
-  - **"forward_tp_grid"**: Creates an ascending take-profit grid where `close_grid_markup_start` < `close_grid_markup_end`
-  - **"backward_tp_grid"**: Creates a descending take-profit grid where `close_grid_markup_start` > `close_grid_markup_end`.
+  - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_pct` > `strategy.trailing_martingale.close.retracement_base_pct`. This prevents retracement from triggering before reaching the minimum profit threshold.
+  - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `live.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
 - **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
 - **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.

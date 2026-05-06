@@ -35,19 +35,19 @@
             {
                 "label": "pure_trailing",
                 "overrides": {
-                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 1,
-                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 1,
-                    "bot.short.strategy.trailing_grid.close_trailing_grid_ratio": 1,
-                    "bot.short.strategy.trailing_grid.entry_trailing_grid_ratio": 1
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.005,
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.005,
+                    "bot.short.strategy.trailing_martingale.close.retracement_base_pct": 0.005,
+                    "bot.short.strategy.trailing_martingale.entry.retracement_base_pct": 0.005
                 }
             },
             {
                 "label": "pure_grid",
                 "overrides": {
-                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 0,
-                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 0,
-                    "bot.short.strategy.trailing_grid.close_trailing_grid_ratio": 0,
-                    "bot.short.strategy.trailing_grid.entry_trailing_grid_ratio": 0
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0,
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
+                    "bot.short.strategy.trailing_martingale.close.retracement_base_pct": 0,
+                    "bot.short.strategy.trailing_martingale.entry.retracement_base_pct": 0
                 }
             },
             {

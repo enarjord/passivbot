@@ -379,7 +379,7 @@ config = {
 ```
 **Expected:** First scenario is long-only, second is short-only.
 
-#### TC5.3: Scenario with grid/trailing ratio overrides
+#### TC5.3: Scenario with trailing martingale retracement overrides
 ```python
 config = {
     "backtest": {
@@ -388,15 +388,15 @@ config = {
             {
                 "label": "pure_grid",
                 "overrides": {
-                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 0,
-                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 0
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0
                 }
             },
             {
                 "label": "pure_trailing",
                 "overrides": {
-                    "bot.long.strategy.trailing_grid.entry_trailing_grid_ratio": 1,
-                    "bot.long.strategy.trailing_grid.close_trailing_grid_ratio": 1
+                    "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.005,
+                    "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.005
                 }
             }
         ]

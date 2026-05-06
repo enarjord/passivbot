@@ -34,6 +34,18 @@ Impact:
 - backtest/runtime optimizations must remain observationally equivalent to naive filter-and-recompute behavior
 - separate live/backtest implementations are acceptable only with explicit parity tests against that contract
 
+## 2026-05: V8 Strategy Schema Is A Clean Break
+
+Decision: v8 replaces the v7 `trailing_grid` schema with canonical strategy kind
+`trailing_martingale`. Do not add dev-branch compatibility aliases, migrations, duplicate schema
+support, or silent shims for removed trailing-grid fields unless explicitly requested.
+
+Impact:
+- canonical config path is `bot.<side>.strategy.trailing_martingale`
+- removed v7 fields such as `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`,
+  `close_grid_markup_start`, and `close_grid_markup_end` are not part of v8 semantics
+- Rust order behavior remains the source of truth when docs or Python adapters disagree
+
 ## Note
 
 Historical/deep decision context remains in git history; keep this file short and current.

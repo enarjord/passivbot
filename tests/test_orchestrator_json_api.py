@@ -16,12 +16,8 @@ def require_real_passivbot_rust_module():
 
 
 ADAPTIVE_STRATEGY_KEYS = {
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
-    "grid_close_price_anchor",
     "close_trailing_retracement_pct",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_threshold_pct",
     "close_weight_volatility_1h",
@@ -37,7 +33,6 @@ ADAPTIVE_STRATEGY_KEYS = {
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
     "entry_trailing_retracement_pct",
-    "entry_trailing_grid_ratio",
     "entry_trailing_threshold_pct",
     "ema_span_0",
     "ema_span_1",
@@ -52,8 +47,6 @@ def _set_nested(mapping, path, value):
 
 
 LEGACY_STRATEGY_KEY_MAP = {
-    "close_grid_markup_end": ("close", "threshold_base_pct"),
-    "close_grid_markup_start": ("close", "threshold_base_pct"),
     "close_grid_qty_pct": ("close", "qty_pct"),
     "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
     "close_trailing_qty_pct": ("close", "qty_pct"),
@@ -106,8 +99,6 @@ def adaptive_strategy_params(**overrides):
         },
     }
     for key, value in overrides.items():
-        if key in {"grid_close_price_anchor", "close_trailing_grid_ratio", "entry_trailing_grid_ratio"}:
-            continue
         if key in LEGACY_STRATEGY_KEY_MAP:
             _set_nested(base, LEGACY_STRATEGY_KEY_MAP[key], value)
         elif "." in key:
@@ -1143,9 +1134,6 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
         "unstuck_threshold": 0.001,
         "unstuck_ema_dist": 0.0,
         "unstuck_loss_allowance_pct": 0.01,
-        "close_grid_qty_pct": 1.0,
-        "close_grid_markup_start": 0.01,
-        "close_grid_markup_end": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
 
@@ -1156,6 +1144,9 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
         long_pos_size=10.0,
         long_pos_price=100.0,
         long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(
+            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+        ),
         emas=ema_bundle(
             m1_close=[
                 [10.0, 1.0],
@@ -1183,11 +1174,6 @@ def test_orders_include_entries_and_closes():
     import passivbot_rust as pbr
 
     long_bp = {
-        "entry_initial_qty_pct": 0.1,
-        "entry_grid_spacing_pct": 0.01,
-        "close_grid_qty_pct": 1.0,
-        "close_grid_markup_start": 0.01,
-        "close_grid_markup_end": 0.01,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
@@ -1197,6 +1183,10 @@ def test_orders_include_entries_and_closes():
         long_pos_size=1.0,
         long_pos_price=100.0,
         long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(
+            entry={"initial_qty_pct": 0.1, "threshold_base_pct": 0.01},
+            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+        ),
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
     out = compute(pbr, inp)
@@ -1215,9 +1205,7 @@ def test_long_grid_close_uses_position_price_anchor():
         long_pos_size=1.0,
         long_pos_price=100.0,
         long_strategy=adaptive_strategy_params(
-            close_grid_markup_start=0.01,
-            close_grid_markup_end=0.01,
-            grid_close_price_anchor="ema_band_upper",
+            close={"threshold_base_pct": 0.01},
         ),
         emas=ema_bundle(
             m1_close=[
@@ -1247,9 +1235,7 @@ def test_short_grid_close_uses_position_price_anchor():
         short_mode="normal",
         short_bp=short_bp,
         short_strategy=adaptive_strategy_params(
-            close_grid_markup_start=0.01,
-            close_grid_markup_end=0.01,
-            grid_close_price_anchor="ema_band_lower",
+            close={"threshold_base_pct": 0.01},
         ),
         emas=ema_bundle(
             m1_close=[
@@ -1266,23 +1252,6 @@ def test_short_grid_close_uses_position_price_anchor():
     )
     close = next(o for o in out["orders"] if o["order_type"] == "close_grid_short")
     assert close["price"] == pytest.approx(99.0)
-
-
-def test_json_ignores_legacy_grid_close_anchor():
-    import passivbot_rust as pbr
-
-    sym = make_symbol(
-        0,
-        bid=100.0,
-        ask=100.0,
-        long_pos_size=1.0,
-        long_pos_price=100.0,
-        long_strategy=adaptive_strategy_params(grid_close_price_anchor="ema_band_lower"),
-    )
-
-    out = compute(pbr, make_input(balance=1_000.0, symbols=[sym]))
-    close = next(o for o in out["orders"] if o["order_type"] == "close_grid_long")
-    assert close["price"] == pytest.approx(101.0)
 
 
 def test_twel_entry_gating_blocks_new_entries():
@@ -1470,11 +1439,7 @@ def test_balance_raw_zero_gate_returns_early():
     """When balance_raw is 0.0, the loss gate returns early (non-positive guard)."""
     import passivbot_rust as pbr
 
-    long_bp = {
-        "close_grid_qty_pct": 1.0,
-        "close_grid_markup_start": 0.01,
-        "close_grid_markup_end": 0.01,
-    }
+    long_bp = {}
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
@@ -1483,6 +1448,9 @@ def test_balance_raw_zero_gate_returns_early():
         long_pos_size=1.0,
         long_pos_price=100.0,
         long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(
+            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+        ),
     )
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
@@ -1501,11 +1469,7 @@ def test_balance_raw_negative_gate_returns_early():
     """When balance_raw is -1.0, the loss gate returns early (non-positive guard)."""
     import passivbot_rust as pbr
 
-    long_bp = {
-        "close_grid_qty_pct": 1.0,
-        "close_grid_markup_start": 0.01,
-        "close_grid_markup_end": 0.01,
-    }
+    long_bp = {}
     global_bp = bot_params_pair(long_overrides=long_bp)
     sym = make_symbol(
         0,
@@ -1514,6 +1478,9 @@ def test_balance_raw_negative_gate_returns_early():
         long_pos_size=1.0,
         long_pos_price=100.0,
         long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(
+            close={"qty_pct": 1.0, "threshold_base_pct": 0.01},
+        ),
     )
 
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])

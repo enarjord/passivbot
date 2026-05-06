@@ -1,0 +1,58 @@
+# Strategy Runtime Contracts
+
+## V8 Clean Break
+
+The canonical v8 strategy kind is `trailing_martingale`. The v7 `trailing_grid` schema is not
+aliased to it. Do not add compatibility migrations, duplicate strategy names, or silent shims for
+removed fields unless the user explicitly asks for released-version compatibility.
+
+Removed v7 trailing-grid concepts:
+
+- `entry_trailing_grid_ratio`
+- `close_trailing_grid_ratio`
+- `close_grid_markup_start`
+- `close_grid_markup_end`
+- linear `markup_start` to `markup_end` TP grids
+- separate entry grid spacing vs trailing threshold knobs
+
+Canonical v8 config path:
+
+```text
+bot.<side>.strategy.trailing_martingale
+```
+
+## Trailing Martingale Semantics
+
+Entries and closes use threshold/retracement fields.
+
+- `retracement_base_pct <= 0.0`: trailing disabled, use passive recursive limit-order behavior.
+- `retracement_base_pct > 0.0`: threshold is the required excursion, retracement is the confirmation move.
+- Trailing extrema reset after any fill for the same coin+pside.
+- Passivbot tracks trailing state itself from candle inputs; exchange-native trailing order types are not part of the core contract.
+
+Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
+exposure weights widen them.
+
+Close thresholds are additive so they can intentionally cross through break-even or negative markup
+as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
+wallet-exposure modifier.
+
+## Close Recursion Contract
+
+Close orders are computed recursively when the close threshold depends on wallet exposure:
+
+1. Compute the next close from current position exposure.
+2. Size it up to `close.qty_pct`.
+3. Simulate that close as filled.
+4. Recompute wallet-exposure ratio.
+5. Repeat until the position is exhausted or the ladder is complete.
+
+If `close.retracement_base_pct <= 0.0` and `close.threshold_we_weight == 0.0`, recursive closes all
+have the same price. Rust intentionally emits one full-position close in that case; `close.qty_pct`
+is effectively moot because multiple same-price slices would be redundant.
+
+## Source Of Truth
+
+Rust owns strategy dispatch and order behavior. If Python docs, adapters, or tests imply old
+`trailing_grid` behavior, update those surfaces to match Rust rather than adding Python-side
+behavior patches.

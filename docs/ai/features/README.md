@@ -10,6 +10,7 @@ Open these only when touching the relevant subsystem.
 | Balance routing | `balance_routing.md` | Raw vs snapped balance semantics |
 | Monitor relay | `monitor_relay.md` | Disk-backed monitor publisher/relay/TUI/dashboard contract |
 | Trailing diagnostics | `trailing_diagnostics.md` | Standalone trailing-logic exploration tool and pure diagnostic helpers |
+| Strategy runtime | `strategy_runtime.md` | Strategy config shape, Rust strategy dispatch, entries/closes behavior |
 
 ## Authoring Rule
 

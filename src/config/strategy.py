@@ -8,7 +8,6 @@ BOT_POSITION_SIDES = ("long", "short")
 DEFAULT_STRATEGY_KIND = "trailing_martingale"
 EMA_ANCHOR_STRATEGY_KIND = "ema_anchor"
 SUPPORTED_STRATEGY_KINDS = (DEFAULT_STRATEGY_KIND, EMA_ANCHOR_STRATEGY_KIND)
-GRID_CLOSE_PRICE_ANCHOR_DEFAULT = "position_price"
 
 TRAILING_MARTINGALE_PARAM_KEYS = (
     "ema_span_0",
@@ -144,30 +143,7 @@ STRATEGY_DEFAULTS_BY_KIND = {
 }
 
 
-def normalize_grid_close_price_anchor(value, *, pside: str) -> str:
-    normalized = str(value or GRID_CLOSE_PRICE_ANCHOR_DEFAULT).strip().lower()
-    if normalized in {"", "position_price", "pprice"}:
-        return GRID_CLOSE_PRICE_ANCHOR_DEFAULT
-    if pside == "long":
-        if normalized in {"ema_band", "ema_band_upper"}:
-            return "ema_band_upper"
-        raise ValueError(
-            "bot.long.strategy.trailing_grid.grid_close_price_anchor must be one of "
-            "{'position_price', 'pprice', 'ema_band', 'ema_band_upper'}"
-        )
-    if pside == "short":
-        if normalized in {"ema_band", "ema_band_lower"}:
-            return "ema_band_lower"
-        raise ValueError(
-            "bot.short.strategy.trailing_grid.grid_close_price_anchor must be one of "
-            "{'position_price', 'pprice', 'ema_band', 'ema_band_lower'}"
-        )
-    raise ValueError(f"unsupported pside {pside!r} for grid_close_price_anchor normalization")
-
-
 def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
-    if strategy_kind == DEFAULT_STRATEGY_KIND and key == "grid_close_price_anchor":
-        return normalize_grid_close_price_anchor(value, pside=pside)
     return value
 
 

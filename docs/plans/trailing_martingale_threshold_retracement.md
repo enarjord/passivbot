@@ -1,8 +1,8 @@
 # Trailing Martingale Threshold/Retracement Redesign
 
-Working draft for a possible v8 replacement for the old `trailing_grid` strategy.
+Design record for the v8 replacement for the old `trailing_grid` strategy.
 
-Recommended strategy kind: `trailing_martingale`.
+Canonical strategy kind: `trailing_martingale`.
 
 ## Goal
 

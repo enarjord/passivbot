@@ -22,12 +22,8 @@ import pytest
 
 
 ADAPTIVE_STRATEGY_KEYS = {
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
-    "grid_close_price_anchor",
     "close_trailing_retracement_pct",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_threshold_pct",
     "close_weight_volatility_1h",
@@ -43,7 +39,6 @@ ADAPTIVE_STRATEGY_KEYS = {
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
     "entry_trailing_retracement_pct",
-    "entry_trailing_grid_ratio",
     "entry_trailing_threshold_pct",
     "ema_span_0",
     "ema_span_1",
@@ -58,8 +53,6 @@ def _set_nested(mapping, path, value):
 
 
 LEGACY_STRATEGY_KEY_MAP = {
-    "close_grid_markup_end": ("close", "threshold_base_pct"),
-    "close_grid_markup_start": ("close", "threshold_base_pct"),
     "close_grid_qty_pct": ("close", "qty_pct"),
     "close_trailing_retracement_pct": ("close", "retracement_base_pct"),
     "close_trailing_qty_pct": ("close", "qty_pct"),
@@ -82,7 +75,7 @@ LEGACY_STRATEGY_KEY_MAP = {
 
 
 def adaptive_strategy_params(**overrides):
-    """Create trailing_martingale strategy params with legacy override support."""
+    """Create trailing_martingale strategy params for direct JSON orchestrator tests."""
     base = {
         "ema_span_0": 10.0,
         "ema_span_1": 20.0,
@@ -113,8 +106,6 @@ def adaptive_strategy_params(**overrides):
         },
     }
     for key, value in overrides.items():
-        if key in {"grid_close_price_anchor", "close_trailing_grid_ratio", "entry_trailing_grid_ratio"}:
-            continue
         if key in LEGACY_STRATEGY_KEY_MAP:
             _set_nested(base, LEGACY_STRATEGY_KEY_MAP[key], value)
         elif "." in key:
@@ -134,7 +125,11 @@ def _split_bot_and_adaptive_strategy_overrides(overrides):
 
 
 def bot_params(**overrides):
-    """Create base bot params with overrides."""
+    """Create flat Rust BotParams with overrides.
+
+    Some BotParams field names still reflect the pre-v8 schema; direct strategy behavior in these
+    tests comes from `strategy_params` unless a test explicitly exercises flat BotParams parsing.
+    """
     base = {
         "close_grid_markup_end": 0.01,
         "close_grid_markup_start": 0.01,
@@ -430,11 +425,9 @@ class TestOrchestratorOrderAccuracy:
                     ask=105.0,
                     long_pos_size=1.0,  # Have 1.0 long position
                     long_pos_price=100.0,  # Bought at 100
-                    long_bp={
-                        "close_grid_markup_start": 0.01,  # Start at 1% markup
-                        "close_grid_markup_end": 0.05,  # End at 5% markup
-                        "close_grid_qty_pct": 0.5,  # Close 50% per order
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                    ),
                 )
             ],
         )
@@ -491,12 +484,13 @@ class TestOrchestratorOrderAccuracy:
                     0,
                     bid=100.0,
                     ask=100.0,
-                    long_bp={
-                        "entry_trailing_threshold_pct": 0.02,  # Trail after 2% move
-                        "entry_trailing_retracement_pct": 0.01,  # Enter on 1% retracement
-                        "entry_trailing_grid_ratio": 0.5,  # 50% of grid
-                        "entry_initial_qty_pct": 0.1,
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        entry={
+                            "threshold_base_pct": 0.02,
+                            "retracement_base_pct": 0.01,
+                            "initial_qty_pct": 0.1,
+                        },
+                    ),
                 )
             ],
         )
@@ -864,10 +858,9 @@ class TestSignedQuantitiesConvention:
                     ask=105.0,
                     long_pos_size=1.0,
                     long_pos_price=100.0,
-                    long_bp={
-                        "close_grid_markup_start": 0.01,
-                        "close_grid_qty_pct": 0.5,
-                    },
+                    long_strategy=adaptive_strategy_params(
+                        close={"threshold_base_pct": 0.01, "qty_pct": 0.5},
+                    ),
                 )
             ],
         )

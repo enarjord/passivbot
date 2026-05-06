@@ -223,22 +223,22 @@
                 "risk": {
                     "entry_cooldown_minutes": [0,60,0.1],
                     "n_positions": [1,1,1],
-                    "total_wallet_exposure_limit": [1,10,0.01],
-                    "total_exposure_enforcer_threshold": [10,10],
+                    "total_wallet_exposure_limit": [0.2,2,0.01],
+                    "total_exposure_enforcer_threshold": [1,1],
                     "we_excess_allowance_pct": [0,0],
-                    "position_exposure_enforcer_threshold": [10,10]
+                    "position_exposure_enforcer_threshold": [0.98,0.98]
                 },
                 "strategy": {
                     "ema_anchor": {
-                        "base_qty_pct": [0.001,0.5,0.0001],
+                        "base_qty_pct": [0.001,0.05,0.0001],
                         "ema_span_0": [30,2880,1],
                         "ema_span_1": [30,2880,1],
                         "entry_double_down_factor": [0,2,0.01],
                         "entry_volatility_ema_span_hours": [1,672,1],
                         "offset": [0.0001,0.02,0.0001],
-                        "offset_psize_weight": [0.0001,100,0.0001],
-                        "offset_volatility_1h_weight": [0.1,40,0.1],
-                        "offset_volatility_1m_weight": [0.1,40,0.1],
+                        "offset_psize_weight": [0,5,0.0001],
+                        "offset_volatility_1h_weight": [0,20,0.1],
+                        "offset_volatility_1m_weight": [0,20,0.1],
                         "offset_volatility_ema_span_minutes": [5,720,1]
                     }
                 },
@@ -279,9 +279,9 @@
                         "entry_double_down_factor": [0,2,0.01],
                         "entry_volatility_ema_span_hours": [1,672,1],
                         "offset": [0.0001,0.02,0.0001],
-                        "offset_psize_weight": [0.0001,100,0.0001],
-                        "offset_volatility_1h_weight": [0,40,0.1],
-                        "offset_volatility_1m_weight": [0,40,0.1],
+                        "offset_psize_weight": [0,5,0.0001],
+                        "offset_volatility_1h_weight": [0,20,0.1],
+                        "offset_volatility_1m_weight": [0,20,0.1],
                         "offset_volatility_ema_span_minutes": [5,720,1]
                     }
                 },
