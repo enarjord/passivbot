@@ -1370,7 +1370,8 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
     assert bot.cm.calls == []
 
 
-def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch):
+def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, caplog):
+    import logging
     import passivbot as pb_mod
 
     now_ms = 10 * 60_000
@@ -1401,6 +1402,57 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch):
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
     bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
     bot.cm = FakeCM()
+
+    with caplog.at_level(logging.WARNING):
+        signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+            bot, ["TAIL/USDT:USDT"], now_ms=now_ms
+        )
+
+    assert missing == []
+    assert signature == (
+        (
+            "TAIL/USDT:USDT",
+            latest_expected,
+            "tail_gap_fallback",
+            last_cached,
+            latest_expected - last_cached,
+        ),
+    )
+    assert any(
+        "active tail gap using last real candle" in record.message
+        and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
+
+
+def test_completed_candle_freshness_allows_real_cm_bounded_active_tail_gap(
+    monkeypatch, tmp_path
+):
+    import numpy as np
+    import passivbot as pb_mod
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager
+
+    now_ms = 10 * 60_000
+    latest_expected = 9 * 60_000
+    last_cached = 6 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="testex",
+        cache_dir=str(tmp_path / "caches"),
+    )
+    cm._persist_batch(
+        "TAIL/USDT:USDT",
+        np.array([(last_cached, 100.0, 100.0, 100.0, 100.0, 1.0)], dtype=CANDLE_DTYPE),
+        timeframe="1m",
+        merge_cache=True,
+        last_refresh_ms=now_ms,
+    )
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = cm
 
     signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
         bot, ["TAIL/USDT:USDT"], now_ms=now_ms

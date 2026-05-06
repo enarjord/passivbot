@@ -1196,6 +1196,27 @@ def test_completed_candle_health_reports_open_tail_gap(tmp_path):
     assert one_m["tail_gap_age_ms"] == 2 * ONE_MIN_MS
 
 
+def test_completed_candle_health_reports_prior_cached_ts_for_one_candle_tail_gap(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TAILPRIOR/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    latest_expected = 9 * ONE_MIN_MS
+    prior = 6 * ONE_MIN_MS
+    candles = np.array([(prior, 10.0, 10.0, 10.0, 10.0, 1.0)], dtype=CANDLE_DTYPE)
+    cm._persist_batch(symbol, candles, timeframe="1m", merge_cache=True, last_refresh_ms=now_ms)
+
+    report = cm.get_completed_candle_health(symbol, {"1m": 1}, now_ms=now_ms)
+
+    one_m = report["timeframes"]["1m"]
+    assert report["ok"] is False
+    assert one_m["coverage_ok"] is False
+    assert one_m["missing_spans"] == [(latest_expected, latest_expected)]
+    assert one_m["open_tail_gap"] is True
+    assert one_m["last_cached_ts"] == prior
+    assert one_m["tail_gap_candles"] == 3
+    assert one_m["tail_gap_age_ms"] == latest_expected - prior
+
+
 def test_completed_candle_health_reports_synthetic_and_hour_boundary(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "SYNTH/USDT:USDT"

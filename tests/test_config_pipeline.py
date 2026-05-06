@@ -427,6 +427,31 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
             0,
             "config\\.live\\.max_active_candle_tail_gap_minutes must be finite and > 0\\.0",
         ),
+        (
+            "max_forager_candle_refresh_seconds",
+            -1,
+            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+        ),
+        (
+            "max_forager_candle_refresh_seconds",
+            0,
+            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+        ),
+        (
+            "max_forager_candle_refresh_seconds",
+            float("inf"),
+            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+        ),
+        (
+            "max_forager_candle_refresh_seconds",
+            float("nan"),
+            "config\\.live\\.max_forager_candle_refresh_seconds must be finite and > 0\\.0",
+        ),
+        (
+            "max_forager_candle_refresh_seconds",
+            "not-a-number",
+            "config\\.live\\.max_forager_candle_refresh_seconds must be numeric",
+        ),
     ],
 )
 def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match):

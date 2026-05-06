@@ -8237,10 +8237,7 @@ class Passivbot:
             missing_end = int(missing_spans[0][1])
         except Exception:
             return False, tuple(), "missing_latest_completed_1m"
-        if (
-            missing_end != latest_expected_i
-            or missing_start != last_cached_i + ONE_MIN_MS
-        ):
+        if missing_end != latest_expected_i or missing_start <= last_cached_i:
             return False, tuple(), "missing_latest_completed_1m"
         try:
             tail_age_ms = int(
@@ -8286,7 +8283,7 @@ class Passivbot:
                 return
             last_by_symbol[str(symbol)] = key
             max_tail_gap_ms = int(Passivbot._active_candle_tail_gap_max_ms(self))
-            logging.info(
+            logging.warning(
                 "[candle] active tail gap using last real candle | symbol=%s expected=%s latest_real=%s tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
                 Passivbot._log_symbol(symbol),
                 ts_to_date(expected_ts)[:19],

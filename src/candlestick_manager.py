@@ -2370,6 +2370,46 @@ class CandlestickManager:
         # Enforce in-memory retention: keep only the latest N candles per symbol (applied by caller after assign)
         return merged
 
+    def _latest_cached_ts_before(
+        self, symbol: str, before_ts: int, *, timeframe: str
+    ) -> Optional[int]:
+        """Return latest known cached candle timestamp before `before_ts` without remote fetch."""
+        tf_norm = self._normalize_timeframe_arg(timeframe, None)
+        threshold = int(before_ts)
+        best: Optional[int] = None
+        if tf_norm == "1m":
+            try:
+                cached = self._cache.get(symbol)
+                if cached is not None and cached.size:
+                    arr = _ensure_dtype(cached)
+                    ts = arr["ts"].astype(np.int64, copy=False)
+                    prior = ts[ts < threshold]
+                    if prior.size:
+                        best = int(np.max(prior))
+            except Exception:
+                pass
+        try:
+            idx = self._ensure_symbol_index(symbol, timeframe=tf_norm)
+            meta_last = idx.get("meta", {}).get("last_final_ts")
+            if meta_last is not None:
+                meta_i = int(meta_last)
+                if 0 < meta_i < threshold:
+                    best = meta_i if best is None else max(best, meta_i)
+            shards = idx.get("shards", {})
+            if isinstance(shards, dict):
+                for shard_meta in shards.values():
+                    if not isinstance(shard_meta, dict):
+                        continue
+                    max_ts = shard_meta.get("max_ts")
+                    if max_ts is None:
+                        continue
+                    max_i = int(max_ts)
+                    if 0 < max_i < threshold:
+                        best = max_i if best is None else max(best, max_i)
+        except Exception:
+            pass
+        return best
+
     # ----- Known gap helpers -----
 
     def _get_known_gaps_enhanced(self, symbol: str) -> List[GapEntry]:
@@ -2961,6 +3001,14 @@ class CandlestickManager:
             open_tail_gap = bool(
                 missing and end_ts >= start_ts and int(missing[-1][1]) >= int(end_ts)
             )
+            if open_tail_gap and last_cached_ts is None and end_ts >= start_ts:
+                prior_cached_ts = self._latest_cached_ts_before(
+                    symbol, start_ts, timeframe=tf_norm
+                )
+                if prior_cached_ts is not None:
+                    last_cached_ts = int(prior_cached_ts)
+                    if last_disk_ts is None:
+                        last_disk_ts = int(prior_cached_ts)
             tail_gap_candles = 0
             if open_tail_gap:
                 if last_cached_ts is None:

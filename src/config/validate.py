@@ -60,6 +60,16 @@ def validate_config(
         raise ValueError(
             "config.live.max_active_candle_tail_gap_minutes must be finite and > 0.0"
         )
+    try:
+        forager_refresh_seconds = float(config["live"]["max_forager_candle_refresh_seconds"])
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "config.live.max_forager_candle_refresh_seconds must be numeric"
+        ) from exc
+    if not math.isfinite(forager_refresh_seconds) or forager_refresh_seconds <= 0.0:
+        raise ValueError(
+            "config.live.max_forager_candle_refresh_seconds must be finite and > 0.0"
+        )
     max_cancellations = int(config["live"]["max_n_cancellations_per_batch"])
     max_creations = int(config["live"]["max_n_creations_per_batch"])
     if max_cancellations <= max_creations:
