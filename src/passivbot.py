@@ -13446,8 +13446,21 @@ class Passivbot:
                     await candle_task
                 refreshed_count += 1
                 if fetch_delay_s > 0:
+                    sleep_s = fetch_delay_s
+                    if max_refresh_ms > 0:
+                        elapsed_after_fetch_ms = int(
+                            max(0, utc_ms() - refresh_started_ms)
+                        )
+                        remaining_s = max(
+                            0.0,
+                            float(max_refresh_ms - elapsed_after_fetch_ms) / 1000.0,
+                        )
+                        if remaining_s <= 0.0:
+                            paused_by_cap = True
+                            break
+                        sleep_s = min(float(fetch_delay_s), remaining_s)
                     await Passivbot._sleep_unless_shutdown(
-                        self, fetch_delay_s, stage="forager_candidate_candle_refresh"
+                        self, sleep_s, stage="forager_candidate_candle_refresh"
                     )
                 now_ms = utc_ms()
                 if len(to_refresh) > 1 and now_ms - last_progress_ms >= 30_000:
