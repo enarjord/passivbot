@@ -96,7 +96,9 @@ async def test_active_candle_refresh_only_fetches_urgent_symbols(monkeypatch):
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -195,7 +197,9 @@ async def test_active_candle_refresh_ignores_broad_graceful_stop_universe(monkey
         _urgent_active_candle_symbols = pb_mod.Passivbot._urgent_active_candle_symbols
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -221,7 +225,9 @@ async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatc
             return True
 
         async def get_candles(self, symbol, **kwargs):
-            raise AssertionError("rate-limited active refresh should break before fetch")
+            raise AssertionError(
+                "rate-limited active refresh should break before fetch"
+            )
 
         def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
             return {
@@ -270,7 +276,9 @@ async def test_active_candle_refresh_does_not_stamp_when_rate_limited(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_schedules_forager_candidates_after_planning(monkeypatch):
+async def test_execute_to_exchange_schedules_forager_candidates_after_planning(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     now_ms = 10_000_000
@@ -296,7 +304,9 @@ async def test_execute_to_exchange_schedules_forager_candidates_after_planning(m
             self.events.append("forager_refresh_scheduled")
 
         async def _refresh_forager_candidate_candles(self):
-            raise AssertionError("forager candidate refresh must not block execute_to_exchange")
+            raise AssertionError(
+                "forager candidate refresh must not block execute_to_exchange"
+            )
 
     bot = FakeBot()
     assert await pb_mod.Passivbot.execute_to_exchange(bot) == ([], [])
@@ -362,11 +372,15 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
         def get_last_refresh_ms(self, symbol):
             return int(self.last_refresh.get(symbol, 0))
 
-        async def get_latest_ema_close(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("close", symbol, None, int(max_age_ms)))
             return 1.0
 
-        async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("qv", symbol, None, int(max_age_ms)))
             return 1.0
 
@@ -414,7 +428,9 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
         has_position = pb_mod.Passivbot.has_position
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -436,7 +452,9 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondaries(monkeypatch):
+async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondaries(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     now_ms = 2_000_000
@@ -453,11 +471,15 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         def get_last_refresh_ms(self, symbol):
             return int(self.last_refresh.get(symbol, 0))
 
-        async def get_latest_ema_close(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("close", symbol, None, int(max_age_ms)))
             return 1.0
 
-        async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("qv", symbol, None, int(max_age_ms)))
             return 1.0
 
@@ -505,7 +527,9 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         has_position = pb_mod.Passivbot.has_position
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -554,11 +578,15 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
         def get_last_refresh_ms(self, symbol):
             return int(self.last_refresh.get(symbol, 0))
 
-        async def get_latest_ema_close(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("close", symbol, None, int(max_age_ms)))
             return 1.0
 
-        async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("qv", symbol, None, int(max_age_ms)))
             return 1.0
 
@@ -607,7 +635,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
         get_symbols_with_pos = pb_mod.Passivbot.get_symbols_with_pos
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -621,7 +651,9 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondaries_without_o
     for kind, symbol, tf, max_age_ms in bot.cm.calls:
         by_symbol.setdefault(symbol, []).append((kind, tf, max_age_ms))
 
-    assert all(max_age < cache_only_ttl for _kind, _tf, max_age in by_symbol["POS/USDT:USDT"])
+    assert all(
+        max_age < cache_only_ttl for _kind, _tf, max_age in by_symbol["POS/USDT:USDT"]
+    )
     assert all(
         max_age >= cache_only_ttl
         for _kind, _tf, max_age in by_symbol["SECONDARY/USDT:USDT"]
@@ -648,11 +680,15 @@ async def test_orchestrator_ema_bundle_marks_incomplete_cache_only_symbol_unavai
         def get_last_refresh_ms(self, symbol):
             return int(self.last_refresh.get(symbol, 0))
 
-        async def get_latest_ema_close(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("close", symbol, None, int(max_age_ms)))
             return 1.0
 
-        async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms=None, **kwargs):
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, **kwargs
+        ):
             self.calls.append(("qv", symbol, None, int(max_age_ms)))
             if symbol == "CACHE/USDT:USDT":
                 raise RuntimeError("no cached volume")
@@ -702,7 +738,9 @@ async def test_orchestrator_ema_bundle_marks_incomplete_cache_only_symbol_unavai
         has_position = pb_mod.Passivbot.has_position
         _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
-        _rank_symbols_by_candle_staleness = pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
         _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
@@ -869,7 +907,9 @@ async def test_background_candle_warmup_is_scheduled_not_awaited():
 
 
 @pytest.mark.asyncio
-async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(monkeypatch):
+async def test_forager_candidate_refresh_rotates_by_completed_candle_staleness(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     now_holder = {"now": 10_000_000}
@@ -1106,7 +1146,9 @@ async def test_forager_candidate_refresh_caps_accumulated_budget(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_forager_candidate_refresh_yields_after_wall_time_cap(monkeypatch, caplog):
+async def test_forager_candidate_refresh_yields_after_wall_time_cap(
+    monkeypatch, caplog
+):
     import passivbot as pb_mod
 
     now_holder = {"now": 10_000_000}
@@ -1285,7 +1327,10 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
 
     class FakeBot:
         config = {"live": {"max_ohlcv_fetches_per_minute": 30}}
-        approved_coins_minus_ignored_coins = {"long": {"FRESH/USDT:USDT"}, "short": set()}
+        approved_coins_minus_ignored_coins = {
+            "long": {"FRESH/USDT:USDT"},
+            "short": set(),
+        }
         active_symbols = []
         positions = {}
         open_orders = {}
@@ -1323,3 +1368,135 @@ async def test_forager_candidate_refresh_skips_latest_final_candles(monkeypatch)
     await pb_mod.Passivbot._refresh_forager_candidate_candles(bot)
 
     assert bot.cm.calls == []
+
+
+def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 10 * 60_000
+    latest_expected = 9 * 60_000
+    last_cached = 6 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            assert windows == {"1m": 1}
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "timeframe": "1m",
+                        "coverage_ok": False,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": last_cached,
+                        "missing_candles": 3,
+                        "missing_spans": [(last_cached + 60_000, latest_expected)],
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 3,
+                        "tail_gap_age_ms": latest_expected - last_cached,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = FakeCM()
+
+    signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+        bot, ["TAIL/USDT:USDT"], now_ms=now_ms
+    )
+
+    assert missing == []
+    assert signature == (
+        (
+            "TAIL/USDT:USDT",
+            latest_expected,
+            "tail_gap_fallback",
+            last_cached,
+            latest_expected - last_cached,
+        ),
+    )
+
+
+def test_completed_candle_freshness_blocks_excessive_active_tail_gap(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 20 * 60_000
+    latest_expected = 19 * 60_000
+    last_cached = 8 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            assert windows == {"1m": 1}
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "timeframe": "1m",
+                        "coverage_ok": False,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": last_cached,
+                        "missing_candles": 11,
+                        "missing_spans": [(last_cached + 60_000, latest_expected)],
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 11,
+                        "tail_gap_age_ms": latest_expected - last_cached,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = FakeCM()
+
+    signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+        bot, ["TAIL/USDT:USDT"], now_ms=now_ms
+    )
+
+    assert signature == ()
+    assert missing[0]["reason"] == "active_candle_tail_gap_exceeded"
+    assert missing[0]["tail_gap_age_ms"] == latest_expected - last_cached
+
+
+def test_completed_candle_freshness_blocks_bounded_gap_plus_tail(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 10 * 60_000
+    latest_expected = 9 * 60_000
+    last_cached = 6 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            assert windows == {"1m": 1}
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "timeframe": "1m",
+                        "coverage_ok": False,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": last_cached,
+                        "missing_candles": 4,
+                        "missing_spans": [
+                            (2 * 60_000, 2 * 60_000),
+                            (last_cached + 60_000, latest_expected),
+                        ],
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 3,
+                        "tail_gap_age_ms": latest_expected - last_cached,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = FakeCM()
+
+    signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+        bot, ["TAIL/USDT:USDT"], now_ms=now_ms
+    )
+
+    assert signature == ()
+    assert missing[0]["reason"] == "missing_latest_completed_1m"

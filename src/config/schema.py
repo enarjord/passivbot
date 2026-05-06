@@ -1,6 +1,5 @@
 from copy import deepcopy
 
-
 CONFIG_SCHEMA_VERSION = "v7.10.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos7.json"
 
@@ -140,12 +139,18 @@ def get_template_config():
                     },
                     {
                         "label": "n_positions_3",
-                        "overrides": {"bot.long.n_positions": 3, "bot.short.n_positions": 3},
+                        "overrides": {
+                            "bot.long.n_positions": 3,
+                            "bot.short.n_positions": 3,
+                        },
                         "start_date": "2025-01-01",
                     },
                     {
                         "label": "n_positions_20",
-                        "overrides": {"bot.long.n_positions": 20, "bot.short.n_positions": 20},
+                        "overrides": {
+                            "bot.long.n_positions": 20,
+                            "bot.short.n_positions": 20,
+                        },
                         "start_date": "2025-01-01",
                     },
                     {
@@ -363,6 +368,7 @@ def get_template_config():
                 "max_concurrent_api_requests": None,
                 "max_disk_candles_per_symbol_per_tf": 2000000,
                 "max_memory_candles_per_symbol": 200000,
+                "max_active_candle_tail_gap_minutes": 10,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,

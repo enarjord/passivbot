@@ -17,14 +17,30 @@ from config import (
 @pytest.mark.parametrize(
     ("target", "expected_sections"),
     [
-        ("canonical", {"backtest", "bot", "coin_overrides", "live", "logging", "monitor", "optimize"}),
+        (
+            "canonical",
+            {
+                "backtest",
+                "bot",
+                "coin_overrides",
+                "live",
+                "logging",
+                "monitor",
+                "optimize",
+            },
+        ),
         ("live", {"bot", "coin_overrides", "live", "logging", "monitor"}),
         ("backtest", {"backtest", "bot", "coin_overrides", "live", "logging"}),
-        ("optimize", {"backtest", "bot", "coin_overrides", "live", "logging", "optimize"}),
+        (
+            "optimize",
+            {"backtest", "bot", "coin_overrides", "live", "logging", "optimize"},
+        ),
         ("monitor", {"live", "logging", "monitor"}),
     ],
 )
-def test_project_config_keeps_only_target_sections_and_metadata(target, expected_sections):
+def test_project_config_keeps_only_target_sections_and_metadata(
+    target, expected_sections
+):
     cfg = get_template_config()
     cfg["_raw"] = {"live": {"user": "raw_user"}}
     cfg["_raw_effective"] = {"live": {"user": "effective_user"}}
@@ -33,9 +49,23 @@ def test_project_config_keeps_only_target_sections_and_metadata(target, expected
 
     projected = project_config(cfg, target)
 
-    metadata_keys = {"_raw", "_raw_effective", "_transform_log", "_coins_sources", "config_version"}
+    metadata_keys = {
+        "_raw",
+        "_raw_effective",
+        "_transform_log",
+        "_coins_sources",
+        "config_version",
+    }
     assert set(projected) == expected_sections | metadata_keys
-    for section in ("backtest", "bot", "coin_overrides", "live", "logging", "monitor", "optimize"):
+    for section in (
+        "backtest",
+        "bot",
+        "coin_overrides",
+        "live",
+        "logging",
+        "monitor",
+        "optimize",
+    ):
         if section in expected_sections:
             assert section in projected
         else:
@@ -71,7 +101,9 @@ def test_prepare_config_rejects_nontunable_bot_bounds(bound_key):
     cfg = get_template_config()
     cfg["optimize"]["bounds"][bound_key] = [0.0, 1.0]
 
-    with pytest.raises(KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."):
+    with pytest.raises(
+        KeyError, match=rf"optimize bound {bound_key} must map to a numeric bot\."
+    ):
         prepare_config(cfg, verbose=False, target="canonical", runtime=None)
 
 
@@ -85,9 +117,18 @@ def test_compile_runtime_config_adds_runtime_aliases_without_removing_canonical_
 
     compiled = compile_runtime_config(canonical, runtime="optimize")
 
-    assert compiled["bot"]["long"]["forager_volume_ema_span"] == canonical["bot"]["long"]["forager_volume_ema_span"]
-    assert compiled["bot"]["long"]["filter_volume_ema_span"] == canonical["bot"]["long"]["forager_volume_ema_span"]
-    assert compiled["bot"]["long"]["filter_volatility_ema_span"] == canonical["bot"]["long"]["forager_volatility_ema_span"]
+    assert (
+        compiled["bot"]["long"]["forager_volume_ema_span"]
+        == canonical["bot"]["long"]["forager_volume_ema_span"]
+    )
+    assert (
+        compiled["bot"]["long"]["filter_volume_ema_span"]
+        == canonical["bot"]["long"]["forager_volume_ema_span"]
+    )
+    assert (
+        compiled["bot"]["long"]["filter_volatility_ema_span"]
+        == canonical["bot"]["long"]["forager_volatility_ema_span"]
+    )
     assert compiled["bot"]["long"]["filter_volatility_drop_pct"] == pytest.approx(0.0)
     assert (
         compiled["optimize"]["bounds"]["long_filter_volume_ema_span"]
@@ -134,14 +175,22 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     )
 
     template = get_template_config()
-    assert prepared["backtest"]["market_order_slippage_pct"] == template["backtest"]["market_order_slippage_pct"]
+    assert (
+        prepared["backtest"]["market_order_slippage_pct"]
+        == template["backtest"]["market_order_slippage_pct"]
+    )
     assert prepared["backtest"]["visible_metrics"] is None
-    assert prepared["bot"]["long"]["filter_volume_ema_span"] == template["bot"]["long"]["forager_volume_ema_span"]
+    assert (
+        prepared["bot"]["long"]["filter_volume_ema_span"]
+        == template["bot"]["long"]["forager_volume_ema_span"]
+    )
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
 
 
-def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifact(tmp_path):
+def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifact(
+    tmp_path,
+):
     source = get_template_config()
     rounded = {
         "volume": 0.323,
@@ -158,14 +207,20 @@ def test_load_prepared_config_accepts_rounded_forager_weights_from_saved_artifac
     assert prepared["bot"]["long"]["forager_score_weights"]["volume"] == pytest.approx(
         0.3233233233233233
     )
-    assert prepared["bot"]["short"]["forager_score_weights"]["ema_readiness"] == pytest.approx(
-        0.4344344344344344
-    )
+    assert prepared["bot"]["short"]["forager_score_weights"][
+        "ema_readiness"
+    ] == pytest.approx(0.4344344344344344)
 
 
 def test_prepare_config_preserves_backtest_visible_metrics():
     source = {
-        "backtest": {"visible_metrics": ["gain", "drawdown_worst_hsl", "hard_stop_restarts_short"]},
+        "backtest": {
+            "visible_metrics": [
+                "gain",
+                "drawdown_worst_hsl",
+                "hard_stop_restarts_short",
+            ]
+        },
         "bot": {"long": {}, "short": {}},
         "coin_overrides": {},
         "live": {},
@@ -203,7 +258,9 @@ def test_prepare_config_rejects_invalid_backtest_visible_metrics_type():
         "optimize": {"bounds": {}},
     }
 
-    with pytest.raises(ValueError, match="backtest.visible_metrics must be null, \\[\\], or"):
+    with pytest.raises(
+        ValueError, match="backtest.visible_metrics must be null, \\[\\], or"
+    ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -287,7 +344,9 @@ def test_prepare_config_rejects_invalid_pnls_max_lookback_days_string():
         "optimize": {"bounds": {}},
     }
 
-    with pytest.raises(ValueError, match="live\\.pnls_max_lookback_days must be >= 0 or 'all'"):
+    with pytest.raises(
+        ValueError, match="live\\.pnls_max_lookback_days must be >= 0 or 'all'"
+    ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
@@ -362,6 +421,11 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
             "forager_score_hysteresis_pct",
             -0.1,
             "config\\.live\\.forager_score_hysteresis_pct must be finite and >= 0\\.0",
+        ),
+        (
+            "max_active_candle_tail_gap_minutes",
+            0,
+            "config\\.live\\.max_active_candle_tail_gap_minutes must be finite and > 0\\.0",
         ),
     ],
 )
@@ -459,12 +523,15 @@ def test_prepare_config_warns_and_removes_entry_grid_inflation_enabled(caplog):
     source["bot"]["short"]["entry_grid_inflation_enabled"] = True
 
     with caplog.at_level(logging.WARNING):
-        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+        prepared = prepare_config(
+            source, verbose=False, target="canonical", runtime=None
+        )
 
     assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
     assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
     assert any(
-        "entry_grid_inflation_enabled" in rec.message and "has no effect; removing it" in rec.message
+        "entry_grid_inflation_enabled" in rec.message
+        and "has no effect; removing it" in rec.message
         for rec in caplog.records
     )
 
@@ -484,7 +551,9 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
         source["bot"]["long"].pop(key)
 
     with caplog.at_level(logging.INFO):
-        prepared = prepare_config(source, verbose=True, target="canonical", runtime=None)
+        prepared = prepare_config(
+            source, verbose=True, target="canonical", runtime=None
+        )
 
     long_cfg = prepared["bot"]["long"]
     assert long_cfg["entry_trailing_retracement_volatility_weight"] == 0.0
@@ -502,10 +571,14 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():
-    prepared = load_prepared_config("configs/fake_live_hsl_btc.hjson", verbose=False, target="live")
+    prepared = load_prepared_config(
+        "configs/fake_live_hsl_btc.hjson", verbose=False, target="live"
+    )
 
     assert prepared["bot"]["short"]["total_wallet_exposure_limit"] == 0.0
-    assert prepared["bot"]["short"]["entry_trailing_double_down_factor"] == pytest.approx(1.0)
+    assert prepared["bot"]["short"][
+        "entry_trailing_double_down_factor"
+    ] == pytest.approx(1.0)
 
 
 def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(caplog):
@@ -514,11 +587,15 @@ def test_prepare_config_silently_removes_disabled_entry_grid_inflation_flag(capl
     source["bot"]["short"]["entry_grid_inflation_enabled"] = False
 
     with caplog.at_level(logging.WARNING):
-        prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+        prepared = prepare_config(
+            source, verbose=False, target="canonical", runtime=None
+        )
 
     assert "entry_grid_inflation_enabled" not in prepared["bot"]["long"]
     assert "entry_grid_inflation_enabled" not in prepared["bot"]["short"]
-    assert not any("entry_grid_inflation_enabled" in rec.message for rec in caplog.records)
+    assert not any(
+        "entry_grid_inflation_enabled" in rec.message for rec in caplog.records
+    )
 
 
 def test_prepare_config_removes_entry_grid_inflation_flag_in_coin_overrides():
@@ -529,7 +606,10 @@ def test_prepare_config_removes_entry_grid_inflation_flag_in_coin_overrides():
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
-    assert "entry_grid_inflation_enabled" not in prepared["coin_overrides"]["BTC"]["bot"]["long"]
+    assert (
+        "entry_grid_inflation_enabled"
+        not in prepared["coin_overrides"]["BTC"]["bot"]["long"]
+    )
 
 
 def test_prepare_config_warns_and_removes_coin_override_entry_grid_inflation(caplog):

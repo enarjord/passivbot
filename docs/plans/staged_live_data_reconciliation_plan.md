@@ -141,7 +141,7 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Enrich staged completed-candle signature-mismatch diagnostics with mismatch type and
   previewed missing/extra/changed symbols, so INFO logs show whether the planning universe
   changed or only the completed-candle target advanced.
-- [ ] Formalize open-ended tail-gap policy for completed candles:
+- [x] Formalize open-ended tail-gap policy for completed candles:
   - If a real candle is expected for `floor(now)-1m` but the exchange has not returned it, emit
     INFO/WARNING with symbol, timeframe, expected timestamp, latest real timestamp, tail age,
     ticker liveness, and action.
@@ -161,13 +161,22 @@ rules. Keep them narrow, visible, and test-covered.
   within the tail-gap threshold.
 - [x] Ensure open-tail gaps are not materialized as runtime synthetic candles, and bounded-gap
   synthesis remains in-memory/runtime only rather than being persisted as real exchange candles.
-- [ ] Ensure tail carry-forward is bounded by the configured staleness threshold and never
+- [x] Ensure tail carry-forward is bounded by the configured staleness threshold and never
   persisted as real exchange candles.
+- [ ] Resolve known live/backtest EMA parity risk for open-ended tail gaps. Current staged live
+  uses bounded carry-forward of the latest real candle/EMA state while the most recent completed
+  1m candle is missing. Backtests have full future candle knowledge and replay bounded no-trade
+  gaps as synthetic zero-candles, so live can keep close/log-range/quote-volume EMAs artificially
+  stale/hot during the open tail. This is accepted as a safety-first interim policy, but the
+  preferred fix is provisional in-memory EMA tail projection: compute temporary EMA values as if
+  missing tail minutes were no-trade candles, do not persist those candles, bound the projection by
+  `live.max_active_candle_tail_gap_minutes`, and replace/replay when real candles arrive.
 - [ ] Add tests for open-ended tail gaps:
   - [x] No synthetic zero candle for open-ended tails.
   - [x] Bounded gaps still synthesize runtime zero candles and report health correctly.
   - [ ] Carry-forward derived EMAs.
-  - [ ] Bounded threshold halt for affected symbol only.
+  - [ ] Provisional in-memory EMA tail projection parity against bounded no-trade gaps.
+  - [x] Bounded threshold halt for affected symbol only.
   - [ ] Ticker-liveness diagnostics.
   - [ ] Recovery replay.
   - [ ] No suppression of active position management without visible policy state.

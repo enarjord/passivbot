@@ -3279,11 +3279,16 @@ class Passivbot:
         """Remember posted order waves until their authoritative refresh settles."""
         if not wave:
             return
-        if not (int(wave.get("cancel_posted", 0) or 0) or int(wave.get("create_posted", 0) or 0)):
+        if not (
+            int(wave.get("cancel_posted", 0) or 0)
+            or int(wave.get("create_posted", 0) or 0)
+        ):
             return
         confirmations = dict(wave.get("requested_confirmations") or {})
         if not confirmations:
-            confirmations = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
+            confirmations = dict(
+                getattr(self, "_authoritative_pending_confirmations", {}) or {}
+            )
         if not confirmations:
             return
         now_ms = int(utc_ms())
@@ -3299,8 +3304,7 @@ class Passivbot:
                 "create_posted": int(wave.get("create_posted", 0) or 0),
                 "symbols": list(wave.get("symbols") or []),
                 "confirmations": {
-                    str(surface): int(epoch)
-                    for surface, epoch in confirmations.items()
+                    str(surface): int(epoch) for surface, epoch in confirmations.items()
                 },
             }
         )
@@ -4330,7 +4334,9 @@ class Passivbot:
                             tf_report.get("runtime_synthetic_count", 0) or 0
                         ),
                         "open_tail_gap": bool(tf_report.get("open_tail_gap", False)),
-                        "tail_gap_candles": int(tf_report.get("tail_gap_candles", 0) or 0),
+                        "tail_gap_candles": int(
+                            tf_report.get("tail_gap_candles", 0) or 0
+                        ),
                     }
                     for tf, tf_report in (
                         symbol_report.get("timeframes", {}) or {}
@@ -4411,9 +4417,22 @@ class Passivbot:
         if not missing:
             return
         now_ms = int(utc_ms())
-        examples = Passivbot._log_symbols(
-            (str(item.get("symbol", "?")) for item in missing[:8]), limit=8
-        )
+        example_parts = []
+        for item in missing[:8]:
+            symbol = Passivbot._log_symbol(str(item.get("symbol", "?")))
+            reason = str(item.get("reason") or "unknown")
+            tail_age_ms = item.get("tail_gap_age_ms")
+            max_tail_gap_ms = item.get("max_tail_gap_ms")
+            tail_note = ""
+            try:
+                if tail_age_ms is not None:
+                    tail_note = f" tail={float(tail_age_ms) / ONE_MIN_MS:.1f}m"
+                    if max_tail_gap_ms is not None:
+                        tail_note += f"/{float(max_tail_gap_ms) / ONE_MIN_MS:.1f}m"
+            except Exception:
+                tail_note = ""
+            example_parts.append(f"{symbol}:{reason}{tail_note}")
+        examples = ",".join(example_parts) if example_parts else "-"
         missing_symbols = tuple(
             sorted(str(item.get("symbol", "?")) for item in missing)
         )
@@ -5223,9 +5242,7 @@ class Passivbot:
                     "[state] staged fills refresh deferred until next minute boundary"
                 )
             elif self._staged_fills_can_prefetch_routine() and (
-                self._schedule_routine_fill_refresh_prefetch(
-                    reason="minute_boundary"
-                )
+                self._schedule_routine_fill_refresh_prefetch(reason="minute_boundary")
             ):
                 plan.discard("fills")
                 logging.debug(
@@ -8110,15 +8127,31 @@ class Passivbot:
                     if not bool(report.get("ok")) or not bool(
                         tf_report.get("coverage_ok")
                     ):
+                        allowed, fallback_signature, reason = (
+                            Passivbot._completed_candle_tail_gap_fallback_signature(
+                                self, symbol, tf_report
+                            )
+                        )
+                        if allowed:
+                            Passivbot._log_completed_candle_tail_gap_fallback(
+                                self, symbol, fallback_signature
+                            )
+                            signature.append(fallback_signature)
+                            continue
                         missing.append(
                             {
                                 "symbol": symbol,
-                                "reason": "missing_latest_completed_1m",
+                                "reason": reason or "missing_latest_completed_1m",
                                 "latest_expected_ts": tf_report.get(
                                     "latest_expected_ts"
                                 ),
                                 "last_cached_ts": tf_report.get("last_cached_ts"),
                                 "missing_candles": tf_report.get("missing_candles"),
+                                "tail_gap_candles": tf_report.get("tail_gap_candles"),
+                                "tail_gap_age_ms": tf_report.get("tail_gap_age_ms"),
+                                "max_tail_gap_ms": Passivbot._active_candle_tail_gap_max_ms(
+                                    self
+                                ),
                             }
                         )
                         continue
@@ -8154,6 +8187,120 @@ class Passivbot:
                 continue
             signature.append((symbol, int(last_final)))
         return tuple(signature), missing
+
+    def _active_candle_tail_gap_max_ms(self) -> int:
+        """Maximum open-ended active 1m candle tail gap allowed before hard block."""
+        raw_minutes = get_optional_live_value(
+            getattr(self, "config", {}) or {},
+            "max_active_candle_tail_gap_minutes",
+            10,
+        )
+        try:
+            minutes = float(raw_minutes)
+        except (TypeError, ValueError):
+            minutes = 10.0
+        if not math.isfinite(minutes) or minutes <= 0.0:
+            minutes = 10.0
+        return max(ONE_MIN_MS, int(minutes * ONE_MIN_MS))
+
+    def _completed_candle_tail_gap_fallback_signature(
+        self, symbol: str, tf_report: dict
+    ) -> tuple[bool, tuple, str]:
+        """Allow bounded open-ended 1m tails to use the last real candle/EMA state.
+
+        This is intentionally narrow: only a pure trailing gap after a known
+        cached candle is allowed. Bounded historical gaps, absent candle history,
+        and stale tails beyond the configured threshold still block planning.
+        """
+        if not isinstance(tf_report, dict):
+            return False, tuple(), "missing_latest_completed_1m"
+        if str(tf_report.get("timeframe") or "1m") != "1m":
+            return False, tuple(), "missing_latest_completed_1m"
+        if not bool(tf_report.get("open_tail_gap", False)):
+            return False, tuple(), "missing_latest_completed_1m"
+        last_cached_ts = tf_report.get("last_cached_ts")
+        latest_expected_ts = tf_report.get("latest_expected_ts")
+        if last_cached_ts is None or latest_expected_ts is None:
+            return False, tuple(), "missing_latest_completed_1m"
+        try:
+            last_cached_i = int(last_cached_ts)
+            latest_expected_i = int(latest_expected_ts)
+        except Exception:
+            return False, tuple(), "missing_latest_completed_1m"
+        if last_cached_i <= 0 or latest_expected_i < last_cached_i:
+            return False, tuple(), "missing_latest_completed_1m"
+        missing_spans = tf_report.get("missing_spans") or []
+        if len(missing_spans) != 1:
+            return False, tuple(), "missing_latest_completed_1m"
+        try:
+            missing_start = int(missing_spans[0][0])
+            missing_end = int(missing_spans[0][1])
+        except Exception:
+            return False, tuple(), "missing_latest_completed_1m"
+        if (
+            missing_end != latest_expected_i
+            or missing_start != last_cached_i + ONE_MIN_MS
+        ):
+            return False, tuple(), "missing_latest_completed_1m"
+        try:
+            tail_age_ms = int(
+                tf_report.get("tail_gap_age_ms")
+                if tf_report.get("tail_gap_age_ms") is not None
+                else max(0, latest_expected_i - last_cached_i)
+            )
+        except Exception:
+            tail_age_ms = max(0, latest_expected_i - last_cached_i)
+        max_tail_gap_ms = int(Passivbot._active_candle_tail_gap_max_ms(self))
+        if tail_age_ms > max_tail_gap_ms:
+            return False, tuple(), "active_candle_tail_gap_exceeded"
+        return (
+            True,
+            (
+                str(symbol),
+                int(latest_expected_i),
+                "tail_gap_fallback",
+                int(last_cached_i),
+                int(tail_age_ms),
+            ),
+            "",
+        )
+
+    def _log_completed_candle_tail_gap_fallback(
+        self, symbol: str, fallback_signature: tuple
+    ) -> None:
+        """Operator-visible log for bounded open-tail carry-forward."""
+        try:
+            if len(fallback_signature) < 5:
+                return
+            expected_ts = int(fallback_signature[1])
+            latest_real_ts = int(fallback_signature[3])
+            tail_age_ms = int(fallback_signature[4])
+            key = (str(symbol), expected_ts, latest_real_ts, tail_age_ms)
+            last_by_symbol = getattr(
+                self, "_completed_candle_tail_gap_last_log_key", None
+            )
+            if not isinstance(last_by_symbol, dict):
+                last_by_symbol = {}
+                self._completed_candle_tail_gap_last_log_key = last_by_symbol
+            if last_by_symbol.get(str(symbol)) == key:
+                return
+            last_by_symbol[str(symbol)] = key
+            max_tail_gap_ms = int(Passivbot._active_candle_tail_gap_max_ms(self))
+            logging.info(
+                "[candle] active tail gap using last real candle | symbol=%s expected=%s latest_real=%s tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
+                Passivbot._log_symbol(symbol),
+                ts_to_date(expected_ts)[:19],
+                ts_to_date(latest_real_ts)[:19],
+                tail_age_ms / ONE_MIN_MS,
+                max_tail_gap_ms / ONE_MIN_MS,
+            )
+        except Exception as exc:
+            logging.debug(
+                "[candle] active tail-gap fallback log failed | symbol=%s error_type=%s error=%s",
+                Passivbot._log_symbol(symbol),
+                type(exc).__name__,
+                exc,
+            )
 
     def _completed_candle_signature_mismatch_details(
         self,
@@ -8737,7 +8884,9 @@ class Passivbot:
             or "live market snapshots" in msg
         )
 
-    def _log_noncritical_market_snapshot_error(self, context: str, exc: Exception) -> bool:
+    def _log_noncritical_market_snapshot_error(
+        self, context: str, exc: Exception
+    ) -> bool:
         if not self._is_market_snapshot_error(exc):
             return False
         logging.warning("[market] skipped %s | error=%s", context, exc)
@@ -9000,11 +9149,7 @@ class Passivbot:
                 len(new_events),
                 str(self.live_value("pnls_max_lookback_days")),
                 self._pnls_manager.get_history_scope(),
-                (
-                    f"{overlap_minutes:.3f}"
-                    if overlap_minutes is not None
-                    else "-"
-                ),
+                (f"{overlap_minutes:.3f}" if overlap_minutes is not None else "-"),
             )
 
             return True
@@ -12116,7 +12261,10 @@ class Passivbot:
                         symbols, max_age_ms=fetch_ttl_ms
                     )
                 except RuntimeError as exc:
-                    if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
+                    if (
+                        str(getattr(self, "exchange", "") or "").lower()
+                        != "hyperliquid"
+                    ):
                         raise
                     logging.debug(
                         "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
@@ -12762,9 +12910,10 @@ class Passivbot:
         kept: list[dict] = []
         skipped = 0
         for order in to_create:
-            if not self._is_initial_entry_order(order) or str(
-                order.get("type", "limit")
-            ).lower() == "market":
+            if (
+                not self._is_initial_entry_order(order)
+                or str(order.get("type", "limit")).lower() == "market"
+            ):
                 kept.append(order)
                 continue
             market_price = market_prices.get(str(order.get("symbol")))
