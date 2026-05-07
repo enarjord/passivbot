@@ -2159,6 +2159,124 @@ class TestEvaluator:
         assert metrics["suite_metrics"] == {}
         assert build_payload.call_args.kwargs["metrics_only"] is True
 
+    def test_suite_evaluate_reuses_compiled_runtime_config_per_scenario(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {
+            "binance": ["BTC/USDT:USDT"],
+            "bybit": ["BTC/USDT:USDT"],
+        }
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx_config = deepcopy(mock_config)
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=ctx_config,
+            exchanges=["binance", "bybit"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"binance": {}, "bybit": {}},
+            timestamps={"binance": None, "bybit": None},
+            shared_hlcvs_np={
+                "binance": np.zeros((1, 1, 5)),
+                "bybit": np.zeros((1, 1, 5)),
+            },
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"binance": None, "bybit": None},
+            overrides={},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+        compiled_runtime = {"compiled": True}
+        execution_settings = object()
+
+        with patch("optimize.compile_runtime_config", return_value=compiled_runtime) as compile_cfg, patch(
+            "optimize.get_backtest_execution_settings", return_value=execution_settings
+        ) as get_settings, patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (-0.1,)
+        assert penalty == 0.0
+        assert metrics["constraint_violation"] == 0.0
+        assert compile_cfg.call_count == 1
+        get_settings.assert_called_once_with(compiled_runtime, is_runtime_compiled=True)
+        assert build_payload.call_count == 2
+        for call in build_payload.call_args_list:
+            assert call.kwargs["runtime_config"] is compiled_runtime
+            assert call.kwargs["execution_settings"] is execution_settings
+            assert call.kwargs["metrics_only"] is True
+
+    def test_suite_scenario_config_overrides_are_isolated_from_candidate_config(self):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["bot"]["long"]["risk"]["n_positions"] = 2
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx_config = deepcopy(mock_config)
+        ctx_config["backtest"]["start_date"] = "2023-01-03"
+        ctx_config["backtest"]["coins"] = {"combined": ["ETH/USDT:USDT"]}
+        ctx_config["live"]["approved_coins"] = {"long": ["ETH"], "short": []}
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=ctx_config,
+            exchanges=["combined"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"combined": {}},
+            timestamps={"combined": None},
+            shared_hlcvs_np={"combined": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"combined": None},
+            overrides={"bot.long.risk.n_positions": 7},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+
+        scenario_config = evaluator._build_scenario_candidate_config(mock_config, ctx)
+
+        assert scenario_config["backtest"]["start_date"] == "2023-01-03"
+        assert scenario_config["backtest"]["coins"] == {"combined": ["ETH/USDT:USDT"]}
+        assert scenario_config["live"]["approved_coins"] == {"long": ["ETH"], "short": []}
+        assert scenario_config["bot"]["long"]["risk"]["n_positions"] == 7
+        assert mock_config["bot"]["long"]["risk"]["n_positions"] == 2
+        assert mock_config["backtest"]["start_date"] == "2023-01-01"
+        assert mock_config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
+
 
 def _remove_nested_path(mapping, path):
     target = mapping

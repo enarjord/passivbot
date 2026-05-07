@@ -461,13 +461,17 @@ def build_backtest_payload(
     *,
     coin_indices: list[int] | None = None,
     metrics_only: bool = False,
+    runtime_config: dict | None = None,
+    execution_settings: BacktestExecutionSettings | None = None,
 ) -> BacktestPayload:
     """
     Assemble the bundle, bot params, and metadata needed to execute a backtest.
     """
 
-    runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
-    execution_settings = get_backtest_execution_settings(runtime_config, is_runtime_compiled=True)
+    if runtime_config is None:
+        runtime_config = compile_runtime_config(config, runtime="backtest", record_step=False)
+    if execution_settings is None:
+        execution_settings = get_backtest_execution_settings(runtime_config, is_runtime_compiled=True)
     (
         bot_params_list,
         strategy_params_list,

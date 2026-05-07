@@ -58,6 +58,7 @@ from backtest import (
     prepare_hlcvs_mss,
     build_backtest_payload,
     execute_backtest,
+    get_backtest_execution_settings,
 )
 import asyncio
 import argparse
@@ -71,7 +72,7 @@ from cli_utils import (
     get_cli_prog,
     help_all_requested,
 )
-from config import load_input_config, load_prepared_config, prepare_config
+from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
 from config.shared_bot import (
@@ -1236,6 +1237,28 @@ class SuiteEvaluator:
                 ctx.attachments["btc"][exchange] = attachment
                 ctx.shared_btc_np[exchange] = attachment.array
 
+    def _build_scenario_candidate_config(self, config: Dict[str, Any], ctx: ScenarioEvalContext):
+        scenario_config = dict(config)
+        scenario_backtest = ctx.config.get("backtest", {})
+        backtest_cfg = dict(config.get("backtest", {}))
+        backtest_cfg["start_date"] = scenario_backtest["start_date"]
+        backtest_cfg["end_date"] = scenario_backtest["end_date"]
+        backtest_cfg["coins"] = deepcopy(scenario_backtest.get("coins", {}))
+        backtest_cfg["cache_dir"] = deepcopy(scenario_backtest.get("cache_dir", {}))
+        scenario_config["backtest"] = backtest_cfg
+
+        scenario_live = ctx.config.get("live", {})
+        live_cfg = dict(config.get("live", {}))
+        live_cfg["approved_coins"] = deepcopy(scenario_live.get("approved_coins", {}))
+        live_cfg["ignored_coins"] = deepcopy(scenario_live.get("ignored_coins", {}))
+        scenario_config["live"] = live_cfg
+        scenario_config["disable_plotting"] = True
+
+        if ctx.overrides:
+            scenario_config = deepcopy(scenario_config)
+            _apply_config_overrides(scenario_config, ctx.overrides)
+        return scenario_config
+
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
         config = individual_to_config(
@@ -1294,20 +1317,7 @@ class SuiteEvaluator:
         from tools.iterative_backtester import combine_analyses as combine
 
         for ctx in self.contexts:
-            scenario_config = deepcopy(config)
-            scenario_config["backtest"]["start_date"] = ctx.config["backtest"]["start_date"]
-            scenario_config["backtest"]["end_date"] = ctx.config["backtest"]["end_date"]
-            scenario_config["backtest"]["coins"] = deepcopy(ctx.config["backtest"]["coins"])
-            scenario_config["backtest"]["cache_dir"] = deepcopy(
-                ctx.config["backtest"].get("cache_dir", {})
-            )
-            scenario_config.setdefault("live", {})
-            scenario_config["live"]["approved_coins"] = deepcopy(
-                ctx.config["live"].get("approved_coins", {})
-            )
-            scenario_config["live"]["ignored_coins"] = deepcopy(
-                ctx.config["live"].get("ignored_coins", {})
-            )
+            scenario_config = self._build_scenario_candidate_config(config, ctx)
             logging.debug(
                 "Optimizer scenario %s | start=%s end=%s coins=%s",
                 ctx.label,
@@ -1315,9 +1325,15 @@ class SuiteEvaluator:
                 scenario_config["backtest"].get("end_date"),
                 list(scenario_config["backtest"]["coins"].keys()),
             )
-            if ctx.overrides:
-                _apply_config_overrides(scenario_config, ctx.overrides)
-            scenario_config["disable_plotting"] = True
+            runtime_config = compile_runtime_config(
+                scenario_config,
+                runtime="backtest",
+                record_step=False,
+            )
+            execution_settings = get_backtest_execution_settings(
+                runtime_config,
+                is_runtime_compiled=True,
+            )
 
             analyses = {}
             for exchange in ctx.exchanges:
@@ -1341,6 +1357,8 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                     metrics_only=True,
+                    runtime_config=runtime_config,
+                    execution_settings=execution_settings,
                 )
                 try:
                     fills, equities_array, analysis = execute_backtest(payload, scenario_config)
