@@ -1090,6 +1090,52 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     ]
 
 
+def test_routine_completed_candle_defers_are_debug_with_periodic_summary(
+    caplog, monkeypatch
+):
+    now_ms = {"value": 0}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now_ms["value"])
+    bot = Passivbot.__new__(Passivbot)
+    details = {
+        "missing": ["completed_candles"],
+        "required": ["balance", "completed_candles", "positions"],
+        "epoch": 7,
+        "context": "market snapshot refresh",
+        "invalid": {
+            "completed_candles": [
+                {
+                    "reason": "signature_mismatch",
+                    "mismatch_type": "completed_candle_target_changed",
+                    "expected_count": 2,
+                    "stamped_count": 2,
+                    "changed_count": 2,
+                    "changed_symbols": ["TON/USDT:USDT", "ZEC/USDT:USDT"],
+                }
+            ]
+        },
+    }
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_staged_execution_defer(details)
+        now_ms["value"] = 31 * 60_000
+        bot._log_staged_execution_defer(details)
+
+    individual = [
+        record
+        for record in caplog.records
+        if "staged planning deferred: completed candle target changed or missing"
+        in record.message
+    ]
+    assert individual
+    assert all(record.levelno == logging.DEBUG for record in individual)
+    assert any(
+        "staged planning deferred summary" in record.message
+        and "reason=completed_candle_target_changed" in record.message
+        and record.levelno == logging.INFO
+        for record in caplog.records
+    )
+
+
 def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
     bot = Passivbot.__new__(Passivbot)
 

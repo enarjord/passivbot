@@ -1613,7 +1613,7 @@ def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog
         )
 
     records = [r for r in caplog.records if "active tail gap carry-forward" in r.message]
-    assert [r.levelno for r in records] == [logging.INFO, logging.DEBUG]
+    assert [r.levelno for r in records] == [logging.DEBUG, logging.DEBUG]
 
 
 def test_completed_candle_tail_gap_fallback_warns_near_cap(monkeypatch, caplog):

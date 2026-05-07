@@ -221,8 +221,12 @@ rules. Keep them narrow, visible, and test-covered.
   publication lag. These now emit INFO with slower throttling, while larger/actionable gaps keep
   WARNING visibility.
 - [x] Further reduce bounded active tail-gap carry-forward log noise. Normal carry-forward is
-  INFO only on first activation, age-bucket increases, or a slow periodic heartbeat; repeats are
-  DEBUG, recovery is INFO once, and WARNING is reserved for near-cap or sustained tail gaps.
+  DEBUG for routine one-minute publication lag; INFO is reserved for multi-minute/persistent tails
+  and periodic summaries, recovery is INFO only after persistent/near-cap tails, and WARNING is
+  reserved for near-cap or sustained tail gaps.
+- [x] Demote self-recovering completed-candle target defers to DEBUG and add periodic INFO
+  summaries. Minute-boundary `completed_candle_target_changed` retries no longer appear as
+  repeated operator events unless they persist over a summary window.
 - [x] Aggregate cache-only EMA skip diagnostics per cycle instead of logging one DEBUG line per
   symbol. This keeps KuCoin DEBUG runs readable while preserving the unavailable-symbol/reason
   detail needed for remote-call economy diagnosis.
@@ -491,6 +495,9 @@ changing behavior during extraction commits.
 - [x] Improve generic execution-loop error diagnostics. Unexpected loop errors now include
   exception type, status/code when available, abandoned-cycle action, and restart/backoff action
   so thin exchange errors such as KuCoin account-overview failures are easier to triage.
+- [x] Aggregate broad forager wall-time cap logs. Repeated KuCoin candidate-candle cap hits now
+  produce DEBUG per-event diagnostics plus periodic INFO/WARNING summaries instead of paired
+  WARNING/INFO lines for every skipped symbol.
 
 ## Initial Ticker Probe Findings
 

@@ -8389,12 +8389,21 @@ class Passivbot:
                     self, "_completed_candle_tail_gap_last_state", None
                 )
                 if isinstance(last_state, dict) and last_state.get("active"):
-                    logging.info(
+                    previous_age_ms = int(last_state.get("max_age_ms") or 0)
+                    previous_level = int(last_state.get("last_level", logging.DEBUG))
+                    recovery_level = (
+                        logging.INFO
+                        if previous_age_ms > ONE_MIN_MS
+                        or previous_level >= logging.WARNING
+                        else logging.DEBUG
+                    )
+                    logging.log(
+                        recovery_level,
                         "[candle] active tail gap recovered | previous_symbols=%s previous_max_tail_age=%.1fm action=resume_completed_candle_truth",
                         Passivbot._log_symbols(
                             tuple(last_state.get("symbols") or ()), limit=8
                         ),
-                        float(last_state.get("max_age_ms") or 0) / ONE_MIN_MS,
+                        float(previous_age_ms) / ONE_MIN_MS,
                     )
                 self._completed_candle_tail_gap_last_state = {"active": False}
                 return
@@ -8439,7 +8448,9 @@ class Passivbot:
                 level = logging.WARNING
                 self._completed_candle_tail_gap_last_warning_ms = now_ms
                 self._completed_candle_tail_gap_last_info_ms = now_ms
-            elif first_active or age_increased or periodic_info:
+            elif max_age_ms > ONE_MIN_MS and (
+                first_active or age_increased or periodic_info
+            ):
                 level = logging.INFO
                 self._completed_candle_tail_gap_last_info_ms = now_ms
             self._completed_candle_tail_gap_last_state = {
@@ -8449,6 +8460,7 @@ class Passivbot:
                 "max_age_ms": max_age_ms,
                 "newest_expected": newest_expected,
                 "oldest_real": oldest_real,
+                "last_level": level,
             }
             logging.log(
                 level,
@@ -8746,20 +8758,103 @@ class Passivbot:
         required = tuple(details.get("required", ()))
         context = str(details.get("context") or "planning")
         invalid = details.get("invalid") or {}
+        routine_candle_target = self._is_routine_completed_candle_target_defer(details)
+        if routine_candle_target:
+            self._record_routine_completed_candle_defer(details)
         log_key = (context, missing, required, tuple(sorted(invalid)))
         now_ms = utc_ms()
         last_log_ms = int(getattr(self, "_staged_execution_defer_last_log_ms", 0) or 0)
+        throttle_ms = 60_000 if routine_candle_target else 15_000
         if (
             log_key == getattr(self, "_staged_execution_defer_last_log_key", None)
-            and now_ms - last_log_ms < 15_000
+            and now_ms - last_log_ms < throttle_ms
         ):
             return
         self._staged_execution_defer_last_log_key = log_key
         self._staged_execution_defer_last_log_ms = now_ms
-        logging.info("[state] %s", Passivbot._format_staged_execution_defer_message(self, details))
+        logging.log(
+            logging.DEBUG if routine_candle_target else logging.INFO,
+            "[state] %s",
+            Passivbot._format_staged_execution_defer_message(self, details),
+        )
         if invalid:
             logging.debug(
                 "[state] staged execution deferred details | invalid=%s", invalid
+            )
+
+    def _is_routine_completed_candle_target_defer(self, details: dict) -> bool:
+        """Return true for self-recovering minute-boundary candle target changes."""
+        missing = set(details.get("missing") or ())
+        if missing != {"completed_candles"}:
+            return False
+        invalid = details.get("invalid") or {}
+        items = invalid.get("completed_candles") if isinstance(invalid, dict) else None
+        if not isinstance(items, list) or not items:
+            return False
+        first = items[0]
+        return (
+            isinstance(first, dict)
+            and first.get("reason") == "signature_mismatch"
+            and first.get("mismatch_type") == "completed_candle_target_changed"
+        )
+
+    def _record_routine_completed_candle_defer(self, details: dict) -> None:
+        """Aggregate routine completed-candle target defers into periodic INFO summaries."""
+        try:
+            now_ms = utc_ms()
+            state = getattr(self, "_routine_completed_candle_defer_summary", None)
+            if not isinstance(state, dict):
+                state = {
+                    "window_start_ms": now_ms,
+                    "last_log_ms": 0,
+                    "count": 0,
+                    "symbols": set(),
+                }
+            invalid = details.get("invalid") or {}
+            items = invalid.get("completed_candles") if isinstance(invalid, dict) else []
+            symbols: set[str] = set()
+            if isinstance(items, list) and items and isinstance(items[0], dict):
+                first = items[0]
+                for key in ("changed_symbols", "missing_symbols", "extra_symbols"):
+                    for symbol in first.get(key) or []:
+                        if symbol:
+                            symbols.add(str(symbol))
+            state["count"] = int(state.get("count", 0) or 0) + 1
+            state_symbols = state.get("symbols")
+            if not isinstance(state_symbols, set):
+                state_symbols = set(state_symbols or [])
+            state_symbols.update(symbols)
+            state["symbols"] = state_symbols
+            state["last_seen_ms"] = now_ms
+            window_start_raw = state.get("window_start_ms", now_ms)
+            window_start_ms = (
+                int(window_start_raw) if window_start_raw is not None else now_ms
+            )
+            last_log_ms = int(state.get("last_log_ms", 0) or 0)
+            should_log = (
+                int(state["count"]) >= 20 and now_ms - last_log_ms >= 30 * 60_000
+            ) or now_ms - window_start_ms >= 30 * 60_000
+            self._routine_completed_candle_defer_summary = state
+            if not should_log:
+                return
+            window_s = max(1, int((now_ms - window_start_ms) / 1000))
+            logging.info(
+                "[state] staged planning deferred summary | reason=completed_candle_target_changed count=%d window=%ds symbols=%s will_retry=automatic action=refresh_candles_then_retry",
+                int(state.get("count", 0) or 0),
+                window_s,
+                Passivbot._log_symbols(tuple(sorted(state_symbols)), limit=8),
+            )
+            self._routine_completed_candle_defer_summary = {
+                "window_start_ms": now_ms,
+                "last_log_ms": now_ms,
+                "count": 0,
+                "symbols": set(),
+            }
+        except Exception as exc:
+            logging.debug(
+                "[state] staged defer summary log failed | error_type=%s error=%s",
+                type(exc).__name__,
+                exc,
             )
 
     async def _defer_staged_execution_cycle(
@@ -13537,6 +13632,85 @@ class Passivbot:
         except Exception:
             return
 
+    def _log_forager_refresh_wall_time_cap(
+        self,
+        *,
+        symbol: str,
+        max_refresh_ms: int,
+        stale_age_ms: int,
+        target_age_ms: int,
+        refreshed_count: int,
+        total_count: int,
+    ) -> None:
+        """Aggregate broad forager refresh cap hits instead of warning per symbol."""
+        try:
+            now_ms = utc_ms()
+            state = getattr(self, "_forager_refresh_cap_summary", None)
+            if not isinstance(state, dict):
+                state = {
+                    "window_start_ms": now_ms,
+                    "last_info_ms": 0,
+                    "last_warning_ms": 0,
+                    "count": 0,
+                    "symbols": {},
+                    "max_stale_age_ms": 0,
+                }
+            symbol_counts = state.get("symbols")
+            if not isinstance(symbol_counts, dict):
+                symbol_counts = {}
+            coin = Passivbot._log_symbol(symbol)
+            symbol_counts[coin] = int(symbol_counts.get(coin, 0) or 0) + 1
+            state["symbols"] = symbol_counts
+            state["count"] = int(state.get("count", 0) or 0) + 1
+            state["max_stale_age_ms"] = max(
+                int(state.get("max_stale_age_ms", 0) or 0), int(stale_age_ms)
+            )
+            self._forager_refresh_cap_summary = state
+
+            last_info_ms = int(state.get("last_info_ms", 0) or 0)
+            last_warning_ms = int(state.get("last_warning_ms", 0) or 0)
+            severe = stale_age_ms >= max(30 * 60_000, int(target_age_ms) * 3)
+            if severe and now_ms - last_warning_ms >= 30 * 60_000:
+                state["last_warning_ms"] = now_ms
+                level = logging.WARNING
+            elif now_ms - last_info_ms >= 15 * 60_000:
+                state["last_info_ms"] = now_ms
+                level = logging.INFO
+            else:
+                logging.debug(
+                    "[candle] forager refresh wall-time cap hit | symbol=%s stale=%ds target=%ds cap=%ds refreshed=%d/%d action=retry_later",
+                    coin,
+                    int(stale_age_ms / 1000),
+                    int(target_age_ms / 1000),
+                    int(max_refresh_ms / 1000),
+                    int(refreshed_count),
+                    int(total_count),
+                )
+                return
+            top = sorted(
+                symbol_counts.items(), key=lambda item: (-int(item[1]), item[0])
+            )[:6]
+            top_s = ",".join(f"{sym}:{count}" for sym, count in top) or "-"
+            window_start_ms = int(state.get("window_start_ms", now_ms) or now_ms)
+            logging.log(
+                level,
+                "[candle] forager refresh paused by wall-time cap | count=%d window=%ds top=%s max_stale=%ds target=%ds cap=%ds refreshed=%d/%d action=retry_later",
+                int(state.get("count", 0) or 0),
+                max(1, int((now_ms - window_start_ms) / 1000)),
+                top_s,
+                int(int(state.get("max_stale_age_ms", 0) or 0) / 1000),
+                int(target_age_ms / 1000),
+                int(max_refresh_ms / 1000),
+                int(refreshed_count),
+                int(total_count),
+            )
+        except Exception as exc:
+            logging.debug(
+                "[candle] forager refresh cap log failed | error_type=%s error=%s",
+                type(exc).__name__,
+                exc,
+            )
+
     async def _refresh_forager_candidate_candles(self) -> None:
         """Best-effort refresh for forager candidate symbols to avoid large bursts."""
         if not self.is_forager_mode():
@@ -13634,6 +13808,7 @@ class Passivbot:
         to_refresh = [sym for _, sym in stale[:budget]]
         if not to_refresh:
             return
+        stale_by_symbol = {sym: int(age_ms) for age_ms, sym in stale}
 
         max_refresh_s_raw = get_optional_live_value(
             self.config, "max_forager_candle_refresh_seconds", 45
@@ -13720,6 +13895,15 @@ class Passivbot:
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             if max_refresh_ms > 0 and elapsed_ms >= max_refresh_ms:
                 paused_by_cap = True
+                Passivbot._log_forager_refresh_wall_time_cap(
+                    self,
+                    symbol=sym,
+                    max_refresh_ms=int(max_refresh_ms),
+                    stale_age_ms=int(stale_by_symbol.get(sym, 0)),
+                    target_age_ms=int(target_age_ms),
+                    refreshed_count=int(refreshed_count),
+                    total_count=len(to_refresh),
+                )
                 break
             try:
                 max_span = 0.0
@@ -13785,7 +13969,7 @@ class Passivbot:
                 now_ms = utc_ms()
                 if len(to_refresh) > 1 and now_ms - last_progress_ms >= 30_000:
                     elapsed_s = int(max(0, now_ms - refresh_started_ms) / 1000)
-                    logging.info(
+                    logging.debug(
                         "[candle] forager refresh progress %d/%d last=%s elapsed=%ds",
                         idx,
                         len(to_refresh),
@@ -13799,10 +13983,14 @@ class Passivbot:
                     and utc_ms() - refresh_started_ms >= max_refresh_ms
                 )
                 if paused_by_cap:
-                    logging.warning(
-                        "[candle] forager refresh paused: %s candle fetch exceeded wall-time cap %.1fs",
-                        Passivbot._log_symbol(sym),
-                        float(max_refresh_ms) / 1000.0,
+                    Passivbot._log_forager_refresh_wall_time_cap(
+                        self,
+                        symbol=sym,
+                        max_refresh_ms=int(max_refresh_ms),
+                        stale_age_ms=int(stale_by_symbol.get(sym, 0)),
+                        target_age_ms=int(target_age_ms),
+                        refreshed_count=int(refreshed_count),
+                        total_count=len(to_refresh),
                     )
                     break
                 logging.warning(
@@ -13820,8 +14008,8 @@ class Passivbot:
         try:
             elapsed_s = int(max(0, utc_ms() - refresh_started_ms) / 1000)
             if paused_by_cap:
-                logging.info(
-                    "[candle] forager refresh paused by wall-time cap refreshed=%d/%d elapsed=%ds cap=%ds remaining=%d",
+                logging.debug(
+                    "[candle] forager refresh cap exit refreshed=%d/%d elapsed=%ds cap=%ds remaining=%d",
                     refreshed_count,
                     len(to_refresh),
                     elapsed_s,
