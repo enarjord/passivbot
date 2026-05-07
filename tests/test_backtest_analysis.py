@@ -303,8 +303,8 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     analysis_btc = _make_analysis_entry(0.25)
     equities = np.array(
         [
-            [1767225600000, 1000.0, 1.0],
-            [1767311940000, 1000.0, 1.0],
+            [1767225600000],
+            [1767311940000],
         ],
         dtype=np.float64,
     )
