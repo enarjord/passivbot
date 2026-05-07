@@ -1253,7 +1253,10 @@ class FakeFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
-        events = list(self.api.get_fill_events(since_ms, until_ms))
+        result = self.api.get_fill_events(since_ms, until_ms)
+        if inspect.isawaitable(result):
+            result = await result
+        events = list(result)
         for event in events:
             cache_entry = detail_cache.get(event["id"])
             if cache_entry:

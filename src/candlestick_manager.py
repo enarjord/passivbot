@@ -629,6 +629,7 @@ class CandlestickManager:
         self._strict_gaps_summary_interval: float = 900.0  # 15 minutes
         self._remote_fetch_callback = remote_fetch_callback
         self._stop_requested_callback = stop_requested_callback
+        self._now_ms_callback: Optional[Callable[[], int]] = None
         # Cache of legacy shard paths per (exchange, symbol, tf)
         self._legacy_shard_paths_cache: Dict[Tuple[str, str, str], Dict[str, str]] = {}
         # Cache for legacy day quality decisions: (symbol, tf, date_key) -> legacy_is_complete
@@ -1011,6 +1012,22 @@ class CandlestickManager:
         self._held_fetch_locks.clear()
         for record in records:
             self._release_lock_sync(record)
+
+    def _now_ms(self) -> int:
+        """Return this manager's time source.
+
+        Live bots use UTC wall time. Fake-live replay installs a scenario-time
+        callback so completed-candle/EMA windows advance with the fake exchange.
+        """
+        callback = getattr(self, "_now_ms_callback", None)
+        if callback is not None:
+            try:
+                now = int(callback())
+                if now > 0:
+                    return now
+            except Exception:
+                pass
+        return _utc_now_ms()
 
     def _release_lock_sync(self, record: _LockRecord) -> None:
         try:
@@ -3145,7 +3162,7 @@ class CandlestickManager:
 
         # Guard against corrupted refresh timestamps that prevent updates.
         meta = idx.setdefault("meta", {})
-        now = _utc_now_ms()
+        now = self._now_ms()
         try:
             last_refresh = int(meta.get("last_refresh_ms", 0) or 0)
         except Exception:
@@ -5246,7 +5263,7 @@ class CandlestickManager:
         # Force refetch: clear known gaps in the requested range
         if force_refetch_gaps:
             # Compute actual range first
-            now = _utc_now_ms()
+            now = self._now_ms()
             eff_end = end_ts if end_ts is not None else _floor_minute(now)
             eff_start = (
                 start_ts
@@ -5271,7 +5288,7 @@ class CandlestickManager:
             # parse timeframe to ms (bucket size)
             period_ms = _tf_to_ms(out_tf)
             if period_ms > ONE_MIN_MS and self.exchange is not None:
-                now = _utc_now_ms()
+                now = self._now_ms()
                 finalized_end = (int(now) // period_ms) * period_ms - period_ms
                 if end_ts is None:
                     end_ts = finalized_end
@@ -5450,7 +5467,7 @@ class CandlestickManager:
                     self._tf_range_cache[symbol] = sym_cache
                     return out
 
-        now = _utc_now_ms()
+        now = self._now_ms()
         if end_ts is None:
             # Use last completed minute as inclusive end (exclude current in-progress minute)
             end_ts = _floor_minute(now) - ONE_MIN_MS
@@ -6254,7 +6271,7 @@ class CandlestickManager:
         """
         if max_age_ms is not None and max_age_ms < 0:
             raise ValueError("max_age_ms cannot be negative")
-        now = _utc_now_ms()
+        now = self._now_ms()
         last_final = _floor_minute(now) - ONE_MIN_MS
         if last_final < 0:
             return float("nan")
@@ -6345,7 +6362,7 @@ class CandlestickManager:
         self, span: float, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:
         span_candles = max(1, int(math.ceil(float(span))))
-        now = _utc_now_ms()
+        now = self._now_ms()
         # Align to timeframe buckets and exclude current in-progress bucket
         end_floor = (int(now) // int(period_ms)) * int(period_ms)
         end_ts = int(end_floor - period_ms)
@@ -6370,7 +6387,7 @@ class CandlestickManager:
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
         # EMA result cache: reuse if end_ts unchanged and within TTL
-        now = _utc_now_ms()
+        now = self._now_ms()
         tf_key = str(period_ms)
         key = ("close", float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
@@ -6604,7 +6621,7 @@ class CandlestickManager:
         out_tf = timeframe if timeframe is not None else tf
         period_ms = _tf_to_ms(out_tf)
         start_ts, end_ts = await self._latest_finalized_range(span, period_ms=period_ms)
-        now = _utc_now_ms()
+        now = self._now_ms()
         tf_key = str(period_ms)
         key = (metric_key, float(span), tf_key)
         cache = self._ema_cache.setdefault(symbol, {})
@@ -6661,7 +6678,7 @@ class CandlestickManager:
                 start_ts = int(end_ts - period_ms * (lookback - 1))
             except Exception:
                 pass
-        now = _utc_now_ms()
+        now = self._now_ms()
         tf_key = str(period_ms)
 
         cache = self._ema_cache.setdefault(symbol, {})
@@ -6866,7 +6883,7 @@ class CandlestickManager:
         if self.exchange is None:
             return None
 
-        now = _utc_now_ms()
+        now = self._now_ms()
         end_exclusive = _floor_minute(now)
         if through_ts is not None:
             end_exclusive = min(end_exclusive, _floor_minute(int(through_ts)) + ONE_MIN_MS)

@@ -370,6 +370,8 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         bot.get_exchange_time = lambda: int(bot.cca.now_ms)
+        if hasattr(bot, "cm"):
+            bot.cm._now_ms_callback = lambda: int(bot.cca.now_ms)
 
 
 def _fake_active_red_psides(bot) -> List[str]:

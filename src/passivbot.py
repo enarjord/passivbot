@@ -8242,6 +8242,21 @@ class Passivbot:
         Passivbot._log_completed_candle_tail_gap_fallbacks(self, signature)
         return tuple(signature), missing
 
+    def _completed_candle_health_now_ms(self) -> int:
+        """Return the timebase used for completed-candle freshness checks.
+
+        Real live bots use the default exchange time implementation, which is
+        UTC wall time. Fake live overrides get_exchange_time() with scenario
+        time, so historical replay does not look stale by wall-clock months.
+        """
+        try:
+            now = int(self.get_exchange_time())
+        except Exception:
+            now = int(utc_ms())
+        if now <= 0:
+            now = int(utc_ms())
+        return now
+
     def _active_candle_tail_gap_max_ms(self) -> int:
         """Maximum open-ended active 1m candle tail gap allowed before hard block."""
         raw_minutes = get_optional_live_value(
@@ -8470,7 +8485,9 @@ class Passivbot:
         invalid: dict[str, list] = {}
         if "completed_candles" in required and "completed_candles" not in missing:
             expected_symbols = tuple(Passivbot._urgent_active_candle_symbols(self))
-            candle_check_ms = ledger.surface_updated_ms("completed_candles") or utc_ms()
+            candle_check_ms = ledger.surface_updated_ms(
+                "completed_candles"
+            ) or Passivbot._completed_candle_health_now_ms(self)
             signature, candle_missing = Passivbot._completed_candle_freshness_signature(
                 self, expected_symbols, now_ms=candle_check_ms
             )
@@ -11444,21 +11461,10 @@ class Passivbot:
                     max_calls_i = int(max_calls) if max_calls is not None else 0
                 except Exception:
                     max_calls_i = 0
-                try:
-                    max_staleness_minutes = float(
-                        get_optional_live_value(
-                            self.config, "max_forager_candle_staleness_minutes", 10
-                        )
+                secondary_max_age_ms = int(
+                    Passivbot._forager_target_staleness_ms(
+                        self, len(secondary_symbols), max_calls_i
                     )
-                except Exception:
-                    max_staleness_minutes = 10.0
-                if (
-                    not math.isfinite(max_staleness_minutes)
-                    or max_staleness_minutes <= 0.0
-                ):
-                    max_staleness_minutes = 10.0
-                secondary_max_age_ms = max(
-                    ONE_MIN_MS, int(max_staleness_minutes * ONE_MIN_MS)
                 )
                 now_ms = utc_ms()
                 cache_only_never_fetched = set()
@@ -13778,7 +13784,7 @@ class Passivbot:
         # Use 60s TTL so each symbol is fetched at most once per minute.
         max_age_ms = 60_000
         try:
-            now = utc_ms()
+            now = Passivbot._completed_candle_health_now_ms(self)
             end_ts = (now // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
             # Use manager default window if available, otherwise a reasonable fallback
             try:
@@ -13834,7 +13840,7 @@ class Passivbot:
                         "error refreshing candles for %s: %s", sym, exc, exc_info=True
                     )
             signature, missing = Passivbot._completed_candle_freshness_signature(
-                self, ordered_symbols, now_ms=utc_ms()
+                self, ordered_symbols, now_ms=now
             )
             if missing:
                 Passivbot._log_active_candle_refresh_incomplete(
@@ -13844,7 +13850,7 @@ class Passivbot:
             self._ensure_freshness_ledger().stamp(
                 "completed_candles",
                 signature,
-                now_ms=utc_ms(),
+                now_ms=now,
                 epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
             )
             return True
