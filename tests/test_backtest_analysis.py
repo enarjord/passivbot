@@ -4,7 +4,12 @@ import pytest
 
 import backtest as bt
 import plotting
-from backtest import expand_analysis, parse_disabled_plot_groups, process_forager_fills
+from backtest import (
+    calc_backtest_completion_ratio,
+    expand_analysis,
+    parse_disabled_plot_groups,
+    process_forager_fills,
+)
 from plotting import create_forager_hard_stop_drawdown_figure
 
 
@@ -218,6 +223,77 @@ def test_expand_analysis_currency_suffixes_new_ratio_metrics():
         assert result[f"{metric}_usd"] == 0.25
         assert result[f"{metric}_btc"] == 0.75
         assert metric not in result
+
+
+def test_calc_backtest_completion_ratio_is_full_when_final_candle_reaches_end():
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-02",
+            "candle_interval_minutes": 1,
+        }
+    }
+    equities = np.array(
+        [
+            [1767225600000, 1000.0, 1.0],
+            [1767311940000, 1000.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    assert calc_backtest_completion_ratio(equities, config) == pytest.approx(1.0)
+
+
+def test_calc_backtest_completion_ratio_detects_early_stop():
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-03",
+            "candle_interval_minutes": 1,
+        }
+    }
+    equities = np.array(
+        [
+            [1767225600000, 1000.0, 1.0],
+            [1767311940000, 50.0, 0.05],
+        ],
+        dtype=np.float64,
+    )
+
+    assert calc_backtest_completion_ratio(equities, config) == pytest.approx(0.5)
+
+
+def test_expand_analysis_includes_backtest_completion_ratio_when_available():
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.75)
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-02",
+            "candle_interval_minutes": 1,
+        },
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        },
+    }
+    equities = np.array(
+        [
+            [1767225600000, 1000.0, 1.0],
+            [1767311940000, 1000.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=equities,
+        config=config,
+    )
+
+    assert result["backtest_completion_ratio"] == pytest.approx(1.0)
 
 
 def test_make_table_includes_trade_metrics():
