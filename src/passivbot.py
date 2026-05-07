@@ -11656,6 +11656,7 @@ class Passivbot:
                     symbol,
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
 
@@ -11665,6 +11666,7 @@ class Passivbot:
                     symbol,
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
 
@@ -11674,6 +11676,7 @@ class Passivbot:
                     symbol,
                     span=span,
                     max_age_ms=m1_max_age_by_symbol.get(symbol, 60_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
 
@@ -11684,6 +11687,7 @@ class Passivbot:
                     span=span,
                     tf="1h",
                     max_age_ms=h1_max_age_by_symbol.get(symbol, 600_000),
+                    allow_remote_fetch=symbol not in cache_only_symbols,
                 )
             )
 

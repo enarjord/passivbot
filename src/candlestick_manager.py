@@ -5216,6 +5216,7 @@ class CandlestickManager:
         fill_leading_gaps: bool = False,
         skip_historical_gap_fill: bool = False,
         max_lookback_candles: Optional[int] = None,
+        allow_remote_fetch: bool = True,
     ) -> np.ndarray:
         """Return candles in inclusive range [start_ts, end_ts].
 
@@ -5234,6 +5235,9 @@ class CandlestickManager:
           recent data is sufficient and filling old gaps wastes time.
         - If `max_lookback_candles` is set: clamp start_ts so the request spans
           at most that many candles ending at end_ts (per timeframe).
+        - If `allow_remote_fetch` is False: serve only local memory/disk data and
+          do not call exchange/archive fetchers. This is used for non-critical
+          live forager candidates where cache misses should not block trading.
         """
         self._raise_if_shutdown_requested("get_candles")
         if max_age_ms is not None and max_age_ms < 0:
@@ -5356,6 +5360,13 @@ class CandlestickManager:
                             self._tf_range_cache[symbol] = sym_cache
                             return out_disk
 
+                if not allow_remote_fetch:
+                    return (
+                        self._slice_ts_range(disk_arr, start_ts, end_ts)
+                        if isinstance(disk_arr, np.ndarray) and disk_arr.size
+                        else np.empty((0,), dtype=CANDLE_DTYPE)
+                    )
+
                 end_excl = int(end_ts) + period_ms
 
                 async with self._acquire_fetch_lock(symbol, out_tf):
@@ -5468,7 +5479,9 @@ class CandlestickManager:
         allow_fetch_present = True
         skip_present_fetch_due_to_ttl = False
         latest_finalized = _floor_minute(now) - ONE_MIN_MS
-        if end_ts >= latest_finalized and self.exchange is not None:
+        if not allow_remote_fetch:
+            allow_fetch_present = False
+        if allow_remote_fetch and end_ts >= latest_finalized and self.exchange is not None:
             if max_age_ms == 0:
                 self._log(
                     "debug",
@@ -5598,6 +5611,8 @@ class CandlestickManager:
                 sub_size=sub.size if hasattr(sub, "size") else 0,
             )
         if (
+            allow_remote_fetch
+            and
             self.exchange is not None
             and span_minutes > large_span_threshold
             and not fully_covered
@@ -5636,6 +5651,7 @@ class CandlestickManager:
             and span_minutes > large_span_threshold
             and not fully_covered
             and self.exchange is not None
+            and allow_remote_fetch
         ):
             self._log(
                 "debug",
@@ -5645,7 +5661,12 @@ class CandlestickManager:
                 fully_covered=fully_covered,
             )
             fetch_historical_gaps = True
-        if self.exchange is not None and fetch_historical_gaps and not skip_historical_gap_fill:
+        if (
+            allow_remote_fetch
+            and self.exchange is not None
+            and fetch_historical_gaps
+            and not skip_historical_gap_fill
+        ):
             # If the requested historical window is not fully covered in memory,
             # attempt to fetch unknown missing spans, regardless of shard presence.
             # Skip this if skip_historical_gap_fill is set (e.g., live warmup where
@@ -6339,6 +6360,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
     ) -> float:
         """Return latest EMA of close over last `span` finalized candles.
 
@@ -6357,7 +6379,12 @@ class CandlestickManager:
             if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
                 return float(val)
         arr = await self.get_candles(
-            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=max_age_ms,
+            timeframe=out_tf,
+            allow_remote_fetch=allow_remote_fetch,
         )
         if arr.size == 0:
             return float("nan")
@@ -6509,6 +6536,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -6516,6 +6544,7 @@ class CandlestickManager:
             max_age_ms,
             timeframe,
             tf=tf,
+            allow_remote_fetch=allow_remote_fetch,
             metric_key="volume",
             series_fn=lambda a: np.asarray(a["bv"], dtype=np.float64),
         )
@@ -6528,6 +6557,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
     ) -> float:
         """Return latest EMA of quote volume over last `span` finalized candles.
 
@@ -6541,6 +6571,7 @@ class CandlestickManager:
             max_age_ms,
             timeframe,
             tf=tf,
+            allow_remote_fetch=allow_remote_fetch,
             metric_key="qv",
             series_fn=lambda a: (
                 np.asarray(a["bv"], dtype=np.float64)
@@ -6561,6 +6592,7 @@ class CandlestickManager:
         timeframe: Optional[str],
         *,
         tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
         metric_key: str,
         series_fn,
     ) -> float:
@@ -6581,7 +6613,12 @@ class CandlestickManager:
             if int(cached_end_ts) == int(end_ts) and (now - int(computed_at)) <= int(max_age_ms):
                 return float(val)
         arr = await self.get_candles(
-            symbol, start_ts=start_ts, end_ts=end_ts, max_age_ms=max_age_ms, timeframe=out_tf
+            symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            max_age_ms=max_age_ms,
+            timeframe=out_tf,
+            allow_remote_fetch=allow_remote_fetch,
         )
         if arr.size == 0:
             return float("nan")
@@ -6715,6 +6752,7 @@ class CandlestickManager:
         *,
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
+        allow_remote_fetch: bool = True,
     ) -> float:
         return await self._get_latest_ema_generic(
             symbol,
@@ -6722,6 +6760,7 @@ class CandlestickManager:
             max_age_ms,
             timeframe,
             tf=tf,
+            allow_remote_fetch=allow_remote_fetch,
             metric_key="log_range",
             series_fn=lambda a: np.log(
                 np.maximum(np.asarray(a["h"], dtype=np.float64), 1e-12)

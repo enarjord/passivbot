@@ -190,6 +190,43 @@ async def test_get_candles_range_and_inclusive(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_get_candles_cache_only_does_not_remote_fetch(tmp_path, monkeypatch):
+    class _Ex:
+        id = "kucoinfutures"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "CACHE/USDT"
+    latest_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    stale_ts = latest_final - 5 * ONE_MIN_MS
+    cm._cache[symbol] = np.array(
+        [(stale_ts, 100.0, 101.0, 99.0, 100.5, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def fail_refresh(*args, **kwargs):
+        raise AssertionError("refresh must not be called for cache-only get_candles")
+
+    async def fail_fetch(*args, **kwargs):
+        raise AssertionError("remote fetch must not be called for cache-only get_candles")
+
+    monkeypatch.setattr(cm, "refresh", fail_refresh)
+    monkeypatch.setattr(cm, "_fetch_ohlcv_paginated", fail_fetch)
+    monkeypatch.setattr(cm, "_prefetch_archives_for_range", fail_refresh)
+
+    res = await cm.get_candles(
+        symbol,
+        start_ts=stale_ts,
+        end_ts=latest_final,
+        max_age_ms=0,
+        allow_remote_fetch=False,
+    )
+
+    assert list(res["ts"]) == [stale_ts]
+
+
+@pytest.mark.asyncio
 async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     # create 5 candles closes: 10,11,12,13,14
@@ -440,7 +477,8 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
         tf=None,
         fill_leading_gaps=False,
         max_lookback_candles=None,
-    ):
+        allow_remote_fetch=True,
+        ):
         calls["n"] += 1
         return arr
 
@@ -497,7 +535,8 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
         tf=None,
         fill_leading_gaps=False,
         max_lookback_candles=None,
-    ):
+        allow_remote_fetch=True,
+        ):
         seen.update(
             {
                 "symbol": symbol_,

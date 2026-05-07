@@ -233,10 +233,14 @@ rules. Keep them narrow, visible, and test-covered.
   activity, but should not run on every ordinary account refresh cycle.
 - [x] Add tests for fair stale-symbol rotation.
 - [x] Add tests proving active symbols bypass non-critical budgeting.
-- [ ] Revisit EMA cache-only suppression. Review found missing EMA for cache-only symbols can mark
+- [x] Revisit EMA cache-only suppression. Review found missing EMA for cache-only symbols can mark
   symbols non-tradable instead of failing loudly. Acceptable behavior should be limited to flat
   forager-only candidates under the formal tail-gap/freshness policy. Active positions, open
   orders, pending confirmations, and forced-normal symbols must not be silently suppressed.
+  CandlestickManager now has an explicit no-network `allow_remote_fetch=false` cache-only path,
+  and staged orchestrator EMA loading uses it only for flat secondary forager candidates. If cache
+  coverage is insufficient, those candidates become unavailable for that cycle without remote
+  OHLCV fetches; active/priority symbols still use the normal remote/fail-loud path.
 - [x] Bound required close-EMA carry-forward fallback by the same tail-gap/freshness policy.
   Previous close EMA may be reused only while recent enough, with `[ema]` warning visibility; once
   stale beyond the threshold, planning must fail or halt the affected symbol/pside loudly.
@@ -313,7 +317,7 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Re-run review-targeted Rust-backed tests after each Rust rebuild:
   `tests/test_orchestrator_json_api.py::test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema`
   and `tests/test_orchestrator_json_api.py::test_forager_respects_n_positions_selects_one_coin`.
-- [ ] Add/adjust tests proving flat cache-only forager candidate handling cannot trigger
+- [x] Add/adjust tests proving flat cache-only forager candidate handling cannot trigger
   `MissingEma` for forced-normal symbols and cannot hide active-symbol EMA requirements.
 - [x] Add tests for generic market snapshot strictness: ticker fetch exceptions, missing bid,
   missing ask, missing last, and explicit Hyperliquid `allMids` exception behavior.
@@ -471,9 +475,10 @@ changing behavior during extraction commits.
   most churn-relevant replacements had score gaps above the old 0.5% threshold.
 - [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
   `live.max_ohlcv_fetches_per_minute=24` and `live.recv_window_ms=10000`.
-- [ ] Continue KuCoin-focused robustness work. Latest DEBUG runs still show heavy sparse-candle
-  diagnostics, websocket ping-timeout reconnect churn, and occasional long account/fill refresh
-  tails.
+- [ ] Continue KuCoin-focused robustness work. Latest DEBUG runs still show websocket
+  ping-timeout reconnect churn and occasional long account/fill refresh tails. Sparse-candle
+  secondary-forager EMA fetch pressure has been addressed with the explicit cache-only/no-network
+  path and needs fresh VPS confirmation.
 
 ## Initial Ticker Probe Findings
 
