@@ -25,6 +25,7 @@ def test_evaluator_applies_limit_penalties():
 
     stats = {
         "drawdown_worst_max": 0.45,
+        "adg_mean": 0.001,
         "adg_min": 0.0008,
         "loss_profit_ratio_mean": 0.55,
         "omega_ratio_mean": 1.2,
@@ -98,3 +99,72 @@ def test_limit_penalty_remains_global_for_non_scoring_metric():
     assert pytest.approx(scores[0]) == expected_penalty
     assert pytest.approx(scores[1]) == expected_penalty
     assert pytest.approx(penalty) == expected_penalty
+
+
+def test_missing_limit_metric_raises_instead_of_passing():
+    limits = [
+        {"metric": "fills_gap_p99_hours", "penalize_if": "greater_than", "value": 72.0},
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+
+    with pytest.raises(
+        ValueError,
+        match="missing optimizer limit metric 'fills_gap_p99_hours_mean'",
+    ):
+        evaluator.calc_fitness({"adg_mean": 0.001})
+
+
+def test_missing_scoring_metric_raises_instead_of_zeroing():
+    cfg = _make_config([], scoring=["fills_gap_p99_hours"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+
+    with pytest.raises(
+        ValueError,
+        match="missing optimizer scoring metric 'fills_gap_p99_hours'",
+    ):
+        evaluator.calc_fitness({"adg_mean": 0.001})
+
+
+def test_fill_gap_limit_uses_aggregate_default_stat():
+    limits = [
+        {
+            "metric": "fills_gap_p99_hours",
+            "penalize_if": "greater_than_or_equal",
+            "value": 72.0,
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    stats = {
+        "adg_mean": 0.001,
+        "fills_gap_p99_hours_mean": 73.0,
+    }
+
+    scores, penalty = evaluator.calc_fitness(stats)
+
+    assert pytest.approx(scores[0]) == (73.0 - 72.0) * 1e6
+    assert pytest.approx(penalty) == (73.0 - 72.0) * 1e6
+
+
+def test_fill_gap_limit_honors_explicit_max_stat():
+    limits = [
+        {
+            "metric": "fills_gap_p99_hours",
+            "penalize_if": "greater_than_or_equal",
+            "value": 72.0,
+            "stat": "max",
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    evaluator = Evaluator({}, {}, {}, cfg)
+    stats = {
+        "adg_mean": 0.001,
+        "fills_gap_p99_hours_mean": 10.0,
+        "fills_gap_p99_hours_max": 73.0,
+    }
+
+    scores, penalty = evaluator.calc_fitness(stats)
+
+    assert pytest.approx(scores[0]) == (73.0 - 72.0) * 1e6
+    assert pytest.approx(penalty) == (73.0 - 72.0) * 1e6
