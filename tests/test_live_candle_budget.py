@@ -1537,7 +1537,7 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
     bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
     bot.cm = FakeCM()
 
-    with caplog.at_level(logging.WARNING):
+    with caplog.at_level(logging.INFO):
         signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
             bot, ["TAIL/USDT:USDT"], now_ms=now_ms
         )
@@ -1554,7 +1554,7 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
     )
     assert any(
         "active tail gap carry-forward" in record.message
-        and record.levelno == logging.WARNING
+        and record.levelno == logging.INFO
         for record in caplog.records
     )
 
@@ -1601,7 +1601,53 @@ def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog
         )
 
     records = [r for r in caplog.records if "active tail gap carry-forward" in r.message]
-    assert [r.levelno for r in records] == [logging.WARNING, logging.DEBUG]
+    assert [r.levelno for r in records] == [logging.INFO, logging.DEBUG]
+
+
+def test_completed_candle_tail_gap_fallback_warns_near_cap(monkeypatch, caplog):
+    import logging
+    import passivbot as pb_mod
+
+    now_ms = 10 * 60_000
+    latest_expected = 9 * 60_000
+    last_cached = 1 * 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "timeframe": "1m",
+                        "coverage_ok": False,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": last_cached,
+                        "missing_candles": 8,
+                        "missing_spans": [(last_cached + 60_000, latest_expected)],
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 8,
+                        "tail_gap_age_ms": latest_expected - last_cached,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = FakeCM()
+
+    with caplog.at_level(logging.WARNING):
+        signature, missing = pb_mod.Passivbot._completed_candle_freshness_signature(
+            bot, ["TAIL/USDT:USDT"], now_ms=now_ms
+        )
+
+    assert missing == []
+    assert signature[0][2] == "tail_gap_fallback"
+    assert any(
+        "active tail gap carry-forward" in record.message
+        and record.levelno == logging.WARNING
+        for record in caplog.records
+    )
 
 
 def test_completed_candle_freshness_allows_real_cm_bounded_active_tail_gap(

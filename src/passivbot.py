@@ -4379,7 +4379,7 @@ class Passivbot:
             if interesting and key != last_key:
                 self._candle_health_last_log_key = key
                 logging.info(
-                    "[candle] health: symbols=%d unhealthy=%d stale=%d synthetic=%d worst_missing=%d%s",
+                    "[candle] health: symbols=%d unhealthy_surfaces=%d stale=%d synthetic=%d worst_missing=%d%s",
                     len(symbol_reports),
                     len(unhealthy_details),
                     stale_count,
@@ -8368,17 +8368,25 @@ class Passivbot:
             now_ms = utc_ms()
             state_key = (symbols, int(max_age_ms // ONE_MIN_MS))
             last_state = getattr(self, "_completed_candle_tail_gap_last_state", None)
+            last_info_ms = int(
+                getattr(self, "_completed_candle_tail_gap_last_info_ms", 0) or 0
+            )
             last_warning_ms = int(
                 getattr(self, "_completed_candle_tail_gap_last_warning_ms", 0) or 0
             )
-            near_limit = max_age_ms >= max(ONE_MIN_MS, int(max_tail_gap_ms * 0.5))
-            aged = max_age_ms > ONE_MIN_MS
+            near_limit = max_age_ms >= max(ONE_MIN_MS, int(max_tail_gap_ms * 0.8))
+            aged = max_age_ms >= max(2 * ONE_MIN_MS, int(max_tail_gap_ms * 0.5))
             first_or_changed = state_key != last_state
+            periodic_info = now_ms - last_info_ms >= 30 * 60 * 1000
             periodic_warning = now_ms - last_warning_ms >= 15 * 60 * 1000
             level = logging.DEBUG
-            if first_or_changed or aged or near_limit or periodic_warning:
+            if near_limit or (aged and periodic_warning):
                 level = logging.WARNING
                 self._completed_candle_tail_gap_last_warning_ms = now_ms
+                self._completed_candle_tail_gap_last_info_ms = now_ms
+            elif first_or_changed or periodic_info:
+                level = logging.INFO
+                self._completed_candle_tail_gap_last_info_ms = now_ms
             self._completed_candle_tail_gap_last_state = state_key
             logging.log(
                 level,
@@ -8566,6 +8574,84 @@ class Passivbot:
         details["defer_reason"] = "staged_planner_inputs_not_fresh"
         return ok, details
 
+    def _format_staged_execution_defer_message(self, details: dict) -> str:
+        """Return an operator-facing staged-defer summary."""
+        missing = tuple(details.get("missing", ()))
+        invalid = details.get("invalid") or {}
+        context = str(details.get("context") or "planning")
+        retry_note = "will_retry=automatic"
+        scope_note = "scope=planner_cycle"
+        headline = "staged planning deferred"
+        dependency = ",".join(missing) if missing else "unknown"
+        extra_parts = []
+        if "completed_candles" in missing:
+            headline = "staged planning deferred: completed candle target changed or missing"
+            dependency = "completed_candles"
+            extra_parts.append("action=refresh_candles_then_retry")
+        elif missing:
+            extra_parts.append("action=refresh_required_surfaces_then_retry")
+        parts = [
+            headline,
+            f"context={context}",
+            f"dependency={dependency}",
+            scope_note,
+            retry_note,
+            f"epoch={int(details.get('epoch', 0) or 0)}",
+        ]
+        parts.extend(extra_parts)
+        if invalid:
+            summaries = []
+            for surface, items in invalid.items():
+                if not isinstance(items, list) or not items:
+                    summaries.append(str(surface))
+                    continue
+                first = items[0]
+                if not isinstance(first, dict):
+                    summaries.append(f"{surface}:{type(first).__name__}")
+                    continue
+                reason = first.get("reason") or "invalid"
+                if reason == "signature_mismatch":
+                    mismatch_type = str(first.get("mismatch_type") or "unknown")
+                    changed_symbols = list(first.get("changed_symbols") or [])
+                    missing_symbols = list(first.get("missing_symbols") or [])
+                    extra_symbols = list(first.get("extra_symbols") or [])
+                    symbol_bits = []
+                    if changed_symbols:
+                        symbol_bits.append(
+                            "changed="
+                            + "|".join(
+                                Passivbot._log_symbol(sym) for sym in changed_symbols[:4]
+                            )
+                        )
+                    if missing_symbols:
+                        symbol_bits.append(
+                            "missing="
+                            + "|".join(
+                                Passivbot._log_symbol(sym) for sym in missing_symbols[:4]
+                            )
+                        )
+                    if extra_symbols:
+                        symbol_bits.append(
+                            "extra="
+                            + "|".join(
+                                Passivbot._log_symbol(sym) for sym in extra_symbols[:4]
+                            )
+                        )
+                    summaries.append(
+                        f"{surface}:{mismatch_type}"
+                        f" expected={int(first.get('expected_count') or 0)}"
+                        f" stamped={int(first.get('stamped_count') or 0)}"
+                        f" changed={int(first.get('changed_count') or 0)}"
+                        + (f" {' '.join(symbol_bits)}" if symbol_bits else "")
+                    )
+                else:
+                    symbol = first.get("symbol")
+                    suffix = f":{Passivbot._log_symbol(symbol)}" if symbol else ""
+                    summaries.append(f"{surface}:{reason}{suffix}")
+            if summaries:
+                parts.append("details=" + ",".join(summaries[:4]))
+        return " | ".join(parts)
+
     def _handle_staged_execution_precondition_error(
         self, exc: RuntimeError
     ) -> tuple[bool, dict]:
@@ -8608,74 +8694,7 @@ class Passivbot:
             return
         self._staged_execution_defer_last_log_key = log_key
         self._staged_execution_defer_last_log_ms = now_ms
-        parts = [
-            f"context={context}",
-            f"epoch={int(details.get('epoch', 0) or 0)}",
-        ]
-        if missing:
-            parts.append(f"missing={','.join(missing)}")
-        if invalid:
-            summaries = []
-            for surface, items in invalid.items():
-                if isinstance(items, list) and items:
-                    first = items[0]
-                    if isinstance(first, dict):
-                        reason = first.get("reason") or "invalid"
-                        symbol = first.get("symbol")
-                        if symbol:
-                            suffix = f":{Passivbot._log_symbol(symbol)}"
-                        elif reason == "signature_mismatch":
-                            missing_count = int(first.get("missing_count") or 0)
-                            extra_count = int(first.get("extra_count") or 0)
-                            changed_count = int(first.get("changed_count") or 0)
-                            expected_count = int(first.get("expected_count") or 0)
-                            stamped_count = int(first.get("stamped_count") or 0)
-                            mismatch_type = str(first.get("mismatch_type") or "unknown")
-                            changed_symbols = list(first.get("changed_symbols") or [])
-                            missing_symbols = list(first.get("missing_symbols") or [])
-                            extra_symbols = list(first.get("extra_symbols") or [])
-                            symbol_bits = []
-                            if changed_symbols:
-                                symbol_bits.append(
-                                    "changed="
-                                    + "|".join(
-                                        Passivbot._log_symbol(sym)
-                                        for sym in changed_symbols[:4]
-                                    )
-                                )
-                            if missing_symbols:
-                                symbol_bits.append(
-                                    "missing="
-                                    + "|".join(
-                                        Passivbot._log_symbol(sym)
-                                        for sym in missing_symbols[:4]
-                                    )
-                                )
-                            if extra_symbols:
-                                symbol_bits.append(
-                                    "extra="
-                                    + "|".join(
-                                        Passivbot._log_symbol(sym)
-                                        for sym in extra_symbols[:4]
-                                    )
-                                )
-                            suffix = (
-                                f":{mismatch_type}"
-                                f" expected={expected_count} stamped={stamped_count}"
-                                f" missing={missing_count} extra={extra_count}"
-                                f" changed={changed_count}"
-                                + (f" {' '.join(symbol_bits)}" if symbol_bits else "")
-                            )
-                        else:
-                            suffix = ""
-                        summaries.append(f"{surface}:{reason}{suffix}")
-                    else:
-                        summaries.append(f"{surface}:{type(first).__name__}")
-                else:
-                    summaries.append(str(surface))
-            if summaries:
-                parts.append("invalid=" + ",".join(summaries[:4]))
-        logging.info("[state] staged execution deferred | %s", " | ".join(parts))
+        logging.info("[state] %s", Passivbot._format_staged_execution_defer_message(self, details))
         if invalid:
             logging.debug(
                 "[state] staged execution deferred details | invalid=%s", invalid
@@ -13024,10 +13043,11 @@ class Passivbot:
         pb_type = self._resolve_pb_order_type(order).lower()
         return pb_type.startswith("entry_initial_")
 
-    def _initial_entry_gate_key(self, order: dict) -> tuple[str, str]:
+    def _initial_entry_gate_key(self, order: dict) -> tuple[str, str, str]:
         return (
             str(order.get("symbol") or ""),
             str(order.get("position_side") or ""),
+            self._resolve_pb_order_type(order).lower(),
         )
 
     def _initial_entry_gate_log_probe(self, order: dict) -> dict:
@@ -13051,6 +13071,9 @@ class Passivbot:
             self._initial_entry_distance_gate_log_state = {}
         key = self._initial_entry_gate_key(order)
         probe = self._initial_entry_gate_log_probe(order)
+        dist_bucket = int(abs(signed_dist) * 200.0)  # 0.5 percentage-point buckets
+        probe["dist_bucket"] = dist_bucket
+        now_ms = utc_ms()
         last_probe = self._initial_entry_distance_gate_log_state.get(key)
         try:
             tolerance = float(self.live_value("order_match_tolerance_pct") or 0.0)
@@ -13059,15 +13082,22 @@ class Passivbot:
         should_log = last_probe is None
         if last_probe is not None:
             try:
-                should_log = not orders_matching(
-                    probe,
+                material_order_change = not orders_matching(
+                    self._initial_entry_gate_log_probe(order),
                     last_probe,
                     tolerance_qty=tolerance,
                     tolerance_price=tolerance,
                 )
             except (KeyError, TypeError, ValueError):
-                should_log = True
-        self._initial_entry_distance_gate_log_state[key] = probe
+                material_order_change = True
+            last_info_ms = int(last_probe.get("last_info_ms", 0) or 0)
+            should_log = (
+                material_order_change
+                and int(last_probe.get("dist_bucket", -1)) != dist_bucket
+            ) or now_ms - last_info_ms >= 10 * 60 * 1000
+        probe["last_info_ms"] = now_ms if should_log else int(
+            (last_probe or {}).get("last_info_ms", 0) or 0
+        )
         if not should_log:
             logging.debug(
                 "[entry] initial entry creation still distance-gated | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
@@ -13082,6 +13112,7 @@ class Passivbot:
                 self._resolve_pb_order_type(order),
             )
             return
+        self._initial_entry_distance_gate_log_state[key] = probe
         logging.info(
             "[entry] initial entry staged but not placed | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
             Passivbot._log_symbol(probe["symbol"]),

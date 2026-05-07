@@ -618,6 +618,8 @@ class CandlestickManager:
         except Exception:
             self._progress_log_interval_seconds = 0.0
         self._progress_last_log: Dict[Tuple[str, str, str], float] = {}
+        self._skipped_trailing_gap_summary: Dict[Tuple[str, str], Dict[str, int]] = {}
+        self._skipped_trailing_gap_summary_last_log: float = time.monotonic()
         self._warning_last_log: Dict[str, float] = {}  # throttle repeated warnings
         self._warning_throttle_seconds: float = 300.0  # 5 minutes between repeated warnings
         self._persist_batch_observer: Optional[
@@ -1247,6 +1249,50 @@ class CandlestickManager:
             return
         self._progress_last_log[key] = now
         self._log("debug", event, **fields)
+
+    def _record_skipped_trailing_gap(
+        self,
+        *,
+        symbol: Optional[str],
+        requested_end_ts: int,
+        actual_end_ts: int,
+        skipped_minutes: int,
+    ) -> None:
+        """Aggregate open-tail skip diagnostics instead of logging per EMA call."""
+        if self.debug_level <= 0:
+            return
+        try:
+            caller = get_caller_name()
+        except Exception:
+            caller = "-"
+        key = (_log_symbol(symbol) if symbol else "-", caller)
+        item = self._skipped_trailing_gap_summary.setdefault(
+            key, {"count": 0, "max_minutes": 0, "latest_requested": 0, "latest_actual": 0}
+        )
+        item["count"] += 1
+        item["max_minutes"] = max(int(item["max_minutes"]), int(skipped_minutes))
+        item["latest_requested"] = max(int(item["latest_requested"]), int(requested_end_ts))
+        item["latest_actual"] = max(int(item["latest_actual"]), int(actual_end_ts))
+        now = time.monotonic()
+        total = sum(int(v["count"]) for v in self._skipped_trailing_gap_summary.values())
+        if total < 250 and (now - self._skipped_trailing_gap_summary_last_log) < 300.0:
+            return
+        self._skipped_trailing_gap_summary_last_log = now
+        top_items = sorted(
+            self._skipped_trailing_gap_summary.items(),
+            key=lambda kv: (-int(kv[1]["count"]), -int(kv[1]["max_minutes"])),
+        )[:8]
+        details = "; ".join(
+            f"{sym} caller={caller} count={data['count']} max_gap={data['max_minutes']}m"
+            for (sym, caller), data in top_items
+        )
+        self.log.debug(
+            "[candle] skipped trailing gap summary | total=%d groups=%d%s",
+            total,
+            len(self._skipped_trailing_gap_summary),
+            f" | {details}" if details else "",
+        )
+        self._skipped_trailing_gap_summary.clear()
 
     def _log_persistent_gap_summary(self) -> None:
         """Log accumulated persistent gap summary if any, throttled to once per 30 min."""
@@ -4092,9 +4138,8 @@ class CandlestickManager:
         if not fill_trailing_gaps and last_real_ts < hi:
             trailing_gap_minutes = (hi - last_real_ts) // ONE_MIN_MS
             if trailing_gap_minutes > 0:
-                self._log(
-                    "debug",
-                    "standardize_gaps_skipping_trailing",
+                self._record_skipped_trailing_gap(
+                    symbol=symbol,
                     requested_end_ts=hi,
                     actual_end_ts=last_real_ts,
                     skipped_minutes=int(trailing_gap_minutes),
@@ -6750,6 +6795,7 @@ class CandlestickManager:
                     strict=False,
                     fill_trailing_gaps=False,
                     assume_sorted=True,
+                    symbol=symbol,
                 )
             if tail.size == 0:
                 out[metric_key] = float("nan")

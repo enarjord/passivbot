@@ -2619,7 +2619,6 @@ class FillEventsManager:
                 level = (
                     logging.INFO
                     if fetch_elapsed_ms >= 10_000
-                    or request_stats.count >= 10
                     or request_stats.error_count
                     else logging.DEBUG
                 )

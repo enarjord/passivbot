@@ -237,7 +237,7 @@ async def test_to_create_orders_sorted_by_market_diff(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_initial_entry_distance_gate_blocks_far_create_and_logs_by_tolerance(
+async def test_initial_entry_distance_gate_blocks_far_create_and_throttles_logs(
     caplog,
 ):
     symbol = "BTC/USDT"
@@ -274,9 +274,8 @@ async def test_initial_entry_distance_gate_blocks_far_create_and_logs_by_toleran
         for record in caplog.records
         if "initial entry staged but not placed" in record.message
     ]
-    assert len(messages) == 2
+    assert len(messages) == 1
     assert "price=99" in messages[0]
-    assert "price=98.9" in messages[1]
 
 
 @pytest.mark.asyncio
