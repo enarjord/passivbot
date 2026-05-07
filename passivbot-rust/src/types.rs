@@ -665,6 +665,52 @@ impl OrderType {
                 | CloseEmaAnchorLong
         )
     }
+
+    #[inline]
+    pub const fn is_entry(self) -> bool {
+        use OrderType::*;
+        matches!(
+            self,
+            EntryInitialNormalLong
+                | EntryInitialPartialLong
+                | EntryTrailingNormalLong
+                | EntryTrailingCroppedLong
+                | EntryGridNormalLong
+                | EntryGridCroppedLong
+                | EntryGridInflatedLong
+                | EntryInitialNormalShort
+                | EntryInitialPartialShort
+                | EntryTrailingNormalShort
+                | EntryTrailingCroppedShort
+                | EntryGridNormalShort
+                | EntryGridCroppedShort
+                | EntryGridInflatedShort
+                | EntryEmaAnchorLong
+                | EntryEmaAnchorShort
+        )
+    }
+
+    #[inline]
+    pub const fn is_close(self) -> bool {
+        use OrderType::*;
+        matches!(
+            self,
+            CloseGridLong
+                | CloseTrailingLong
+                | CloseUnstuckLong
+                | CloseAutoReduceTwelLong
+                | CloseGridShort
+                | CloseTrailingShort
+                | CloseUnstuckShort
+                | CloseAutoReduceTwelShort
+                | ClosePanicLong
+                | ClosePanicShort
+                | CloseAutoReduceWelLong
+                | CloseAutoReduceWelShort
+                | CloseEmaAnchorLong
+                | CloseEmaAnchorShort
+        )
+    }
 }
 
 #[derive(Default)]
@@ -793,6 +839,30 @@ pub struct Analysis {
     pub trade_loss_max: f64,
     pub trade_loss_mean: f64,
     pub trade_loss_median: f64,
+    pub fills_active_days_count: f64,
+    pub fills_active_days_ratio: f64,
+    pub fills_active_symbols_count: f64,
+    pub fills_analysis_duration_days: f64,
+    pub fills_count: f64,
+    pub fills_count_close: f64,
+    pub fills_count_entry: f64,
+    pub fills_count_long: f64,
+    pub fills_count_short: f64,
+    pub fills_entry_per_close: f64,
+    pub fills_gap_longest_days: f64,
+    pub fills_gap_mean_hours: f64,
+    pub fills_gap_median_hours: f64,
+    pub fills_gap_p95_hours: f64,
+    pub fills_gap_p99_hours: f64,
+    pub fills_per_day: f64,
+    pub fills_per_day_close: f64,
+    pub fills_per_day_entry: f64,
+    pub fills_per_day_long: f64,
+    pub fills_per_day_per_position_slot: f64,
+    pub fills_per_day_per_position_slot_long: f64,
+    pub fills_per_day_per_position_slot_short: f64,
+    pub fills_per_day_short: f64,
+    pub fills_top_symbol_share: f64,
 
     pub adg_w: f64,
     pub adg_pnl_w: f64,
@@ -938,6 +1008,30 @@ impl Default for Analysis {
             trade_loss_max: 0.0,
             trade_loss_mean: 0.0,
             trade_loss_median: 0.0,
+            fills_active_days_count: 0.0,
+            fills_active_days_ratio: 0.0,
+            fills_active_symbols_count: 0.0,
+            fills_analysis_duration_days: 0.0,
+            fills_count: 0.0,
+            fills_count_close: 0.0,
+            fills_count_entry: 0.0,
+            fills_count_long: 0.0,
+            fills_count_short: 0.0,
+            fills_entry_per_close: 0.0,
+            fills_gap_longest_days: 0.0,
+            fills_gap_mean_hours: 0.0,
+            fills_gap_median_hours: 0.0,
+            fills_gap_p95_hours: 0.0,
+            fills_gap_p99_hours: 0.0,
+            fills_per_day: 0.0,
+            fills_per_day_close: 0.0,
+            fills_per_day_entry: 0.0,
+            fills_per_day_long: 0.0,
+            fills_per_day_per_position_slot: 0.0,
+            fills_per_day_per_position_slot_long: 0.0,
+            fills_per_day_per_position_slot_short: 0.0,
+            fills_per_day_short: 0.0,
+            fills_top_symbol_share: 0.0,
             adg_w: 0.0,
             adg_pnl_w: 0.0,
             mdg_pnl_w: 0.0,

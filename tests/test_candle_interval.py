@@ -156,6 +156,10 @@ def test_backtest_with_candle_interval():
         "position_unchanged_days_max",
         "high_exposure_days_max_long",
         "peak_recovery_days_strategy_eq",
+        "fills_count",
+        "fills_per_day",
+        "fills_gap_longest_days",
+        "fills_per_day_per_position_slot",
     ]:
         assert key in analysis
         assert np.isfinite(analysis[key])

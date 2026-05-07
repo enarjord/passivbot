@@ -1,6 +1,6 @@
 use crate::types::{Analysis, Equities, Fill};
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_HOUR: u64 = 3_600_000;
@@ -18,6 +18,231 @@ pub struct EquitySeriesMetrics {
     pub sortino_ratio: f64,
     pub omega_ratio: f64,
     pub expected_shortfall_1pct: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FillActivityMetrics {
+    pub fills_active_days_count: f64,
+    pub fills_active_days_ratio: f64,
+    pub fills_active_symbols_count: f64,
+    pub fills_analysis_duration_days: f64,
+    pub fills_count: f64,
+    pub fills_count_close: f64,
+    pub fills_count_entry: f64,
+    pub fills_count_long: f64,
+    pub fills_count_short: f64,
+    pub fills_entry_per_close: f64,
+    pub fills_gap_longest_days: f64,
+    pub fills_gap_mean_hours: f64,
+    pub fills_gap_median_hours: f64,
+    pub fills_gap_p95_hours: f64,
+    pub fills_gap_p99_hours: f64,
+    pub fills_per_day: f64,
+    pub fills_per_day_close: f64,
+    pub fills_per_day_entry: f64,
+    pub fills_per_day_long: f64,
+    pub fills_per_day_per_position_slot: f64,
+    pub fills_per_day_per_position_slot_long: f64,
+    pub fills_per_day_per_position_slot_short: f64,
+    pub fills_per_day_short: f64,
+    pub fills_top_symbol_share: f64,
+}
+
+fn percentile(values: &[f64], pct: f64) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    if values.len() == 1 {
+        return values[0];
+    }
+    let mut sorted = values.to_vec();
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b).unwrap_or_else(|| {
+            if a.is_nan() && b.is_nan() {
+                Ordering::Equal
+            } else if a.is_nan() {
+                Ordering::Greater
+            } else {
+                Ordering::Less
+            }
+        })
+    });
+    let rank = (pct.clamp(0.0, 100.0) / 100.0) * (sorted.len() - 1) as f64;
+    let lo = rank.floor() as usize;
+    let hi = rank.ceil() as usize;
+    if lo == hi {
+        sorted[lo]
+    } else {
+        let weight = rank - lo as f64;
+        sorted[lo] * (1.0 - weight) + sorted[hi] * weight
+    }
+}
+
+pub fn calc_fill_activity_metrics(
+    fills: &[Fill],
+    timestamps_ms: &[u64],
+    long_position_slots: usize,
+    short_position_slots: usize,
+) -> FillActivityMetrics {
+    let (start_ts, end_ts, n_days) = if timestamps_ms.len() >= 2 {
+        let start_ts = timestamps_ms[0];
+        let end_ts = *timestamps_ms.last().unwrap_or(&start_ts);
+        let range_ms = end_ts.saturating_sub(start_ts);
+        let n_days = if range_ms > 0 {
+            range_ms as f64 / MS_PER_DAY as f64
+        } else {
+            timestamps_ms.len() as f64 / 1440.0
+        }
+        .max(1e-9);
+        (Some(start_ts), Some(end_ts), n_days)
+    } else {
+        (None, None, 0.0)
+    };
+
+    let fills_count = fills.len() as f64;
+    let fills_count_entry = fills
+        .iter()
+        .filter(|fill| fill.order_type.is_entry())
+        .count() as f64;
+    let fills_count_close = fills
+        .iter()
+        .filter(|fill| fill.order_type.is_close())
+        .count() as f64;
+    let fills_count_long = fills
+        .iter()
+        .filter(|fill| fill.order_type.is_long())
+        .count() as f64;
+    let fills_count_short = fills_count - fills_count_long;
+    let fills_per_day = if n_days > 0.0 {
+        fills_count / n_days
+    } else {
+        0.0
+    };
+    let fills_per_day_entry = if n_days > 0.0 {
+        fills_count_entry / n_days
+    } else {
+        0.0
+    };
+    let fills_per_day_close = if n_days > 0.0 {
+        fills_count_close / n_days
+    } else {
+        0.0
+    };
+    let fills_per_day_long = if n_days > 0.0 {
+        fills_count_long / n_days
+    } else {
+        0.0
+    };
+    let fills_per_day_short = if n_days > 0.0 {
+        fills_count_short / n_days
+    } else {
+        0.0
+    };
+    let fills_per_day_per_position_slot_long = if long_position_slots > 0 {
+        fills_per_day_long / long_position_slots as f64
+    } else {
+        0.0
+    };
+    let fills_per_day_per_position_slot_short = if short_position_slots > 0 {
+        fills_per_day_short / short_position_slots as f64
+    } else {
+        0.0
+    };
+    let mut slot_rates = Vec::with_capacity(2);
+    if long_position_slots > 0 {
+        slot_rates.push(fills_per_day_per_position_slot_long);
+    }
+    if short_position_slots > 0 {
+        slot_rates.push(fills_per_day_per_position_slot_short);
+    }
+    let fills_per_day_per_position_slot = if slot_rates.is_empty() {
+        0.0
+    } else {
+        slot_rates.iter().sum::<f64>() / slot_rates.len() as f64
+    };
+    let fills_entry_per_close = fills_count_entry / fills_count_close.max(1.0);
+    let mut fills_by_symbol: HashMap<&str, usize> = HashMap::new();
+    for fill in fills {
+        *fills_by_symbol.entry(fill.coin.as_str()).or_insert(0) += 1;
+    }
+    let fills_active_symbols_count = fills_by_symbol.len() as f64;
+    let fills_top_symbol_share = if fills.is_empty() {
+        0.0
+    } else {
+        fills_by_symbol.values().copied().max().unwrap_or(0) as f64 / fills.len() as f64
+    };
+
+    let mut metrics = FillActivityMetrics {
+        fills_active_symbols_count,
+        fills_analysis_duration_days: n_days,
+        fills_count,
+        fills_count_entry,
+        fills_count_close,
+        fills_count_long,
+        fills_count_short,
+        fills_per_day,
+        fills_per_day_entry,
+        fills_per_day_close,
+        fills_per_day_long,
+        fills_per_day_short,
+        fills_per_day_per_position_slot,
+        fills_per_day_per_position_slot_long,
+        fills_per_day_per_position_slot_short,
+        fills_entry_per_close,
+        fills_top_symbol_share,
+        ..FillActivityMetrics::default()
+    };
+
+    let (Some(start_ts), Some(end_ts)) = (start_ts, end_ts) else {
+        return metrics;
+    };
+    let mut fill_ts: Vec<u64> = fills
+        .iter()
+        .map(|fill| {
+            if fill.timestamp_ms > 0 {
+                fill.timestamp_ms
+            } else {
+                fallback_timestamp_ms(fill.index)
+            }
+        })
+        .filter(|ts| *ts >= start_ts && *ts <= end_ts)
+        .collect();
+    fill_ts.sort_unstable();
+
+    let gap_hours = if fill_ts.is_empty() {
+        vec![end_ts.saturating_sub(start_ts) as f64 / MS_PER_HOUR as f64]
+    } else {
+        let mut boundaries = Vec::with_capacity(fill_ts.len() + 2);
+        boundaries.push(start_ts);
+        boundaries.extend(fill_ts.iter().copied());
+        boundaries.push(end_ts);
+        boundaries
+            .windows(2)
+            .map(|window| window[1].saturating_sub(window[0]) as f64 / MS_PER_HOUR as f64)
+            .collect()
+    };
+    let active_day_buckets = if fill_ts.is_empty() {
+        0
+    } else {
+        fill_ts
+            .iter()
+            .map(|ts| ts.saturating_sub(start_ts) / MS_PER_DAY)
+            .collect::<HashSet<_>>()
+            .len()
+    };
+    let total_day_buckets = n_days.ceil().max(1.0);
+    metrics.fills_active_days_count = active_day_buckets as f64;
+    metrics.fills_active_days_ratio = active_day_buckets as f64 / total_day_buckets;
+    metrics.fills_gap_longest_days = gap_hours.iter().copied().fold(0.0, f64::max) / 24.0;
+    metrics.fills_gap_mean_hours = if gap_hours.is_empty() {
+        0.0
+    } else {
+        gap_hours.iter().sum::<f64>() / gap_hours.len() as f64
+    };
+    metrics.fills_gap_median_hours = percentile(&gap_hours, 50.0);
+    metrics.fills_gap_p95_hours = percentile(&gap_hours, 95.0);
+    metrics.fills_gap_p99_hours = percentile(&gap_hours, 99.0);
+    metrics
 }
 
 pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquitySeriesMetrics {
@@ -1395,6 +1620,79 @@ mod tests {
             twe_short: if is_long { 0.0 } else { -0.1 },
             twe_net: if is_long { 0.1 } else { -0.1 },
         }
+    }
+
+    #[test]
+    fn fill_activity_metrics_include_gaps_splits_and_slot_rates() {
+        let start = 1_740_000_000_000_u64;
+        let one_hour = MS_PER_HOUR;
+        let timestamps = vec![
+            start,
+            start + one_hour,
+            start + 2 * one_hour,
+            start + 3 * one_hour,
+            start + 4 * one_hour,
+        ];
+        let fills = vec![
+            make_trade_fill(1, start + one_hour, "BTC", 1.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(
+                3,
+                start + 3 * one_hour,
+                "ETH",
+                -0.5,
+                -0.1,
+                0.0,
+                1005.0,
+                true,
+            ),
+        ];
+
+        let metrics = calc_fill_activity_metrics(&fills, &timestamps, 2, 0);
+
+        assert_eq!(metrics.fills_count, 2.0);
+        assert_eq!(metrics.fills_count_entry, 1.0);
+        assert_eq!(metrics.fills_count_close, 1.0);
+        assert_eq!(metrics.fills_count_long, 2.0);
+        assert_eq!(metrics.fills_count_short, 0.0);
+        assert!((metrics.fills_per_day - 12.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_entry - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_close - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_long - 12.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_short - 0.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_per_position_slot_long - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_per_position_slot_short - 0.0).abs() < 1e-12);
+        assert!((metrics.fills_per_day_per_position_slot - 6.0).abs() < 1e-12);
+        assert!((metrics.fills_entry_per_close - 1.0).abs() < 1e-12);
+        assert!((metrics.fills_active_days_count - 1.0).abs() < 1e-12);
+        assert!((metrics.fills_active_days_ratio - 1.0).abs() < 1e-12);
+        assert!((metrics.fills_active_symbols_count - 2.0).abs() < 1e-12);
+        assert!((metrics.fills_analysis_duration_days - (4.0 / 24.0)).abs() < 1e-12);
+        assert!((metrics.fills_top_symbol_share - 0.5).abs() < 1e-12);
+        assert!((metrics.fills_gap_longest_days - 2.0 / 24.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_mean_hours - 4.0 / 3.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_median_hours - 1.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_p95_hours - 1.9).abs() < 1e-12);
+        assert!((metrics.fills_gap_p99_hours - 1.98).abs() < 1e-12);
+    }
+
+    #[test]
+    fn fill_activity_metrics_no_fills_uses_whole_backtest_gap() {
+        let start = 1_740_000_000_000_u64;
+        let timestamps = vec![start, start + MS_PER_HOUR, start + 2 * MS_PER_HOUR];
+        let metrics = calc_fill_activity_metrics(&[], &timestamps, 1, 1);
+
+        assert_eq!(metrics.fills_count, 0.0);
+        assert_eq!(metrics.fills_per_day, 0.0);
+        assert_eq!(metrics.fills_active_days_count, 0.0);
+        assert_eq!(metrics.fills_active_days_ratio, 0.0);
+        assert_eq!(metrics.fills_active_symbols_count, 0.0);
+        assert_eq!(metrics.fills_top_symbol_share, 0.0);
+        assert!((metrics.fills_analysis_duration_days - (2.0 / 24.0)).abs() < 1e-12);
+        assert!((metrics.fills_gap_longest_days - 2.0 / 24.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_mean_hours - 2.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_median_hours - 2.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_p95_hours - 2.0).abs() < 1e-12);
+        assert!((metrics.fills_gap_p99_hours - 2.0).abs() < 1e-12);
     }
 
     #[test]

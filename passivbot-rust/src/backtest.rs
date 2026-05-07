@@ -1,4 +1,4 @@
-use crate::analysis::analyze_equity_series;
+use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
 use crate::entries::calc_min_entry_qty;
 use crate::equity_hard_stop_loss as ehsl;
@@ -4427,6 +4427,28 @@ impl<'a> Backtest<'a> {
             self.effective_n_positions.short,
         );
         (long, short)
+    }
+
+    pub fn fill_activity_metrics_for_analysis(
+        &self,
+        fills: &[Fill],
+        equities: &Equities,
+    ) -> FillActivityMetrics {
+        let long_slots = if self.bot_params_master.long.n_positions > 0
+            && self.bot_params_master.long.total_wallet_exposure_limit > 0.0
+        {
+            self.bot_params_master.long.n_positions
+        } else {
+            0
+        };
+        let short_slots = if self.bot_params_master.short.n_positions > 0
+            && self.bot_params_master.short.total_wallet_exposure_limit > 0.0
+        {
+            self.bot_params_master.short.n_positions
+        } else {
+            0
+        };
+        calc_fill_activity_metrics(fills, &equities.timestamps_ms, long_slots, short_slots)
     }
 
     fn strategy_equity_metrics_from_series(

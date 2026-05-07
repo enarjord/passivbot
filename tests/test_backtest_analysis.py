@@ -339,39 +339,58 @@ def test_process_forager_fills_no_fills_keeps_datetime_index_for_resample():
     assert not bal_eq.empty
 
 
-def test_process_forager_fills_adds_fill_activity_metrics_from_trading_window():
-    start = 1_740_000_000_000
-    one_hour = 3_600_000
-    equities_array = np.array(
-        [
-            [start, 1000.0, 0.02],
-            [start + one_hour, 1001.0, 0.02],
-            [start + 2 * one_hour, 1002.0, 0.02],
-            [start + 3 * one_hour, 1003.0, 0.02],
-            [start + 4 * one_hour, 1004.0, 0.02],
-        ],
-        dtype=np.float64,
+def test_expand_analysis_keeps_rust_fill_activity_metrics_shared():
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.75)
+    fill_metrics = {
+        "fills_active_days_count": 1.0,
+        "fills_active_days_ratio": 1.0,
+        "fills_active_symbols_count": 2.0,
+        "fills_analysis_duration_days": 4.0 / 24.0,
+        "fills_count": 2.0,
+        "fills_count_close": 1.0,
+        "fills_count_entry": 1.0,
+        "fills_count_long": 2.0,
+        "fills_count_short": 0.0,
+        "fills_entry_per_close": 1.0,
+        "fills_gap_longest_days": 2.0 / 24.0,
+        "fills_gap_mean_hours": 4.0 / 3.0,
+        "fills_gap_median_hours": 1.0,
+        "fills_gap_p95_hours": 1.9,
+        "fills_gap_p99_hours": 1.98,
+        "fills_per_day": 12.0,
+        "fills_per_day_close": 6.0,
+        "fills_per_day_entry": 6.0,
+        "fills_per_day_long": 12.0,
+        "fills_per_day_per_position_slot": 6.0,
+        "fills_per_day_per_position_slot_long": 6.0,
+        "fills_per_day_per_position_slot_short": 0.0,
+        "fills_per_day_short": 0.0,
+        "fills_top_symbol_share": 0.5,
+    }
+    analysis_usd.update(fill_metrics)
+    analysis_btc.update(fill_metrics)
+
+    result = expand_analysis(
+        analysis_usd,
+        analysis_btc,
+        fills=np.empty((0, 0)),
+        equities_array=np.empty((0, 3)),
+        config={
+            "bot": {
+                "long": {"total_wallet_exposure_limit": 1.0},
+                "short": {"total_wallet_exposure_limit": 0.0},
+            }
+        },
     )
-    fills = [
-        [1, start + one_hour, "BTC", 1.0, 0.1, 1000.0, 0.0, 1000.0, 50000.0, 0.1, 100.0, 0.1, 100.0, "entry_ema_anchor_long", "maker", 0.1, 0.0, 0.0, 0.0],
-        [3, start + 3 * one_hour, "BTC", -0.5, 0.1, 1005.0, 0.0, 1005.0, 50000.0, -0.1, 110.0, 0.0, 0.0, "close_ema_anchor_long", "maker", 0.0, 0.0, 0.0, 0.0],
-    ]
 
-    _fdf, analysis_appendix, _bal_eq = process_forager_fills(
-        fills=fills,
-        coins=["BTC"],
-        hlcvs=np.empty((0, 0), dtype=np.float64),
-        equities_array=equities_array,
-        balance_sample_divider=1,
-    )
-
-    assert analysis_appendix["fills_per_day"] == pytest.approx(12.0)
-    assert analysis_appendix["hours_no_fills_max"] == pytest.approx(2.0)
-    assert analysis_appendix["hours_no_fills_mean"] == pytest.approx(4.0 / 3.0)
-    assert analysis_appendix["hours_no_fills_median"] == pytest.approx(1.0)
+    for key, value in fill_metrics.items():
+        assert result[key] == pytest.approx(value)
+        assert f"{key}_usd" not in result
+        assert f"{key}_btc" not in result
 
 
-def test_process_forager_fills_no_fills_penalizes_whole_trading_window():
+def test_process_forager_fills_no_fills_leaves_fill_activity_to_rust_analysis():
     start = 1_740_000_000_000
     one_hour = 3_600_000
     equities_array = np.array(
@@ -391,10 +410,7 @@ def test_process_forager_fills_no_fills_penalizes_whole_trading_window():
         balance_sample_divider=1,
     )
 
-    assert analysis_appendix["fills_per_day"] == pytest.approx(0.0)
-    assert analysis_appendix["hours_no_fills_max"] == pytest.approx(2.0)
-    assert analysis_appendix["hours_no_fills_mean"] == pytest.approx(2.0)
-    assert analysis_appendix["hours_no_fills_median"] == pytest.approx(2.0)
+    assert "fills_per_day" not in analysis_appendix
 
 
 def test_process_forager_fills_includes_strategy_equity_column():

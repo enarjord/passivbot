@@ -1,4 +1,4 @@
-use crate::analysis::analyze_backtest_pair;
+use crate::analysis::{analyze_backtest_pair, FillActivityMetrics};
 use crate::backtest::Backtest;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -15,13 +15,12 @@ use crate::risk::{
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
 use crate::strategies::{
-    parse_grid_close_price_anchor_value, EmaAnchorParams, GridClosePriceAnchor, StrategySide,
-    TrailingGridCloseParams, TrailingGridEntryParams,
+    EmaAnchorParams, StrategySide, TrailingGridCloseParams, TrailingGridEntryParams,
 };
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
 };
-use crate::types::OrderType;
+use crate::types::{Analysis, OrderType};
 use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
     EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
@@ -39,6 +38,33 @@ use serde_json::{self, Value};
 use std::str::FromStr;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
+
+fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
+    analysis.fills_active_days_count = metrics.fills_active_days_count;
+    analysis.fills_active_days_ratio = metrics.fills_active_days_ratio;
+    analysis.fills_active_symbols_count = metrics.fills_active_symbols_count;
+    analysis.fills_analysis_duration_days = metrics.fills_analysis_duration_days;
+    analysis.fills_count = metrics.fills_count;
+    analysis.fills_count_close = metrics.fills_count_close;
+    analysis.fills_count_entry = metrics.fills_count_entry;
+    analysis.fills_count_long = metrics.fills_count_long;
+    analysis.fills_count_short = metrics.fills_count_short;
+    analysis.fills_entry_per_close = metrics.fills_entry_per_close;
+    analysis.fills_gap_longest_days = metrics.fills_gap_longest_days;
+    analysis.fills_gap_mean_hours = metrics.fills_gap_mean_hours;
+    analysis.fills_gap_median_hours = metrics.fills_gap_median_hours;
+    analysis.fills_gap_p95_hours = metrics.fills_gap_p95_hours;
+    analysis.fills_gap_p99_hours = metrics.fills_gap_p99_hours;
+    analysis.fills_per_day = metrics.fills_per_day;
+    analysis.fills_per_day_close = metrics.fills_per_day_close;
+    analysis.fills_per_day_entry = metrics.fills_per_day_entry;
+    analysis.fills_per_day_long = metrics.fills_per_day_long;
+    analysis.fills_per_day_per_position_slot = metrics.fills_per_day_per_position_slot;
+    analysis.fills_per_day_per_position_slot_long = metrics.fills_per_day_per_position_slot_long;
+    analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
+    analysis.fills_per_day_short = metrics.fills_per_day_short;
+    analysis.fills_top_symbol_share = metrics.fills_top_symbol_share;
+}
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
 pub struct HlcvsBundlePy {
@@ -1304,6 +1330,9 @@ fn run_backtest_core<'py>(
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        let fill_activity = backtest.fill_activity_metrics_for_analysis(&fills, &equities);
+        apply_fill_activity_metrics(&mut analysis_usd, fill_activity);
+        apply_fill_activity_metrics(&mut analysis_btc, fill_activity);
 
         let hs = backtest.hard_stop_metrics();
         let strategy = backtest.strategy_equity_metrics_for_analysis();
@@ -1796,33 +1825,6 @@ fn strategy_params_pair_from_dict(
     Ok(StrategyParamsPairValue { long, short })
 }
 
-fn extract_grid_close_price_anchor(dict: &PyDict, side: &str) -> PyResult<&'static str> {
-    let raw = match dict.get_item("grid_close_price_anchor")? {
-        Some(item) => item.extract::<String>()?,
-        None => "position_price".to_string(),
-    };
-    let normalized = raw.trim().to_lowercase();
-    match side {
-        "long" => match normalized.as_str() {
-            "" | "position_price" | "pprice" => Ok("position_price"),
-            "ema_band" | "ema_band_upper" => Ok("ema_band_upper"),
-            _ => Err(PyValueError::new_err(
-                "long grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_upper'}",
-            )),
-        },
-        "short" => match normalized.as_str() {
-            "" | "position_price" | "pprice" => Ok("position_price"),
-            "ema_band" | "ema_band_lower" => Ok("ema_band_lower"),
-            _ => Err(PyValueError::new_err(
-                "short grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_lower'}",
-            )),
-        },
-        _ => Err(PyValueError::new_err(format!(
-            "unsupported side for grid_close_price_anchor extraction: {side}"
-        ))),
-    }
-}
-
 fn extract_optional_f64(dict: &PyDict, key: &str) -> PyResult<f64> {
     Ok(match dict.get_item(key)? {
         Some(item) => item.extract::<f64>()?,
@@ -2121,34 +2123,6 @@ fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext
     }
 }
 
-fn parse_helper_close_anchor(
-    side: StrategySide,
-    grid_close_price_anchor: &str,
-) -> PyResult<GridClosePriceAnchor> {
-    parse_grid_close_price_anchor_value(side, grid_close_price_anchor)
-        .map_err(PyValueError::new_err)
-}
-
-fn validate_helper_close_anchor_inputs(
-    side: StrategySide,
-    anchor: GridClosePriceAnchor,
-    ema_band: f64,
-) -> PyResult<()> {
-    match (side, anchor) {
-        (StrategySide::Long, GridClosePriceAnchor::EmaBandUpper) if ema_band <= 0.0 => {
-            Err(PyValueError::new_err(
-                "ema_bands_upper must be > 0 when grid_close_price_anchor is ema_band_upper",
-            ))
-        }
-        (StrategySide::Short, GridClosePriceAnchor::EmaBandLower) if ema_band <= 0.0 => {
-            Err(PyValueError::new_err(
-                "ema_bands_lower must be > 0 when grid_close_price_anchor is ema_band_lower",
-            ))
-        }
-        _ => Ok(()),
-    }
-}
-
 #[pyfunction]
 pub fn calc_next_entry_long_py(
     qty_step: f64,
@@ -2371,11 +2345,6 @@ pub fn calc_next_close_long_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
         &grid_close_price_anchor,
-    )?;
-    validate_helper_close_anchor_inputs(
-        StrategySide::Long,
-        GridClosePriceAnchor::PositionPrice,
-        ema_bands_upper,
     )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
@@ -2626,11 +2595,6 @@ pub fn calc_next_close_short_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
         &grid_close_price_anchor,
-    )?;
-    validate_helper_close_anchor_inputs(
-        StrategySide::Short,
-        GridClosePriceAnchor::PositionPrice,
-        ema_bands_lower,
     )?;
     let position = Position {
         size: position_size,
@@ -3020,11 +2984,6 @@ pub fn calc_closes_long_py(
         close_weight_volatility_1m,
         &grid_close_price_anchor,
     )?;
-    validate_helper_close_anchor_inputs(
-        StrategySide::Long,
-        GridClosePriceAnchor::PositionPrice,
-        ema_bands_upper,
-    )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
 
     let position = Position {
@@ -3167,11 +3126,6 @@ pub fn calc_closes_short_py(
         close_weight_volatility_1h,
         close_weight_volatility_1m,
         &grid_close_price_anchor,
-    )?;
-    validate_helper_close_anchor_inputs(
-        StrategySide::Short,
-        GridClosePriceAnchor::PositionPrice,
-        ema_bands_lower,
     )?;
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {

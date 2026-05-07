@@ -19,15 +19,6 @@ pub enum StrategyKind {
     EmaAnchor,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum GridClosePriceAnchor {
-    #[default]
-    PositionPrice,
-    EmaBandUpper,
-    EmaBandLower,
-}
-
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingGridParams {
@@ -217,49 +208,6 @@ pub fn parse_strategy_params(
                 .map(StrategyParams::EmaAnchor)
                 .map_err(|err| format!("failed to parse ema_anchor strategy params: {err}"))
         }
-    }
-}
-
-pub fn parse_grid_close_price_anchor_value(
-    side: StrategySide,
-    raw: &str,
-) -> Result<GridClosePriceAnchor, String> {
-    let normalized = raw.trim().to_lowercase();
-    match (side, normalized.as_str()) {
-        (_, "" | "position_price" | "pprice") => Ok(GridClosePriceAnchor::PositionPrice),
-        (StrategySide::Long, "ema_band" | "ema_band_upper") => {
-            Ok(GridClosePriceAnchor::EmaBandUpper)
-        }
-        (StrategySide::Short, "ema_band" | "ema_band_lower") => {
-            Ok(GridClosePriceAnchor::EmaBandLower)
-        }
-        (StrategySide::Long, _) => {
-            Err(
-                "long trailing_grid grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_upper'}".to_string()
-            )
-        }
-        (StrategySide::Short, _) => {
-            Err(
-                "short trailing_grid grid_close_price_anchor must be one of {'position_price', 'pprice', 'ema_band', 'ema_band_lower'}".to_string()
-            )
-        }
-    }
-}
-
-pub fn validate_grid_close_price_anchor(
-    side: StrategySide,
-    anchor: GridClosePriceAnchor,
-) -> Result<(), String> {
-    match (side, anchor) {
-        (StrategySide::Long, GridClosePriceAnchor::EmaBandLower) => Err(
-            "long trailing_grid grid_close_price_anchor must be position_price or ema_band_upper"
-                .to_string(),
-        ),
-        (StrategySide::Short, GridClosePriceAnchor::EmaBandUpper) => Err(
-            "short trailing_grid grid_close_price_anchor must be position_price or ema_band_lower"
-                .to_string(),
-        ),
-        _ => Ok(()),
     }
 }
 
