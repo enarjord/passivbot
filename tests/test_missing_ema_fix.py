@@ -326,17 +326,23 @@ class _BundleReproBot:
             def __init__(self, outer):
                 self.outer = outer
 
-            async def get_latest_ema_close(self, symbol, span, max_age_ms=30_000):
+            async def get_latest_ema_close(
+                self, symbol, span, max_age_ms=30_000, allow_remote_fetch=True
+            ):
                 if self.outer.close_mode == "timeout":
                     raise TimeoutError("kucoinfutures GET ... RequestTimeout")
                 if self.outer.close_mode == "nan":
                     return float("nan")
                 return float(self.outer.close_value)
 
-            async def get_latest_ema_quote_volume(self, symbol, span, max_age_ms=60_000):
+            async def get_latest_ema_quote_volume(
+                self, symbol, span, max_age_ms=60_000, allow_remote_fetch=True
+            ):
                 return 250000.0
 
-            async def get_latest_ema_log_range(self, symbol, span, tf=None, max_age_ms=60_000):
+            async def get_latest_ema_log_range(
+                self, symbol, span, tf=None, max_age_ms=60_000, allow_remote_fetch=True
+            ):
                 if tf == "1h":
                     if self.outer.h1_mode == "timeout":
                         raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -552,7 +558,7 @@ class _PacingProbeCM:
         self.current_concurrency = 0
         self.max_concurrency = 0
 
-    async def get_latest_ema_close(self, symbol, *, span, max_age_ms):
+    async def get_latest_ema_close(self, symbol, *, span, max_age_ms, allow_remote_fetch=True):
         self.current_concurrency += 1
         self.max_concurrency = max(self.max_concurrency, self.current_concurrency)
         try:
@@ -561,10 +567,14 @@ class _PacingProbeCM:
         finally:
             self.current_concurrency -= 1
 
-    async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms):
+    async def get_latest_ema_quote_volume(
+        self, symbol, *, span, max_age_ms, allow_remote_fetch=True
+    ):
         return 0.0
 
-    async def get_latest_ema_log_range(self, symbol, *, span, max_age_ms, tf="1m"):
+    async def get_latest_ema_log_range(
+        self, symbol, *, span, max_age_ms, tf="1m", allow_remote_fetch=True
+    ):
         return 0.0
 
 
