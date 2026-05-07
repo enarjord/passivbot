@@ -4,7 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- `refactor/rust-strategy-runtime-plan` is targeting the next major release as `v8.0.0`.
+- `refactor/rust-strategy-runtime-plan` is versioned as the next major release, `v8.0.0`.
 - Changed the HSL config default `live.hsl_signal_mode` to `unified`, making account-level strategy drawdown the canonical HSL signal while keeping `pside` available for side-local HSL tuning, and clarified that HSL RED waits for all positions on that side to be fully closed rather than waiting for PnL recovery.
 - Added `passivbot tool merge-paretos` for combining two or more Pareto run/front directories into capped long/short starting-config sets.
 - Changed optimizer `fixed_params` and `--fine_tune_params` from exact-only bounds keys to literal bounds-key selectors, with sorted multi-line logs showing each selector expansion and the resulting fixed/tunable bounds.

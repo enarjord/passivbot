@@ -72,10 +72,10 @@ from config.migrations import (
     apply_backward_compatibility_renames as apply_migration_renames,
     build_base_config_from_flavor as build_migration_base_config_from_flavor,
     detect_flavor as detect_migration_flavor,
-    migrate_btc_collateral_settings as migrate_btc_collateral_settings_v7,
-    migrate_config_version as migrate_config_version_v7,
-    migrate_empty_means_all_approved as migrate_empty_means_all_approved_v7,
-    migrate_suite_to_scenarios as migrate_suite_to_scenarios_v7,
+    migrate_btc_collateral_settings as migrate_btc_collateral_settings_impl,
+    migrate_config_version as migrate_config_version_impl,
+    migrate_empty_means_all_approved as migrate_empty_means_all_approved_impl,
+    migrate_suite_to_scenarios as migrate_suite_to_scenarios_impl,
     rename_config_keys as rename_migration_config_keys,
 )
 from pure_funcs import sort_dict_keys, str2bool
@@ -392,25 +392,25 @@ def _apply_backward_compatibility_renames(
 def _migrate_suite_to_scenarios(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    migrate_suite_to_scenarios_v7(result, verbose=verbose, tracker=tracker)
+    migrate_suite_to_scenarios_impl(result, verbose=verbose, tracker=tracker)
 
 
 def _migrate_btc_collateral_settings(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    migrate_btc_collateral_settings_v7(result, verbose=verbose, tracker=tracker)
+    migrate_btc_collateral_settings_impl(result, verbose=verbose, tracker=tracker)
 
 
 def _migrate_config_version(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    migrate_config_version_v7(result, verbose=verbose, tracker=tracker)
+    migrate_config_version_impl(result, verbose=verbose, tracker=tracker)
 
 
 def _migrate_empty_means_all_approved(
     result: dict, verbose: bool = True, tracker: Optional[ConfigTransformTracker] = None
 ) -> None:
-    migrate_empty_means_all_approved_v7(result, verbose=verbose, tracker=tracker)
+    migrate_empty_means_all_approved_impl(result, verbose=verbose, tracker=tracker)
 
 
 def detect_flavor(config: dict, template: dict) -> str:

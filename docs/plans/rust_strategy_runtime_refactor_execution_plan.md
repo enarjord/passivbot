@@ -37,7 +37,7 @@ Current health-gate task:
 - keep the Rust/Python boundary and config-pipeline tests green after the 2026-04-28
   `origin/master` merge
 - use the post-merge `refactor_test` artifact as the current comparison target; the older frozen
-  artifact remains a legacy pre-v7.10.0 reference only
+  artifact remains a legacy pre-runtime-behavior-change reference only
 
 ## Branch
 
@@ -57,7 +57,7 @@ Legacy frozen baseline artifact:
 
 - `backtests/combined/2026-04-03T19_45_50`
 
-Legacy frozen baseline metrics for pure-refactor phases before the v7.10.0 order-behavior merge:
+Legacy frozen baseline metrics for pure-refactor phases before the order-behavior merge:
 
 - `gain_usd = 3.6817791411966043`
 - `adg_usd = 0.001099589010446378`
@@ -92,7 +92,7 @@ Current accepted post-merge baseline metrics:
 Baseline acceptance note:
 
 - The post-merge artifact is expected to diverge from the legacy frozen artifact because `master`
-  removed inflated grid re-entry behavior for v7.10.0. The first fill-level divergence is fill row
+  removed inflated grid re-entry behavior. The first fill-level divergence is fill row
   `83` at `2023-01-04 20:10:00` for `SOL`: the legacy artifact emits
   `entry_grid_inflated_long` with `qty = 1628.31`, while the post-merge artifact emits
   `entry_grid_normal_long` with `qty = 1504.27`. The relevant trailing-grid config parameters are
