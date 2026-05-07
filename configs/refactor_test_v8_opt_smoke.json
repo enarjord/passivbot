@@ -1,0 +1,137 @@
+{
+    "config_version": "v8.0.0",
+    "backtest": {
+        "base_dir": "backtests/refactor_test_v8_opt_smoke",
+        "candle_interval_minutes": 5,
+        "end_date": "2023-01-05",
+        "exchanges": [
+            "binance",
+            "bybit"
+        ],
+        "scenarios": [
+            {
+                "label": "base",
+                "coins": [
+                    "BTC/USDT:USDT",
+                    "SOL/USDT:USDT"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ]
+            },
+            {
+                "label": "btc_only",
+                "coins": [
+                    "BTC/USDT:USDT"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ]
+            },
+            {
+                "label": "sol_only",
+                "coins": [
+                    "SOL/USDT:USDT"
+                ],
+                "exchanges": [
+                    "binance",
+                    "bybit"
+                ]
+            }
+        ],
+        "start_date": "2023-01-01",
+        "starting_balance": 100000,
+        "suite_enabled": true
+    },
+    "bot": {
+        "long": {
+            "risk": {
+                "n_positions": 2,
+                "total_wallet_exposure_limit": 1.0,
+                "total_exposure_enforcer_enabled": true,
+                "total_exposure_enforcer_threshold": 1.0,
+                "we_excess_allowance_pct": 0.25,
+                "position_exposure_enforcer_enabled": true,
+                "position_exposure_enforcer_threshold": 0.98
+            },
+            "strategy": {
+                "trailing_martingale": {
+                    "ema_span_0": 770,
+                    "ema_span_1": 210,
+                    "volatility_ema_span_1h": 1690,
+                    "volatility_ema_span_1m": 60.0,
+                    "entry": {
+                        "double_down_factor": 0.73,
+                        "initial_ema_dist": 0.0097,
+                        "initial_qty_pct": 0.0276,
+                        "threshold_base_pct": 0.033,
+                        "threshold_we_weight": 0.135,
+                        "threshold_volatility_1h_weight": 2.4,
+                        "threshold_volatility_1m_weight": 0.0,
+                        "retracement_base_pct": 0.0,
+                        "retracement_we_weight": 0.0,
+                        "retracement_volatility_1h_weight": 0.0,
+                        "retracement_volatility_1m_weight": 0.0
+                    },
+                    "close": {
+                        "qty_pct": 0.1,
+                        "threshold_base_pct": 0.006,
+                        "threshold_we_weight": -0.004,
+                        "threshold_volatility_1h_weight": 1.0,
+                        "threshold_volatility_1m_weight": 0.0,
+                        "retracement_base_pct": 0.0,
+                        "retracement_volatility_1h_weight": 0.0,
+                        "retracement_volatility_1m_weight": 0.0
+                    }
+                }
+            },
+            "unstuck": {
+                "enabled": true,
+                "close_pct": 0.053,
+                "ema_dist": -0.04,
+                "loss_allowance_pct": 0.00024,
+                "threshold": 0.866
+            }
+        },
+        "short": {
+            "risk": {
+                "n_positions": 2,
+                "total_wallet_exposure_limit": 0.0
+            }
+        }
+    },
+    "live": {
+        "approved_coins": {
+            "long": [
+                "BTC",
+                "SOL"
+            ],
+            "short": []
+        },
+        "ignored_coins": {
+            "long": [],
+            "short": []
+        },
+        "minimum_coin_age_days": 365,
+        "strategy_kind": "trailing_martingale",
+        "user": "bybit_01"
+    },
+    "optimize": {
+        "backend": "pymoo",
+        "iters": 4,
+        "n_cpus": 1,
+        "pareto_max_size": 10,
+        "population_size": 4,
+        "pymoo": {
+            "algorithm": "nsga2"
+        },
+        "scoring": [
+            "adg_strategy_eq",
+            "backtest_completion_ratio",
+            "fills_gap_p95_hours"
+        ],
+        "write_all_results": false
+    }
+}
