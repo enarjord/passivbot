@@ -5,7 +5,9 @@ import pytest
 import backtest as bt
 import plotting
 from backtest import (
+    BacktestPayload,
     calc_backtest_completion_ratio,
+    execute_backtest,
     expand_analysis,
     parse_disabled_plot_groups,
     process_forager_fills,
@@ -294,6 +296,47 @@ def test_expand_analysis_includes_backtest_completion_ratio_when_available():
     )
 
     assert result["backtest_completion_ratio"] == pytest.approx(1.0)
+
+
+def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.25)
+    equities = np.array(
+        [
+            [1767225600000, 1000.0, 1.0],
+            [1767311940000, 1000.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+
+    def fake_run_backtest_bundle(*_args):
+        return None, equities, analysis_usd, analysis_btc
+
+    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
+    payload = BacktestPayload(
+        bundle=object(),
+        bot_params_list=[],
+        strategy_params_list=[],
+        exchange_params=[],
+        backtest_params={"metrics_only": True},
+    )
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-02",
+            "candle_interval_minutes": 1,
+        },
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        },
+    }
+
+    fills, equities_array, analysis = execute_backtest(payload, config)
+
+    assert fills is None
+    assert equities_array is None
+    assert analysis["backtest_completion_ratio"] == pytest.approx(1.0)
 
 
 def test_make_table_includes_trade_metrics():
