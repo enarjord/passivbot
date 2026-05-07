@@ -301,16 +301,11 @@ def test_expand_analysis_includes_backtest_completion_ratio_when_available():
 def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     analysis_usd = _make_analysis_entry(0.25)
     analysis_btc = _make_analysis_entry(0.25)
-    equities = np.array(
-        [
-            [1767225600000],
-            [1767311940000],
-        ],
-        dtype=np.float64,
-    )
+    analysis_usd["backtest_completion_ratio"] = 1.0
+    analysis_btc["backtest_completion_ratio"] = 1.0
 
     def fake_run_backtest_bundle(*_args):
-        return None, equities, analysis_usd, analysis_btc
+        return None, None, analysis_usd, analysis_btc
 
     monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
     payload = BacktestPayload(

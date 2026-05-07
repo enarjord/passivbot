@@ -48,7 +48,7 @@ const DEBUG_TRACE_WINDOW: Option<(usize, usize)> = None;
 const DEBUG_TRACE_COIN_FILTER: Option<&str> = None;
 use ndarray::{ArrayView1, ArrayView3};
 use serde_json;
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 use std::fs::{create_dir_all, File};
 use std::io::{BufWriter, Write};
 use std::path::Path;
@@ -602,8 +602,7 @@ pub struct Backtest<'a> {
     any_trailing_long: bool,
     any_trailing_short: bool,
     equities: Equities,
-    last_valid_timestamps: HashMap<usize, usize>,
-    first_valid_timestamps: HashMap<usize, usize>,
+    last_valid_timestamps: Vec<Option<usize>>,
     did_fill_long: Vec<bool>,
     did_fill_short: Vec<bool>,
     last_increase_fill_timestamp_long: Vec<Option<u64>>,
@@ -1290,7 +1289,7 @@ impl<'a> Backtest<'a> {
                 let mut mode_long: Option<orchestrator::TradingMode> = None;
                 let mut mode_short: Option<orchestrator::TradingMode> = None;
 
-                if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
+                if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                     if k >= delist_timestamp {
                         if pos_long.size != 0.0 {
                             mode_long = Some(orchestrator::TradingMode::Panic);
@@ -1579,7 +1578,7 @@ impl<'a> Backtest<'a> {
             let mut mode_long: Option<orchestrator::TradingMode> = None;
             let mut mode_short: Option<orchestrator::TradingMode> = None;
 
-            if let Some(&delist_timestamp) = self.last_valid_timestamps.get(&idx) {
+            if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                 if k >= delist_timestamp {
                     if pos_long.size != 0.0 {
                         mode_long = Some(orchestrator::TradingMode::Panic);
@@ -2048,8 +2047,7 @@ impl<'a> Backtest<'a> {
             any_trailing_long,
             any_trailing_short,
             equities: equities,
-            last_valid_timestamps: HashMap::new(),
-            first_valid_timestamps: HashMap::new(),
+            last_valid_timestamps: vec![None; n_coins],
             did_fill_long: vec![false; n_coins],
             did_fill_short: vec![false; n_coins],
             last_increase_fill_timestamp_long: vec![None; n_coins],
@@ -2144,11 +2142,10 @@ impl<'a> Backtest<'a> {
 
         // --- register first & last valid candle for every coin ---
         for idx in 0..self.n_coins {
-            if let Some((start, end)) = self.coin_valid_range(idx) {
-                self.first_valid_timestamps.insert(idx, start);
+            if let Some((_start, end)) = self.coin_valid_range(idx) {
                 if end.saturating_add(1400) < n_timesteps {
                     // add only if delisted more than one day before last timestamp
-                    self.last_valid_timestamps.insert(idx, end);
+                    self.last_valid_timestamps[idx] = Some(end);
                 }
             }
         }

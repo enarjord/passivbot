@@ -347,7 +347,7 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
 
 fn analyze_backtest_basic(
     fills: &[Fill],
-    equities: &Vec<f64>,
+    equities: &[f64],
     timestamps_ms: &[u64],
     exposures_series: &[f64],
 ) -> Analysis {
@@ -967,7 +967,7 @@ pub fn analyze_backtest(
         };
         let subset_analysis = analyze_backtest_basic(
             &subset_fills,
-            &subset_equities.to_vec(),
+            subset_equities,
             subset_timestamps,
             subset_exposures,
         );

@@ -54,6 +54,7 @@ CURRENCY_METRICS = {
 }
 
 SHARED_METRICS = {
+    "backtest_completion_ratio",
     "positions_held_per_day",
     "positions_held_per_day_w",
     "position_held_hours_mean",

@@ -113,6 +113,7 @@ def test_validate_visible_metrics_config_accepts_explicit_hsl_and_hard_stop_metr
 def test_validate_visible_metrics_config_accepts_fill_activity_metrics():
     cfg = get_template_config()
     cfg["backtest"]["visible_metrics"] = [
+        "backtest_completion_ratio",
         "fills_active_days_count",
         "fills_active_days_ratio",
         "fills_active_symbols_count",

@@ -22,10 +22,10 @@ use crate::trailing::{
 };
 use crate::types::{Analysis, OrderType};
 use crate::types::{
-    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, EquityHardStopLossConfig,
-    EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights, HlcvsBundle, HlcvsMeta,
-    OrderBook, Position, RuntimeOrderContext, StateParams, StrategyParamsPairValue,
-    TrailingPriceBundle,
+    BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
+    EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
+    HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
+    StrategyParamsPairValue, TrailingPriceBundle,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -64,6 +64,41 @@ fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMet
     analysis.fills_per_day_per_position_slot_short = metrics.fills_per_day_per_position_slot_short;
     analysis.fills_per_day_short = metrics.fills_per_day_short;
     analysis.fills_top_symbol_share = metrics.fills_top_symbol_share;
+}
+
+fn calc_backtest_completion_ratio(
+    equities: &Equities,
+    backtest_params: &BacktestParams,
+    n_timesteps: usize,
+) -> f64 {
+    let interval_ms = backtest_params
+        .candle_interval_minutes
+        .max(1)
+        .saturating_mul(60_000);
+    let requested_start_ts = backtest_params.requested_start_timestamp_ms;
+    let requested_end_ts = backtest_params
+        .first_timestamp_ms
+        .saturating_add((n_timesteps as u64).saturating_mul(interval_ms));
+    if requested_end_ts <= requested_start_ts {
+        return 1.0;
+    }
+    let Some(&first_equity_ts) = equities.timestamps_ms.first() else {
+        return 0.0;
+    };
+    let Some(&last_equity_ts) = equities.timestamps_ms.last() else {
+        return 0.0;
+    };
+    if last_equity_ts < first_equity_ts {
+        return 0.0;
+    }
+    let final_covered_ts = last_equity_ts.saturating_add(interval_ms);
+    let covered_end_ts = requested_end_ts.min(final_covered_ts);
+    let covered_span = covered_end_ts.saturating_sub(requested_start_ts);
+    let requested_span = requested_end_ts.saturating_sub(requested_start_ts);
+    if requested_span == 0 {
+        return 1.0;
+    }
+    ((covered_span as f64) / (requested_span as f64)).clamp(0.0, 1.0)
 }
 
 #[pyclass(name = "HlcvsBundle", module = "passivbot_rust", unsendable)]
@@ -1330,6 +1365,10 @@ fn run_backtest_core<'py>(
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        let completion_ratio =
+            calc_backtest_completion_ratio(&equities, &backtest_params, n_timesteps);
+        analysis_usd.backtest_completion_ratio = completion_ratio;
+        analysis_btc.backtest_completion_ratio = completion_ratio;
         let fill_activity = backtest.fill_activity_metrics_for_analysis(&fills, &equities);
         apply_fill_activity_metrics(&mut analysis_usd, fill_activity);
         apply_fill_activity_metrics(&mut analysis_btc, fill_activity);
@@ -1491,15 +1530,9 @@ fn run_backtest_core<'py>(
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
         if metrics_only {
-            let equities_timestamps_array =
-                Array2::from_shape_fn((equities.timestamps_ms.len(), 1), |(i, _)| {
-                    equities.timestamps_ms[i] as f64
-                })
-                .into_pyarray_bound(py)
-                .unbind();
             return Ok((
                 py.None().into_py(py),
-                equities_timestamps_array.into_py(py),
+                py.None().into_py(py),
                 py_analysis_usd,
                 py_analysis_btc,
                 py.None().into_py(py),
@@ -1599,21 +1632,54 @@ fn run_backtest_core<'py>(
 }
 
 fn struct_to_py_dict<T: Serialize + ?Sized>(py: Python<'_>, obj: &T) -> PyResult<Py<PyDict>> {
-    // Convert struct to JSON string
-    let json_str = serde_json::to_string(obj).map_err(|e| {
+    let json_value = serde_json::to_value(obj).map_err(|e| {
         PyErr::new::<pyo3::exceptions::PyValueError, _>(format!("JSON serialization error: {}", e))
     })?;
+    match json_value {
+        Value::Object(map) => {
+            let py_dict = PyDict::new_bound(py);
+            for (key, value) in map.iter() {
+                py_dict.set_item(key, json_value_to_py(py, value)?)?;
+            }
+            Ok(py_dict.unbind())
+        }
+        _ => Err(PyErr::new::<pyo3::exceptions::PyTypeError, _>(
+            "Serialized object did not produce a JSON object",
+        )),
+    }
+}
 
-    // Use Python's json module to convert to a Python dict
-    let json = py.import_bound("json")?;
-    let py_obj_any = json.call_method1("loads", (json_str,))?.unbind();
-    let py_obj_bound = py_obj_any.bind(py);
-
-    // Convert to PyDict
-    let py_dict_bound = py_obj_bound.downcast::<PyDict>().map_err(|_| {
-        PyErr::new::<pyo3::exceptions::PyTypeError, _>("Failed to convert to Python dict")
-    })?;
-    Ok(py_dict_bound.clone().unbind())
+fn json_value_to_py(py: Python<'_>, value: &Value) -> PyResult<PyObject> {
+    Ok(match value {
+        Value::Null => py.None(),
+        Value::Bool(item) => item.into_py(py),
+        Value::Number(item) => {
+            if let Some(value) = item.as_i64() {
+                value.into_py(py)
+            } else if let Some(value) = item.as_u64() {
+                value.into_py(py)
+            } else if let Some(value) = item.as_f64() {
+                value.into_py(py)
+            } else {
+                py.None()
+            }
+        }
+        Value::String(item) => item.into_py(py),
+        Value::Array(items) => {
+            let py_list = PyList::empty_bound(py);
+            for item in items {
+                py_list.append(json_value_to_py(py, item)?)?;
+            }
+            py_list.into_py(py)
+        }
+        Value::Object(items) => {
+            let py_dict = PyDict::new_bound(py);
+            for (key, item) in items {
+                py_dict.set_item(key, json_value_to_py(py, item)?)?;
+            }
+            py_dict.into_py(py)
+        }
+    })
 }
 
 fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
