@@ -220,6 +220,12 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Soften active completed-candle refresh-incomplete logs for likely one-candle exchange
   publication lag. These now emit INFO with slower throttling, while larger/actionable gaps keep
   WARNING visibility.
+- [x] Further reduce bounded active tail-gap carry-forward log noise. Normal carry-forward is
+  INFO only on first activation, age-bucket increases, or a slow periodic heartbeat; repeats are
+  DEBUG, recovery is INFO once, and WARNING is reserved for near-cap or sustained tail gaps.
+- [x] Aggregate cache-only EMA skip diagnostics per cycle instead of logging one DEBUG line per
+  symbol. This keeps KuCoin DEBUG runs readable while preserving the unavailable-symbol/reason
+  detail needed for remote-call economy diagnosis.
 - [x] Prevent background candle warmup from competing with runtime EMA/active-symbol OHLCV fetches
   on slow exchanges. Latest KuCoin logs show many concurrent broad warmup and runtime EMA OHLCV
   timeouts, with pending task piles during startup. Background warmup now uses the common
@@ -228,6 +234,9 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Add a general slow-surface progress log for staged account refreshes. If a required surface
   crosses a threshold, e.g. 10s, log which surface is still pending so long fill/open-order
   refreshes do not look like a frozen bot.
+- [x] Clarify staged refresh timing logs: report wall time, per-surface sum, per-surface max,
+  whether surfaces ran in parallel, and residual scheduler/lock-wait time instead of ambiguous
+  `sum/max/unaccounted` labels.
 - [ ] Avoid repeated full-scope exchange-specific state sweeps in steady state. Hyperliquid HIP-3
   full dex sweeps are required at startup, periodically for safety, and after unknown-dex WS
   activity, but should not run on every ordinary account refresh cycle.
@@ -469,8 +478,8 @@ changing behavior during extraction commits.
 - [x] Added a narrow live-only initial-entry executor distance gate to reduce churn from
   EMA-drifting `entry_initial_*` orders. Rust still emits the intended initial entry, but live
   only posts it when it is within `live.initial_entry_exec_max_market_dist_pct` of market; blocked
-  orders are INFO-visible and re-logged only when price/qty drift exceeds
-  `live.order_match_tolerance_pct`.
+  orders are INFO-visible on first block and then throttled to periodic INFO, with repeated drift
+  kept at DEBUG.
 - [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
   most churn-relevant replacements had score gaps above the old 0.5% threshold.
 - [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
@@ -479,6 +488,9 @@ changing behavior during extraction commits.
   ping-timeout reconnect churn and occasional long account/fill refresh tails. Sparse-candle
   secondary-forager EMA fetch pressure has been addressed with the explicit cache-only/no-network
   path and needs fresh VPS confirmation.
+- [x] Improve generic execution-loop error diagnostics. Unexpected loop errors now include
+  exception type, status/code when available, abandoned-cycle action, and restart/backoff action
+  so thin exchange errors such as KuCoin account-overview failures are easier to triage.
 
 ## Initial Ticker Probe Findings
 

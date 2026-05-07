@@ -1069,23 +1069,23 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     assert state_logs == [
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | sum=1150ms | max=400ms | balance=250ms fills=400ms open_orders=200ms positions=300ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=650ms | surface_sum=1150ms | surface_max=400ms | parallel=yes | balance=250ms fills=400ms open_orders=200ms positions=300ms",
         ),
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,open_orders,positions | wall=1700ms | sum=1800ms | max=700ms | balance=500ms open_orders=700ms positions=600ms unaccounted=1000ms",
+            "[state] staged refresh timings | plan=balance,open_orders,positions | wall=1700ms | surface_sum=1800ms | surface_max=700ms | parallel=yes | balance=500ms open_orders=700ms positions=600ms residual=1000ms residual_hint=scheduler_or_lock_wait",
         ),
         (
             "DEBUG",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | sum=11500ms | max=4000ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms unaccounted=4500ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=8500ms | surface_sum=11500ms | surface_max=4000ms | parallel=yes | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms residual=4500ms residual_hint=scheduler_or_lock_wait",
         ),
         (
             "INFO",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | sum=5100ms | max=1700ms | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms unaccounted=2400ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=4100ms | surface_sum=5100ms | surface_max=1700ms | parallel=yes | balance=1200ms fills=1300ms open_orders=900ms positions=1700ms residual=2400ms residual_hint=scheduler_or_lock_wait",
         ),
         (
             "INFO",
-            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=10500ms | sum=11500ms | max=4000ms | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms unaccounted=6500ms",
+            "[state] staged refresh timings | plan=balance,fills,open_orders,positions | wall=10500ms | surface_sum=11500ms | surface_max=4000ms | parallel=yes | balance=2500ms fills=4000ms open_orders=2000ms positions=3000ms residual=6500ms residual_hint=scheduler_or_lock_wait",
         ),
     ]
 
@@ -4149,6 +4149,62 @@ async def test_run_execution_loop_recovers_timestamp_error_without_traceback(cap
     bot.execute_to_exchange.assert_not_awaited()
     assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
     assert not [r for r in caplog.records if "error with run_execution_loop" in r.message]
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_error_log_includes_type_status_and_action(caplog, monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._health_errors = 0
+    bot._health_rate_limits = 0
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._monitor_record_error = MagicMock()
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=False)
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    class FakeExchangeError(RuntimeError):
+        pass
+
+    exc = FakeExchangeError("kucoinfutures GET https://example.invalid/account-overview")
+    exc.http_status = 500
+    exc.code = "500000"
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_refresh_authoritative_state():
+        raise exc
+
+    async def fake_restart():
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.restart_bot_on_too_many_errors.side_effect = fake_restart
+
+    with caplog.at_level(logging.ERROR):
+        result = await bot.run_execution_loop()
+
+    assert result is None
+    assert bot._health_errors == 1
+    bot.restart_bot_on_too_many_errors.assert_awaited_once()
+    messages = [record.message for record in caplog.records]
+    assert not any("error with run_execution_loop" in message for message in messages)
+    assert any(
+        "[error] run_execution_loop failed" in message
+        and "error_type=FakeExchangeError" in message
+        and "status=500" in message
+        and "code=500000" in message
+        and "cycle=abandoned" in message
+        and "action=record_error_restart_backoff" in message
+        for message in messages
+    )
 
 
 @pytest.mark.asyncio

@@ -471,6 +471,7 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
 @pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondaries(
     monkeypatch,
+    caplog,
 ):
     import passivbot as pb_mod
 
@@ -551,16 +552,17 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
 
     bot = FakeBot()
-    (
-        m1_close_emas,
-        m1_volume_emas,
-        m1_log_range_emas,
-        h1_log_range_emas,
-        volumes_long,
-        log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot, ["POS/USDT:USDT", "FETCH/USDT:USDT", "SKIP/USDT:USDT"], modes={}
-    )
+    with caplog.at_level(logging.DEBUG):
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            h1_log_range_emas,
+            volumes_long,
+            log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, ["POS/USDT:USDT", "FETCH/USDT:USDT", "SKIP/USDT:USDT"], modes={}
+        )
 
     called_symbols = {symbol for _kind, symbol, _tf, _max_age_ms in bot.cm.calls}
     assert "POS/USDT:USDT" in called_symbols
@@ -582,6 +584,16 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         "FETCH/USDT:USDT",
         "SKIP/USDT:USDT",
     }
+    assert any(
+        "cache-only EMA skipped" in record.message
+        and "unavailable=2" in record.message
+        for record in caplog.records
+    )
+    assert not any(
+        "skipping orchestrator EMA fetch for never-fetched cache-only symbol"
+        in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

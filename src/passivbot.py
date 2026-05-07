@@ -4541,6 +4541,38 @@ class Passivbot:
                     return True
         return False
 
+    def _execution_loop_error_fields(self, exc: Exception) -> dict[str, str]:
+        """Return compact fields for execution-loop error logs."""
+        fields: dict[str, str] = {
+            "error_type": type(exc).__name__,
+            "status": "-",
+            "code": "-",
+            "error": str(exc),
+        }
+        for attr in ("http_status", "status", "status_code"):
+            value = getattr(exc, attr, None)
+            if value not in (None, ""):
+                fields["status"] = str(value)
+                break
+        for attr in ("code", "exact", "error_code"):
+            value = getattr(exc, attr, None)
+            if value not in (None, ""):
+                fields["code"] = str(value)
+                break
+        info = getattr(exc, "info", None)
+        if isinstance(info, dict):
+            for key in ("code", "retCode", "errorCode"):
+                value = info.get(key)
+                if value not in (None, ""):
+                    fields["code"] = str(value)
+                    break
+            for key in ("status", "statusCode"):
+                value = info.get(key)
+                if value not in (None, ""):
+                    fields["status"] = str(value)
+                    break
+        return fields
+
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
         current_task = asyncio.current_task()
@@ -4772,7 +4804,14 @@ class Passivbot:
                     tags=("error", "bot"),
                     payload={"source": "run_execution_loop"},
                 )
-                logging.error(f"error with {get_function_name()} {e}")
+                fields = self._execution_loop_error_fields(e)
+                logging.error(
+                    "[error] run_execution_loop failed | error_type=%s status=%s code=%s action=record_error_restart_backoff cycle=abandoned error=%s",
+                    fields["error_type"],
+                    fields["status"],
+                    fields["code"],
+                    fields["error"],
+                )
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(1.0)
@@ -5402,7 +5441,7 @@ class Passivbot:
             return
         sum_ms = int(sum(int(v) for v in timings_ms.values()))
         max_surface_ms = int(max(int(v) for v in timings_ms.values()))
-        unaccounted_ms = int(max(0, wall_ms - max_surface_ms))
+        residual_ms = int(max(0, wall_ms - max_surface_ms))
         pending_confirmations = bool(
             getattr(self, "_authoritative_pending_confirmations", {}) or {}
         )
@@ -5429,16 +5468,18 @@ class Passivbot:
         parts = [
             f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)
         ]
-        if unaccounted_ms >= 500:
-            parts.append(f"unaccounted={unaccounted_ms}ms")
+        if residual_ms >= 500:
+            parts.append(f"residual={residual_ms}ms")
+            parts.append("residual_hint=scheduler_or_lock_wait")
         suffix = " | pending_confirmations=yes" if pending_confirmations else ""
         logging.log(
             log_level,
-            "[state] staged refresh timings | plan=%s | wall=%dms | sum=%dms | max=%dms | %s%s",
+            "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
             ",".join(sorted(plan)),
             wall_ms,
             sum_ms,
             max_surface_ms,
+            "yes" if len(timings_ms) > 1 else "no",
             " ".join(parts),
             suffix,
         )
@@ -8344,6 +8385,18 @@ class Passivbot:
                 and sig[2] == "tail_gap_fallback"
             ]
             if not fallbacks:
+                last_state = getattr(
+                    self, "_completed_candle_tail_gap_last_state", None
+                )
+                if isinstance(last_state, dict) and last_state.get("active"):
+                    logging.info(
+                        "[candle] active tail gap recovered | previous_symbols=%s previous_max_tail_age=%.1fm action=resume_completed_candle_truth",
+                        Passivbot._log_symbols(
+                            tuple(last_state.get("symbols") or ()), limit=8
+                        ),
+                        float(last_state.get("max_age_ms") or 0) / ONE_MIN_MS,
+                    )
+                self._completed_candle_tail_gap_last_state = {"active": False}
                 return
             max_tail_gap_ms = int(Passivbot._active_candle_tail_gap_max_ms(self))
             parsed = []
@@ -8366,8 +8419,10 @@ class Passivbot:
             newest_expected = max(item[1] for item in parsed)
             oldest_real = min(item[2] for item in parsed)
             now_ms = utc_ms()
-            state_key = (symbols, int(max_age_ms // ONE_MIN_MS))
+            age_bucket = int(max_age_ms // ONE_MIN_MS)
             last_state = getattr(self, "_completed_candle_tail_gap_last_state", None)
+            if not isinstance(last_state, dict):
+                last_state = {}
             last_info_ms = int(
                 getattr(self, "_completed_candle_tail_gap_last_info_ms", 0) or 0
             )
@@ -8375,19 +8430,26 @@ class Passivbot:
                 getattr(self, "_completed_candle_tail_gap_last_warning_ms", 0) or 0
             )
             near_limit = max_age_ms >= max(ONE_MIN_MS, int(max_tail_gap_ms * 0.8))
-            aged = max_age_ms >= max(2 * ONE_MIN_MS, int(max_tail_gap_ms * 0.5))
-            first_or_changed = state_key != last_state
+            first_active = not bool(last_state.get("active"))
+            age_increased = age_bucket > int(last_state.get("age_bucket", -1) or -1)
             periodic_info = now_ms - last_info_ms >= 30 * 60 * 1000
             periodic_warning = now_ms - last_warning_ms >= 15 * 60 * 1000
             level = logging.DEBUG
-            if near_limit or (aged and periodic_warning):
+            if near_limit and (first_active or age_increased or periodic_warning):
                 level = logging.WARNING
                 self._completed_candle_tail_gap_last_warning_ms = now_ms
                 self._completed_candle_tail_gap_last_info_ms = now_ms
-            elif first_or_changed or periodic_info:
+            elif first_active or age_increased or periodic_info:
                 level = logging.INFO
                 self._completed_candle_tail_gap_last_info_ms = now_ms
-            self._completed_candle_tail_gap_last_state = state_key
+            self._completed_candle_tail_gap_last_state = {
+                "active": True,
+                "symbols": symbols,
+                "age_bucket": age_bucket,
+                "max_age_ms": max_age_ms,
+                "newest_expected": newest_expected,
+                "oldest_real": oldest_real,
+            }
             logging.log(
                 level,
                 "[candle] active tail gap carry-forward | symbols=%s count=%d expected=%s oldest_real=%s max_tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
@@ -11454,6 +11516,11 @@ class Passivbot:
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
+        ema_unavailable_reasons: dict[str, list[str]] = {}
+
+        def mark_ema_unavailable(symbol: str, reason: str) -> None:
+            ema_unavailable_symbols.add(symbol)
+            ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
         is_forager_mode = getattr(
             self, "is_forager_mode", lambda *args, **kwargs: False
         )
@@ -11719,11 +11786,7 @@ class Passivbot:
         async def load_symbol_bundle(sym: str):
             Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
             if sym in cache_only_never_fetched:
-                logging.debug(
-                    "[candle] skipping orchestrator EMA fetch for never-fetched cache-only symbol %s",
-                    Passivbot._log_symbol(sym),
-                )
-                ema_unavailable_symbols.add(sym)
+                mark_ema_unavailable(sym, "never_fetched_cache_only")
                 return {}, {}, {}, {}
             try:
                 close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
@@ -11738,23 +11801,18 @@ class Passivbot:
             except Exception:
                 if sym not in cache_only_symbols:
                     raise
-                logging.debug(
-                    "[candle] cache-only orchestrator EMA unavailable for %s; marking non-tradable this cycle",
-                    Passivbot._log_symbol(sym),
-                )
-                ema_unavailable_symbols.add(sym)
+                mark_ema_unavailable(sym, "cache_only_fetch_failed")
                 return {}, {}, {}, {}
             if sym in cache_only_symbols:
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
                 missing_lr1m = [span for span in m1_lr_spans if span not in lr1m]
                 if missing_volume or missing_lr1m:
-                    logging.debug(
-                        "[candle] cache-only orchestrator forager EMA incomplete for %s; marking non-tradable this cycle missing_volume=%s missing_log_range=%s",
-                        Passivbot._log_symbol(sym),
-                        [float(span) for span in missing_volume],
-                        [float(span) for span in missing_lr1m],
-                    )
-                    ema_unavailable_symbols.add(sym)
+                    missing_bits = []
+                    if missing_volume:
+                        missing_bits.append("missing_volume")
+                    if missing_lr1m:
+                        missing_bits.append("missing_log_range")
+                    mark_ema_unavailable(sym, "+".join(missing_bits) or "incomplete")
                     return {}, {}, {}, {}
             return close, vol, lr1m, h1
 
@@ -11821,6 +11879,21 @@ class Passivbot:
                     err,
                 )
             raise errors[0][1]
+        if ema_unavailable_reasons:
+            parts = []
+            all_unavailable: set[str] = set()
+            for reason, reason_symbols in sorted(ema_unavailable_reasons.items()):
+                unique_symbols = tuple(sorted(set(reason_symbols)))
+                all_unavailable.update(unique_symbols)
+                parts.append(
+                    f"{reason}:n={len(unique_symbols)} symbols={Passivbot._log_symbols(unique_symbols, limit=8)}"
+                )
+            logging.debug(
+                "[candle] cache-only EMA skipped | unavailable=%d groups=%d | %s",
+                len(all_unavailable),
+                len(ema_unavailable_reasons),
+                "; ".join(parts[:4]),
+            )
 
         # Convenience: compute the single-span values used by legacy forager logging.
         volumes_long = {s: m1_volume_emas[s].get(vol_span_long, 0.0) for s in symbols}
@@ -13071,8 +13144,6 @@ class Passivbot:
             self._initial_entry_distance_gate_log_state = {}
         key = self._initial_entry_gate_key(order)
         probe = self._initial_entry_gate_log_probe(order)
-        dist_bucket = int(abs(signed_dist) * 200.0)  # 0.5 percentage-point buckets
-        probe["dist_bucket"] = dist_bucket
         now_ms = utc_ms()
         last_probe = self._initial_entry_distance_gate_log_state.get(key)
         try:
@@ -13081,23 +13152,12 @@ class Passivbot:
             raise ValueError("live.order_match_tolerance_pct must be numeric") from exc
         should_log = last_probe is None
         if last_probe is not None:
-            try:
-                material_order_change = not orders_matching(
-                    self._initial_entry_gate_log_probe(order),
-                    last_probe,
-                    tolerance_qty=tolerance,
-                    tolerance_price=tolerance,
-                )
-            except (KeyError, TypeError, ValueError):
-                material_order_change = True
             last_info_ms = int(last_probe.get("last_info_ms", 0) or 0)
-            should_log = (
-                material_order_change
-                and int(last_probe.get("dist_bucket", -1)) != dist_bucket
-            ) or now_ms - last_info_ms >= 10 * 60 * 1000
+            should_log = now_ms - last_info_ms >= 15 * 60 * 1000
         probe["last_info_ms"] = now_ms if should_log else int(
             (last_probe or {}).get("last_info_ms", 0) or 0
         )
+        self._initial_entry_distance_gate_log_state[key] = probe
         if not should_log:
             logging.debug(
                 "[entry] initial entry creation still distance-gated | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
@@ -13112,7 +13172,6 @@ class Passivbot:
                 self._resolve_pb_order_type(order),
             )
             return
-        self._initial_entry_distance_gate_log_state[key] = probe
         logging.info(
             "[entry] initial entry staged but not placed | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
             Passivbot._log_symbol(probe["symbol"]),
