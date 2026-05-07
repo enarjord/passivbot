@@ -2457,6 +2457,25 @@ class Passivbot:
         # Loop timing
         loop_ms = getattr(self, "_last_loop_duration_ms", 0)
         loop_str = f"{loop_ms / 1000:.1f}s" if loop_ms > 0 else "n/a"
+        slow_phase_str = ""
+        try:
+            loop_timing = getattr(self, "_last_loop_timing_ms", {}) or {}
+            if loop_ms >= 60_000 and isinstance(loop_timing, dict) and loop_timing:
+                ranked = sorted(
+                    (
+                        (str(phase), int(duration_ms))
+                        for phase, duration_ms in loop_timing.items()
+                    ),
+                    key=lambda item: item[1],
+                    reverse=True,
+                )
+                slow_phase_str = " | slow_phases=" + ",".join(
+                    f"{phase}:{duration_ms / 1000:.1f}s"
+                    for phase, duration_ms in ranked[:3]
+                    if duration_ms > 0
+                )
+        except Exception:
+            slow_phase_str = ""
 
         # Error budget: count of errors in last hour vs max
         error_counts = getattr(self, "error_counts", [])
@@ -2488,7 +2507,7 @@ class Passivbot:
             error_budget_str,
             self._health_ws_reconnects,
             self._health_rate_limits,
-            f" | {mem_str}" if mem_str else "",
+            f"{slow_phase_str}{f' | {mem_str}' if mem_str else ''}",
         )
         self._maybe_log_candle_health_summary()
 
@@ -4540,11 +4559,20 @@ class Passivbot:
         while not self.stop_signal_received:
             try:
                 loop_start_ms = utc_ms()
+                loop_timings_ms: dict[str, int] = {}
+
+                def mark_phase(phase: str, started_ms: int) -> None:
+                    try:
+                        loop_timings_ms[str(phase)] = int(max(0, utc_ms() - started_ms))
+                    except Exception:
+                        pass
+
                 self.execution_scheduled = False
                 self.state_change_detected_by_symbol = set()
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_authoritative_state"
                 )
+                phase_start_ms = utc_ms()
                 try:
                     authoritative_ok = await self.refresh_authoritative_state()
                 except asyncio.CancelledError:
@@ -4554,6 +4582,7 @@ class Passivbot:
                         )
                         break
                     raise
+                mark_phase("authoritative", phase_start_ms)
                 if not authoritative_ok:
                     if self._shutdown_requested():
                         break
@@ -4579,6 +4608,7 @@ class Passivbot:
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
                     self._last_loop_duration_ms = utc_ms() - loop_start_ms
+                    self._last_loop_timing_ms = dict(loop_timings_ms)
                     self._maybe_log_health_summary()
                     self._maybe_log_unstuck_status()
                     self._set_log_silence_watchdog_context(
@@ -4599,12 +4629,15 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="prepare_planning_universe"
                 )
+                phase_start_ms = utc_ms()
                 await self.prepare_planning_universe()
+                mark_phase("planning_universe", phase_start_ms)
                 if self.stop_signal_received:
                     break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
                 )
+                phase_start_ms = utc_ms()
                 try:
                     market_ok = await self.refresh_market_state_if_needed()
                 except asyncio.CancelledError:
@@ -4614,6 +4647,7 @@ class Passivbot:
                         )
                         break
                     raise
+                mark_phase("market_state", phase_start_ms)
                 if not market_ok:
                     await asyncio.sleep(0.5)
                     continue
@@ -4624,6 +4658,7 @@ class Passivbot:
                     include_market_snapshot=False, context="market snapshot refresh"
                 )
                 if not staged_ready:
+                    self._last_loop_timing_ms = dict(loop_timings_ms)
                     await self._defer_staged_execution_cycle(
                         staged_details, loop_start_ms
                     )
@@ -4631,6 +4666,7 @@ class Passivbot:
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="execute_to_exchange"
                 )
+                phase_start_ms = utc_ms()
                 try:
                     res = await self.execute_to_exchange(prepare_cycle=False)
                 except asyncio.CancelledError:
@@ -4643,9 +4679,11 @@ class Passivbot:
                         exc
                     )
                     if handled:
+                        self._last_loop_timing_ms = dict(loop_timings_ms)
                         await self._defer_staged_execution_cycle(details, loop_start_ms)
                         continue
                     raise
+                mark_phase("execute", phase_start_ms)
                 if self.debug_mode:
                     if getattr(self, "_execution_loop_task", None) is current_task:
                         self._execution_loop_task = None
@@ -4659,25 +4697,32 @@ class Passivbot:
                     break
                 # Track loop duration for health reporting
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
+                self._last_loop_timing_ms = dict(loop_timings_ms)
                 # Periodic health summary
                 self._maybe_log_health_summary()
                 self._maybe_log_unstuck_status()
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="flush_snapshot"
                 )
+                phase_start_ms = utc_ms()
                 await self._monitor_flush_snapshot()
+                mark_phase("monitor_flush", phase_start_ms)
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="execution_delay"
                 )
+                phase_start_ms = utc_ms()
                 await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
+                mark_phase("execution_delay", phase_start_ms)
                 sleep_duration = 30
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="scheduled_wait"
                 )
+                phase_start_ms = utc_ms()
                 for i in range(sleep_duration * 10):
                     if self.execution_scheduled or self.stop_signal_received:
                         break
                     await asyncio.sleep(0.1)
+                mark_phase("scheduled_wait", phase_start_ms)
             except (RestartBotException, FatalBotException):
                 raise  # Propagate restart without incrementing error count
             except RateLimitExceeded as e:
@@ -4920,9 +4965,20 @@ class Passivbot:
             logging.debug(
                 "[ws] %s: reconnect reason=%s exception=%s", exchange, reason, exc
             )
-            logging.debug(
-                "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
+            now_ms = utc_ms()
+            last_traceback_ms = int(
+                getattr(self, "_ws_reconnect_traceback_last_ms", 0) or 0
             )
+            if reconnect_no <= 1 or now_ms - last_traceback_ms >= 15 * 60 * 1000:
+                self._ws_reconnect_traceback_last_ms = now_ms
+                logging.debug(
+                    "[ws] %s: reconnect traceback follows (throttled)", exchange
+                )
+                logging.debug(
+                    "".join(
+                        traceback.format_exception(type(exc), exc, exc.__traceback__)
+                    )
+                )
 
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
@@ -8133,9 +8189,6 @@ class Passivbot:
                             )
                         )
                         if allowed:
-                            Passivbot._log_completed_candle_tail_gap_fallback(
-                                self, symbol, fallback_signature
-                            )
                             signature.append(fallback_signature)
                             continue
                         missing.append(
@@ -8186,6 +8239,7 @@ class Passivbot:
                 )
                 continue
             signature.append((symbol, int(last_final)))
+        Passivbot._log_completed_candle_tail_gap_fallbacks(self, signature)
         return tuple(signature), missing
 
     def _active_candle_tail_gap_max_ms(self) -> int:
@@ -8262,39 +8316,68 @@ class Passivbot:
             "",
         )
 
-    def _log_completed_candle_tail_gap_fallback(
-        self, symbol: str, fallback_signature: tuple
+    def _log_completed_candle_tail_gap_fallbacks(
+        self, signatures: Iterable[tuple]
     ) -> None:
-        """Operator-visible log for bounded open-tail carry-forward."""
+        """Operator-visible batch log for bounded open-tail carry-forward."""
         try:
-            if len(fallback_signature) < 5:
+            fallbacks = [
+                sig
+                for sig in signatures
+                if isinstance(sig, tuple)
+                and len(sig) >= 5
+                and sig[2] == "tail_gap_fallback"
+            ]
+            if not fallbacks:
                 return
-            expected_ts = int(fallback_signature[1])
-            latest_real_ts = int(fallback_signature[3])
-            tail_age_ms = int(fallback_signature[4])
-            key = (str(symbol), expected_ts, latest_real_ts, tail_age_ms)
-            last_by_symbol = getattr(
-                self, "_completed_candle_tail_gap_last_log_key", None
-            )
-            if not isinstance(last_by_symbol, dict):
-                last_by_symbol = {}
-                self._completed_candle_tail_gap_last_log_key = last_by_symbol
-            if last_by_symbol.get(str(symbol)) == key:
-                return
-            last_by_symbol[str(symbol)] = key
             max_tail_gap_ms = int(Passivbot._active_candle_tail_gap_max_ms(self))
-            logging.warning(
-                "[candle] active tail gap using last real candle | symbol=%s expected=%s latest_real=%s tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
-                Passivbot._log_symbol(symbol),
-                ts_to_date(expected_ts)[:19],
-                ts_to_date(latest_real_ts)[:19],
-                tail_age_ms / ONE_MIN_MS,
+            parsed = []
+            for sig in fallbacks:
+                try:
+                    parsed.append(
+                        (
+                            str(sig[0]),
+                            int(sig[1]),
+                            int(sig[3]),
+                            int(sig[4]),
+                        )
+                    )
+                except Exception:
+                    continue
+            if not parsed:
+                return
+            symbols = tuple(sorted({item[0] for item in parsed}))
+            max_age_ms = max(item[3] for item in parsed)
+            newest_expected = max(item[1] for item in parsed)
+            oldest_real = min(item[2] for item in parsed)
+            now_ms = utc_ms()
+            state_key = (symbols, int(max_age_ms // ONE_MIN_MS))
+            last_state = getattr(self, "_completed_candle_tail_gap_last_state", None)
+            last_warning_ms = int(
+                getattr(self, "_completed_candle_tail_gap_last_warning_ms", 0) or 0
+            )
+            near_limit = max_age_ms >= max(ONE_MIN_MS, int(max_tail_gap_ms * 0.5))
+            aged = max_age_ms > ONE_MIN_MS
+            first_or_changed = state_key != last_state
+            periodic_warning = now_ms - last_warning_ms >= 15 * 60 * 1000
+            level = logging.DEBUG
+            if first_or_changed or aged or near_limit or periodic_warning:
+                level = logging.WARNING
+                self._completed_candle_tail_gap_last_warning_ms = now_ms
+            self._completed_candle_tail_gap_last_state = state_key
+            logging.log(
+                level,
+                "[candle] active tail gap carry-forward | symbols=%s count=%d expected=%s oldest_real=%s max_tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
+                Passivbot._log_symbols(symbols, limit=8),
+                len(parsed),
+                ts_to_date(newest_expected)[:19],
+                ts_to_date(oldest_real)[:19],
+                max_age_ms / ONE_MIN_MS,
                 max_tail_gap_ms / ONE_MIN_MS,
             )
         except Exception as exc:
             logging.debug(
-                "[candle] active tail-gap fallback log failed | symbol=%s error_type=%s error=%s",
-                Passivbot._log_symbol(symbol),
+                "[candle] active tail-gap fallback log failed | error_type=%s error=%s",
                 type(exc).__name__,
                 exc,
             )
@@ -11352,69 +11435,58 @@ class Passivbot:
                     priority_symbols.append(sym)
                 else:
                     secondary_symbols.append(sym)
+            cache_only_ttl = 365 * 24 * 3600 * 1000
             if secondary_symbols:
                 max_calls = get_optional_live_value(
                     self.config, "max_ohlcv_fetches_per_minute", 0
                 )
                 try:
-                    max_calls = int(max_calls) if max_calls is not None else 0
+                    max_calls_i = int(max_calls) if max_calls is not None else 0
                 except Exception:
-                    max_calls = 0
-                slots_open_any = False
-                for pside in ("long", "short"):
-                    if not is_forager_mode(pside):
-                        continue
-                    try:
-                        max_n = int(self.get_max_n_positions(pside))
-                    except Exception:
-                        max_n = 0
-                    try:
-                        current_n = int(self.get_current_n_positions(pside))
-                    except Exception:
-                        current_n = len(self.get_symbols_with_pos(pside))
-                    if max_n > current_n:
-                        slots_open_any = True
-                        break
-                if max_calls > 0 and slots_open_any:
-                    cycle_cap = max(1, int(math.ceil(float(max_calls) / 4.0)))
-                    budget = self._token_bucket_budget(
-                        "_forager_active_candle_refresh_state",
-                        max_calls,
-                        max_cycle_budget=cycle_cap,
-                        initial_tokens=cycle_cap,
+                    max_calls_i = 0
+                try:
+                    max_staleness_minutes = float(
+                        get_optional_live_value(
+                            self.config, "max_forager_candle_staleness_minutes", 10
+                        )
                     )
-                    secondary_max_age_ms = max(
-                        60_000,
-                        self._forager_target_staleness_ms(
-                            len(secondary_symbols), max_calls
-                        ),
-                    )
-                else:
-                    budget = 0
-                    secondary_max_age_ms = int(
-                        getattr(self, "inactive_coin_candle_ttl_ms", 600_000)
-                    )
-                secondary_ttls, cache_only_never_fetched = (
-                    self._compute_fetch_budget_ttls(
-                        secondary_symbols, secondary_max_age_ms, budget
-                    )
+                except Exception:
+                    max_staleness_minutes = 10.0
+                if (
+                    not math.isfinite(max_staleness_minutes)
+                    or max_staleness_minutes <= 0.0
+                ):
+                    max_staleness_minutes = 10.0
+                secondary_max_age_ms = max(
+                    ONE_MIN_MS, int(max_staleness_minutes * ONE_MIN_MS)
                 )
-                cache_only_ttl = 365 * 24 * 3600 * 1000
-                for sym, ttl in secondary_ttls.items():
-                    ttl_int = int(ttl)
-                    if ttl_int >= cache_only_ttl:
-                        cache_only_symbols.add(sym)
-                    m1_max_age_by_symbol[sym] = ttl_int
-                    h1_max_age_by_symbol[sym] = (
-                        ttl_int if ttl_int >= cache_only_ttl else max(600_000, ttl_int)
-                    )
+                now_ms = utc_ms()
+                cache_only_never_fetched = set()
+                stale_unavailable = set()
+                for sym in secondary_symbols:
+                    cache_only_symbols.add(sym)
+                    m1_max_age_by_symbol[sym] = cache_only_ttl
+                    h1_max_age_by_symbol[sym] = cache_only_ttl
+                    try:
+                        never_fetched = int(self.cm.get_last_refresh_ms(sym) or 0) <= 0
+                    except Exception:
+                        never_fetched = True
+                    if never_fetched:
+                        cache_only_never_fetched.add(sym)
+                        continue
+                    if (
+                        self._candle_staleness_ms(sym, now_ms=now_ms)
+                        > secondary_max_age_ms
+                    ):
+                        stale_unavailable.add(sym)
+                cache_only_never_fetched.update(stale_unavailable)
                 logging.debug(
-                    "[candle] orchestrator forager EMA budget priority=%d secondary=%d slots_open=%s budget=%d target_age=%ds",
+                    "[candle] orchestrator forager EMA cache-only priority=%d secondary=%d budget=0 max_staleness=%ds unavailable=%d max_ohlcv_fetches_per_minute=%d",
                     len(priority_symbols),
                     len(secondary_symbols),
-                    "yes" if slots_open_any else "no",
-                    int(budget),
                     int(secondary_max_age_ms / 1000),
+                    len(cache_only_never_fetched),
+                    int(max_calls_i),
                 )
             else:
                 cache_only_never_fetched = set()
@@ -13526,7 +13598,9 @@ class Passivbot:
             )
             if refresh_started_ms - last_start_log >= 60_000:
                 oldest_ms = int(stale[0][0]) if stale else 0
-                logging.info(
+                interesting = oldest_ms >= max(300_000, int(target_age_ms) * 3)
+                logging.log(
+                    logging.INFO if interesting else logging.DEBUG,
                     "[candle] forager refresh starting slots_open=%s candidates=%d stale=%d refreshing=%d oldest=%ds target=%ds",
                     "yes" if slots_open_any else "no",
                     len(all_candidates),

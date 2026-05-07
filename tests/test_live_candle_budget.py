@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 
 
@@ -355,7 +357,9 @@ async def test_forager_candidate_refresh_scheduler_coalesces_running_task():
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch):
+async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_symbols(
+    monkeypatch,
+):
     import passivbot as pb_mod
 
     now_ms = 2_000_000
@@ -391,7 +395,12 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
             return 1.0
 
     class FakeBot:
-        config = {"live": {"max_ohlcv_fetches_per_minute": 4}}
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_staleness_minutes": 10,
+            }
+        }
         positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
         open_orders = {}
         inactive_coin_candle_ttl_ms = 600_000
@@ -436,19 +445,27 @@ async def test_orchestrator_ema_bundle_budgets_forager_only_symbols(monkeypatch)
 
     bot = FakeBot()
     symbols = ["POS/USDT:USDT", "A/USDT:USDT", "B/USDT:USDT"]
-    await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, modes={})
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, modes={})
 
     by_symbol = {}
     for kind, symbol, tf, max_age_ms in bot.cm.calls:
         by_symbol.setdefault(symbol, []).append((kind, tf, max_age_ms))
 
     assert all(max_age <= 600_000 for _kind, _tf, max_age in by_symbol["POS/USDT:USDT"])
-    assert all(max_age <= 600_000 for _kind, _tf, max_age in by_symbol["A/USDT:USDT"])
+    assert "A/USDT:USDT" not in by_symbol
     assert "B/USDT:USDT" in by_symbol
     assert all(
         max_age >= 365 * 24 * 3600 * 1000
         for _kind, _tf, max_age in by_symbol["B/USDT:USDT"]
     )
+    assert bot._orchestrator_ema_unavailable_symbols == {"A/USDT:USDT"}
 
 
 @pytest.mark.asyncio
@@ -547,15 +564,24 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
 
     called_symbols = {symbol for _kind, symbol, _tf, _max_age_ms in bot.cm.calls}
     assert "POS/USDT:USDT" in called_symbols
-    assert "FETCH/USDT:USDT" in called_symbols
+    assert "FETCH/USDT:USDT" not in called_symbols
     assert "SKIP/USDT:USDT" not in called_symbols
+    assert m1_close_emas["FETCH/USDT:USDT"] == {}
+    assert m1_volume_emas["FETCH/USDT:USDT"] == {}
+    assert m1_log_range_emas["FETCH/USDT:USDT"] == {}
+    assert h1_log_range_emas["FETCH/USDT:USDT"] == {}
+    assert volumes_long["FETCH/USDT:USDT"] == 0.0
+    assert log_ranges_long["FETCH/USDT:USDT"] == 0.0
     assert m1_close_emas["SKIP/USDT:USDT"] == {}
     assert m1_volume_emas["SKIP/USDT:USDT"] == {}
     assert m1_log_range_emas["SKIP/USDT:USDT"] == {}
     assert h1_log_range_emas["SKIP/USDT:USDT"] == {}
     assert volumes_long["SKIP/USDT:USDT"] == 0.0
     assert log_ranges_long["SKIP/USDT:USDT"] == 0.0
-    assert bot._orchestrator_ema_unavailable_symbols == {"SKIP/USDT:USDT"}
+    assert bot._orchestrator_ema_unavailable_symbols == {
+        "FETCH/USDT:USDT",
+        "SKIP/USDT:USDT",
+    }
 
 
 @pytest.mark.asyncio
@@ -764,7 +790,10 @@ async def test_orchestrator_ema_bundle_marks_incomplete_cache_only_symbol_unavai
     assert h1_log_range_emas["CACHE/USDT:USDT"] == {}
     assert volumes_long["CACHE/USDT:USDT"] == 0.0
     assert log_ranges_long["CACHE/USDT:USDT"] == 0.0
-    assert bot._orchestrator_ema_unavailable_symbols == {"CACHE/USDT:USDT"}
+    assert bot._orchestrator_ema_unavailable_symbols == {
+        "CACHE/USDT:USDT",
+        "FETCH/USDT:USDT",
+    }
 
 
 def test_required_candle_health_windows_include_indicator_and_diagnostic_timeframes():
@@ -1419,10 +1448,55 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
         ),
     )
     assert any(
-        "active tail gap using last real candle" in record.message
+        "active tail gap carry-forward" in record.message
         and record.levelno == logging.WARNING
         for record in caplog.records
     )
+
+
+def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    now_ms = 10 * 60_000
+    current_now = {"ms": now_ms}
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: current_now["ms"])
+
+    class FakeCM:
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            latest_expected = int(now_ms) - 60_000
+            last_cached = latest_expected - 60_000
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "timeframe": "1m",
+                        "coverage_ok": False,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": last_cached,
+                        "missing_candles": 1,
+                        "missing_spans": [(last_cached + 60_000, latest_expected)],
+                        "open_tail_gap": True,
+                        "tail_gap_candles": 1,
+                        "tail_gap_age_ms": latest_expected - last_cached,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {"max_active_candle_tail_gap_minutes": 10}}
+    bot.cm = FakeCM()
+
+    with caplog.at_level(logging.DEBUG):
+        pb_mod.Passivbot._completed_candle_freshness_signature(
+            bot, ["TAIL/USDT:USDT"], now_ms=current_now["ms"]
+        )
+        current_now["ms"] += 60_000
+        pb_mod.Passivbot._completed_candle_freshness_signature(
+            bot, ["TAIL/USDT:USDT"], now_ms=current_now["ms"]
+        )
+
+    records = [r for r in caplog.records if "active tail gap carry-forward" in r.message]
+    assert [r.levelno for r in records] == [logging.WARNING, logging.DEBUG]
 
 
 def test_completed_candle_freshness_allows_real_cm_bounded_active_tail_gap(
