@@ -1,4 +1,7 @@
-use crate::analysis::{analyze_backtest_pair, FillActivityMetrics};
+use crate::analysis::{
+    analyze_backtest_pair, analyze_backtest_pair_with_profile, analyze_backtest_usd_with_profile,
+    FillActivityMetrics,
+};
 use crate::backtest::Backtest;
 use crate::closes::{
     calc_closes_long, calc_closes_short, calc_next_close_long, calc_next_close_short,
@@ -36,8 +39,55 @@ use pyo3::PyObject;
 use serde::Serialize;
 use serde_json::{self, Value};
 use std::str::FromStr;
+use std::time::Instant;
 
 type BacktestPyResult = (PyObject, PyObject, Py<PyDict>, Py<PyDict>, PyObject);
+
+const OPTIMIZE_PROFILE_ENV: &str = "PASSIVBOT_OPTIMIZE_PROFILE";
+const RUST_PROFILE_KEY: &str = "_rust_profile";
+
+fn rust_profile_enabled() -> bool {
+    match std::env::var(OPTIMIZE_PROFILE_ENV) {
+        Ok(value) => {
+            let value = value.trim().to_ascii_lowercase();
+            !value.is_empty() && value != "0" && value != "false" && value != "no"
+        }
+        Err(_) => false,
+    }
+}
+
+fn profile_start(enabled: bool) -> Option<Instant> {
+    if enabled {
+        Some(Instant::now())
+    } else {
+        None
+    }
+}
+
+fn profile_add(
+    profile: &mut Vec<(&'static str, f64)>,
+    key: &'static str,
+    started: Option<Instant>,
+) {
+    if let Some(started) = started {
+        profile.push((key, started.elapsed().as_secs_f64() * 1000.0));
+    }
+}
+
+fn profile_to_py_dict(
+    py: Python<'_>,
+    profile: &[(&'static str, f64)],
+    total_started: Option<Instant>,
+) -> PyResult<Py<PyDict>> {
+    let py_profile = PyDict::new_bound(py);
+    for (key, value) in profile {
+        py_profile.set_item(*key, *value)?;
+    }
+    if let Some(started) = total_started {
+        py_profile.set_item("rust_total_ms", started.elapsed().as_secs_f64() * 1000.0)?;
+    }
+    Ok(py_profile.unbind())
+}
 
 fn apply_fill_activity_metrics(analysis: &mut Analysis, metrics: FillActivityMetrics) {
     analysis.fills_active_days_count = metrics.fills_active_days_count;
@@ -1261,6 +1311,10 @@ fn run_backtest_core<'py>(
     exchange_params_list: &Bound<'py, PyAny>,
     backtest_params_dict: &Bound<'py, PyDict>,
 ) -> PyResult<BacktestPyResult> {
+    let profile_enabled = rust_profile_enabled();
+    let profile_total_start = profile_start(profile_enabled);
+    let mut rust_profile = Vec::new();
+    let input_parse_start = profile_start(profile_enabled);
     let hlcvs_rust = hlcvs.as_array();
     let btc_usd_rust = btc_usd.as_array();
 
@@ -1338,8 +1392,13 @@ fn run_backtest_core<'py>(
             .map_err(|_| PyValueError::new_err("Unsupported data type in exchange_params_list"))?;
         exchange_params.push(exchange_params_from_dict(dict)?);
     }
+    profile_add(&mut rust_profile, "rust_input_parse_ms", input_parse_start);
 
     let metrics_only = backtest_params.metrics_only;
+    let skip_btc_analysis = metrics_only
+        && backtest_params.skip_btc_analysis
+        && backtest_params.btc_collateral_cap <= 0.0;
+    let init_start = profile_start(profile_enabled);
     let mut backtest = Backtest::new_with_strategy_params(
         hlcvs_rust,
         btc_usd_rust,
@@ -1349,32 +1408,94 @@ fn run_backtest_core<'py>(
         exchange_params,
         &backtest_params,
     );
+    profile_add(&mut rust_profile, "rust_backtest_init_ms", init_start);
 
     // Run the backtest and process results
-    Python::with_gil(|py| {
+    Python::with_gil(move |py| {
+        let simulation_start = profile_start(profile_enabled);
         let (fills, equities) = backtest.run().map_err(PyValueError::new_err)?;
+        profile_add(&mut rust_profile, "rust_simulation_ms", simulation_start);
         let (entry_pct_long, entry_pct_short) = backtest.initial_entry_balance_pct();
-        let (mut analysis_usd, mut analysis_btc) = analyze_backtest_pair(
-            &fills,
-            &equities,
-            backtest.balance.use_btc_collateral,
-            &backtest.total_wallet_exposures,
-            backtest.liquidated(),
-        );
+        let (mut analysis_usd, mut analysis_btc) = if skip_btc_analysis {
+            let (analysis_usd, analysis_profile) = analyze_backtest_usd_with_profile(
+                &fills,
+                &equities,
+                &backtest.total_wallet_exposures,
+                backtest.liquidated(),
+                profile_enabled,
+            );
+            if profile_enabled {
+                rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
+                rust_profile.push(("rust_analysis_btc_ms", 0.0));
+                rust_profile.push(("rust_btc_fill_prepare_ms", 0.0));
+                rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
+                rust_profile.push(("rust_btc_analysis_skipped", 1.0));
+            }
+            (analysis_usd, Analysis::default())
+        } else if profile_enabled {
+            let ((analysis_usd, analysis_btc), analysis_profile) =
+                analyze_backtest_pair_with_profile(
+                    &fills,
+                    &equities,
+                    backtest.balance.use_btc_collateral,
+                    &backtest.total_wallet_exposures,
+                    backtest.liquidated(),
+                );
+            rust_profile.push(("rust_analysis_usd_ms", analysis_profile.analysis_usd_ms));
+            rust_profile.push((
+                "rust_btc_fill_prepare_ms",
+                analysis_profile.btc_fill_prepare_ms,
+            ));
+            rust_profile.push(("rust_analysis_btc_ms", analysis_profile.analysis_btc_ms));
+            rust_profile.push(("rust_analysis_pair_ms", analysis_profile.total_ms));
+            (analysis_usd, analysis_btc)
+        } else {
+            analyze_backtest_pair(
+                &fills,
+                &equities,
+                backtest.balance.use_btc_collateral,
+                &backtest.total_wallet_exposures,
+                backtest.liquidated(),
+            )
+        };
         analysis_usd.entry_initial_balance_pct_long = entry_pct_long;
         analysis_usd.entry_initial_balance_pct_short = entry_pct_short;
         analysis_btc.entry_initial_balance_pct_long = entry_pct_long;
         analysis_btc.entry_initial_balance_pct_short = entry_pct_short;
+        let completion_start = profile_start(profile_enabled);
         let completion_ratio =
             calc_backtest_completion_ratio(&equities, &backtest_params, n_timesteps);
         analysis_usd.backtest_completion_ratio = completion_ratio;
         analysis_btc.backtest_completion_ratio = completion_ratio;
+        profile_add(
+            &mut rust_profile,
+            "rust_completion_ratio_ms",
+            completion_start,
+        );
+        let fill_activity_start = profile_start(profile_enabled);
         let fill_activity = backtest.fill_activity_metrics_for_analysis(&fills, &equities);
         apply_fill_activity_metrics(&mut analysis_usd, fill_activity);
         apply_fill_activity_metrics(&mut analysis_btc, fill_activity);
+        profile_add(
+            &mut rust_profile,
+            "rust_fill_activity_ms",
+            fill_activity_start,
+        );
 
+        let hard_stop_metrics_start = profile_start(profile_enabled);
         let hs = backtest.hard_stop_metrics();
+        profile_add(
+            &mut rust_profile,
+            "rust_hard_stop_metrics_ms",
+            hard_stop_metrics_start,
+        );
+        let strategy_metrics_start = profile_start(profile_enabled);
         let strategy = backtest.strategy_equity_metrics_for_analysis();
+        profile_add(
+            &mut rust_profile,
+            "rust_strategy_equity_metrics_ms",
+            strategy_metrics_start,
+        );
         analysis_usd.hard_stop_triggers = hs.triggers;
         analysis_usd.hard_stop_triggers_per_year = hs.triggers_per_year;
         analysis_usd.hard_stop_triggers_long = hs.triggers_long;
@@ -1526,18 +1647,36 @@ fn run_backtest_core<'py>(
         analysis_btc.calmar_ratio_strategy_eq_w = strategy.overall.calmar_ratio_strategy_eq_w;
         analysis_btc.sterling_ratio_strategy_eq_w = strategy.overall.sterling_ratio_strategy_eq_w;
 
-        // Create a dictionary to store analysis results using a more concise approach
+        let analysis_dict_start = profile_start(profile_enabled);
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
-        let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
+        let py_analysis_btc = if skip_btc_analysis {
+            PyDict::new_bound(py).unbind()
+        } else {
+            struct_to_py_dict(py, &analysis_btc)?
+        };
+        profile_add(
+            &mut rust_profile,
+            "rust_analysis_py_dict_ms",
+            analysis_dict_start,
+        );
         if metrics_only {
+            let py_extra = if profile_enabled {
+                let py_profile = profile_to_py_dict(py, &rust_profile, profile_total_start)?;
+                let py_extra = PyDict::new_bound(py);
+                py_extra.set_item(RUST_PROFILE_KEY, py_profile)?;
+                py_extra.into_py(py)
+            } else {
+                py.None().into_py(py)
+            };
             return Ok((
                 py.None().into_py(py),
                 py.None().into_py(py),
                 py_analysis_usd,
                 py_analysis_btc,
-                py.None().into_py(py),
+                py_extra,
             ));
         }
+        let artifact_conversion_start = profile_start(profile_enabled);
         let hard_stop_plot_data = backtest.hard_stop_plot_data();
         let py_events_long = PyList::empty_bound(py);
         for event in hard_stop_plot_data.events_long {
@@ -1621,6 +1760,17 @@ fn run_backtest_core<'py>(
             .into_pyarray_bound(py)
             .unbind();
         let fills_array = py_fills.into_pyarray_bound(py).unbind();
+        profile_add(
+            &mut rust_profile,
+            "rust_artifact_conversion_ms",
+            artifact_conversion_start,
+        );
+        if profile_enabled {
+            py_hard_stop_plot.set_item(
+                RUST_PROFILE_KEY,
+                profile_to_py_dict(py, &rust_profile, profile_total_start)?,
+            )?;
+        }
         Ok((
             fills_array.into_py(py),
             equities_array.into_py(py),
@@ -1747,6 +1897,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
         },
         metrics_only: dict
             .get_item("metrics_only")?
+            .map(|item| item.extract::<bool>())
+            .transpose()?
+            .unwrap_or(false),
+        skip_btc_analysis: dict
+            .get_item("skip_btc_analysis")?
             .map(|item| item.extract::<bool>())
             .transpose()?
             .unwrap_or(false),

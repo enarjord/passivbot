@@ -334,6 +334,62 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     assert analysis["backtest_completion_ratio"] == pytest.approx(1.0)
 
 
+def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
+    analysis_usd = _make_analysis_entry(0.25)
+    analysis_btc = _make_analysis_entry(0.25)
+    rust_profile = {"rust_simulation_ms": 12.5, "rust_analysis_pair_ms": 3.25}
+
+    def fake_run_backtest_bundle(*_args):
+        return None, None, analysis_usd, analysis_btc, {"_rust_profile": rust_profile}
+
+    monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
+    payload = BacktestPayload(
+        bundle=object(),
+        bot_params_list=[],
+        strategy_params_list=[],
+        exchange_params=[],
+        backtest_params={"metrics_only": True},
+    )
+    config = {
+        "backtest": {
+            "start_date": "2026-01-01",
+            "end_date": "2026-01-02",
+            "candle_interval_minutes": 1,
+        },
+        "bot": {
+            "long": {"total_wallet_exposure_limit": 1.0},
+            "short": {"total_wallet_exposure_limit": 1.0},
+        },
+    }
+
+    fills, equities_array, _analysis = execute_backtest(payload, config)
+
+    assert fills is None
+    assert equities_array is None
+    assert payload.rust_profile == rust_profile
+
+
+def test_expand_analysis_allows_skipped_btc_analysis():
+    analysis_usd = _make_analysis_entry(0.25)
+    result = expand_analysis(
+        analysis_usd,
+        {},
+        fills=None,
+        equities_array=None,
+        config={
+            "bot": {
+                "long": {"total_wallet_exposure_limit": 1.0},
+                "short": {"total_wallet_exposure_limit": 1.0},
+            }
+        },
+    )
+
+    assert result["adg_usd"] == pytest.approx(0.25)
+    assert result["adg_per_exposure_long_usd"] == pytest.approx(0.25)
+    assert "adg_btc" not in result
+    assert "adg_per_exposure_long_btc" not in result
+
+
 def test_make_table_includes_trade_metrics():
     table = plotting.make_table(
         {

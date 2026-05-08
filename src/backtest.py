@@ -449,6 +449,7 @@ class BacktestPayload:
     backtest_params: dict
     execution_settings: BacktestExecutionSettings | None = None
     hard_stop_plot_data: dict | None = None
+    rust_profile: dict | None = None
 
 
 def build_backtest_payload(
@@ -461,6 +462,7 @@ def build_backtest_payload(
     *,
     coin_indices: list[int] | None = None,
     metrics_only: bool = False,
+    skip_btc_analysis: bool = False,
     runtime_config: dict | None = None,
     execution_settings: BacktestExecutionSettings | None = None,
 ) -> BacktestPayload:
@@ -486,6 +488,7 @@ def build_backtest_payload(
         metrics_only=metrics_only,
     )
     backtest_params = dict(backtest_params)
+    backtest_params["skip_btc_analysis"] = bool(skip_btc_analysis)
     coins_order = backtest_params.get("coins", [])
 
     # Read candle interval from config (default to 1m)
@@ -700,6 +703,13 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             f"run_backtest_bundle returned {len(backtest_result)} values; expected 4 or 5"
         )
 
+    rust_profile = {}
+    if isinstance(hard_stop_plot_data, dict):
+        profile_value = hard_stop_plot_data.get("_rust_profile")
+        if isinstance(profile_value, dict):
+            rust_profile = dict(profile_value)
+    payload.rust_profile = rust_profile
+
     if payload.backtest_params.get("metrics_only", False):
         payload.hard_stop_plot_data = {}
         analysis = expand_analysis(analysis_usd, analysis_btc, None, equities_array, config)
@@ -707,6 +717,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
 
     equities_array = np.asarray(equities_array)
     payload.hard_stop_plot_data = dict(hard_stop_plot_data or {})
+    payload.hard_stop_plot_data.pop("_rust_profile", None)
     analysis = expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config)
     if bool(analysis.get("liquidated", False)):
         final_equity_usd = float(equities_array[-1, 1]) if equities_array.size else float("nan")
@@ -1714,6 +1725,7 @@ def prep_backtest_args(
             "trade_start_indices": [],
             "global_warmup_bars": 0,
             "metrics_only": bool(metrics_only),
+            "skip_btc_analysis": False,
             "filter_by_min_effective_cost": bool(
                 require_config_value(config, "backtest.filter_by_min_effective_cost")
             ),
@@ -1744,16 +1756,18 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
             or 0.0
         )
         for key in keys:
-            analysis_usd[f"{key}_per_exposure_{pside}"] = (
-                (analysis_usd[key] / twel if twel > 0.0 else 0.0)
-                if analysis_usd[key] is not None
-                else None
-            )
-            analysis_btc[f"{key}_per_exposure_{pside}"] = (
-                (analysis_btc[key] / twel if twel > 0.0 else 0.0)
-                if analysis_btc[key] is not None
-                else None
-            )
+            if key in analysis_usd:
+                analysis_usd[f"{key}_per_exposure_{pside}"] = (
+                    (analysis_usd[key] / twel if twel > 0.0 else 0.0)
+                    if analysis_usd[key] is not None
+                    else None
+                )
+            if key in analysis_btc:
+                analysis_btc[f"{key}_per_exposure_{pside}"] = (
+                    (analysis_btc[key] / twel if twel > 0.0 else 0.0)
+                    if analysis_btc[key] is not None
+                    else None
+                )
 
     result = {}
 

@@ -1995,6 +1995,69 @@ class TestEvaluator:
         # Check that metric key is created (could be max, mean, etc.)
         assert "drawdown_worst_usd" in evaluator.limit_checks[0]["metric_key"]
 
+    def test_optimizer_can_skip_btc_analysis_when_no_btc_metrics_are_needed(self):
+        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_strategy_eq", "fills_gap_p95_hours"]
+        mock_config["optimize"]["limits"] = [
+            {
+                "metric": "drawdown_worst_strategy_eq",
+                "penalize_if": "greater_than",
+                "value": 0.3,
+            }
+        ]
+
+        evaluator = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+
+        assert _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+    def test_optimizer_keeps_btc_analysis_for_btc_scoring_limits_or_collateral(self):
+        from optimize import Evaluator, _optimizer_can_skip_btc_analysis
+        from config_utils import get_template_config
+
+        mock_config = get_template_config()
+        mock_config["backtest"]["btc_collateral_cap"] = 0.0
+        mock_config["optimize"]["scoring"] = ["adg_btc"]
+        mock_config["optimize"]["limits"] = []
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+        mock_config["optimize"]["scoring"] = ["adg_strategy_eq"]
+        mock_config["optimize"]["limits"] = [
+            {"metric": "drawdown_worst_btc", "penalize_if": "greater_than", "value": 0.3}
+        ]
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
+        mock_config["backtest"]["btc_collateral_cap"] = 1.0
+        mock_config["optimize"]["limits"] = []
+        evaluator = Evaluator(hlcvs_specs={}, btc_usd_specs={}, msss={}, config=mock_config)
+        assert not _optimizer_can_skip_btc_analysis(
+            mock_config,
+            evaluator.scoring_specs,
+            evaluator.limit_checks,
+        )
+
     def test_build_limit_checks_uses_suite_aggregate_defaults(self):
         from optimize import Evaluator, SuiteEvaluator
         from config_utils import get_template_config
@@ -2268,9 +2331,14 @@ class TestEvaluator:
         )
         evaluator = SuiteEvaluator(base, [ctx], {})
         individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+        payload = type(
+            "Payload",
+            (),
+            {"rust_profile": {"rust_simulation_ms": 12.5, "rust_analysis_pair_ms": 3.25}},
+        )()
 
         with caplog.at_level(logging.INFO), patch(
-            "optimize.build_backtest_payload", return_value=object()
+            "optimize.build_backtest_payload", return_value=payload
         ), patch(
             "optimize.execute_backtest",
             return_value=(None, None, {"liquidated": False}),
@@ -2286,6 +2354,8 @@ class TestEvaluator:
         assert metrics["profile"]["exchange_evals"] == 1
         assert metrics["profile"]["total_ms"] >= 0.0
         assert "rust_backtest_ms" in metrics["profile"]
+        assert metrics["profile"]["rust_simulation_ms"] == 12.5
+        assert metrics["profile"]["rust_analysis_pair_ms"] == 3.25
         assert any("[opt-profile] suite_eval" in record.message for record in caplog.records)
 
     def test_suite_scenario_config_overrides_are_isolated_from_candidate_config(self):

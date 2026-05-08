@@ -483,6 +483,34 @@ def _profile_add(timings: Dict[str, float] | None, key: str, started: float) -> 
         timings[key] = timings.get(key, 0.0) + (time.perf_counter() - started) * 1000.0
 
 
+def _metric_uses_btc_denominated_analysis(metric: Any) -> bool:
+    metric = str(metric or "").strip().lower()
+    return metric.endswith("_btc") or "_btc_" in metric
+
+
+def _optimizer_can_skip_btc_analysis(
+    config: Dict[str, Any],
+    scoring_specs: Sequence[ObjectiveSpec],
+    limit_checks: Sequence[Dict[str, Any]],
+) -> bool:
+    try:
+        btc_collateral_cap = float(
+            get_optional_config_value(config, "backtest.btc_collateral_cap", 0.0) or 0.0
+        )
+    except (TypeError, ValueError):
+        return False
+    if btc_collateral_cap > 0.0:
+        return False
+    if any(_metric_uses_btc_denominated_analysis(spec.metric) for spec in scoring_specs):
+        return False
+    for check in limit_checks or []:
+        if _metric_uses_btc_denominated_analysis(check.get("metric")):
+            return False
+        if _metric_uses_btc_denominated_analysis(check.get("metric_key")):
+            return False
+    return True
+
+
 def _format_objectives(
     values: Sequence[float] | dict[str, Any],
     *,
@@ -1035,6 +1063,11 @@ class Evaluator:
                 self.seen_hashes[individual_hash] = None
         analyses = {}
         liquidated = False
+        skip_btc_analysis = _optimizer_can_skip_btc_analysis(
+            config,
+            self.scoring_specs,
+            self.limit_checks,
+        )
         for exchange in self.exchanges:
             self._ensure_attached(exchange)
             payload = build_backtest_payload(
@@ -1045,6 +1078,7 @@ class Evaluator:
                 self.shared_btc_np[exchange],
                 self.timestamps.get(exchange),
                 metrics_only=True,
+                skip_btc_analysis=skip_btc_analysis,
             )
             try:
                 fills, equities_array, analysis = execute_backtest(payload, config)
@@ -1342,6 +1376,11 @@ class SuiteEvaluator:
         for ctx in self.contexts:
             phase_start = _profile_start(profile_enabled)
             scenario_config = self._build_scenario_candidate_config(config, ctx)
+            skip_btc_analysis = _optimizer_can_skip_btc_analysis(
+                scenario_config,
+                self.base.scoring_specs,
+                self.base.limit_checks,
+            )
             _profile_add(timings, "scenario_config_ms", phase_start)
             logging.debug(
                 "Optimizer scenario %s | start=%s end=%s coins=%s",
@@ -1385,6 +1424,7 @@ class SuiteEvaluator:
                     ctx.timestamps.get(exchange),
                     coin_indices=coin_indices,
                     metrics_only=True,
+                    skip_btc_analysis=skip_btc_analysis,
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
                 )
@@ -1393,6 +1433,16 @@ class SuiteEvaluator:
                     phase_start = _profile_start(profile_enabled)
                     fills, equities_array, analysis = execute_backtest(payload, scenario_config)
                     _profile_add(timings, "rust_backtest_ms", phase_start)
+                    if timings is not None and isinstance(
+                        getattr(payload, "rust_profile", None), dict
+                    ):
+                        for key, value in payload.rust_profile.items():
+                            if not isinstance(key, str) or not key.startswith("rust_"):
+                                continue
+                            try:
+                                timings[key] = timings.get(key, 0.0) + float(value)
+                            except (TypeError, ValueError):
+                                continue
                 except BaseException as exc:
                     if not _is_recoverable_backtest_candidate_error(exc):
                         raise
@@ -1489,8 +1539,13 @@ class SuiteEvaluator:
             profile_payload["scenarios"] = len(self.contexts)
             profile_payload["exchange_evals"] = sum(len(ctx.exchanges) for ctx in self.contexts)
             metrics_payload["profile"] = profile_payload
+            rust_detail = " ".join(
+                f"{key}={profile_payload[key]:.3f}"
+                for key in sorted(profile_payload)
+                if key.startswith("rust_") and key != "rust_backtest_ms"
+            )
             logging.info(
-                "[opt-profile] suite_eval total_ms=%.3f scenario_config_ms=%.3f runtime_compile_ms=%.3f payload_build_ms=%.3f rust_backtest_ms=%.3f combine_metrics_ms=%.3f aggregate_metrics_ms=%.3f fitness_payload_ms=%.3f scenarios=%d exchange_evals=%d",
+                "[opt-profile] suite_eval total_ms=%.3f scenario_config_ms=%.3f runtime_compile_ms=%.3f payload_build_ms=%.3f rust_backtest_ms=%.3f combine_metrics_ms=%.3f aggregate_metrics_ms=%.3f fitness_payload_ms=%.3f scenarios=%d exchange_evals=%d rust_detail=%s",
                 profile_payload.get("total_ms", 0.0),
                 profile_payload.get("scenario_config_ms", 0.0),
                 profile_payload.get("runtime_compile_ms", 0.0),
@@ -1501,6 +1556,7 @@ class SuiteEvaluator:
                 profile_payload.get("fitness_payload_ms", 0.0),
                 profile_payload["scenarios"],
                 profile_payload["exchange_evals"],
+                rust_detail,
             )
 
         _set_candidate_metrics(individual, metrics_payload)

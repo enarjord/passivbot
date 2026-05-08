@@ -1,6 +1,7 @@
 use crate::types::{Analysis, Equities, Fill};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_HOUR: u64 = 3_600_000;
@@ -82,6 +83,47 @@ pub struct FillActivityMetrics {
     pub fills_per_day_per_position_slot_short: f64,
     pub fills_per_day_short: f64,
     pub fills_top_symbol_share: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnalysisPairProfile {
+    pub analysis_usd_ms: f64,
+    pub btc_fill_prepare_ms: f64,
+    pub analysis_btc_ms: f64,
+    pub total_ms: f64,
+}
+
+fn profile_start(enabled: bool) -> Option<Instant> {
+    if enabled {
+        Some(Instant::now())
+    } else {
+        None
+    }
+}
+
+fn elapsed_ms(started: Option<Instant>) -> f64 {
+    started
+        .map(|started| started.elapsed().as_secs_f64() * 1000.0)
+        .unwrap_or(0.0)
+}
+
+fn calc_long_short_profit_ratio(fills: &[Fill]) -> f64 {
+    let (long_pnl_sum, short_pnl_sum) =
+        fills
+            .iter()
+            .fold((0.0, 0.0), |(long_sum, short_sum), fill| {
+                if fill.order_type.is_long() {
+                    (long_sum + fill.pnl, short_sum)
+                } else {
+                    (long_sum, short_sum + fill.pnl)
+                }
+            });
+    let pnl_sum = long_pnl_sum + short_pnl_sum;
+    if pnl_sum != 0.0 {
+        long_pnl_sum / pnl_sum
+    } else {
+        0.5
+    }
 }
 
 fn percentile(values: &[f64], pct: f64) -> f64 {
@@ -1199,29 +1241,85 @@ pub fn analyze_backtest_pair(
     total_wallet_exposures: &[f64],
     liquidated: bool,
 ) -> (Analysis, Analysis) {
-    let (long_pnl_sum, short_pnl_sum) =
-        fills
-            .iter()
-            .fold((0.0, 0.0), |(long_sum, short_sum), fill| {
-                if fill.order_type.is_long() {
-                    (long_sum + fill.pnl, short_sum)
-                } else {
-                    (long_sum, short_sum + fill.pnl)
-                }
-            });
-    let pnl_sum = long_pnl_sum + short_pnl_sum;
-    let long_short_profit_ratio = if pnl_sum != 0.0 {
-        long_pnl_sum / pnl_sum
-    } else {
-        0.5
-    };
+    analyze_backtest_pair_inner(
+        fills,
+        equities,
+        _use_btc_collateral,
+        total_wallet_exposures,
+        liquidated,
+        false,
+    )
+    .0
+}
 
+pub fn analyze_backtest_pair_with_profile(
+    fills: &[Fill],
+    equities: &Equities,
+    _use_btc_collateral: bool,
+    total_wallet_exposures: &[f64],
+    liquidated: bool,
+) -> ((Analysis, Analysis), AnalysisPairProfile) {
+    analyze_backtest_pair_inner(
+        fills,
+        equities,
+        _use_btc_collateral,
+        total_wallet_exposures,
+        liquidated,
+        true,
+    )
+}
+
+pub fn analyze_backtest_usd_with_profile(
+    fills: &[Fill],
+    equities: &Equities,
+    total_wallet_exposures: &[f64],
+    liquidated: bool,
+    profile_enabled: bool,
+) -> (Analysis, AnalysisPairProfile) {
+    let total_started = profile_start(profile_enabled);
+    let usd_started = profile_start(profile_enabled);
+    let mut analysis_usd = analyze_backtest(
+        fills,
+        &equities.usd_total_equity,
+        &equities.timestamps_ms,
+        total_wallet_exposures,
+    );
+    let analysis_usd_ms = elapsed_ms(usd_started);
+    let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
+    analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
+    analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
+    analysis_usd.liquidated = liquidated;
+    (
+        analysis_usd,
+        AnalysisPairProfile {
+            analysis_usd_ms,
+            total_ms: elapsed_ms(total_started),
+            ..AnalysisPairProfile::default()
+        },
+    )
+}
+
+fn analyze_backtest_pair_inner(
+    fills: &[Fill],
+    equities: &Equities,
+    _use_btc_collateral: bool,
+    total_wallet_exposures: &[f64],
+    liquidated: bool,
+    profile_enabled: bool,
+) -> ((Analysis, Analysis), AnalysisPairProfile) {
+    let total_started = profile_start(profile_enabled);
+    let long_short_profit_ratio = calc_long_short_profit_ratio(fills);
+
+    let usd_started = profile_start(profile_enabled);
     let analysis_usd = analyze_backtest(
         fills,
         &equities.usd_total_equity,
         &equities.timestamps_ms,
         total_wallet_exposures,
     );
+    let analysis_usd_ms = elapsed_ms(usd_started);
+
+    let btc_fill_prepare_started = profile_start(profile_enabled);
     let mut btc_fills = fills.to_vec();
     for fill in btc_fills.iter_mut() {
         let price = if fill.btc_price > 0.0 {
@@ -1235,12 +1333,16 @@ pub fn analyze_backtest_pair(
         fill.fill_price /= price;
         fill.position_price /= price;
     }
+    let btc_fill_prepare_ms = elapsed_ms(btc_fill_prepare_started);
+
+    let btc_started = profile_start(profile_enabled);
     let analysis_btc = analyze_backtest(
         &btc_fills,
         &equities.btc_total_equity,
         &equities.timestamps_ms,
         total_wallet_exposures,
     );
+    let analysis_btc_ms = elapsed_ms(btc_started);
     let mut analysis_usd = analysis_usd;
     analysis_usd.pnl_ratio_long_short = long_short_profit_ratio;
     analysis_usd.long_short_profit_ratio = long_short_profit_ratio;
@@ -1251,7 +1353,15 @@ pub fn analyze_backtest_pair(
     analysis_btc.long_short_profit_ratio = long_short_profit_ratio;
     analysis_btc.liquidated = liquidated;
 
-    (analysis_usd, analysis_btc)
+    (
+        (analysis_usd, analysis_btc),
+        AnalysisPairProfile {
+            analysis_usd_ms,
+            btc_fill_prepare_ms,
+            analysis_btc_ms,
+            total_ms: elapsed_ms(total_started),
+        },
+    )
 }
 
 fn calc_daily_pnl_ratios(fills: &[Fill]) -> Vec<f64> {
