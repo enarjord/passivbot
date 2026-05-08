@@ -3197,15 +3197,8 @@ class Passivbot:
         total_skipped: int,
     ) -> bool:
         """Return True when an order-plan summary is worth emitting at INFO."""
-        unchanged_cancel = max(0, total_pre_cancel - total_cancel)
-        unchanged_create = max(0, total_pre_create - total_create)
         actual_work = total_cancel + total_create
-        return (
-            actual_work >= 4
-            or total_skipped >= 4
-            or unchanged_cancel >= 3
-            or unchanged_create >= 3
-        )
+        return actual_work >= 4 or (actual_work > 0 and total_skipped >= 4)
 
     def _begin_order_wave(
         self, to_cancel: list[dict], to_create: list[dict]
@@ -9640,11 +9633,11 @@ class Passivbot:
         if not hasattr(self, "_min_effective_cost_last_log_ms"):
             self._min_effective_cost_last_log_ms = {}
         if not hasattr(self, "_min_effective_cost_log_interval_ms"):
-            self._min_effective_cost_log_interval_ms = 15 * 60 * 1000
+            self._min_effective_cost_log_interval_ms = 60 * 60 * 1000
         if not hasattr(self, "_min_effective_cost_summary_last_log_ms"):
             self._min_effective_cost_summary_last_log_ms = 0
         if not hasattr(self, "_min_effective_cost_summary_log_interval_ms"):
-            self._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
+            self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         now_ms = utc_ms()
         visible_blocks = []
         for block in blocks:
@@ -11607,11 +11600,35 @@ class Passivbot:
             self._orchestrator_prev_close_ema = {}
         if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):
             self._orchestrator_close_ema_fallback_counts = {}
+        if not hasattr(self, "_orchestrator_ema_issue_last_log_ms"):
+            self._orchestrator_ema_issue_last_log_ms = {}
         m1_max_age_by_symbol = {s: 60_000 for s in symbols}
         h1_max_age_by_symbol = {s: 600_000 for s in symbols}
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
+        optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
+
+        def log_ema_issue(
+            key: tuple,
+            level: int,
+            message: str,
+            *args,
+            interval_ms: int = 15 * 60 * 1000,
+        ) -> None:
+            """Throttle repeated EMA diagnostics without hiding first occurrence."""
+            now = int(utc_ms())
+            last = int(self._orchestrator_ema_issue_last_log_ms.get(key, 0) or 0)
+            if now - last >= interval_ms:
+                self._orchestrator_ema_issue_last_log_ms[key] = now
+                logging.log(level, message, *args)
+            else:
+                logging.debug(message, *args)
+
+        def record_optional_ema_drop(
+            ema_type: str, symbol: str, span: float, reason: str
+        ) -> None:
+            optional_ema_drops.setdefault((ema_type, reason), []).append((symbol, span))
 
         def mark_ema_unavailable(symbol: str, reason: str) -> None:
             ema_unavailable_symbols.add(symbol)
@@ -11690,24 +11707,15 @@ class Passivbot:
                 try:
                     val = float(await fn(symbol, span))
                 except Exception as e:
-                    logging.warning(
-                        "[ema] dropping %s span for %s span=%.8g reason=%s: %s",
-                        ema_type,
-                        Passivbot._log_symbol(symbol),
-                        span,
-                        type(e).__name__,
-                        e,
+                    record_optional_ema_drop(
+                        ema_type, symbol, span, f"{type(e).__name__}: {e}"
                     )
                     continue
                 if math.isfinite(val):
                     out[span] = val
                 else:
-                    logging.warning(
-                        "[ema] dropping %s span for %s span=%.8g reason=non-finite value %s",
-                        ema_type,
-                        Passivbot._log_symbol(symbol),
-                        span,
-                        val,
+                    record_optional_ema_drop(
+                        ema_type, symbol, span, f"non-finite value {val}"
                     )
             return out
 
@@ -11730,17 +11738,18 @@ class Passivbot:
                         out[span] = val
                         continue
                     reason = f"non-finite {ema_type} value {val}"
-                logging.warning(
-                    "[ema] missing required %s span for %s span=%.8g reason=%s",
-                    ema_type,
-                    Passivbot._log_symbol(symbol),
-                    span,
-                    reason,
-                )
                 missing.append((span, reason))
             if missing:
                 detail = "; ".join(
                     [f"span={sp:.8g} reason={why}" for sp, why in missing]
+                )
+                log_ema_issue(
+                    ("required_missing", symbol, ema_type),
+                    logging.WARNING,
+                    "[ema] missing required %s EMA %s spans=%s",
+                    ema_type,
+                    Passivbot._log_symbol(symbol),
+                    ",".join(f"{sp:.8g}" for sp, _why in missing),
                 )
                 raise RuntimeError(
                     f"[ema] missing required {ema_type} EMA for {symbol}: {detail}"
@@ -11791,14 +11800,6 @@ class Passivbot:
                     prev_ts = int(prev[1])
                     age_ms = max(0, now_ms - prev_ts)
                     if age_ms > max_fallback_age_ms:
-                        logging.warning(
-                            "[ema] close EMA fallback stale %s span=%.8g age_ms=%d max_age_ms=%d reason=%s",
-                            Passivbot._log_symbol(symbol),
-                            span,
-                            age_ms,
-                            max_fallback_age_ms,
-                            reason,
-                        )
                         missing.append(
                             (
                                 span,
@@ -11815,7 +11816,9 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
-                        logging.warning(
+                        log_ema_issue(
+                            ("close_fallback", symbol, span),
+                            logging.WARNING,
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
                             " n_fallbacks=%d reason=%s",
                             Passivbot._log_symbol(symbol),
@@ -11831,6 +11834,29 @@ class Passivbot:
                 detail = "; ".join(
                     [f"span={sp:.8g} reason={why}" for sp, why in missing]
                 )
+                stale = [
+                    (sp, why)
+                    for sp, why in missing
+                    if "previous close EMA stale" in str(why)
+                ]
+                if stale:
+                    log_ema_issue(
+                        ("close_fallback_stale", symbol),
+                        logging.WARNING,
+                        "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s",
+                        Passivbot._log_symbol(symbol),
+                        ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
+                        max_fallback_age_ms,
+                        stale[0][1],
+                    )
+                else:
+                    log_ema_issue(
+                        ("close_missing", symbol),
+                        logging.WARNING,
+                        "[ema] missing required close EMA %s spans=%s action=block_until_fresh",
+                        Passivbot._log_symbol(symbol),
+                        ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
+                    )
                 raise RuntimeError(
                     f"[ema] missing required close EMA for {symbol}; no previous EMA fallback available: {detail}"
                 )
@@ -11960,6 +11986,29 @@ class Passivbot:
             m1_volume_emas[sym] = vol
             m1_log_range_emas[sym] = lr1m
             h1_log_range_emas[sym] = h1
+        if optional_ema_drops:
+            parts = []
+            total = 0
+            for (ema_type, reason), items in sorted(optional_ema_drops.items()):
+                total += len(items)
+                symbols_for_reason = sorted({symbol for symbol, _span in items})
+                spans_for_reason = sorted({float(span) for _symbol, span in items})
+                parts.append(
+                    "%s:n=%d symbols=%s spans=%s reason=%s"
+                    % (
+                        ema_type,
+                        len(items),
+                        Passivbot._log_symbols(symbols_for_reason, limit=8),
+                        ",".join(f"{span:.8g}" for span in spans_for_reason[:6]),
+                        str(reason)[:120],
+                    )
+                )
+            logging.debug(
+                "[ema] optional EMA drops | dropped=%d groups=%d | %s",
+                total,
+                len(optional_ema_drops),
+                "; ".join(parts[:4]),
+            )
         if errors:
             fatal = next(
                 (err for _sym, err in errors if not isinstance(err, Exception)), None

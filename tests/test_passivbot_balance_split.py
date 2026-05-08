@@ -1159,6 +1159,16 @@ def test_order_plan_summary_is_interesting_only_for_large_or_clipped_waves():
         )
         is True
     )
+    assert (
+        bot._order_plan_summary_is_interesting(
+            total_pre_cancel=10,
+            total_cancel=0,
+            total_pre_create=10,
+            total_create=0,
+            total_skipped=10,
+        )
+        is False
+    )
 
 
 def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):

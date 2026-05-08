@@ -1,6 +1,7 @@
 """Tests for MissingEma fix: EMA paths and error handling."""
 
 import asyncio
+import logging
 import math
 import time
 import json
@@ -444,7 +445,7 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
 
 
 @pytest.mark.asyncio
-async def test_close_ema_fallback_raises_when_previous_ema_is_stale():
+async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -463,8 +464,17 @@ async def test_close_ema_fallback_raises_when_previous_ema_is_stale():
     )
     bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
 
-    with pytest.raises(RuntimeError, match="previous close EMA stale"):
-        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="previous close EMA stale"):
+            await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    stale_warnings = [
+        record.message
+        for record in caplog.records
+        if "close EMA fallback stale" in record.message
+    ]
+    assert len(stale_warnings) == 1
+    assert "spans=10,14.142136,20" in stale_warnings[0]
 
 
 @pytest.mark.asyncio

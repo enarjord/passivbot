@@ -271,7 +271,7 @@ class KucoinBot(CCXTBot):
         if fallback_symbols:
             now_ms = utc_ms()
             last_log_ms = int(getattr(self, "_kucoin_ticker_fallback_log_ms", 0) or 0)
-            if now_ms - last_log_ms >= 15 * 60 * 1000:
+            if now_ms - last_log_ms >= 60 * 60 * 1000:
                 logging.warning(
                     "[market] kucoin ticker bid/ask missing; using last as bid=ask | symbols=%s",
                     ",".join(symbol_to_coin(symbol) for symbol in fallback_symbols[:12]),
