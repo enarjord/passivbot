@@ -9,16 +9,19 @@ import pytest
 
 from rust_utils import (
     _installed_extension_candidates,
+    acquire_lock,
     compiled_extension_paths,
     is_stale,
     latest_compiled_mtime,
     latest_source_mtime,
     check_and_maybe_compile,
     extension_needs_rebuild,
+    maturin_env,
     prune_shadowing_local_extensions,
     preferred_compiled_path,
     source_fingerprint,
     source_stamp_path,
+    stamp_compiled_extensions,
     verify_loaded_runtime_extension,
     write_source_stamp,
 )
@@ -51,6 +54,76 @@ def test_check_and_maybe_compile_errors_on_import(monkeypatch):
     monkeypatch.setitem(sys.modules, "passivbot_rust", object())
     with pytest.raises(RuntimeError):
         check_and_maybe_compile(force=True)
+
+
+def test_check_and_maybe_compile_rechecks_after_lock_and_skips_rebuild(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.delitem(sys.modules, "passivbot_rust", raising=False)
+    compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
+    compiled.write_text("binary")
+    stale_checks = iter([True, False])
+    releases: list[bool] = []
+
+    monkeypatch.setattr("rust_utils.prune_shadowing_local_extensions", lambda: None)
+    monkeypatch.setattr("rust_utils.latest_source_mtime", lambda: 2.0)
+    monkeypatch.setattr("rust_utils.source_fingerprint", lambda: "abc123")
+    monkeypatch.setattr("rust_utils.preferred_compiled_path", lambda: compiled)
+    monkeypatch.setattr(
+        "rust_utils.extension_needs_rebuild",
+        lambda compiled_path, source_mtime, fingerprint: next(stale_checks),
+    )
+    monkeypatch.setattr("rust_utils.acquire_lock", lambda: True)
+    monkeypatch.setattr("rust_utils.release_lock", lambda: releases.append(True))
+    monkeypatch.setattr(
+        "rust_utils.recompile_rust",
+        lambda: pytest.fail("waiter should skip rebuild after lock recheck"),
+    )
+
+    check_and_maybe_compile()
+
+    assert releases == [True]
+
+
+def test_acquire_lock_timeout_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    times = iter([0.0, 2.0])
+
+    def _raise_blocked(_handle):
+        raise BlockingIOError()
+
+    monkeypatch.setattr("rust_utils._lock_file_nonblocking", _raise_blocked)
+    monkeypatch.setattr("rust_utils.time.time", lambda: next(times))
+    monkeypatch.setattr("rust_utils.time.sleep", lambda _seconds: None)
+
+    assert acquire_lock(tmp_path / "compile.lock", timeout=1.0) is False
+
+
+def test_stamp_compiled_extensions_only_stamps_selected_paths(tmp_path: Path):
+    stale = tmp_path / "stale" / "passivbot_rust.cpython-312-darwin.so"
+    fresh = tmp_path / "fresh" / "passivbot_rust.cpython-312-darwin.so"
+    stale.parent.mkdir()
+    fresh.parent.mkdir()
+    stale.write_text("stale")
+    fresh.write_text("fresh")
+
+    stamp_compiled_extensions("abc123", paths=[fresh])
+
+    read_stamp = source_stamp_path(fresh).read_text(encoding="utf-8").strip()
+    assert read_stamp
+    assert read_stamp == "abc123"
+    assert not source_stamp_path(stale).exists()
+
+
+def test_maturin_env_prefers_current_virtualenv(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr("rust_utils.sys.prefix", "/tmp/current-venv")
+    monkeypatch.setattr("rust_utils.sys.base_prefix", "/usr")
+    monkeypatch.setenv("VIRTUAL_ENV", "/tmp/wrong-venv")
+    monkeypatch.setenv("PATH", "/usr/bin")
+
+    env = maturin_env()
+
+    assert env["VIRTUAL_ENV"] == "/tmp/current-venv"
+    assert env["PATH"].startswith("/tmp/current-venv/bin")
 
 
 def test_latest_source_mtime_includes_root_level_rs_files(tmp_path: Path):
