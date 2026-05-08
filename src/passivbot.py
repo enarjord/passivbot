@@ -9639,7 +9639,7 @@ class Passivbot:
         if not hasattr(self, "_min_effective_cost_summary_log_interval_ms"):
             self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         now_ms = utc_ms()
-        visible_blocks = []
+        eligible_blocks = []
         for block in blocks:
             if not isinstance(block, dict):
                 continue
@@ -9647,14 +9647,38 @@ class Passivbot:
             pside = str(block.get("pside", "unknown"))
             if pside not in ("long", "short") or not self.is_pside_enabled(pside):
                 continue
-            throttle_key = f"{symbol}:{pside}"
-            last_log_ms = self._min_effective_cost_last_log_ms.get(throttle_key, 0)
-            if (now_ms - last_log_ms) < self._min_effective_cost_log_interval_ms:
-                continue
-            self._min_effective_cost_last_log_ms[throttle_key] = now_ms
-            visible_blocks.append((symbol, pside, block))
-        if not visible_blocks:
+            eligible_blocks.append((symbol, pside, block))
+        if not eligible_blocks:
             return
+        blocked_signature = tuple(
+            sorted(
+                f"{Passivbot._log_symbol(symbol)}:{pside}"
+                for symbol, pside, _ in eligible_blocks
+            )
+        )
+        last_signature = getattr(self, "_min_effective_cost_last_signature", None)
+        try:
+            detail_interval_ms = max(
+                60 * 60 * 1000, int(self._min_effective_cost_log_interval_ms)
+            )
+        except Exception:
+            detail_interval_ms = 60 * 60 * 1000
+        last_signature_log_ms = int(
+            getattr(self, "_min_effective_cost_signature_last_log_ms", 0) or 0
+        )
+        if (
+            blocked_signature == last_signature
+            and now_ms - last_signature_log_ms < detail_interval_ms
+        ):
+            logging.debug(
+                "[entry] initial entries blocked by min effective cost suppressed by unchanged set | blocked=%d examples=%s",
+                len(eligible_blocks),
+                ",".join(blocked_signature[:12]),
+            )
+            return
+        self._min_effective_cost_last_signature = blocked_signature
+        self._min_effective_cost_signature_last_log_ms = now_ms
+        visible_blocks = eligible_blocks
         detail_limit = 3
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
