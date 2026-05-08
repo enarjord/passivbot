@@ -3046,18 +3046,21 @@ mod core {
             }
         }
 
-        fn sync_trailing_grid_strategy_params(symbol: &mut SymbolInput) {
-            let long_params =
-                crate::strategies::TrailingGridParams::from_bot_params(&symbol.long.bot_params);
+        fn sync_trailing_martingale_strategy_params(symbol: &mut SymbolInput) {
+            let long_params = crate::strategies::TrailingMartingaleParams::from_bot_params(
+                &symbol.long.bot_params,
+            );
             symbol.long.strategy_params = Some(long_params.to_value());
-            symbol.long.parsed_strategy_params =
-                Some(crate::strategies::StrategyParams::TrailingGrid(long_params));
+            symbol.long.parsed_strategy_params = Some(
+                crate::strategies::StrategyParams::TrailingMartingale(long_params),
+            );
 
-            let short_params =
-                crate::strategies::TrailingGridParams::from_bot_params(&symbol.short.bot_params);
+            let short_params = crate::strategies::TrailingMartingaleParams::from_bot_params(
+                &symbol.short.bot_params,
+            );
             symbol.short.strategy_params = Some(short_params.to_value());
             symbol.short.parsed_strategy_params = Some(
-                crate::strategies::StrategyParams::TrailingGrid(short_params),
+                crate::strategies::StrategyParams::TrailingMartingale(short_params),
             );
         }
 
@@ -3066,7 +3069,7 @@ mod core {
         ) -> Result<OrchestratorOutput, OrchestratorError> {
             let mut synced = input.clone();
             for symbol in &mut synced.symbols {
-                sync_trailing_grid_strategy_params(symbol);
+                sync_trailing_martingale_strategy_params(symbol);
             }
             super::compute_ideal_orders(&synced)
         }
@@ -3085,7 +3088,7 @@ mod core {
                 sort_global: true,
                 global_bot_params: BotParamsPair::default(),
                 hedge_mode: true,
-                strategy_kind: StrategyKind::TrailingGrid,
+                strategy_kind: StrategyKind::TrailingMartingale,
             }
         }
 
@@ -3230,7 +3233,7 @@ mod core {
                         pair
                     },
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -3296,7 +3299,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3378,7 +3381,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3481,7 +3484,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3518,7 +3521,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3564,7 +3567,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -3622,7 +3625,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3677,7 +3680,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: false,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3731,7 +3734,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3779,7 +3782,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3827,7 +3830,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym0, sym1],
                 peek_hints: None,
@@ -3940,7 +3943,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: syms,
                 peek_hints: None,
@@ -4158,7 +4161,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp.clone(),
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym.clone()],
                 peek_hints: None,
@@ -4230,7 +4233,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4290,7 +4293,7 @@ mod core {
                         sort_global: true,
                         global_bot_params: global_bp,
                         hedge_mode: true,
-                        strategy_kind: StrategyKind::TrailingGrid,
+                        strategy_kind: StrategyKind::TrailingMartingale,
                     },
                     symbols: vec![sym],
                     peek_hints: None,
@@ -4354,7 +4357,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4411,7 +4414,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4474,7 +4477,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,
@@ -4522,7 +4525,7 @@ mod core {
                     sort_global: true,
                     global_bot_params: global_bp,
                     hedge_mode: true,
-                    strategy_kind: StrategyKind::TrailingGrid,
+                    strategy_kind: StrategyKind::TrailingMartingale,
                 },
                 symbols: vec![sym],
                 peek_hints: None,

@@ -244,7 +244,7 @@ Commit intent:
 
 Tasks:
 
-1. Audit `trailing_grid` repeated calculations that can be hoisted once per side.
+1. Audit `trailing_martingale` repeated calculations that can be hoisted once per side.
 2. Ensure `ema_anchor` does no extra volatility work when weights are zero.
 3. Precompute side-level booleans where useful.
 

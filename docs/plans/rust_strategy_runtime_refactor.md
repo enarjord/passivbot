@@ -221,7 +221,7 @@ Recommended canonical shape:
           "offset": 0.002,
           "offset_psize_weight": 0.1
         },
-        "trailing_grid": {}
+        "trailing_martingale": {}
       },
     },
     "short": {
@@ -261,7 +261,7 @@ Recommended canonical shape:
           "offset": 0.002,
           "offset_psize_weight": 0.1
         },
-        "trailing_grid": {}
+        "trailing_martingale": {}
       },
     }
   }
@@ -292,7 +292,7 @@ Recommended shape:
 
 ```rust
 pub enum StrategyParams {
-    TrailingGrid(TrailingGridParamsPair),
+    TrailingMartingale(TrailingMartingaleParamsPair),
     EmaAnchor(EmaAnchorParamsPair),
 }
 ```
@@ -301,7 +301,7 @@ or equivalently:
 
 ```rust
 pub enum StrategyInstance {
-    TrailingGrid(TrailingGridRuntime),
+    TrailingMartingale(TrailingMartingaleRuntime),
     EmaAnchor(EmaAnchorRuntime),
 }
 ```
@@ -376,7 +376,7 @@ Recommended Rust layout:
 - `passivbot-rust/src/strategies/mod.rs`
 - `passivbot-rust/src/strategies/spec.rs`
 - `passivbot-rust/src/strategies/registry.rs`
-- `passivbot-rust/src/strategies/trailing_grid.rs`
+- `passivbot-rust/src/strategies/trailing_martingale.rs`
 - `passivbot-rust/src/strategies/ema_anchor.rs`
 
 The earlier draft's basic direction was correct here.
@@ -468,7 +468,7 @@ This spec should become the source for:
 
 ### Recommended Default Strategy Naming
 
-- canonical strategy name: `trailing_grid`
+- canonical strategy name: `trailing_martingale`
 - canonical experiment strategy name: `ema_anchor`
 - old branch-local names should be removed, not aliased
 

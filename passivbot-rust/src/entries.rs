@@ -1,5 +1,5 @@
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
-use crate::strategies::TrailingGridEntryParams;
+use crate::strategies::TrailingMartingaleEntryParams;
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
     TrailingPriceBundle,
@@ -26,7 +26,7 @@ pub fn calc_initial_entry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     balance: f64,
     entry_price: f64,
 ) -> f64 {
@@ -62,7 +62,7 @@ pub fn calc_min_entry_qty(entry_price: f64, exchange_params: &ExchangeParams) ->
 fn calc_entry_distance_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit: f64,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     volatility_ema_1h: f64,
     volatility_ema_1m: f64,
 ) -> f64 {
@@ -85,7 +85,7 @@ fn calc_entry_distance_multiplier(
 fn calc_entry_retracement_multiplier(
     wallet_exposure: f64,
     effective_wallet_exposure_limit: f64,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     volatility_ema_1h: f64,
     volatility_ema_1m: f64,
 ) -> f64 {
@@ -161,7 +161,7 @@ pub fn calc_reentry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     wallet_exposure_limit_cap: f64,
 ) -> f64 {
     let effective_wallet_exposure_limit = f64::min(
@@ -189,7 +189,7 @@ fn calc_reentry_price_bid(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     volatility_ema_1h: f64,
     volatility_ema_1m: f64,
     wallet_exposure_limit_cap: f64,
@@ -226,7 +226,7 @@ fn calc_reentry_price_ask(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     volatility_ema_1h: f64,
     volatility_ema_1m: f64,
     wallet_exposure_limit_cap: f64,
@@ -261,7 +261,7 @@ pub fn calc_grid_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
@@ -380,7 +380,7 @@ pub fn calc_next_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -420,7 +420,7 @@ pub fn calc_trailing_entry_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
     wallet_exposure_limit_cap: f64,
@@ -583,7 +583,7 @@ pub fn calc_grid_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
@@ -706,7 +706,7 @@ pub fn calc_trailing_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
     wallet_exposure_limit_cap: f64,
@@ -873,7 +873,7 @@ pub fn calc_next_entry_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -913,7 +913,7 @@ pub fn calc_entries_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
@@ -980,7 +980,7 @@ pub fn calc_entries_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    entry_params: &TrailingGridEntryParams,
+    entry_params: &TrailingMartingaleEntryParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
@@ -1063,8 +1063,8 @@ mod tests {
         }
     }
 
-    fn make_entry_params() -> TrailingGridEntryParams {
-        TrailingGridEntryParams {
+    fn make_entry_params() -> TrailingMartingaleEntryParams {
+        TrailingMartingaleEntryParams {
             double_down_factor: 1.0,
             threshold_base_pct: 0.01,
             initial_ema_dist: 0.0,

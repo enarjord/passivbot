@@ -10,7 +10,7 @@ use crate::orchestrator::{
 use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
     strategy_has_trailing, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-    strategy_offset_volatility_span_minutes, StrategyParams, TrailingGridParams,
+    strategy_offset_volatility_span_minutes, StrategyParams, TrailingMartingaleParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
@@ -879,8 +879,8 @@ fn make_runtime_budget_state(
 fn default_strategy_params_pair_from_bot_params(
     bot_params: &BotParamsPair,
 ) -> StrategyParamsPairValue {
-    let long = TrailingGridParams::from_bot_params(&bot_params.long).to_value();
-    let short = TrailingGridParams::from_bot_params(&bot_params.short).to_value();
+    let long = TrailingMartingaleParams::from_bot_params(&bot_params.long).to_value();
+    let short = TrailingMartingaleParams::from_bot_params(&bot_params.short).to_value();
     StrategyParamsPairValue { long, short }
 }
 
@@ -1685,7 +1685,7 @@ impl<'a> Backtest<'a> {
         Self::new_with_strategy_params(
             hlcvs,
             btc_usd_prices,
-            crate::strategies::StrategyKind::TrailingGrid,
+            crate::strategies::StrategyKind::TrailingMartingale,
             bot_params,
             strategy_params,
             exchange_params_list,
@@ -4940,10 +4940,10 @@ mod tests {
 
     fn adaptive_strategy_pair_from_bot_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
         StrategyParamsPair {
-            long: StrategyParams::TrailingGrid(TrailingGridParams::from_bot_params(
+            long: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_bot_params(
                 &bot_params.long,
             )),
-            short: StrategyParams::TrailingGrid(TrailingGridParams::from_bot_params(
+            short: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_bot_params(
                 &bot_params.short,
             )),
         }

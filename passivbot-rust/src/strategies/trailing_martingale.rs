@@ -33,7 +33,7 @@ fn would_fill_next_candle(low: f64, high: f64, qty: f64, price: f64) -> bool {
 pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> GeneratedOrders {
     let mut generated = GeneratedOrders::default();
     let params = match request.strategy_params {
-        StrategyParams::TrailingGrid(params) => params,
+        StrategyParams::TrailingMartingale(params) => params,
         _ => panic!("trailing_martingale strategy received non-trailing_martingale params"),
     };
     let runtime_context = RuntimeOrderContext {

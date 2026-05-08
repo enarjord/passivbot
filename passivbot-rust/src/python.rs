@@ -18,7 +18,7 @@ use crate::risk::{
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
 use crate::strategies::{
-    EmaAnchorParams, StrategySide, TrailingGridCloseParams, TrailingGridEntryParams,
+    EmaAnchorParams, StrategySide, TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
 };
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
@@ -2260,7 +2260,7 @@ fn extract_value_with_fallback<'a, T: pyo3::FromPyObject<'a>>(
     )))
 }
 
-fn make_trailing_grid_entry_params(
+fn make_trailing_martingale_entry_params(
     entry_grid_double_down_factor: f64,
     entry_grid_spacing_pct: f64,
     entry_initial_ema_dist: f64,
@@ -2272,9 +2272,9 @@ fn make_trailing_grid_entry_params(
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_we_weight: f64,
-) -> TrailingGridEntryParams {
+) -> TrailingMartingaleEntryParams {
     let use_trailing = entry_trailing_grid_ratio != 0.0;
-    TrailingGridEntryParams {
+    TrailingMartingaleEntryParams {
         double_down_factor: if use_trailing {
             entry_trailing_double_down_factor
         } else {
@@ -2301,7 +2301,7 @@ fn make_trailing_grid_entry_params(
     }
 }
 
-fn make_trailing_grid_close_params(
+fn make_trailing_martingale_close_params(
     side: StrategySide,
     close_grid_markup_end: f64,
     close_grid_markup_start: f64,
@@ -2313,14 +2313,14 @@ fn make_trailing_grid_close_params(
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
     grid_close_price_anchor: &str,
-) -> PyResult<TrailingGridCloseParams> {
+) -> PyResult<TrailingMartingaleCloseParams> {
     let _ = (
         side,
         close_grid_markup_end,
         close_trailing_grid_ratio,
         grid_close_price_anchor,
     );
-    Ok(TrailingGridCloseParams {
+    Ok(TrailingMartingaleCloseParams {
         qty_pct: if close_trailing_grid_ratio != 0.0 {
             close_trailing_qty_pct
         } else {
@@ -2420,7 +2420,7 @@ pub fn calc_next_entry_long_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
-    let entry_params = make_trailing_grid_entry_params(
+    let entry_params = make_trailing_martingale_entry_params(
         entry_grid_double_down_factor,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -2560,7 +2560,7 @@ pub fn calc_next_close_long_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
-    let close_params = make_trailing_grid_close_params(
+    let close_params = make_trailing_martingale_close_params(
         StrategySide::Long,
         close_grid_markup_end,
         close_grid_markup_start,
@@ -2670,7 +2670,7 @@ pub fn calc_next_entry_short_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
-    let entry_params = make_trailing_grid_entry_params(
+    let entry_params = make_trailing_martingale_entry_params(
         entry_grid_double_down_factor,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -2810,7 +2810,7 @@ pub fn calc_next_close_short_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
-    let close_params = make_trailing_grid_close_params(
+    let close_params = make_trailing_martingale_close_params(
         StrategySide::Short,
         close_grid_markup_end,
         close_grid_markup_start,
@@ -2922,7 +2922,7 @@ pub fn calc_entries_long_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
-    let entry_params = make_trailing_grid_entry_params(
+    let entry_params = make_trailing_martingale_entry_params(
         entry_grid_double_down_factor,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -3036,7 +3036,7 @@ pub fn calc_entries_short_py(
         risk_we_excess_allowance_pct,
         ..Default::default()
     };
-    let entry_params = make_trailing_grid_entry_params(
+    let entry_params = make_trailing_martingale_entry_params(
         entry_grid_double_down_factor,
         entry_grid_spacing_pct,
         entry_initial_ema_dist,
@@ -3198,7 +3198,7 @@ pub fn calc_closes_long_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
-    let close_params = make_trailing_grid_close_params(
+    let close_params = make_trailing_martingale_close_params(
         StrategySide::Long,
         close_grid_markup_end,
         close_grid_markup_start,
@@ -3341,7 +3341,7 @@ pub fn calc_closes_short_py(
         risk_wel_enforcer_threshold,
         ..Default::default()
     };
-    let close_params = make_trailing_grid_close_params(
+    let close_params = make_trailing_martingale_close_params(
         StrategySide::Short,
         close_grid_markup_end,
         close_grid_markup_start,

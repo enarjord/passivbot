@@ -1,6 +1,6 @@
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
 use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance};
-use crate::strategies::TrailingGridCloseParams;
+use crate::strategies::TrailingMartingaleCloseParams;
 use crate::types::{
     BotParams, ExchangeParams, Order, OrderType, Position, RuntimeOrderContext, StateParams,
     TrailingPriceBundle,
@@ -215,7 +215,7 @@ fn calc_wel_auto_reduce_short(
 
 fn calc_close_retracement_multiplier(
     state_params: &StateParams,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
 ) -> f64 {
     calc_dynamic_distance_multiplier(DynamicDistanceInputs {
         volatility_ema_1m: state_params.volatility_ema_1m,
@@ -233,7 +233,7 @@ fn calc_close_threshold_pct(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
 ) -> f64 {
     let wallet_exposure_limit = wallet_exposure_limit_with_allowance(bot_params, runtime_context);
@@ -258,7 +258,7 @@ pub fn calc_grid_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
 ) -> Order {
     if position.size <= 0.0 {
@@ -305,7 +305,7 @@ pub fn calc_trailing_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -416,7 +416,7 @@ pub fn calc_next_close_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -467,7 +467,7 @@ pub fn calc_grid_close_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
 ) -> Order {
     let position_size_abs = position.size.abs();
@@ -515,7 +515,7 @@ pub fn calc_trailing_close_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -626,7 +626,7 @@ pub fn calc_next_close_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Order {
@@ -694,8 +694,8 @@ mod tests {
         }
     }
 
-    fn make_close_params() -> TrailingGridCloseParams {
-        TrailingGridCloseParams {
+    fn make_close_params() -> TrailingMartingaleCloseParams {
+        TrailingMartingaleCloseParams {
             qty_pct: 1.0,
             threshold_base_pct: 0.01,
             threshold_we_weight: 0.0,
@@ -848,7 +848,7 @@ mod tests {
             risk_we_excess_allowance_pct: 0.0,
             ..Default::default()
         };
-        let close = TrailingGridCloseParams {
+        let close = TrailingMartingaleCloseParams {
             threshold_base_pct: 0.008,
             threshold_we_weight: -0.002,
             threshold_volatility_1h_weight: 0.25,
@@ -902,7 +902,7 @@ mod tests {
         let exchange = make_exchange_params();
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
-        let close = TrailingGridCloseParams {
+        let close = TrailingMartingaleCloseParams {
             qty_pct: 0.1,
             threshold_base_pct: 0.02,
             threshold_we_weight: -0.01,
@@ -945,7 +945,7 @@ mod tests {
         let exchange = make_exchange_params();
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
-        let close = TrailingGridCloseParams {
+        let close = TrailingMartingaleCloseParams {
             qty_pct: 0.1,
             threshold_base_pct: 0.01,
             threshold_we_weight: 0.01,
@@ -990,7 +990,7 @@ mod tests {
         let exchange = make_exchange_params();
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
-        let close = TrailingGridCloseParams {
+        let close = TrailingMartingaleCloseParams {
             qty_pct: 0.1,
             threshold_base_pct: 0.01,
             threshold_we_weight: 0.0,
@@ -1022,7 +1022,7 @@ mod tests {
         let exchange = make_exchange_params();
         let state = make_recursive_close_state();
         let bot = make_recursive_close_bot();
-        let close = TrailingGridCloseParams {
+        let close = TrailingMartingaleCloseParams {
             qty_pct: 0.1,
             threshold_base_pct: 0.01,
             threshold_we_weight: -0.005,
@@ -1061,7 +1061,7 @@ pub fn calc_closes_long(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
@@ -1139,7 +1139,7 @@ pub fn calc_closes_short(
     state_params: &StateParams,
     bot_params: &BotParams,
     runtime_context: &RuntimeOrderContext,
-    close_params: &TrailingGridCloseParams,
+    close_params: &TrailingMartingaleCloseParams,
     position: &Position,
     trailing_price_bundle: &TrailingPriceBundle,
 ) -> Vec<Order> {
