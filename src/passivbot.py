@@ -9624,7 +9624,29 @@ class Passivbot:
             return
         self._min_effective_cost_last_signature = blocked_signature
         self._min_effective_cost_signature_last_log_ms = now_ms
-        visible_blocks = eligible_blocks
+        per_symbol_last_log_ms = self._min_effective_cost_last_log_ms
+        visible_blocks = []
+        suppressed_blocks = []
+        for symbol, pside, block in eligible_blocks:
+            throttle_key = f"{symbol}:{pside}"
+            last_log_ms = int(per_symbol_last_log_ms.get(throttle_key, 0) or 0)
+            if last_log_ms <= 0 or now_ms - last_log_ms >= detail_interval_ms:
+                visible_blocks.append((symbol, pside, block))
+                per_symbol_last_log_ms[throttle_key] = now_ms
+            else:
+                suppressed_blocks.append((symbol, pside, block))
+        if suppressed_blocks:
+            logging.debug(
+                "[entry] initial entries blocked by min effective cost suppressed by symbol throttle | blocked=%d suppressed=%d examples=%s",
+                len(eligible_blocks),
+                len(suppressed_blocks),
+                ",".join(
+                    f"{Passivbot._log_symbol(symbol)}:{pside}"
+                    for symbol, pside, _ in suppressed_blocks[:12]
+                ),
+            )
+        if not visible_blocks:
+            return
         detail_limit = 3
         for symbol, pside, block in visible_blocks[:detail_limit]:
             balance = float(block.get("balance", 0.0) or 0.0)
@@ -9654,10 +9676,10 @@ class Passivbot:
                 entry_initial_qty_pct,
                 pside,
             )
-        if len(visible_blocks) > detail_limit:
+        if len(eligible_blocks) > detail_limit:
             examples = ",".join(
                 f"{Passivbot._log_symbol(symbol)}:{pside}"
-                for symbol, pside, _ in visible_blocks[:12]
+                for symbol, pside, _ in eligible_blocks[:12]
             )
             summary_interval = int(self._min_effective_cost_summary_log_interval_ms)
             if (

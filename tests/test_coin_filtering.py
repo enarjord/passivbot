@@ -298,3 +298,48 @@ def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
     bot._log_min_effective_cost_blocks(out, idx_to_symbol)
     bot._log_min_effective_cost_blocks(out, idx_to_symbol)
     assert len(seen) == 1
+
+
+def test_log_min_effective_cost_blocks_throttles_symbol_across_set_changes(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 900_000
+    bot.is_pside_enabled = lambda _pside: True
+
+    seen = []
+    monkeypatch.setattr("passivbot.utc_ms", lambda: 1_000_000)
+    monkeypatch.setattr(
+        "passivbot.logging.info",
+        lambda msg, *args: seen.append(msg % args)
+        if str(msg).startswith("[entry]")
+        else None,
+    )
+
+    def block(symbol_idx):
+        return {
+            "symbol_idx": symbol_idx,
+            "pside": "long",
+            "balance": 51.154957,
+            "effective_limit": 1.5,
+            "entry_initial_qty_pct": 0.0192,
+            "projected_initial_cost": 1.4732627616,
+            "effective_min_cost": 10.1,
+        }
+
+    idx_to_symbol = {
+        0: "BTC/USDC:USDC",
+        1: "LINK/USDC:USDC",
+        2: "BCH/USDC:USDC",
+    }
+    bot._log_min_effective_cost_blocks(
+        {"diagnostics": {"min_effective_cost_blocks": [block(0), block(1)]}},
+        idx_to_symbol,
+    )
+    bot._log_min_effective_cost_blocks(
+        {"diagnostics": {"min_effective_cost_blocks": [block(2), block(0)]}},
+        idx_to_symbol,
+    )
+
+    assert sum("symbol=BTC side=long" in line for line in seen) == 1
+    assert sum("symbol=LINK side=long" in line for line in seen) == 1
+    assert sum("symbol=BCH side=long" in line for line in seen) == 1
