@@ -2229,6 +2229,65 @@ class TestEvaluator:
             assert call.kwargs["execution_settings"] is execution_settings
             assert call.kwargs["metrics_only"] is True
 
+    def test_suite_evaluate_profile_payload_when_enabled(self, monkeypatch, caplog):
+        from optimize import Evaluator, SuiteEvaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+        mock_config["backtest"]["start_date"] = "2023-01-01"
+        mock_config["backtest"]["end_date"] = "2023-01-02"
+        mock_config["backtest"]["coins"] = {"combined": ["BTC/USDT:USDT"]}
+        mock_config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+        mock_config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+        base = Evaluator(
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={},
+            config=mock_config,
+        )
+        ctx = ScenarioEvalContext(
+            label="test",
+            config=deepcopy(mock_config),
+            exchanges=["combined"],
+            hlcvs_specs={},
+            btc_usd_specs={},
+            msss={"combined": {}},
+            timestamps={"combined": None},
+            shared_hlcvs_np={"combined": np.zeros((1, 1, 5))},
+            shared_btc_np={},
+            attachments={"hlcvs": {}, "btc": {}},
+            coin_indices={"combined": None},
+            overrides={},
+        )
+        evaluator = SuiteEvaluator(base, [ctx], {})
+        individual = DummyIndividual(config_to_individual(mock_config, base.bounds, base.sig_digits))
+
+        with caplog.at_level(logging.INFO), patch(
+            "optimize.build_backtest_payload", return_value=object()
+        ), patch(
+            "optimize.execute_backtest",
+            return_value=(None, None, {"liquidated": False}),
+        ), patch(
+            "tools.iterative_backtester.combine_analyses",
+            return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (-0.1,)
+        assert penalty == 0.0
+        assert metrics["profile"]["scenarios"] == 1
+        assert metrics["profile"]["exchange_evals"] == 1
+        assert metrics["profile"]["total_ms"] >= 0.0
+        assert "rust_backtest_ms" in metrics["profile"]
+        assert any("[opt-profile] suite_eval" in record.message for record in caplog.records)
+
     def test_suite_scenario_config_overrides_are_isolated_from_candidate_config(self):
         from optimize import Evaluator, SuiteEvaluator
         from config_utils import get_template_config

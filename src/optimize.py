@@ -456,11 +456,31 @@ logging.basicConfig(
 TEMPLATE_CONFIG_MODE = "v8"
 INVALID_BACKTEST_CANDIDATE_PENALTY = 1e18
 DEFAULT_PARETO_MAX_SIZE = 1000
+OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
 _RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
     "hard-stop evaluation failed",
     "equity must be finite and > 0",
     "peak_strategy_equity must be finite and > 0",
 )
+
+
+def _optimize_profile_enabled() -> bool:
+    return os.environ.get(OPTIMIZE_PROFILE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "t",
+        "yes",
+        "y",
+    }
+
+
+def _profile_start(enabled: bool) -> float:
+    return time.perf_counter() if enabled else 0.0
+
+
+def _profile_add(timings: Dict[str, float] | None, key: str, started: float) -> None:
+    if timings is not None:
+        timings[key] = timings.get(key, 0.0) + (time.perf_counter() - started) * 1000.0
 
 
 def _format_objectives(
@@ -1260,6 +1280,9 @@ class SuiteEvaluator:
         return scenario_config
 
     def evaluate(self, individual, overrides_list):
+        profile_enabled = _optimize_profile_enabled()
+        timings: Dict[str, float] | None = {} if profile_enabled else None
+        profile_total_start = _profile_start(profile_enabled)
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
         config = individual_to_config(
             individual,
@@ -1317,7 +1340,9 @@ class SuiteEvaluator:
         from tools.iterative_backtester import combine_analyses as combine
 
         for ctx in self.contexts:
+            phase_start = _profile_start(profile_enabled)
             scenario_config = self._build_scenario_candidate_config(config, ctx)
+            _profile_add(timings, "scenario_config_ms", phase_start)
             logging.debug(
                 "Optimizer scenario %s | start=%s end=%s coins=%s",
                 ctx.label,
@@ -1325,6 +1350,7 @@ class SuiteEvaluator:
                 scenario_config["backtest"].get("end_date"),
                 list(scenario_config["backtest"]["coins"].keys()),
             )
+            phase_start = _profile_start(profile_enabled)
             runtime_config = compile_runtime_config(
                 scenario_config,
                 runtime="backtest",
@@ -1334,6 +1360,7 @@ class SuiteEvaluator:
                 runtime_config,
                 is_runtime_compiled=True,
             )
+            _profile_add(timings, "runtime_compile_ms", phase_start)
 
             analyses = {}
             for exchange in ctx.exchanges:
@@ -1348,6 +1375,7 @@ class SuiteEvaluator:
                     btc_data = ctx.shared_btc_np.get(exchange)
                     coin_indices = ctx.coin_indices.get(exchange)
 
+                phase_start = _profile_start(profile_enabled)
                 payload = build_backtest_payload(
                     hlcvs_data,
                     ctx.msss[exchange],
@@ -1360,8 +1388,11 @@ class SuiteEvaluator:
                     runtime_config=runtime_config,
                     execution_settings=execution_settings,
                 )
+                _profile_add(timings, "payload_build_ms", phase_start)
                 try:
+                    phase_start = _profile_start(profile_enabled)
                     fills, equities_array, analysis = execute_backtest(payload, scenario_config)
+                    _profile_add(timings, "rust_backtest_ms", phase_start)
                 except BaseException as exc:
                     if not _is_recoverable_backtest_candidate_error(exc):
                         raise
@@ -1392,7 +1423,9 @@ class SuiteEvaluator:
                 del equities_array
                 del payload
 
+            phase_start = _profile_start(profile_enabled)
             combined_metrics = combine(analyses)
+            _profile_add(timings, "combine_metrics_ms", phase_start)
             stats = combined_metrics.get("stats", {})
             logging.debug(
                 "Scenario metrics | label=%s adg_pnl=%s peak_recovery_hours_pnl=%s",
@@ -1424,7 +1457,10 @@ class SuiteEvaluator:
                 )
             )
 
+        phase_start = _profile_start(profile_enabled)
         aggregate_summary = aggregate_metrics(scenario_results, self.aggregate_cfg)
+        _profile_add(timings, "aggregate_metrics_ms", phase_start)
+        phase_start = _profile_start(profile_enabled)
         suite_payload = build_suite_metrics_payload(scenario_results, aggregate_summary)
         aggregate_stats = aggregate_summary.get("stats", {})
 
@@ -1436,6 +1472,7 @@ class SuiteEvaluator:
             flat_stats[f"{metric}_mean"] = agg_value
         objectives, total_penalty = self.base.calc_fitness(flat_stats)
         objectives_map = {f"w_{i}": val for i, val in enumerate(objectives)}
+        _profile_add(timings, "fitness_payload_ms", phase_start)
 
         metrics_payload = {
             "objectives": objectives_map,
@@ -1443,6 +1480,28 @@ class SuiteEvaluator:
             "constraint_violation": total_penalty,
             "liquidated": liquidated,
         }
+        if timings is not None:
+            timings["total_ms"] = (time.perf_counter() - profile_total_start) * 1000.0
+            profile_payload = {
+                key: round(value, 3)
+                for key, value in sorted(timings.items())
+            }
+            profile_payload["scenarios"] = len(self.contexts)
+            profile_payload["exchange_evals"] = sum(len(ctx.exchanges) for ctx in self.contexts)
+            metrics_payload["profile"] = profile_payload
+            logging.info(
+                "[opt-profile] suite_eval total_ms=%.3f scenario_config_ms=%.3f runtime_compile_ms=%.3f payload_build_ms=%.3f rust_backtest_ms=%.3f combine_metrics_ms=%.3f aggregate_metrics_ms=%.3f fitness_payload_ms=%.3f scenarios=%d exchange_evals=%d",
+                profile_payload.get("total_ms", 0.0),
+                profile_payload.get("scenario_config_ms", 0.0),
+                profile_payload.get("runtime_compile_ms", 0.0),
+                profile_payload.get("payload_build_ms", 0.0),
+                profile_payload.get("rust_backtest_ms", 0.0),
+                profile_payload.get("combine_metrics_ms", 0.0),
+                profile_payload.get("aggregate_metrics_ms", 0.0),
+                profile_payload.get("fitness_payload_ms", 0.0),
+                profile_payload["scenarios"],
+                profile_payload["exchange_evals"],
+            )
 
         _set_candidate_metrics(individual, metrics_payload)
         actual_hash = calc_hash(individual)

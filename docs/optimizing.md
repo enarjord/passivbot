@@ -617,3 +617,16 @@ python tools/profile_optimizer_memory.py \
 ```
 
 The script writes raw samples and a summary to `tmp/optimizer_mem_profiles/`.
+
+### Profiling Suite Optimizer Evaluation
+
+Set `PASSIVBOT_OPTIMIZE_PROFILE=1` to log per-candidate suite evaluator timings:
+
+```bash
+PASSIVBOT_OPTIMIZE_PROFILE=1 passivbot optimize path/to/config.json
+```
+
+The profile is opt-in and emits `[opt-profile]` INFO lines for suite evaluation phases such as
+scenario config assembly, runtime compilation, payload construction, Rust backtest execution,
+metric combining, aggregate metric building, and Pareto result recording. When enabled, candidate
+metrics also include a `profile` block so retained Pareto configs can be inspected after the run.

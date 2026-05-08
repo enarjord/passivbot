@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import logging
+import os
+import time
 from typing import Any, Sequence
 
 import numpy as np
@@ -14,6 +17,17 @@ _PYMOO_WORKER_EVALUATOR = None
 _PYMOO_WORKER_OVERRIDES_LIST: list[str] = []
 _PYMOO_WORKER_N_OBJ = 0
 _PYMOO_WORKER_HAS_CONSTRAINTS = False
+OPTIMIZE_PROFILE_ENV = "PASSIVBOT_OPTIMIZE_PROFILE"
+
+
+def _optimize_profile_enabled() -> bool:
+    return os.environ.get(OPTIMIZE_PROFILE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "t",
+        "yes",
+        "y",
+    }
 
 
 def initialize_pymoo_worker(
@@ -129,6 +143,8 @@ class PymooAsyncRecordingRunner:
         self.poll_interval_seconds = max(0.0, float(poll_interval_seconds))
 
     def _record_result(self, vector, metrics) -> None:
+        profile_enabled = _optimize_profile_enabled()
+        started = time.perf_counter() if profile_enabled else 0.0
         entry = build_pymoo_record_entry(
             vector=vector,
             metrics=metrics,
@@ -138,6 +154,12 @@ class PymooAsyncRecordingRunner:
             overrides_list=self.overrides_list,
         )
         self.recorder.record(entry)
+        if profile_enabled:
+            logging.info(
+                "[opt-profile] record_result_ms=%.3f metrics_keys=%d",
+                (time.perf_counter() - started) * 1000.0,
+                len(metrics) if isinstance(metrics, dict) else 0,
+            )
 
     def __call__(self, _f, X):
         xs = list(X)

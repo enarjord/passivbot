@@ -124,6 +124,34 @@ def test_async_recording_runner_records_and_strips_metrics():
     assert recorder.record.call_count == 2
 
 
+def test_async_recording_runner_profiles_record_result_when_enabled(monkeypatch, caplog):
+    evaluator = FakeEvaluator(has_constraints=True)
+    recorder = MagicMock()
+    runner = PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=True,
+        n_obj=2,
+        pool=FakeAsyncPool(),
+        recorder=recorder,
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
+            "bot": {"long": {"a": float(vector[0])}},
+            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
+            **template,
+        },
+        overrides_fn=object(),
+        overrides_list=["x"],
+    )
+
+    monkeypatch.setenv("PASSIVBOT_OPTIMIZE_PROFILE", "1")
+    with caplog.at_level("INFO"):
+        results = runner(object(), [np.asarray([0.25])])
+
+    assert len(results) == 1
+    assert recorder.record.call_count == 1
+    assert any("[opt-profile] record_result_ms=" in record.message for record in caplog.records)
+
+
 def test_async_recording_runner_uses_picklable_worker_target():
     evaluator = FakeEvaluator(has_constraints=True)
     recorder = MagicMock()
