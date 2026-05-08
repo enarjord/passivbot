@@ -9,6 +9,42 @@ fn fallback_timestamp_ms(index: usize) -> u64 {
     (index as u64) * 60_000
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FillSuffixSelection {
+    Empty,
+    Contiguous(usize),
+    NonContiguous,
+}
+
+fn fill_is_at_or_after_analysis_start(fill: &Fill, subset_start_ts: u64, start_idx: usize) -> bool {
+    if fill.timestamp_ms > 0 {
+        fill.timestamp_ms >= subset_start_ts
+    } else {
+        fill.index >= start_idx
+    }
+}
+
+fn select_contiguous_fill_suffix(
+    fills: &[Fill],
+    subset_start_ts: u64,
+    start_idx: usize,
+) -> FillSuffixSelection {
+    let Some(first_idx) = fills
+        .iter()
+        .position(|fill| fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx))
+    else {
+        return FillSuffixSelection::Empty;
+    };
+    if fills[first_idx..]
+        .iter()
+        .all(|fill| fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx))
+    {
+        FillSuffixSelection::Contiguous(first_idx)
+    } else {
+        FillSuffixSelection::NonContiguous
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EquitySeriesMetrics {
     pub gain: f64,
@@ -940,21 +976,6 @@ pub fn analyze_backtest(
         } else {
             fallback_timestamp_ms(start_idx)
         };
-        let subset_fills: Vec<Fill> = fills
-            .iter()
-            .filter(|fill| {
-                if fill.timestamp_ms > 0 {
-                    fill.timestamp_ms >= subset_start_ts
-                } else {
-                    fill.index >= start_idx
-                }
-            })
-            .cloned()
-            .collect();
-        if subset_fills.len() == 0 {
-            break;
-        }
-
         let subset_timestamps = if timestamps_ms.len() == equities.len() {
             &timestamps_ms[start_idx..]
         } else {
@@ -965,12 +986,35 @@ pub fn analyze_backtest(
         } else {
             &[]
         };
-        let subset_analysis = analyze_backtest_basic(
-            &subset_fills,
-            subset_equities,
-            subset_timestamps,
-            subset_exposures,
-        );
+
+        let subset_analysis = match select_contiguous_fill_suffix(fills, subset_start_ts, start_idx)
+        {
+            FillSuffixSelection::Empty => break,
+            FillSuffixSelection::Contiguous(fill_start_idx) => analyze_backtest_basic(
+                &fills[fill_start_idx..],
+                subset_equities,
+                subset_timestamps,
+                subset_exposures,
+            ),
+            FillSuffixSelection::NonContiguous => {
+                let subset_fills: Vec<Fill> = fills
+                    .iter()
+                    .filter(|fill| {
+                        fill_is_at_or_after_analysis_start(fill, subset_start_ts, start_idx)
+                    })
+                    .cloned()
+                    .collect();
+                if subset_fills.is_empty() {
+                    break;
+                }
+                analyze_backtest_basic(
+                    &subset_fills,
+                    subset_equities,
+                    subset_timestamps,
+                    subset_exposures,
+                )
+            }
+        };
         subset_analyses.push(subset_analysis);
     }
 
@@ -1620,6 +1664,39 @@ mod tests {
             twe_short: if is_long { 0.0 } else { -0.1 },
             twe_net: if is_long { 0.1 } else { -0.1 },
         }
+    }
+
+    #[test]
+    fn fill_suffix_selection_uses_contiguous_chronological_suffix() {
+        let fills = vec![
+            make_trade_fill(0, 1_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(1, 2_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(2, 3_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(3, 4_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+        ];
+
+        assert_eq!(
+            select_contiguous_fill_suffix(&fills, 3_000, 2),
+            FillSuffixSelection::Contiguous(2)
+        );
+        assert_eq!(
+            select_contiguous_fill_suffix(&fills, 5_000, 5),
+            FillSuffixSelection::Empty
+        );
+    }
+
+    #[test]
+    fn fill_suffix_selection_detects_non_contiguous_fallback_case() {
+        let fills = vec![
+            make_trade_fill(0, 4_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(1, 1_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(2, 5_000, "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+        ];
+
+        assert_eq!(
+            select_contiguous_fill_suffix(&fills, 3_000, 2),
+            FillSuffixSelection::NonContiguous
+        );
     }
 
     #[test]
