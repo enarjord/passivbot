@@ -1,6 +1,6 @@
 from copy import deepcopy
 
-CONFIG_SCHEMA_VERSION = "v7.10.0"
+CONFIG_SCHEMA_VERSION = "v7.11.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos7.json"
 
 
@@ -345,7 +345,6 @@ def get_template_config():
                 "auto_gs": True,
                 "balance_hysteresis_snap_pct": 0.01,
                 "balance_override": None,
-                "authoritative_refresh_mode": "staged",
                 "candle_lock_timeout_seconds": 10,
                 "defer_broad_candle_warmup": True,
                 "enable_archive_candle_fetch": False,

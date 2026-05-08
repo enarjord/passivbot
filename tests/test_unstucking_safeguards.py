@@ -569,8 +569,6 @@ def _stamp_staged_account_and_candles(bot):
     from freshness_ledger import ACCOUNT_SURFACES
     from market_snapshot import MarketSnapshot
 
-    if bot._authoritative_refresh_mode() != "staged":
-        return
     bot._begin_authoritative_refresh_epoch()
     for surface in ACCOUNT_SURFACES:
         bot._record_authoritative_surface(surface, (surface, "fresh"))
@@ -892,7 +890,6 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
 @pytest.mark.asyncio
 async def test_staged_orchestrator_precondition_blocks_before_market_snapshot():
     cfg = _dummy_config()
-    cfg["live"]["authoritative_refresh_mode"] = "staged"
     bot = _make_dummy_bot(cfg)
     bot.exchange = "bybit"
     symbol = _set_basic_state(bot)
@@ -920,7 +917,6 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     monkeypatch,
 ):
     cfg = _dummy_config()
-    cfg["live"]["authoritative_refresh_mode"] = "staged"
     bot = _make_dummy_bot(cfg)
     bot.exchange = "bybit"
     bot.user_info["exchange"] = "bybit"
@@ -1016,7 +1012,6 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
 @pytest.mark.asyncio
 async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypatch):
     cfg = _dummy_config()
-    cfg["live"]["authoritative_refresh_mode"] = "staged"
     bot = _make_dummy_bot(cfg)
     bot.exchange = "bybit"
     bot.user_info["exchange"] = "bybit"
@@ -1120,7 +1115,6 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
 @pytest.mark.asyncio
 async def test_staged_market_snapshot_missing_symbols_do_not_use_cm_fallback():
     cfg = _dummy_config()
-    cfg["live"]["authoritative_refresh_mode"] = "staged"
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     cm_calls = []

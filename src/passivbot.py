@@ -2917,11 +2917,7 @@ class Passivbot:
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
-        if self._authoritative_refresh_mode() == "staged":
-            await self.refresh_authoritative_state()
-        else:
-            await self.update_positions_and_balance()
-            await self.update_open_orders()
+        await self.refresh_authoritative_state()
         self._assert_supported_live_state()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
@@ -5176,57 +5172,15 @@ class Passivbot:
             return "symbols"
         return "bulk"
 
-    def _authoritative_refresh_mode(self) -> str:
-        config = getattr(self, "config", {}) or {}
-        if "_raw_effective" in config:
-            explicit_mode = get_optional_config_value(
-                config, "_raw_effective.live.authoritative_refresh_mode", None
-            )
-        else:
-            explicit_mode = get_optional_live_value(
-                config, "authoritative_refresh_mode", None
-            )
-        default_mode = "staged"
-        mode = str(explicit_mode if explicit_mode is not None else default_mode).lower()
-        if mode not in {"legacy", "staged"}:
-            raise ValueError(
-                f"invalid live.authoritative_refresh_mode={explicit_mode!r}; expected 'legacy' or 'staged'"
-            )
-        return mode
-
     async def refresh_authoritative_state(self) -> bool:
         """Refresh authoritative account state before planning/execution."""
         if self.stop_signal_received:
             return False
         self._begin_authoritative_refresh_epoch()
-        mode = self._authoritative_refresh_mode()
-        if mode == "staged":
-            return await self._refresh_authoritative_state_staged()
-        return await self._refresh_authoritative_state_legacy()
-
-    async def _refresh_authoritative_state_legacy(self) -> bool:
-        """Current production refresh path: positions+balance, then open orders+fills."""
-        self._authoritative_refresh_plan_surfaces = (
-            self._authoritative_full_confirmation_surfaces()
-        )
-        balance_ok, positions_ok = await self.update_positions_and_balance()
-        if not positions_ok:
-            return False
-        if not balance_ok:
-            return False
-
-        open_orders_ok, pnls_ok = await asyncio.gather(
-            self.update_open_orders(),
-            self.update_pnls(),
-        )
-        if open_orders_ok and pnls_ok:
-            self._finalize_authoritative_refresh_consistency(
-                {"balance", "positions", "open_orders", "fills"}
-            )
-        return bool(open_orders_ok and pnls_ok)
+        return await self._refresh_authoritative_state_staged()
 
     async def _refresh_authoritative_state_staged(self) -> bool:
-        """Experimental staged refresh path used for side-by-side harness comparisons."""
+        """Refresh live account state through the staged authoritative cohort."""
         plan = self._authoritative_staged_refresh_plan()
         snapshot = await self._fetch_authoritative_state_staged_snapshot(plan)
         fetched_balance = snapshot.get("balance")
@@ -6272,7 +6226,7 @@ class Passivbot:
         self, orders: list[dict]
     ) -> list[dict]:
         """Block staged order creations unless live market snapshots are still fresh."""
-        if not orders or Passivbot._authoritative_refresh_mode(self) != "staged":
+        if not orders:
             return orders
         symbols = sorted(
             {str(order["symbol"]) for order in orders if order.get("symbol")}
@@ -8545,8 +8499,6 @@ class Passivbot:
         symbols: Iterable[str] | None = None,
     ) -> tuple[bool, dict]:
         """Return staged planner input-completeness state for the current planning pass."""
-        if self._authoritative_refresh_mode() != "staged":
-            return True, {"missing": [], "required": [], "epoch": 0}
         ledger = self._ensure_freshness_ledger()
         required = self._staged_planner_required_surfaces(
             include_market_snapshot=include_market_snapshot
@@ -8732,9 +8684,7 @@ class Passivbot:
             "staged planner precondition failed",
             "planning snapshot invalid before capture",
         )
-        if self._authoritative_refresh_mode() != "staged" or not message.startswith(
-            transient_prefixes
-        ):
+        if not message.startswith(transient_prefixes):
             return False, {}
         ok, details = self._staged_execution_ready_state(
             include_market_snapshot=True,
@@ -8869,10 +8819,8 @@ class Passivbot:
 
     def _build_staged_planning_snapshot(
         self, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
-    ) -> PlanningSnapshot | None:
+    ) -> PlanningSnapshot:
         """Capture and validate the exact staged data set handed to Rust."""
-        if self._authoritative_refresh_mode() != "staged":
-            return None
         ordered_symbols = tuple(
             sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
         )
@@ -8902,8 +8850,6 @@ class Passivbot:
         self, symbols: Iterable[str]
     ) -> list[dict]:
         """Return reasons the current staged planning snapshot is unsafe for creations."""
-        if self._authoritative_refresh_mode() != "staged":
-            return []
         snapshot = getattr(self, "_current_planning_snapshot", None)
         ordered_symbols = tuple(
             sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
@@ -12125,16 +12071,8 @@ class Passivbot:
             self, symbols, market_snapshots
         )
         self._current_planning_snapshot = planning_snapshot
-        last_prices = (
-            planning_snapshot.last_prices()
-            if planning_snapshot is not None
-            else {symbol: snap.last for symbol, snap in market_snapshots.items()}
-        )
-        monitor_source = (
-            "orchestrator_live_market_snapshot_staged"
-            if self._authoritative_refresh_mode() == "staged"
-            else "orchestrator_live"
-        )
+        last_prices = planning_snapshot.last_prices()
+        monitor_source = "orchestrator_live_market_snapshot_staged"
         Passivbot._monitor_record_price_ticks(
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
@@ -12577,108 +12515,82 @@ class Passivbot:
     async def _get_orchestrator_market_snapshots(
         self, symbols: list[str]
     ) -> dict[str, MarketSnapshot]:
-        """Return latest prices for orchestrator planning.
-
-        In staged mode, market-price reads go through MarketSnapshotProvider only;
-        missing current snapshots remain invalid so the staged precondition can
-        block planning. Legacy mode keeps an explicit completed-candle fallback.
-        """
-        ttl_ms = 10_000
+        """Return current bid/ask/last snapshots for orchestrator planning."""
         fetch_ttl_ms = Passivbot._live_market_snapshot_fetch_max_age_ms(self)
-        if self._authoritative_refresh_mode() == "staged":
-            provider = getattr(self, "market_snapshot_provider", None)
-            snapshots: dict[str, MarketSnapshot] = {}
-            if provider is not None:
-                logging.debug(
-                    "[state] staged orchestrator requesting market snapshots | symbols=%s | ttl=%sms fetch_ttl=%sms",
-                    len(symbols),
-                    ttl_ms,
-                    fetch_ttl_ms,
+        provider = getattr(self, "market_snapshot_provider", None)
+        snapshots: dict[str, MarketSnapshot] = {}
+        if provider is not None:
+            logging.debug(
+                "[state] staged orchestrator requesting market snapshots | symbols=%s | fetch_ttl=%sms",
+                len(symbols),
+                fetch_ttl_ms,
+            )
+            try:
+                snapshots = await provider.get_snapshots(
+                    symbols, max_age_ms=fetch_ttl_ms
                 )
+            except RuntimeError as exc:
+                if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
+                    raise
+                logging.debug(
+                    "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
+                    len(symbols),
+                    exc,
+                )
+                snapshots = {}
+        invalid = [
+            symbol
+            for symbol in symbols
+            if symbol not in snapshots or not snapshots[symbol].is_valid()
+        ]
+        if invalid:
+            suffix = (
+                " | attempting hyperliquid fallback"
+                if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid"
+                else ""
+            )
+            logging.debug(
+                "[state] staged bulk market snapshots incomplete | symbols=%s | missing=%s%s",
+                len(symbols),
+                Passivbot._log_symbols(invalid, limit=12),
+                suffix,
+            )
+            if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
                 try:
-                    snapshots = await provider.get_snapshots(
-                        symbols, max_age_ms=fetch_ttl_ms
+                    snapshots = await self._get_live_market_snapshots(
+                        symbols,
+                        max_age_ms=fetch_ttl_ms,
+                        context="orchestrator",
+                        allow_completed_candle_fallback=False,
                     )
-                except RuntimeError as exc:
-                    if (
-                        str(getattr(self, "exchange", "") or "").lower()
-                        != "hyperliquid"
-                    ):
-                        raise
+                    Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+                    sources = Counter(snap.source for snap in snapshots.values())
                     logging.debug(
-                        "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
+                        "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
                         len(symbols),
-                        exc,
+                        len(symbols),
+                        ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
                     )
-                    snapshots = {}
-            missing = [
-                symbol
-                for symbol in symbols
-                if symbol not in snapshots or not snapshots[symbol].is_valid()
-            ]
-            if missing:
-                suffix = (
-                    " | attempting hyperliquid fallback"
-                    if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid"
-                    else ""
-                )
-                logging.debug(
-                    "[state] staged bulk market snapshots incomplete | symbols=%s | missing=%s%s",
-                    len(symbols),
-                    Passivbot._log_symbols(missing, limit=12),
-                    suffix,
-                )
-            invalid = [
-                symbol
-                for symbol in symbols
-                if symbol not in snapshots or not snapshots[symbol].is_valid()
-            ]
-            if invalid:
-                if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
-                    try:
-                        snapshots = await self._get_live_market_snapshots(
-                            symbols,
-                            max_age_ms=fetch_ttl_ms,
-                            context="orchestrator",
-                            allow_completed_candle_fallback=False,
-                        )
-                        Passivbot._record_market_snapshot_surface(
-                            self, symbols, snapshots
-                        )
-                        sources = Counter(snap.source for snap in snapshots.values())
-                        logging.debug(
-                            "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
-                            len(symbols),
-                            len(symbols),
-                            ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
-                        )
-                        return snapshots
-                    except RuntimeError:
-                        pass
-                logging.debug(
-                    "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
-                    len(symbols),
-                    len(symbols) - len(invalid),
-                    len(invalid),
-                    Passivbot._log_symbols(invalid, limit=12),
-                )
-            else:
-                sources = Counter(snap.source for snap in snapshots.values())
-                logging.debug(
-                    "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
-                    len(symbols),
-                    len(symbols),
-                    ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
-                )
-                Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+                    return snapshots
+                except RuntimeError:
+                    pass
+            logging.debug(
+                "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
+                len(symbols),
+                len(symbols) - len(invalid),
+                len(invalid),
+                Passivbot._log_symbols(invalid, limit=12),
+            )
             return snapshots
-
-        return await self._get_live_market_snapshots(
-            symbols,
-            max_age_ms=ttl_ms,
-            context="legacy_orchestrator",
-            allow_completed_candle_fallback=True,
+        sources = Counter(snap.source for snap in snapshots.values())
+        logging.debug(
+            "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
+            len(symbols),
+            len(symbols),
+            ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
         )
+        Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
+        return snapshots
 
     def _live_market_snapshot_max_age_ms(self) -> int:
         return 10_000

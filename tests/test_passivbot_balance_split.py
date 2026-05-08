@@ -54,33 +54,11 @@ def test_repeated_shutdown_signal_forces_immediate_exit(monkeypatch):
     assert exc_info.value.code == 130
 
 
-def test_authoritative_refresh_mode_defaults_to_staged_without_explicit_choice():
-    bot = Passivbot.__new__(Passivbot)
-    bot.exchange = "binance"
-    bot.config = {
-        "live": {"authoritative_refresh_mode": "legacy"},
-        "_raw_effective": {"live": {}},
-    }
-
-    assert bot._authoritative_refresh_mode() == "staged"
-
-
 def test_binance_execute_to_exchange_accepts_staged_prepare_cycle_kwarg():
     signature = inspect.signature(BinanceBot.execute_to_exchange)
 
     assert "prepare_cycle" in signature.parameters
     assert signature.parameters["prepare_cycle"].kind is inspect.Parameter.KEYWORD_ONLY
-
-
-def test_authoritative_refresh_mode_respects_explicit_legacy_opt_out_for_hyperliquid():
-    bot = Passivbot.__new__(Passivbot)
-    bot.exchange = "hyperliquid"
-    bot.config = {
-        "live": {"authoritative_refresh_mode": "legacy"},
-        "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
-    }
-
-    assert bot._authoritative_refresh_mode() == "legacy"
 
 
 def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_bitget():
@@ -123,7 +101,7 @@ def _counted_staged_account_refresh_bot(
     pending_confirmations: dict[str, int] | None = None,
 ) -> tuple[Passivbot, dict[str, int]]:
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -203,7 +181,7 @@ def _counted_staged_account_refresh_bot(
 async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
     symbol = "BTC/USDT:USDT"
@@ -1917,7 +1895,7 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -1998,7 +1976,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -2105,7 +2083,7 @@ async def test_fetch_authoritative_state_staged_snapshot_uses_exchange_cohort_ho
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_any_exchange():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "binance"
     bot.stop_signal_received = False
     bot._authoritative_refresh_epoch = 0
@@ -2999,7 +2977,7 @@ def test_positions_change_without_fills_requests_full_confirmation():
 
 def test_staged_planner_preconditions_require_current_epoch_surfaces():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
@@ -3028,7 +3006,7 @@ def test_staged_planner_preconditions_require_current_epoch_surfaces():
 
 def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
@@ -3071,7 +3049,7 @@ def test_staged_planner_preconditions_allow_open_orders_only_confirmation_epoch(
 
 def test_staged_planner_preconditions_raise_before_rust_planning():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
 
@@ -3085,7 +3063,7 @@ def test_staged_planner_preconditions_raise_before_rust_planning():
 
 def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.active_symbols = ["BTC/USDT:USDT"]
@@ -3119,7 +3097,7 @@ def test_staged_planner_preconditions_reject_stale_completed_candle_signature():
 
 def test_staged_planner_preconditions_explain_completed_candle_signature_mismatch():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
@@ -3165,7 +3143,7 @@ def test_staged_planner_preconditions_explain_completed_candle_signature_mismatc
 
 def test_completed_candle_signature_ignores_later_cache_improvements():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     symbol = "BTC/USDT:USDT"
@@ -3209,7 +3187,7 @@ def test_completed_candle_signature_ignores_later_cache_improvements():
 
 def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     symbol = "BTC/USDT:USDT"
@@ -3266,7 +3244,7 @@ def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
 
 def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged", "user": "tester"}}
+    bot.config = {"live": {"user": "tester"}}
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -3320,7 +3298,7 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
 
 def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged", "user": "tester"}}
+    bot.config = {"live": {"user": "tester"}}
     bot.exchange = "bybit"
     bot.coin_overrides = {}
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
@@ -3350,7 +3328,7 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
@@ -3408,7 +3386,7 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapshot():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
@@ -3466,7 +3444,7 @@ async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapsh
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
@@ -3517,17 +3495,6 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == []
-
-
-def test_legacy_planner_preconditions_do_not_require_freshness_ledger():
-    bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "legacy"}}
-    bot.exchange = "bybit"
-
-    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=True)
-
-    assert ok is True
-    assert details["missing"] == []
 
 
 def _make_open_order_guardrail_bot(*, epoch: int = 3):
@@ -3953,7 +3920,7 @@ async def test_run_execution_loop_defers_staged_precondition_without_error_count
     cycle = {"n": 0}
     executes = []
 
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot.stop_signal_received = False
@@ -4266,7 +4233,7 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirmation_plan():
     bot = Passivbot.__new__(Passivbot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None

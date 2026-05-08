@@ -337,8 +337,8 @@ rules. Keep them narrow, visible, and test-covered.
 
 ### 11. Config And Runtime Validation Cleanup
 
-- [x] Move `live.authoritative_refresh_mode` invalid-value handling to config validation. Runtime
-  must not silently map invalid values to `staged`.
+- [x] Removed `live.authoritative_refresh_mode` and the legacy authoritative-refresh path. Live now
+  always uses the staged account-state pipeline.
 - [x] Consolidate `live.forager_score_hysteresis_pct` defaults so schema/prepared config is the
   single source. Review found Python backtest fallback at `0.02` and Rust PyO3 fallback at `0.005`.
 - [x] Validate non-finite or negative `forager_score_hysteresis_pct` loudly instead of silently
@@ -421,8 +421,8 @@ changing behavior during extraction commits.
 - [x] Split live startup candle work: startup now does a synchronous trading-ready warmup for
   symbols with positions/open orders, then schedules broad approved-coin warmup as a cancellable
   background maintainer. `live.defer_broad_candle_warmup=false` keeps legacy blocking warmup.
-- [x] Made staged authoritative refresh the default for all exchanges while keeping explicit
-  `live.authoritative_refresh_mode=legacy` as a temporary opt-out on this development branch.
+- [x] Removed the temporary `live.authoritative_refresh_mode=legacy` opt-out; compare against
+  branch/tag `v7.10` if legacy live behavior is needed for investigation.
 - [x] Added `passivbot tool ticker-endpoint-probe` for multi-user CCXT endpoint timing probes.
   The JSON output covers ticker variants, bids/asks where available, order book, 1m OHLCV tail
   current-minute behavior, market metadata, and read-only private account-state endpoint timings.

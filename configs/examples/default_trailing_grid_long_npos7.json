@@ -1,5 +1,5 @@
 {
-    "config_version": "v7.10.0",
+    "config_version": "v7.11.0",
     "backtest": {
         "aggregate": {
             "default": "mean",
@@ -351,7 +351,6 @@
                 "UNI"
             ]
         },
-        "authoritative_refresh_mode": "staged",
         "auto_gs": true,
         "balance_hysteresis_snap_pct": 0.01,
         "balance_override": null,

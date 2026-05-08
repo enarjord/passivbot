@@ -12,11 +12,9 @@ class _FakeBot:
         self,
         update_exchange_config_impl,
         assert_supported_live_state_impl=None,
-        authoritative_refresh_mode="legacy",
     ):
         self._update_exchange_config_impl = update_exchange_config_impl
         self._assert_supported_live_state_impl = assert_supported_live_state_impl
-        self._authoritative_refresh_mode_value = authoritative_refresh_mode
         self.update_exchange_config_calls = 0
         self.determine_utc_offset_calls = 0
         self.market_specific_settings_calls = 0
@@ -48,9 +46,6 @@ class _FakeBot:
 
     def set_wallet_exposure_limits(self):
         return None
-
-    def _authoritative_refresh_mode(self):
-        return self._authoritative_refresh_mode_value
 
     async def refresh_authoritative_state(self):
         self.refresh_authoritative_state_calls += 1
@@ -109,8 +104,9 @@ async def test_init_markets_retries_request_timeout_then_succeeds(monkeypatch):
     assert bot.ineligible_symbols == {"DOGE/USDT:USDT": "bad"}
     assert bot.market_specific_settings_calls == 1
     assert bot.abstraction_refresh_calls == 1
-    assert bot.positions_balance_calls == 1
-    assert bot.open_orders_calls == 1
+    assert bot.refresh_authoritative_state_calls == 1
+    assert bot.positions_balance_calls == 0
+    assert bot.open_orders_calls == 0
     assert bot.min_cost_calls == 1
 
 
@@ -218,7 +214,7 @@ async def test_init_markets_uses_staged_refresh_for_bybit(monkeypatch):
     async def _update_exchange_config(_attempt):
         return None
 
-    bot = _FakeBot(_update_exchange_config, authoritative_refresh_mode="staged")
+    bot = _FakeBot(_update_exchange_config)
 
     await pb_mod.Passivbot.init_markets(bot, verbose=False)
 

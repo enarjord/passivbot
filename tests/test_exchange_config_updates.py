@@ -4,6 +4,37 @@ import pytest
 from ccxt.base.errors import RateLimitExceeded
 
 
+class FreshPlanningSnapshot:
+    symbols = (
+        "BTC/USDT:USDT",
+        "CANCEL/USDT:USDT",
+        "ETH/USDT:USDT",
+        "PENDING/USDT:USDT",
+        "READY/USDT:USDT",
+    )
+
+    def invalid_details(self, now_ms=None):
+        return []
+
+
+class FreshMarketSnapshotProvider:
+    async def get_snapshots(self, symbols, max_age_ms=10_000):
+        from market_snapshot import MarketSnapshot
+        from utils import utc_ms
+
+        return {
+            symbol: MarketSnapshot(
+                symbol=symbol,
+                bid=1.0,
+                ask=1.0,
+                last=1.0,
+                fetched_ms=utc_ms(),
+                source="test",
+            )
+            for symbol in symbols
+        }
+
+
 @pytest.mark.asyncio
 async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch):
     import passivbot as pb_mod
@@ -295,15 +326,14 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
         balance_threshold = 0.0
         quote = "USDT"
         state_change_detected_by_symbol = set()
-        config = {
-            "live": {"authoritative_refresh_mode": "legacy"},
-            "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
-        }
+        config = {"live": {}, "_raw_effective": {"live": {}}}
 
         def __init__(self):
             self.stop_signal_received = False
             self.config_symbols = None
             self.created_orders = None
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
 
         async def execution_cycle(self):
             return None
@@ -361,6 +391,7 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
         async def _refresh_forager_candidate_candles(self):
             return None
 
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
@@ -379,15 +410,14 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         balance_threshold = 0.0
         quote = "USDT"
         state_change_detected_by_symbol = set()
-        config = {
-            "live": {"authoritative_refresh_mode": "legacy"},
-            "_raw_effective": {"live": {"authoritative_refresh_mode": "legacy"}},
-        }
+        config = {"live": {}, "_raw_effective": {"live": {}}}
 
         def __init__(self):
             self.stop_signal_received = False
             self.config_symbols = None
             self.created_orders = None
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
 
         async def execution_cycle(self):
             return None
@@ -430,6 +460,7 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
         async def _refresh_forager_candidate_candles(self):
             return None
 
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()

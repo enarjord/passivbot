@@ -467,30 +467,6 @@ def test_install_runtime_overrides_sets_exchange_time_override():
     assert bot.get_exchange_time() == client.now_ms
 
 
-def test_main_parses_authoritative_refresh_mode(monkeypatch):
-    seen = {}
-
-    async def fake_async_main(args):
-        seen["mode"] = args.authoritative_refresh_mode
-        return 0
-
-    monkeypatch.setattr(run_fake_live_module, "_async_main", fake_async_main)
-    monkeypatch.setattr(
-        run_fake_live_module.sys,
-        "argv",
-        [
-            "run_fake_live.py",
-            "config.json",
-            "scenario.hjson",
-            "--authoritative-refresh-mode",
-            "staged",
-        ],
-    )
-
-    assert run_fake_live_module.main() == 0
-    assert seen["mode"] == "staged"
-
-
 def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():
     payload = {
         "step_summaries": [{"step_index": 0, "fills": 0}],
@@ -498,14 +474,12 @@ def test_compare_run_artifacts_reports_no_diff_for_matching_payloads():
         "fills": [],
         "positions": [],
         "hsl_trace": {"long": {"halted": False}},
-        "run_metadata": {"authoritative_refresh_mode": "legacy"},
         "remote_call_summary": {"total_calls": 3, "by_method": {"fetch_balance": 1}},
     }
     report = _compare_run_artifacts(
         payload,
         {
             **payload,
-            "run_metadata": {"authoritative_refresh_mode": "staged"},
             "remote_call_summary": {
                 "total_calls": 5,
                 "by_method": {"fetch_balance": 1, "fetch_tickers": 2},
@@ -563,7 +537,6 @@ def test_compare_run_artifacts_ignores_nondeterministic_fields():
                 "last_stop_event": {"triggered_at": "a", "user": "legacy_user", "tier": "red"},
             }
         },
-        "run_metadata": {"authoritative_refresh_mode": "legacy"},
     }
     staged = {
         "step_summaries": [{"step_index": 0, "fills": 1}],
@@ -609,7 +582,6 @@ def test_compare_run_artifacts_ignores_nondeterministic_fields():
                 "last_stop_event": {"triggered_at": "b", "user": "staged_user", "tier": "red"},
             }
         },
-        "run_metadata": {"authoritative_refresh_mode": "staged"},
     }
 
     report = _compare_run_artifacts(legacy, staged)
@@ -624,9 +596,7 @@ def test_load_run_artifacts_reads_expected_files(tmp_path):
     (tmp_path / "fills.json").write_text("[]", encoding="utf-8")
     (tmp_path / "positions.json").write_text("[]", encoding="utf-8")
     (tmp_path / "hsl_trace.json").write_text(json.dumps({"long": {"halted": False}}), encoding="utf-8")
-    (tmp_path / "run_metadata.json").write_text(
-        json.dumps({"authoritative_refresh_mode": "legacy"}), encoding="utf-8"
-    )
+    (tmp_path / "run_metadata.json").write_text(json.dumps({"user": "fake"}), encoding="utf-8")
     (tmp_path / "remote_calls.json").write_text(json.dumps([{"method": "fetch_balance"}]), encoding="utf-8")
     (tmp_path / "remote_call_summary.json").write_text(
         json.dumps({"total_calls": 1}), encoding="utf-8"
@@ -644,29 +614,6 @@ def test_load_run_artifacts_reads_expected_files(tmp_path):
     assert loaded["remote_call_summary"]["total_calls"] == 1
     assert loaded["candle_remote_fetches"][0]["kind"] == "ccxt_fetch_ohlcv"
     assert loaded["log_text"] == "hello\n"
-
-
-def test_main_parses_compare_authoritative_refresh_modes(monkeypatch):
-    seen = {}
-
-    async def fake_async_main(args):
-        seen["compare"] = args.compare_authoritative_refresh_modes
-        return 0
-
-    monkeypatch.setattr(run_fake_live_module, "_async_main", fake_async_main)
-    monkeypatch.setattr(
-        run_fake_live_module.sys,
-        "argv",
-        [
-            "run_fake_live.py",
-            "config.json",
-            "scenario.hjson",
-            "--compare-authoritative-refresh-modes",
-        ],
-    )
-
-    assert run_fake_live_module.main() == 0
-    assert seen["compare"] is True
 
 
 def test_refresh_halted_runtime_forced_modes_keeps_active_red_pside_in_panic():
@@ -1091,8 +1038,6 @@ async def test_fake_live_writes_remote_call_artifacts(tmp_path, monkeypatch):
         output_dir=str(tmp_path),
         log_level=1,
         snapshot_each_step=False,
-        authoritative_refresh_mode="staged",
-        compare_authoritative_refresh_modes=False,
     )
     assert await _async_main(args) == 0
 

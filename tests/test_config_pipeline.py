@@ -408,11 +408,6 @@ def test_prepare_config_rejects_cancellations_not_greater_than_creations():
     ("field", "value", "match"),
     [
         (
-            "authoritative_refresh_mode",
-            "stagd",
-            "config\\.live\\.authoritative_refresh_mode must be one of",
-        ),
-        (
             "market_snapshot_ticker_strategy",
             "fast",
             "config\\.live\\.market_snapshot_ticker_strategy must be one of",

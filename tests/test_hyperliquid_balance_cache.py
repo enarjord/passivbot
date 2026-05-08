@@ -761,7 +761,7 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
 ):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
-    bot.config = {"live": {"authoritative_refresh_mode": "staged"}}
+    bot.config = {"live": {}}
     bot.exchange = "hyperliquid"
     bot.active_symbols = []
     bot.positions = {}

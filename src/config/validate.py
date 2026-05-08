@@ -24,13 +24,6 @@ def validate_config(
     normalize_hsl_cooldown_position_policy(
         config["live"]["hsl_position_during_cooldown_policy"]
     )
-    authoritative_mode = str(
-        config["live"].get("authoritative_refresh_mode", "staged")
-    ).lower()
-    if authoritative_mode not in {"legacy", "staged"}:
-        raise ValueError(
-            "config.live.authoritative_refresh_mode must be one of: legacy, staged"
-        )
     ticker_strategy = str(
         config["live"].get("market_snapshot_ticker_strategy", "auto")
     ).lower()

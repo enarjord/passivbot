@@ -34,12 +34,6 @@ def _build_output_dir(root: str | None, scenario: dict) -> Path:
     return base / f"{stamp}_{scenario_name}"
 
 
-def _mode_run_user(user: str | None, mode: str) -> str | None:
-    if user is None:
-        return None
-    return f"{user}_{mode}"
-
-
 def _dump_json(path: Path, data: Any) -> None:
     ensure_parent_directory(path)
     with path.open("w", encoding="utf-8") as handle:
@@ -388,7 +382,13 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
     active_red_psides = _fake_active_red_psides(bot)
     if not active_red_psides:
         return {"red_supervisor": False}
+    if not await bot.refresh_authoritative_state():
+        return {"red_supervisor": True, "finalized": False, "refreshed": False}
+    active_red_psides = _fake_active_red_psides(bot)
+    if not active_red_psides:
+        return {"red_supervisor": True, "finalized": True}
 
+    needs_panic_execution = False
     for pside in list(active_red_psides):
         state = bot._hsl_state(pside)
         n_positions = bot._equity_hard_stop_count_open_positions(pside)
@@ -400,6 +400,7 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
                 )
             state["red_flat_confirmations"] += 1
         else:
+            needs_panic_execution = True
             state["red_flat_confirmations"] = 0
         bot._equity_hard_stop_log_red_progress(
             pside,
@@ -414,11 +415,15 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
     active_red_psides = _fake_active_red_psides(bot)
     if not active_red_psides:
         return {"red_supervisor": True, "finalized": True}
+    if not needs_panic_execution:
+        return {"red_supervisor": True, "finalized": False}
 
     for pside in active_red_psides:
         bot._equity_hard_stop_set_red_runtime_forced_modes(pside)
     bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
-    await bot.execute_to_exchange()
+    if not await bot.refresh_market_state_if_needed():
+        return {"red_supervisor": True, "finalized": False, "market_ready": False}
+    await bot.execute_to_exchange(prepare_cycle=False)
     return {"red_supervisor": True, "finalized": False}
 
 
@@ -510,6 +515,12 @@ async def _run_fake_cycle(bot):
                 return await _run_fake_red_supervisor_step(bot)
             await bot._equity_hard_stop_run_red_supervisor()
             return {"red_supervisor": True}
+    refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
+    if callable(refresh_authoritative) and not await refresh_authoritative():
+        return {"updated": False}
+    refresh_market = getattr(bot, "refresh_market_state_if_needed", None)
+    if callable(refresh_market) and not await refresh_market():
+        return {"updated": False, "market_ready": False}
     return await bot.execute_to_exchange(prepare_cycle=False)
 
 def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
@@ -620,40 +631,38 @@ def _canonicalize_artifact(name: str, payload: Any) -> Any:
     return payload
 
 
-def _compare_run_artifacts(legacy: dict[str, Any], staged: dict[str, Any]) -> dict[str, Any]:
+def _compare_run_artifacts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
     keys = ("step_summaries", "fake_exchange_state", "fills", "positions", "hsl_trace")
     diffs = []
     for key in keys:
-        legacy_normalized = _canonicalize_artifact(key, legacy.get(key))
-        staged_normalized = _canonicalize_artifact(key, staged.get(key))
-        if legacy_normalized != staged_normalized:
+        left_normalized = _canonicalize_artifact(key, left.get(key))
+        right_normalized = _canonicalize_artifact(key, right.get(key))
+        if left_normalized != right_normalized:
             diffs.append(
                 {
                     "artifact": key,
-                    "legacy": legacy_normalized,
-                    "staged": staged_normalized,
+                    "left": left_normalized,
+                    "right": right_normalized,
                 }
             )
-    legacy_summary = legacy.get("remote_call_summary") or {}
-    staged_summary = staged.get("remote_call_summary") or {}
-    legacy_by_method = legacy_summary.get("by_method") or {}
-    staged_by_method = staged_summary.get("by_method") or {}
+    left_summary = left.get("remote_call_summary") or {}
+    right_summary = right.get("remote_call_summary") or {}
+    left_by_method = left_summary.get("by_method") or {}
+    right_by_method = right_summary.get("by_method") or {}
     remote_call_delta_by_method = {
-        method: int(staged_by_method.get(method, 0)) - int(legacy_by_method.get(method, 0))
-        for method in sorted(set(legacy_by_method) | set(staged_by_method))
+        method: int(right_by_method.get(method, 0)) - int(left_by_method.get(method, 0))
+        for method in sorted(set(left_by_method) | set(right_by_method))
     }
     return {
         "match": not diffs,
         "diff_count": len(diffs),
         "diffs": diffs,
-        "legacy_mode": legacy.get("run_metadata", {}).get("authoritative_refresh_mode"),
-        "staged_mode": staged.get("run_metadata", {}).get("authoritative_refresh_mode"),
         "remote_call_summary": {
-            "legacy": legacy_summary,
-            "staged": staged_summary,
+            "left": left_summary,
+            "right": right_summary,
         },
-        "remote_call_delta": int(staged_summary.get("total_calls") or 0)
-        - int(legacy_summary.get("total_calls") or 0),
+        "remote_call_delta": int(right_summary.get("total_calls") or 0)
+        - int(left_summary.get("total_calls") or 0),
         "remote_call_delta_by_method": remote_call_delta_by_method,
     }
 
@@ -667,7 +676,6 @@ async def _run_fake_case(
     output_dir: Path,
     log_level: int,
     snapshot_each_step: bool,
-    authoritative_refresh_mode: str,
     enforce_assertions: bool = True,
 ) -> Path:
     config = load_prepared_config(
@@ -678,12 +686,6 @@ async def _run_fake_case(
     )
     config.setdefault("live", {})
     config["live"]["fake_scenario_path"] = scenario_path
-    effective_mode = str(authoritative_refresh_mode or "legacy")
-    config["live"]["authoritative_refresh_mode"] = effective_mode
-    if isinstance(config.get("_raw_effective"), dict):
-        config["_raw_effective"].setdefault("live", {})
-        if isinstance(config["_raw_effective"]["live"], dict):
-            config["_raw_effective"]["live"]["authoritative_refresh_mode"] = effective_mode
 
     scenario = load_fake_scenario(scenario_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -741,9 +743,6 @@ async def _run_fake_case(
         _dump_json(
             output_dir / "run_metadata.json",
             {
-                "authoritative_refresh_mode": str(
-                    config.get("live", {}).get("authoritative_refresh_mode", "legacy")
-                ),
                 "assertions_enforced": bool(enforce_assertions),
                 "user": str(config.get("live", {}).get("user") or ""),
                 "scenario_path": str(scenario_path),
@@ -772,39 +771,6 @@ async def _async_main(args: argparse.Namespace) -> int:
     scenario = load_fake_scenario(args.scenario)
     output_dir = _build_output_dir(args.output_dir, scenario)
 
-    if getattr(args, "compare_authoritative_refresh_modes", False):
-        legacy_dir = output_dir / "legacy"
-        staged_dir = output_dir / "staged"
-        legacy_run = await _run_fake_case(
-            config_path=args.config,
-            scenario_path=args.scenario,
-            user=_mode_run_user(args.user, "legacy"),
-            max_steps=args.max_steps,
-            output_dir=legacy_dir,
-            log_level=args.log_level,
-            snapshot_each_step=args.snapshot_each_step,
-            authoritative_refresh_mode="legacy",
-            enforce_assertions=False,
-        )
-        staged_run = await _run_fake_case(
-            config_path=args.config,
-            scenario_path=args.scenario,
-            user=_mode_run_user(args.user, "staged"),
-            max_steps=args.max_steps,
-            output_dir=staged_dir,
-            log_level=args.log_level,
-            snapshot_each_step=args.snapshot_each_step,
-            authoritative_refresh_mode="staged",
-            enforce_assertions=False,
-        )
-        report = _compare_run_artifacts(
-            _load_run_artifacts(legacy_run),
-            _load_run_artifacts(staged_run),
-        )
-        _dump_json(output_dir / "comparison.json", report)
-        print(str(output_dir))
-        return 0
-
     run_dir = await _run_fake_case(
         config_path=args.config,
         scenario_path=args.scenario,
@@ -813,9 +779,6 @@ async def _async_main(args: argparse.Namespace) -> int:
         output_dir=output_dir,
         log_level=args.log_level,
         snapshot_each_step=args.snapshot_each_step,
-        authoritative_refresh_mode=str(
-            getattr(args, "authoritative_refresh_mode", "legacy") or "legacy"
-        ),
     )
     print(str(run_dir))
     return 0
@@ -847,17 +810,6 @@ def main() -> int:
         "--snapshot-each-step",
         action="store_true",
         help="Write a JSON snapshot after each execution cycle",
-    )
-    parser.add_argument(
-        "--authoritative-refresh-mode",
-        choices=("legacy", "staged"),
-        default="legacy",
-        help="Select which authoritative refresh path to use during fake-live runs",
-    )
-    parser.add_argument(
-        "--compare-authoritative-refresh-modes",
-        action="store_true",
-        help="Run both legacy and staged authoritative refresh modes and write a structured comparison report",
     )
     args = parser.parse_args()
     return asyncio.run(_async_main(args))
