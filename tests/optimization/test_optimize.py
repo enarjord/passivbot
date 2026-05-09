@@ -1105,37 +1105,50 @@ class TestApplyFineTuneBounds:
             },
         }
         # Only tune param1, param2 should be fixed
-        apply_fine_tune_bounds(config, ["long_param1"], set())
+        apply_fine_tune_bounds(config, ["bot.long.param1"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
-    def test_fine_tune_params_accept_substring_selectors(self):
+    def test_fine_tune_params_accept_dotted_path_selectors(self):
         config = {
+            "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
-                    "long_close_grid_markup_start": [0.0, 1.0],
-                    "long_close_grid_qty_pct": [0.0, 1.0],
-                    "long_entry_grid_spacing_pct": [0.0, 1.0],
-                    "short_close_grid_markup_start": [0.0, 1.0],
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {
+                                    "qty_pct": [0.0, 1.0],
+                                    "threshold_base_pct": [0.0, 1.0],
+                                },
+                            }
+                        },
+                        "unstuck": {"threshold": [0.0, 1.0]},
+                    }
                 }
             },
             "bot": {
                 "long": {
-                    "close_grid_markup_start": 0.11,
-                    "close_grid_qty_pct": 0.22,
-                    "entry_grid_spacing_pct": 0.33,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.33},
+                            "close": {"qty_pct": 0.22, "threshold_base_pct": 0.11},
+                        }
+                    },
+                    "unstuck": {"threshold": 0.44},
                 },
-                "short": {"close_grid_markup_start": 0.44},
             },
         }
 
-        apply_fine_tune_bounds(config, ["close_grid"], set())
+        apply_fine_tune_bounds(config, ["long.strategy.close"], set())
 
-        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.0, 1.0]
-        assert config["optimize"]["bounds"]["long_entry_grid_spacing_pct"] == [0.33, 0.33]
+        tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        assert tm_bounds["close"]["qty_pct"] == [0.0, 1.0]
+        assert tm_bounds["close"]["threshold_base_pct"] == [0.0, 1.0]
+        assert tm_bounds["entry"]["threshold_base_pct"] == [0.33, 0.33]
+        assert config["optimize"]["bounds"]["long"]["unstuck"]["threshold"] == [0.44, 0.44]
 
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
@@ -1193,7 +1206,7 @@ class TestApplyFineTuneBounds:
             },
         }
 
-        apply_fine_tune_bounds(config, ["long_offset"], set())
+        apply_fine_tune_bounds(config, ["long.strategy.ema_anchor.offset"], set())
 
         assert config["optimize"]["bounds"]["long"]["strategy"]["ema_anchor"]["offset"] == [
             0.006,
@@ -1249,7 +1262,7 @@ class TestApplyFineTuneBounds:
                 "long": {"param1": 0.5},
             },
         }
-        apply_fine_tune_bounds(config, ["long_nonexistent"], set())
+        apply_fine_tune_bounds(config, ["long.nonexistent"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.5, 0.5]
 
@@ -1260,7 +1273,7 @@ class TestApplyFineTuneBounds:
                     "long_param1": [0.0, 1.0],
                     "long_param2": [0.0, 1.0],
                 },
-                "fixed_params": ["long_param2"],
+                "fixed_params": ["bot.long.param2"],
             },
             "bot": {
                 "long": {"param1": 0.5, "param2": 0.7},
@@ -1271,54 +1284,74 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
 
-    def test_config_fixed_params_accept_substring_selectors(self, caplog):
+    def test_config_fixed_params_accept_dotted_path_prefix_selectors(self, caplog):
         caplog.set_level(logging.INFO)
         config = {
+            "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
                 "bounds": {
-                    "long_close_grid_markup_end": [0.0, 1.0],
-                    "long_close_grid_markup_start": [0.0, 1.0],
-                    "long_close_grid_qty_pct": [0.0, 1.0],
-                    "long_unstuck_close_pct": [0.0, 1.0],
-                    "short_close_grid_markup_end": [0.0, 1.0],
-                    "short_close_grid_markup_start": [0.0, 1.0],
-                    "short_close_grid_qty_pct": [0.0, 1.0],
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {"qty_pct": [0.0, 1.0]},
+                            }
+                        },
+                        "unstuck": {"close_pct": [0.0, 1.0]},
+                    },
+                    "short": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
                 },
-                "fixed_params": ["close_grid"],
+                "fixed_params": ["long.strategy"],
             },
             "bot": {
                 "long": {
-                    "close_grid_markup_end": 0.1,
-                    "close_grid_markup_start": 0.2,
-                    "close_grid_qty_pct": 0.3,
-                    "unstuck_close_pct": 0.4,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.1},
+                            "close": {"qty_pct": 0.3},
+                        }
+                    },
+                    "unstuck": {"close_pct": 0.4},
                 },
                 "short": {
-                    "close_grid_markup_end": 0.5,
-                    "close_grid_markup_start": 0.6,
-                    "close_grid_qty_pct": 0.7,
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.5},
+                        }
+                    }
                 },
             },
         }
 
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long_close_grid_markup_end"] == [0.1, 0.1]
-        assert config["optimize"]["bounds"]["long_close_grid_markup_start"] == [0.2, 0.2]
-        assert config["optimize"]["bounds"]["long_close_grid_qty_pct"] == [0.3, 0.3]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_end"] == [0.5, 0.5]
-        assert config["optimize"]["bounds"]["short_close_grid_markup_start"] == [0.6, 0.6]
-        assert config["optimize"]["bounds"]["short_close_grid_qty_pct"] == [0.7, 0.7]
-        assert config["optimize"]["bounds"]["long_unstuck_close_pct"] == [0.0, 1.0]
-        assert "  close_grid ->" in caplog.text
-        assert "    long_close_grid_markup_end" in caplog.text
-        assert "    short_close_grid_qty_pct" in caplog.text
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        short_tm_bounds = config["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == [0.1, 0.1]
+        assert long_tm_bounds["close"]["qty_pct"] == [0.3, 0.3]
+        assert short_tm_bounds["entry"]["threshold_base_pct"] == [0.0, 1.0]
+        assert config["optimize"]["bounds"]["long"]["unstuck"]["close_pct"] == [0.0, 1.0]
+        assert "  long.strategy ->" in caplog.text
+        assert (
+            "    long_entry_threshold_base_pct "
+            "(bot.long.strategy.trailing_martingale.entry.threshold_base_pct)"
+        ) in caplog.text
+        assert (
+            "    long_close_qty_pct "
+            "(bot.long.strategy.trailing_martingale.close.qty_pct)"
+        ) in caplog.text
 
     def test_config_fixed_params_warn_for_unmatched_selectors(self, caplog):
         config = {
             "optimize": {
                 "bounds": {"long_param1": [0.0, 1.0]},
-                "fixed_params": ["missing"],
+                "fixed_params": ["long.missing"],
             },
             "bot": {"long": {"param1": 0.5}},
         }
@@ -1326,26 +1359,76 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
-        assert "optimize.fixed_params selector matched no optimize bounds: missing" in caplog.text
+        assert "optimize.fixed_params selector matched no optimize bounds: long.missing" in caplog.text
 
     def test_config_fixed_params_support_pside_hsl_keys(self):
         config = {
             "optimize": {
                 "bounds": {
-                    "long_hsl_red_threshold": [0.1, 0.3],
+                    "long": {"hsl": {"red_threshold": [0.1, 0.3]}},
                 },
-                "fixed_params": ["long_hsl_red_threshold"],
+                "fixed_params": ["long.hsl.red_threshold"],
             },
             "bot": {
                 "long": {
-                    "hsl_red_threshold": 0.22,
+                    "hsl": {"red_threshold": 0.22},
                 },
                 "short": {},
             },
         }
         apply_fine_tune_bounds(config, [], set())
 
-        assert config["optimize"]["bounds"]["long_hsl_red_threshold"] == [0.22, 0.22]
+        assert config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [0.22, 0.22]
+
+    def test_fixed_params_support_side_wildcard_path_segment(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                                "close": {"qty_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
+                    "short": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.0, 1.0]},
+                            }
+                        }
+                    },
+                },
+                "fixed_params": ["*.strategy.entry"],
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.1},
+                            "close": {"qty_pct": 0.3},
+                        }
+                    },
+                },
+                "short": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.5},
+                        }
+                    }
+                },
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        short_tm_bounds = config["optimize"]["bounds"]["short"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == [0.1, 0.1]
+        assert short_tm_bounds["entry"]["threshold_base_pct"] == [0.5, 0.5]
+        assert long_tm_bounds["close"]["qty_pct"] == [0.0, 1.0]
 
     def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
         config = {
@@ -1355,13 +1438,13 @@ class TestApplyFineTuneBounds:
                     "long_param2": [0.0, 1.0],
                     "long_param3": [0.0, 1.0],
                 },
-                "fixed_params": ["long_param3"],
+                "fixed_params": ["bot.long.param3"],
             },
             "bot": {
                 "long": {"param1": 0.5, "param2": 0.7, "param3": 0.9},
             },
         }
-        apply_fine_tune_bounds(config, ["long_param1", "long_param3"], set())
+        apply_fine_tune_bounds(config, ["bot.long.param1", "bot.long.param3"], set())
 
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]

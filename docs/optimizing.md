@@ -229,14 +229,16 @@ Trade-offs:
 ### Fine-Tuning Specific Parameters
 
 When you only want to adjust a handful of parameters and keep everything else fixed, use
-`--fine_tune_params` (short: `-ft`). Provide a comma-separated list of `optimize.bounds`
+`--fine_tune_params` (short: `-ft`). Provide a comma-separated list of dotted config-path
 selectors to keep tunable; all other bounds are locked to their current config values
-before the run starts. A selector matches any bounds key containing that string, so
-`close_grid` matches both `long_close_grid_*` and `short_close_grid_*` bounds.
+before the run starts. Selectors match full path segments by prefix, not substring.
+The leading `bot.` may be omitted for side-local paths, so `long.risk` is equivalent to
+`bot.long.risk`. A `*` segment may be used as a one-segment wildcard, for example
+`*.strategy.close` matches both long and short active-strategy close params.
 
 ```bash
 passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
-  --fine_tune_params close_grid,entry_grid_spacing_pct
+  --fine_tune_params long.risk,long.forager,long.unstuck
 ```
 
 Behind the scenes the optimizer sets every unlisted bound to `[value, value]`, so the GA
@@ -244,12 +246,32 @@ can mutate only the parameters you specified. Bounds for the listed parameters r
 configured. The optimizer logs each selector expansion on separate sorted lines before
 the run starts.
 
-`optimize.fixed_params` provides the config-file equivalent: list `optimize.bounds`
-selectors that should always be fixed to their current config values. Broad selectors are
-literal substring matches; for example, `trailing` fixes all bounds whose names contain
-`trailing`, while `close` also matches `unstuck_close_pct`. Use narrower selectors when
-needed. Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one
-effective fixed-parameter set before bounds are collapsed.
+`optimize.fixed_params` provides the config-file equivalent for selectors that should always
+be fixed to their current config values. It uses the same dotted path-prefix matching as
+`--fine_tune_params`.
+
+Useful examples:
+
+```json
+"optimize": {
+  "fixed_params": ["long.strategy"]
+}
+```
+
+This fixes every optimizer bound under `bot.long.strategy.<active_strategy>`, such as all
+`trailing_martingale` entry/close thresholds, retracements, EMA spans, and volatility spans.
+It does not fix `bot.long.risk`, `bot.long.forager`, or `bot.long.unstuck`.
+
+```json
+"optimize": {
+  "fixed_params": ["long.strategy.close", "long.hsl"]
+}
+```
+
+This fixes only the active long strategy's close subtree plus long HSL bounds.
+
+Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one effective
+fixed-parameter set before bounds are collapsed.
 
 `optimize.fixed_runtime_overrides` is different: it overrides runtime config values only during
 optimize evaluations, without changing the stored/live config value. This is useful for

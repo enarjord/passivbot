@@ -185,6 +185,7 @@ from optimization.warmup import (
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
 from config.strategy import (
+    SUPPORTED_STRATEGY_KINDS,
     get_strategy_param_keys,
     normalize_strategy_kind,
     sync_canonical_strategy_config,
@@ -1601,7 +1602,7 @@ def add_extra_options(parser, *, help_all: bool):
         default="",
         dest="fine_tune_params",
         help=(
-            "Comma-separated optimize bounds selectors to tune; other parameters are fixed to their current config values"
+            "Comma-separated dotted config-path selectors to tune; other parameters are fixed to their current config values"
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1644,6 +1645,37 @@ def apply_fine_tune_bounds(
         else:
             set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
 
+    def _normalize_selector_path(selector: str) -> tuple[str, ...]:
+        raw_parts = tuple(part.strip() for part in selector.split(".") if part.strip())
+        if not raw_parts:
+            return ()
+        if raw_parts[0] in ("long", "short") or (
+            raw_parts[0] == "*"
+            and len(raw_parts) >= 2
+            and raw_parts[1] in ("strategy", "risk", "forager", "hsl", "unstuck")
+        ):
+            parts = ("bot", *raw_parts)
+        else:
+            parts = raw_parts
+        if (
+            len(parts) >= 4
+            and parts[0] == "bot"
+            and parts[1] in ("long", "short", "*")
+            and parts[2] == "strategy"
+            and parts[3] not in SUPPORTED_STRATEGY_KINDS
+            and parts[3] != "*"
+        ):
+            parts = (*parts[:3], strategy_kind, *parts[3:])
+        return parts
+
+    def _path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+        if len(selector_path) > len(path):
+            return False
+        return all(
+            selector_part == "*" or selector_part == path_part
+            for selector_part, path_part in zip(selector_path, path)
+        )
+
     def _resolve_bound_selectors(selectors, label: str) -> set[str]:
         resolved: set[str] = set()
         selectors_sorted = sorted(
@@ -1651,15 +1683,25 @@ def apply_fine_tune_bounds(
         )
         if not selectors_sorted:
             return resolved
+        bound_paths = {
+            key: path
+            for key in flat_bounds
+            if (path := resolve_optimization_bound_path(config, key)) is not None
+        }
         logging.info("%s selectors:", label)
         for selector in selectors_sorted:
-            matches = sorted(key for key in flat_bounds if selector in key)
+            selector_path = _normalize_selector_path(selector)
+            matches = sorted(
+                key
+                for key, path in bound_paths.items()
+                if _path_matches_selector(path, selector_path)
+            )
             if not matches:
                 logging.warning("%s selector matched no optimize bounds: %s", label, selector)
                 continue
             logging.info("  %s ->", selector)
             for match in matches:
-                logging.info("    %s", match)
+                logging.info("    %s (%s)", match, ".".join(bound_paths[match]))
             resolved.update(matches)
         return resolved
 
@@ -1745,19 +1787,6 @@ def apply_fine_tune_bounds(
         if key not in flat_bounds:
             continue
         _fix_bound_to_current_value(key)
-
-    missing = [key for key in fine_tune_set if key not in flat_bounds]
-    if missing:
-        logging.warning(
-            "fine-tune bounds: requested keys not found in optimize bounds: %s",
-            ",".join(sorted(missing)),
-        )
-    fixed_missing = [key for key in config_fixed_params if key not in flat_bounds]
-    if fixed_missing:
-        logging.warning(
-            "optimize.fixed_params keys not found in optimize bounds: %s",
-            ",".join(sorted(fixed_missing)),
-        )
 
 
 def extract_configs(path):

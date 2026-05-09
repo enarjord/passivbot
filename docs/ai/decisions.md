@@ -44,6 +44,8 @@ Impact:
 - canonical config path is `bot.<side>.strategy.trailing_martingale`
 - removed v7 fields such as `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`,
   `close_grid_markup_start`, and `close_grid_markup_end` are not part of v8 semantics
+- optimizer fixed/fine-tune selectors are dotted config paths such as `long.strategy`, not
+  flattened underscore optimize keys
 - Rust order behavior remains the source of truth when docs or Python adapters disagree
 
 ## Note

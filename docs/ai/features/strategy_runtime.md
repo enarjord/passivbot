@@ -21,6 +21,17 @@ Canonical v8 config path:
 bot.<side>.strategy.trailing_martingale
 ```
 
+Optimizer selector contract:
+
+- `optimize.fixed_params` and `--fine_tune_params` use dotted config-path selectors.
+- `long.*` / `short.*` selectors are aliases for `bot.long.*` / `bot.short.*`.
+- Selectors match path segments by prefix, not substring. Use `long.strategy` to match the
+  whole active strategy subtree, or `long.strategy.close` to match only
+  `bot.long.strategy.<active_strategy>.close.*`.
+- `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
+- Do not use flattened underscore selector names such as `long_entry_*` in v8 user-facing docs
+  or agent instructions.
+
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example
 `volatility_ema_span_1m`, `volatility_ema_span_1h`, `forager_volume_ema_span_1m`, and
