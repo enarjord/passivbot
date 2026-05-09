@@ -1216,6 +1216,93 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
     )
 
 
+def test_order_wave_settlement_demotes_quick_clean_confirmation(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._pending_order_waves = [
+        {
+            "id": 7,
+            "started_ms": 1_000_000,
+            "posted_ms": 1_000_500,
+            "cancel_posted": 1,
+            "create_posted": 1,
+            "symbols": ["BTC/USDT:USDT"],
+            "confirmations": {"open_orders": 5},
+        }
+    ]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 1_003_000)
+
+    with caplog.at_level(logging.DEBUG):
+        bot._log_settled_order_waves(
+            current_epoch=5,
+            fresh_surfaces={"open_orders"},
+            changed_surfaces=[],
+        )
+
+    settled_records = [
+        record for record in caplog.records if "[order] wave settled" in record.message
+    ]
+    assert len(settled_records) == 1
+    assert settled_records[0].levelno == logging.DEBUG
+    assert bot._pending_order_waves == []
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_routine_empty_refresh_timing_demoted_to_debug(
+    monkeypatch, caplog
+):
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
+
+    class _Manager:
+        def __init__(self, events):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.history_scope = "all"
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    times = iter([1_000_000, 1_015_000])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times, 1_015_000))
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager(cached_events)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    with caplog.at_level(logging.DEBUG):
+        result = await bot.update_pnls(source="routine_prefetch:minute_boundary")
+
+    assert result is True
+    fill_timing_records = [
+        record for record in caplog.records if "[fills] refresh timing" in record.message
+    ]
+    assert len(fill_timing_records) == 1
+    assert fill_timing_records[0].levelno == logging.DEBUG
+    assert "elapsed=15000ms" in fill_timing_records[0].message
+
+
 def test_min_effective_cost_blocks_are_aggregated(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}

@@ -3344,7 +3344,10 @@ class Passivbot:
             elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms) or now_ms))
             confirm_ms = max(0, now_ms - int(wave.get("posted_ms", now_ms) or now_ms))
             symbols = list(wave.get("symbols") or [])
-            logging.info(
+            changed = bool(changed_surfaces)
+            log_level = logging.INFO if confirm_ms >= 10_000 or changed else logging.DEBUG
+            logging.log(
+                log_level,
                 "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "
                 "cancel_posted=%d create_posted=%d | confirmed=%s%s%s",
                 wave.get("id", "?"),
@@ -9377,8 +9380,15 @@ class Passivbot:
                 "fills", self._fill_events_signature(all_events)
             )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
+            blocking_or_confirmation_refresh = (
+                refresh_mode in {"full", "incremental_confirm"}
+                or "confirm" in str(source)
+                or "staged" in str(source)
+            )
             log_level = (
-                logging.INFO if elapsed_ms >= 10_000 or new_events else logging.DEBUG
+                logging.INFO
+                if new_events or blocking_or_confirmation_refresh or elapsed_ms >= 30_000
+                else logging.DEBUG
             )
             logging.log(
                 log_level,
