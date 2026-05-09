@@ -91,6 +91,82 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
     }
 
 
+@pytest.mark.asyncio
+async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
+        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
+        _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
+        _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
+        _extract_order_float = pb_mod.Passivbot._extract_order_float
+        _canonical_passivbot_custom_id = pb_mod.Passivbot._canonical_passivbot_custom_id
+        _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
+        _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
+        _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+
+        def __init__(self):
+            self.monitor_publisher = None
+            self._health_orders_placed = 0
+            self.debug_mode = False
+            self.orders_emitted_to_exchange = []
+
+        def live_value(self, key):
+            assert key == "max_n_creations_per_batch"
+            return 5
+
+        def get_exchange_time(self):
+            return 123456
+
+        def add_to_recent_order_executions(self, order):
+            return None
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        async def execute_orders(self, orders):
+            return [TimeoutError("create timed out")]
+
+        def did_create_order(self, executed):
+            return False
+
+        def add_new_order(self, order, source="POST"):
+            raise AssertionError("failed create attempts must not be added locally")
+
+    bot = FakeBot()
+    custom_id = _pb_custom_id("entry_grid_normal_long", "timeout")
+    order = {
+        "symbol": "TON/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 25.0,
+        "price": 2.495,
+        "reduce_only": False,
+        "custom_id": custom_id,
+        "pb_order_type": "entry_grid_normal_long",
+    }
+
+    res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+
+    assert res == []
+    assert len(bot.orders_emitted_to_exchange) == 1
+    record = bot.orders_emitted_to_exchange[0]
+    assert record["timestamp"] == 123456
+    assert record["custom_id"] == custom_id
+    assert record["canonical_custom_id"] == "0x0004-timeout"
+    assert record["pb_type"] == "entry_grid_normal_long"
+    assert record["status"] == "create_error_ambiguous"
+    assert bot._health_orders_placed == 0
+
+
 def _make_detection_bot(now_ts: int, start_ts: int):
     import passivbot as pb_mod
 
@@ -187,6 +263,55 @@ async def test_detect_foreign_passivbot_orders_ignores_manual_and_prestart_order
     assert bot.foreign_passivbot_seen == {}
     assert bot.orders_emitted_to_exchange == []
     assert bot.stop_signal_received is False
+
+
+def test_ambiguous_create_records_use_shorter_prune_window():
+    import passivbot as pb_mod
+
+    now_ts = 2_000_000
+    bot = _make_detection_bot(now_ts=now_ts, start_ts=1_000_000)
+    ack_custom_id = _pb_custom_id("entry_grid_normal_long", "ack")
+    ambiguous_custom_id = _pb_custom_id("entry_grid_normal_long", "amb")
+    bot.orders_emitted_to_exchange = [
+        {
+            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS - 1,
+            "exchange_id": "",
+            "custom_id": ambiguous_custom_id,
+            "canonical_custom_id": "0x0004-amb",
+            "pb_type": "entry_grid_normal_long",
+            "status": "create_error_ambiguous",
+            "fingerprint": None,
+        },
+        {
+            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS + 1,
+            "exchange_id": "",
+            "custom_id": ambiguous_custom_id,
+            "canonical_custom_id": "0x0004-amb",
+            "pb_type": "entry_grid_normal_long",
+            "status": "create_error_ambiguous",
+            "fingerprint": None,
+        },
+        {
+            "timestamp": now_ts - pb_mod.FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS - 1,
+            "exchange_id": "",
+            "custom_id": ack_custom_id,
+            "canonical_custom_id": "0x0004-ack",
+            "pb_type": "entry_grid_normal_long",
+            "status": "acknowledged",
+            "fingerprint": None,
+        },
+    ]
+
+    pb_mod.Passivbot._prune_emitted_order_custom_ids(bot, now_ts)
+
+    assert [record["status"] for record in bot.orders_emitted_to_exchange] == [
+        "create_error_ambiguous",
+        "acknowledged",
+    ]
+    assert [record["canonical_custom_id"] for record in bot.orders_emitted_to_exchange] == [
+        "0x0004-amb",
+        "0x0004-ack",
+    ]
 
 
 @pytest.mark.asyncio

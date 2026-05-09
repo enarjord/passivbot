@@ -129,6 +129,7 @@ FOREIGN_PASSIVBOT_GRACE_MS = 15_000
 FOREIGN_PASSIVBOT_WINDOW_MS = 60 * 60 * 1000
 FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW = 3
 FOREIGN_PASSIVBOT_FINGERPRINT_MATCH_MS = 5 * 60 * 1000
+FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS = 15 * 60 * 1000
 
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
@@ -5824,7 +5825,7 @@ class Passivbot:
         }
 
     def _build_emitted_order_record(
-        self, order: dict, emitted_ts: int
+        self, order: dict, emitted_ts: int, *, status: str = "acknowledged"
     ) -> Optional[dict]:
         custom_id = Passivbot._extract_order_custom_id(self, order)
         pb_type = (
@@ -5842,6 +5843,7 @@ class Passivbot:
                 self, custom_id
             ),
             "pb_type": pb_type if pb_type and pb_type != "unknown" else "",
+            "status": str(status or "acknowledged"),
         }
         record["fingerprint"] = Passivbot._order_identity_fingerprint(
             self, order, record["pb_type"]
@@ -5870,6 +5872,7 @@ class Passivbot:
                             self, custom_id
                         ),
                         "pb_type": custom_id_to_snake(custom_id),
+                        "status": "legacy",
                         "fingerprint": None,
                     }
                 )
@@ -5882,12 +5885,19 @@ class Passivbot:
 
     def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
         """Drop emitted order records outside the foreign-writer lookback window."""
-        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_LOOKBACK_MS
-        self.orders_emitted_to_exchange = [
-            record
-            for record in Passivbot._emitted_order_records(self)
-            if int(record.get("timestamp", 0)) >= cutoff_ts
-        ]
+        now_ts = int(now_ts)
+        acknowledged_cutoff_ts = now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS
+        ambiguous_cutoff_ts = now_ts - FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS
+        kept = []
+        for record in Passivbot._emitted_order_records(self):
+            cutoff_ts = (
+                ambiguous_cutoff_ts
+                if record.get("status") == "create_error_ambiguous"
+                else acknowledged_cutoff_ts
+            )
+            if int(record.get("timestamp", 0)) >= cutoff_ts:
+                kept.append(record)
+        self.orders_emitted_to_exchange = kept
 
     def _prune_foreign_passivbot_seen(self, now_ts: int) -> None:
         """Drop old foreign Passivbot detections outside the rolling stop window."""
@@ -5899,16 +5909,22 @@ class Passivbot:
         }
 
     def _record_emitted_order_custom_id(
-        self, order: dict, emitted_ts: Optional[int] = None
+        self,
+        order: dict,
+        emitted_ts: Optional[int] = None,
+        *,
+        status: str = "acknowledged",
     ) -> None:
-        """Remember a successfully acknowledged create so later refreshes can adopt it."""
+        """Remember an acknowledged or ambiguous create so later refreshes can adopt it."""
         if emitted_ts is None:
             emitted_ts = (
                 int(self.get_exchange_time())
                 if hasattr(self, "get_exchange_time")
                 else utc_ms()
             )
-        record = Passivbot._build_emitted_order_record(self, order, emitted_ts)
+        record = Passivbot._build_emitted_order_record(
+            self, order, emitted_ts, status=status
+        )
         if record is None:
             return
         if not hasattr(self, "orders_emitted_to_exchange"):
@@ -6319,6 +6335,20 @@ class Passivbot:
         to_return = []
         for ex, order in zip(res, orders):
             if not self.did_create_order(ex):
+                if isinstance(ex, Exception):
+                    Passivbot._record_emitted_order_custom_id(
+                        self,
+                        order,
+                        emitted_ts=emitted_ts,
+                        status="create_error_ambiguous",
+                    )
+                    logging.debug(
+                        "[order] remembered ambiguous create after exchange error | symbol=%s type=%s custom_id=%s error_type=%s",
+                        Passivbot._log_symbol(order.get("symbol")),
+                        self._resolve_pb_order_type(order),
+                        shorten_custom_id(str(order.get("custom_id", ""))),
+                        type(ex).__name__,
+                    )
                 print(f"debug did_create_order false {ex}")
                 continue
             debug_prints = {}

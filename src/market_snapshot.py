@@ -137,24 +137,95 @@ class MarketSnapshotProvider:
                         exc,
                     )
 
-        hits = 0
         for symbol in missing:
             snap = self.get_cached(symbol, now_ms=fetched_ms, max_age_ms=max_age_ms)
             if snap is None:
                 continue
             out[symbol] = snap
-            hits += 1
+
+        missing_after = [symbol for symbol in missing if symbol not in out]
+        if (
+            missing_after
+            and source != "fetch_tickers_symbols"
+            and self._fetch_tickers_for_symbols is not None
+        ):
+            try:
+                symbol_fetched = await self._fetch_tickers_for_symbols_shared(
+                    missing_after
+                )
+            except Exception as exc:
+                self._log.warning(
+                    "[market] ticker missing-symbol retry failed | exchange=%s symbols=%s error_type=%s error=%s",
+                    self.exchange_name,
+                    len(missing_after),
+                    type(exc).__name__,
+                    exc,
+                )
+                raise RuntimeError(
+                    f"[market] ticker missing-symbol retry failed for {self.exchange_name}; "
+                    f"missing={len(missing_after)}"
+                ) from exc
+            retry_ms = utc_ms()
+            retry_cached = 0
+            if not isinstance(symbol_fetched, dict):
+                self._log.warning(
+                    "[market] ticker missing-symbol retry returned non-dict | exchange=%s type=%s",
+                    self.exchange_name,
+                    type(symbol_fetched).__name__,
+                )
+                raise RuntimeError(
+                    f"[market] ticker missing-symbol retry returned non-dict for {self.exchange_name}: "
+                    f"{type(symbol_fetched).__name__}"
+                )
+            for raw_symbol, ticker in symbol_fetched.items():
+                symbol = str(raw_symbol)
+                if symbol not in missing_after:
+                    continue
+                snap = self._snapshot_from_ticker(
+                    symbol,
+                    ticker,
+                    fetched_ms=retry_ms,
+                    source="fetch_tickers_symbols",
+                )
+                if snap is None:
+                    continue
+                self._cache[symbol] = snap
+                retry_cached += 1
+                if self._cache_sink is not None:
+                    try:
+                        self._cache_sink(symbol, float(snap.last), int(snap.fetched_ms))
+                    except Exception as exc:
+                        self._log.debug(
+                            "[market] snapshot cache sink failed | symbol=%s error_type=%s error=%s",
+                            symbol,
+                            type(exc).__name__,
+                            exc,
+                        )
+            for symbol in missing_after:
+                snap = self.get_cached(symbol, now_ms=retry_ms, max_age_ms=max_age_ms)
+                if snap is None:
+                    continue
+                out[symbol] = snap
+            retry_misses = [symbol for symbol in missing_after if symbol not in out]
+            self._log.debug(
+                "[market] ticker missing-symbol retry complete | exchange=%s requested=%s hits=%s misses=%s cached=%s source=fetch_tickers_symbols",
+                self.exchange_name,
+                len(missing_after),
+                max(0, len(missing_after) - len(retry_misses)),
+                len(retry_misses),
+                retry_cached,
+            )
 
         self._log.debug(
             "[market] ticker snapshots ready | exchange=%s requested=%s hits=%s misses=%s cached=%s source=%s",
             self.exchange_name,
             len(ordered_symbols),
-            hits,
-            max(0, len(missing) - hits),
+            sum(1 for symbol in missing if symbol in out),
+            sum(1 for symbol in missing if symbol not in out),
             cached,
             source,
         )
-        if hits < len(missing):
+        if any(symbol not in out for symbol in missing):
             missing_after = [symbol for symbol in missing if symbol not in out]
             raise RuntimeError(
                 f"[market] ticker snapshots incomplete | exchange={self.exchange_name} "

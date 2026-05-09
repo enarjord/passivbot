@@ -57,6 +57,39 @@ async def test_market_snapshot_provider_caches_all_bulk_ticker_results():
 
 
 @pytest.mark.asyncio
+async def test_market_snapshot_provider_retries_missing_bulk_symbols_strictly():
+    calls = {"bulk": 0, "symbols": []}
+
+    async def fetch_tickers():
+        calls["bulk"] += 1
+        return {
+            "BTC/USDT:USDT": {"bid": 99.0, "ask": 101.0, "last": 100.0},
+        }
+
+    async def fetch_tickers_for_symbols(symbols):
+        calls["symbols"].append(list(symbols))
+        return {
+            "ETH/USDT:USDT": {"bid": 199.0, "ask": 201.0, "last": 200.0},
+        }
+
+    provider = MarketSnapshotProvider(
+        exchange_name="gateio",
+        fetch_tickers=fetch_tickers,
+        fetch_tickers_for_symbols=fetch_tickers_for_symbols,
+    )
+
+    out = await provider.get_snapshots(
+        ["BTC/USDT:USDT", "ETH/USDT:USDT"], max_age_ms=60_000
+    )
+
+    assert calls["bulk"] == 1
+    assert calls["symbols"] == [["ETH/USDT:USDT"]]
+    assert out["BTC/USDT:USDT"].source == "fetch_tickers"
+    assert out["ETH/USDT:USDT"].source == "fetch_tickers_symbols"
+    assert out["ETH/USDT:USDT"].last == 200.0
+
+
+@pytest.mark.asyncio
 async def test_market_snapshot_provider_uses_symbol_strategy():
     calls = {"bulk": 0, "symbols": []}
 
