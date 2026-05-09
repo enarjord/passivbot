@@ -278,6 +278,52 @@ async def test_initial_entry_distance_gate_blocks_far_create_and_throttles_logs(
     assert "price=99" in messages[0]
 
 
+def test_initial_entry_distance_gate_info_heartbeat_is_hourly(monkeypatch, caplog):
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._live_values["order_match_tolerance_pct"] = 0.0002
+    order = _make_order(
+        symbol,
+        "buy",
+        "long",
+        1.0,
+        99.0,
+        "entry_initial_normal_long",
+    )
+    now = {"ms": 0}
+    monkeypatch.setattr("passivbot.utc_ms", lambda: now["ms"])
+
+    with caplog.at_level(logging.INFO):
+        bot._log_initial_entry_distance_gate_block(
+            order,
+            market_price=100.0,
+            signed_dist=0.01,
+            threshold=0.005,
+        )
+        now["ms"] = 59 * 60 * 1000
+        bot._log_initial_entry_distance_gate_block(
+            order,
+            market_price=100.0,
+            signed_dist=0.01,
+            threshold=0.005,
+        )
+        now["ms"] = 60 * 60 * 1000
+        bot._log_initial_entry_distance_gate_block(
+            order,
+            market_price=100.0,
+            signed_dist=0.01,
+            threshold=0.005,
+        )
+
+    messages = [
+        record.message
+        for record in caplog.records
+        if "initial entry staged but not placed" in record.message
+    ]
+    assert len(messages) == 2
+
+
 @pytest.mark.asyncio
 async def test_initial_entry_distance_gate_keeps_existing_within_tolerance():
     symbol = "BTC/USDT"

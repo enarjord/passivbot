@@ -970,9 +970,9 @@ class Passivbot:
         self._loss_gate_log_interval_ms = 5 * 60 * 1000  # 5 minutes
         # Effective min-cost gate logging throttle
         self._min_effective_cost_last_log_ms = {}
-        self._min_effective_cost_log_interval_ms = 15 * 60 * 1000  # 15 minutes
+        self._min_effective_cost_log_interval_ms = 60 * 60 * 1000  # 1 hour
         self._min_effective_cost_summary_last_log_ms = 0
-        self._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
+        self._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
         self._orchestrator_prev_close_ema = {}
         self._orchestrator_close_ema_fallback_counts = {}
         self.hsl = self._parse_hsl_config()
@@ -9659,14 +9659,14 @@ class Passivbot:
             )
             effective_min_cost = float(block.get("effective_min_cost", 0.0) or 0.0)
             logging.info(
-                "[entry] initial entries blocked by min effective cost\n"
-                "  symbol=%s side=%s\n"
-                "  projected_initial_cost=%.6f required_effective_min_cost=%.6f\n"
-                "  balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f\n"
-                "  next steps: increase balance, reduce bot.%s.n_positions, or increase per-slot sizing\n"
-                "  override: set live.filter_by_min_effective_cost=false to allow exchange-min-clamped initial entries\n"
-                "  caution: disabling the gate lets Passivbot size initial entries up to the exchange executable minimum, "
-                "which may exceed configured initial sizing and can still cause venue-specific churn or rejects in edge cases",
+                "[entry] initial entry blocked by min effective cost | %s %s notional wanted/required=%.6f/%.6f action=skip_create docs=docs/configuration.md#filter_by_min_effective_cost",
+                Passivbot._log_symbol(symbol),
+                pside,
+                projected_initial_cost,
+                effective_min_cost,
+            )
+            logging.debug(
+                "[entry] initial entry min effective cost detail | symbol=%s side=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
@@ -9687,18 +9687,21 @@ class Passivbot:
                 >= summary_interval
             ):
                 self._min_effective_cost_summary_last_log_ms = now_ms
-                logging.warning(
-                    "[entry] initial entries blocked by min effective cost | blocked=%d detailed=%d examples=%s | "
+                logging.info(
+                    "[entry] initial entries blocked by min effective cost summary | blocked=%d detailed=%d suppressed=%d examples=%s | "
                     "increase balance, reduce n_positions, increase per-slot sizing, or set "
                     "live.filter_by_min_effective_cost=false",
-                    len(visible_blocks),
+                    len(eligible_blocks),
                     min(detail_limit, len(visible_blocks)),
+                    len(suppressed_blocks),
                     examples,
                 )
             else:
                 logging.debug(
-                    "[entry] initial entries blocked by min effective cost suppressed by summary throttle | blocked=%d examples=%s",
-                    len(visible_blocks),
+                    "[entry] initial entries blocked by min effective cost summary suppressed by throttle | blocked=%d detailed=%d suppressed=%d examples=%s",
+                    len(eligible_blocks),
+                    min(detail_limit, len(visible_blocks)),
+                    len(suppressed_blocks),
                     examples,
                 )
 
@@ -13255,7 +13258,7 @@ class Passivbot:
         should_log = last_probe is None
         if last_probe is not None:
             last_info_ms = int(last_probe.get("last_info_ms", 0) or 0)
-            should_log = now_ms - last_info_ms >= 15 * 60 * 1000
+            should_log = now_ms - last_info_ms >= 60 * 60 * 1000
         probe["last_info_ms"] = now_ms if should_log else int(
             (last_probe or {}).get("last_info_ms", 0) or 0
         )

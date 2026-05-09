@@ -257,12 +257,49 @@ def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):
     }
     bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
     assert len(seen) == 1
+    assert "BTC long" in seen[0]
+    assert "notional wanted/required=1.473263/10.100000" in seen[0]
+    assert "action=skip_create" in seen[0]
+    assert "docs/configuration.md#filter_by_min_effective_cost" in seen[0]
+
+
+def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 900_000
+    bot.is_pside_enabled = lambda pside: pside == "long"
+
+    seen = []
+    monkeypatch.setattr(
+        "passivbot.logging.debug",
+        lambda msg, *args: seen.append(msg % args)
+        if str(msg).startswith("[entry]")
+        else None,
+    )
+
+    out = {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": 0,
+                    "pside": "long",
+                    "balance": 51.154957,
+                    "effective_limit": 1.5,
+                    "entry_initial_qty_pct": 0.0192,
+                    "projected_initial_cost": 1.4732627616,
+                    "effective_min_cost": 10.1,
+                }
+            ]
+        }
+    }
+    bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
+    assert len(seen) == 1
     assert "symbol=BTC side=long" in seen[0]
     assert "projected_initial_cost=1.473263" in seen[0]
     assert "required_effective_min_cost=10.100000" in seen[0]
+    assert "balance=51.154957" in seen[0]
     assert "live.filter_by_min_effective_cost=false" in seen[0]
-    assert "exchange-min-clamped initial entries" in seen[0]
-    assert "may exceed configured initial sizing" in seen[0]
+    assert "override_may_create_exchange-min-sized_entries" in seen[0]
 
 
 def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):
@@ -340,6 +377,6 @@ def test_log_min_effective_cost_blocks_throttles_symbol_across_set_changes(monke
         idx_to_symbol,
     )
 
-    assert sum("symbol=BTC side=long" in line for line in seen) == 1
-    assert sum("symbol=LINK side=long" in line for line in seen) == 1
-    assert sum("symbol=BCH side=long" in line for line in seen) == 1
+    assert sum("BTC long" in line for line in seen) == 1
+    assert sum("LINK long" in line for line in seen) == 1
+    assert sum("BCH long" in line for line in seen) == 1

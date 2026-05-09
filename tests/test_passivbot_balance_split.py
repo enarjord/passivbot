@@ -1219,9 +1219,9 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
 def test_min_effective_cost_blocks_are_aggregated(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._min_effective_cost_last_log_ms = {}
-    bot._min_effective_cost_log_interval_ms = 15 * 60 * 1000
+    bot._min_effective_cost_log_interval_ms = 60 * 60 * 1000
     bot._min_effective_cost_summary_last_log_ms = 0
-    bot._min_effective_cost_summary_log_interval_ms = 15 * 60 * 1000
+    bot._min_effective_cost_summary_log_interval_ms = 60 * 60 * 1000
     bot.is_pside_enabled = lambda _pside: True
     idx_to_symbol = {idx: f"SYM{idx}/USDT:USDT" for idx in range(5)}
     out = {
@@ -1248,8 +1248,9 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
     warnings = [
         record.message for record in caplog.records if record.levelno == logging.WARNING
     ]
-    assert sum("symbol=SYM" in msg for msg in infos) == 3
-    assert any("blocked=5 detailed=3" in msg for msg in warnings)
+    assert sum("initial entry blocked by min effective cost | SYM" in msg for msg in infos) == 3
+    assert not warnings
+    assert any("blocked=5 detailed=3 suppressed=0" in msg for msg in infos)
 
 
 def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
