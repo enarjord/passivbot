@@ -298,7 +298,7 @@ rules. Keep them narrow, visible, and test-covered.
 - [x] Unit tests for market snapshot provider.
 - [x] Unit tests for completed-only candle manager behavior.
 - [x] Unit tests for duplicate-order guardrail.
-- [ ] Fake-live staged-vs-legacy comparison where practical.
+- [ ] Fake-live staged-mode request-count and safety regression scenarios where practical.
 - [x] Bybit DEBUG smoke.
 - [x] Hyperliquid unified DEBUG smoke.
 - [x] Hyperliquid non-unified vanilla DEBUG smoke.
@@ -367,7 +367,8 @@ changing behavior during extraction commits.
 - [ ] Extract startup/shutdown/health timing utilities where practical into `src/live/runtime.py`.
 - [ ] Keep exchange-specific overrides in `src/exchanges/*`; move only generic live orchestration.
 - [ ] Do the split mechanically in small commits with parity tests after each extraction.
-- [ ] After extraction, remove the temporary legacy authoritative-refresh path when staged-only validation is complete.
+- [x] Legacy authoritative-refresh path was removed before the module split. Keep future
+  extraction commits behavior-preserving against the staged-only path.
 
 ## Current Completed Work Relevant To This Plan
 
@@ -437,8 +438,8 @@ changing behavior during extraction commits.
 - [x] Batched position-change display price lookups so startup or manual-position transitions fetch
   one market snapshot cohort instead of one ticker request per changed position.
 - [x] Extended the fake-live validation harness for staged remote-call economy: fake exchange
-  request logs now include order writes, scenario assertions can validate request-count paths, and
-  staged-vs-legacy comparison reports include remote-call summaries and per-method deltas.
+  request logs now include order writes, and scenario assertions can validate request-count paths
+  and per-method request summaries.
 - [x] Tightened staged planning freshness: completed candles are stamped only after exact
   required-symbol coverage is verified, planning universe preparation now happens before market
   refresh, market snapshots are revalidated immediately before order creation, the old
@@ -634,14 +635,14 @@ Hyperliquid USDC perps with `hyperliquid_01`:
 - Ticker endpoint probing is now systematic in tooling. Bitget, Gate.io, OKX, Binance, and KuCoin
   have both initial local probe results and quote-specific VPS USDT results; current durable
   default remains broad tickers except for Hyperliquid and Bitget.
-- Fake-live staged-vs-legacy comparison support exists, but still needs practical scenario coverage
+- Fake-live staged-mode request-count support exists, but still needs practical scenario coverage
   focused on staged safety and request-count regression.
 - Bybit DEBUG smoke still hit OHLCV rate-limit/availability warnings during broad candle/EMA
   work, even though market snapshots were healthy.
 - Shutdown responsiveness during candle/EMA warmup is verified for Bybit warmup jitter; further
   exchange smoke tests should still include Ctrl-C during long startup/warmup phases.
-- Legacy authoritative refresh still exists as a temporary opt-out on this branch; final merge
-  target is staged-only with legacy path removed after broader exchange validation.
+- Legacy authoritative refresh was removed from this branch. `v7.10` remains the comparison point
+  for legacy live behavior if needed during investigation.
 
 ## Update Policy
 
