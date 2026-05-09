@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed backtests with asymmetric `approved_coins` so long-only and short-only coin lists remain side-specific, disabled sides no longer inflate HLCV data preparation, and dynamic WEL-by-tradability counts side-eligible coins separately.
 - Fixed Rust extension auto-rebuild coordination so simultaneous bot startups share one compile, waiters re-check freshness after the lock, stale lock timeouts fail closed, and stale shadow artifacts are no longer stamped as current.
 - Fixed TWEL auto-reduce dead zones where positions sitting at raw per-position WEL could block reductions even though `risk_twel_enforcer_threshold < 1.0` required total exposure below TWEL.
 - Changed the HSL config default `live.hsl_signal_mode` to `unified`, making account-level strategy drawdown the canonical HSL signal while keeping `pside` available for side-local HSL tuning, and clarified that HSL RED waits for all positions on that side to be fully closed rather than waiting for PnL recovery.

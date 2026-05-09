@@ -69,6 +69,52 @@ def _synthetic_1m_hlcvs(n_minutes: int, start_ts: int):
     return hlcvs, btc_usd_prices, timestamps
 
 
+def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
+    start_ts = 1609459200000
+    n_minutes = 60
+    coins = ["COIN1", "COIN2", "COIN3", "COIN4"]
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": coins}
+    config["live"]["approved_coins"] = {
+        "long": ["COIN1", "COIN2", "COIN3"],
+        "short": ["COIN1", "COIN2", "COIN3", "COIN4"],
+    }
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["n_positions"] = 3
+    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["short"]["n_positions"] = 4
+    mss = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        }
+        for coin in coins
+    }
+    mss["__meta__"] = {
+        "requested_start_ts": int(start_ts),
+        "requested_start_date": "2021-01-01",
+        "warmup_minutes_requested": 0,
+    }
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    hlcvs = np.ones((n_minutes, len(coins), 4), dtype=np.float64)
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+    coin4_idx = payload.backtest_params["coins"].index("COIN4")
+
+    assert payload.bot_params_list[coin4_idx]["long"]["wallet_exposure_limit"] == 0.0
+    assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
+
+
 def test_build_backtest_payload_does_not_mutate_mss():
     """Pin the function as a pure consumer of `mss`. Covers the root cause
     of the re-entrance bug: callers that reuse `mss` across calls must see
