@@ -3246,6 +3246,37 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
 
 
+@pytest.mark.asyncio
+async def test_kucoin_fetcher_empty_fetch_logs_debug(monkeypatch, caplog):
+    fetcher = KucoinFetcher(api=object())
+
+    async def _fetch_trades(since_ms, until_ms):
+        return []
+
+    monkeypatch.setattr(fetcher, "_fetch_trades", _fetch_trades)
+
+    with caplog.at_level(logging.DEBUG, logger=fem.logger.name):
+        out = await fetcher.fetch(
+            since_ms=1_700_000_000_000,
+            until_ms=None,
+            detail_cache={},
+        )
+
+    assert out == []
+    records = [
+        record
+        for record in caplog.records
+        if "KucoinFetcher: fetched 0 trade events" in record.message
+    ]
+    assert len(records) == 1
+    assert records[0].levelno == logging.DEBUG
+    assert not any(
+        "KucoinFetcher: fetching fill history" in record.message
+        and record.levelno >= logging.INFO
+        for record in caplog.records
+    )
+
+
 def test_kucoin_pnl_discrepancy_logs_symbol_diagnostics(caplog):
     fetcher = KucoinFetcher(api=object())
     fem._pnl_discrepancy_last_log.clear()

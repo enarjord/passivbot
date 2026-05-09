@@ -3344,8 +3344,12 @@ class Passivbot:
             elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms) or now_ms))
             confirm_ms = max(0, now_ms - int(wave.get("posted_ms", now_ms) or now_ms))
             symbols = list(wave.get("symbols") or [])
-            changed = bool(changed_surfaces)
-            log_level = logging.INFO if confirm_ms >= 10_000 or changed else logging.DEBUG
+            significant_changed = any(
+                str(surface) != "open_orders" for surface in changed_surfaces
+            )
+            log_level = (
+                logging.INFO if confirm_ms >= 10_000 or significant_changed else logging.DEBUG
+            )
             logging.log(
                 log_level,
                 "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "

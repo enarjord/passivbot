@@ -3977,16 +3977,18 @@ class KucoinFetcher(BaseFetcher):
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
         fetch_started = time.time()
-        logger.info(
+        logger.debug(
             "KucoinFetcher: fetching fill history since=%s until=%s",
             _format_ms(since_ms),
             _format_ms(until_ms),
         )
         trades = await self._fetch_trades(since_ms, until_ms)
-        logger.info(
+        trade_elapsed = time.time() - fetch_started
+        logger.log(
+            logging.INFO if trades or trade_elapsed >= 10.0 else logging.DEBUG,
             "KucoinFetcher: fetched %d trade events in %.1fs",
             len(trades),
-            time.time() - fetch_started,
+            trade_elapsed,
         )
         if not trades:
             return []

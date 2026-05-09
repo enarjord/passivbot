@@ -1198,7 +1198,7 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
 
     bot._authoritative_refresh_epoch = 5
     bot._authoritative_refresh_epoch_fresh = {"open_orders"}
-    bot._authoritative_refresh_epoch_changed = {"open_orders"}
+    bot._authoritative_refresh_epoch_changed = {"open_orders", "positions"}
 
     with caplog.at_level(logging.INFO):
         blocked, details = bot._authoritative_execution_barrier_state()
@@ -1211,12 +1211,15 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
         "[order] wave settled | id=1 | elapsed_ms=3000 | confirm_ms=2500"
         in record.message
         and "confirmed=open_orders" in record.message
+        and "changed=open_orders,positions" in record.message
         and "symbols=BTC,ETH" in record.message
         for record in caplog.records
     )
 
 
-def test_order_wave_settlement_demotes_quick_clean_confirmation(monkeypatch, caplog):
+def test_order_wave_settlement_demotes_quick_open_orders_confirmation(
+    monkeypatch, caplog
+):
     bot = Passivbot.__new__(Passivbot)
     bot._pending_order_waves = [
         {
@@ -1235,7 +1238,7 @@ def test_order_wave_settlement_demotes_quick_clean_confirmation(monkeypatch, cap
         bot._log_settled_order_waves(
             current_epoch=5,
             fresh_surfaces={"open_orders"},
-            changed_surfaces=[],
+            changed_surfaces=["open_orders"],
         )
 
     settled_records = [
