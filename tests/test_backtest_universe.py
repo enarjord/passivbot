@@ -1,5 +1,7 @@
 from copy import deepcopy
 
+import pytest
+
 from backtest import get_cache_hash
 from backtest_universe import effective_backtest_data_coins
 from config_utils import get_template_config
@@ -36,3 +38,11 @@ def test_hlcvs_cache_hash_changes_when_disabled_side_becomes_enabled():
     assert effective_backtest_data_coins(disabled_long) == ["A"]
     assert effective_backtest_data_coins(enabled_long) == ["A", "B", "C"]
     assert get_cache_hash(disabled_long, "binance") != get_cache_hash(enabled_long, "binance")
+
+
+def test_effective_backtest_data_coins_rejects_missing_approved_side():
+    cfg = _base_config()
+    cfg["live"]["approved_coins"] = {"short": ["A"]}
+
+    with pytest.raises(KeyError, match="live\\.approved_coins\\.long"):
+        effective_backtest_data_coins(cfg)

@@ -38,9 +38,15 @@ def _normalize_coin_list(coins: Any) -> list[str]:
 
 def effective_backtest_approved_coins_by_side(config: dict) -> dict[str, list[str]]:
     approved = require_live_value(config, "approved_coins")
+    if not isinstance(approved, dict):
+        raise TypeError("live.approved_coins must be a normalized per-side mapping for backtest")
+    missing = [pside for pside in POSITION_SIDES if pside not in approved]
+    if missing:
+        missing_paths = ", ".join(f"live.approved_coins.{pside}" for pside in missing)
+        raise KeyError(f"missing required {missing_paths}")
     return {
         pside: (
-            _normalize_coin_list(approved.get(pside, []))
+            _normalize_coin_list(approved[pside])
             if backtest_side_enabled(config, pside)
             else []
         )
