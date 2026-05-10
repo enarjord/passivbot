@@ -5196,11 +5196,26 @@ class Passivbot:
         fetched_open_orders = snapshot.get("open_orders")
         pnls_ok = snapshot.get("pnls_ok", True)
 
+        if "positions" in plan and fetched_positions in [None, False]:
+            return False
+        if "balance" in plan and fetched_balance in [None, False]:
+            return False
+        if "open_orders" in plan and fetched_open_orders in [None, False]:
+            return False
+        if "fills" in plan and not pnls_ok:
+            return False
+
         fetched_positions_old = None
         fetched_positions_new = None
-        if "positions" in plan:
-            if fetched_positions in [None, False]:
+        if "open_orders" in plan:
+            open_orders_ok = await self._apply_open_orders_snapshot(
+                fetched_open_orders,
+                allow_followup_positions_refresh=False,
+                reconcile_balance="balance" not in plan,
+            )
+            if not open_orders_ok:
                 return False
+        if "positions" in plan:
             fetched_positions_old, fetched_positions_new = (
                 self._apply_positions_snapshot(fetched_positions)
             )
@@ -5212,9 +5227,13 @@ class Passivbot:
                 "positions",
                 self._positions_signature(fetched_positions_new),
             )
-        defer_balance_publication = bool(self._staged_defer_balance_publication())
-        if "balance" in plan and not defer_balance_publication:
-            self._reconcile_balance_after_positions_and_balance_refresh()
+        if "balance" in plan:
+            if "open_orders" in plan:
+                self._reconcile_balance_after_staged_refresh()
+                balance_source = self._staged_balance_update_source()
+            else:
+                self._reconcile_balance_after_positions_and_balance_refresh()
+                balance_source = "REST"
             self._record_authoritative_surface(
                 "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
             )
@@ -5227,39 +5246,7 @@ class Passivbot:
                     "position-change diagnostics", e
                 ):
                     logging.error(f"error logging position changes {e}")
-            await self.handle_balance_update(source="REST")
-
-        if "open_orders" in plan:
-            if fetched_open_orders in [None, False]:
-                return False
-            open_orders_ok = await self._apply_open_orders_snapshot(
-                fetched_open_orders,
-                allow_followup_positions_refresh=False,
-                reconcile_balance=not defer_balance_publication,
-            )
-            if not open_orders_ok:
-                return False
-        if "fills" in plan and not pnls_ok:
-            return False
-        if defer_balance_publication and "open_orders" in plan:
-            self._reconcile_balance_after_staged_refresh()
-            if "balance" in plan:
-                self._record_authoritative_surface(
-                    "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
-                )
-            if fetched_positions_old is not None:
-                try:
-                    await self.log_position_changes(
-                        fetched_positions_old, fetched_positions_new
-                    )
-                except Exception as e:
-                    if not self._log_noncritical_market_snapshot_error(
-                        "position-change diagnostics", e
-                    ):
-                        logging.error(f"error logging position changes {e}")
-            await self.handle_balance_update(
-                source=self._staged_balance_update_source()
-            )
+            await self.handle_balance_update(source=balance_source)
         self._finalize_authoritative_refresh_consistency(plan)
         return True
 
@@ -11672,6 +11659,35 @@ class Passivbot:
         def mark_ema_unavailable(symbol: str, reason: str) -> None:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
+
+        def has_normal_planning_mode(symbol: str) -> bool:
+            """Return True when the current Rust payload may place entries for symbol."""
+            pb_modes = getattr(self, "PB_modes", {})
+            for pside in ("long", "short"):
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is not None:
+                    if (
+                        Passivbot._mode_override_to_orchestrator_mode(
+                            self, explicit_mode
+                        )
+                        == "normal"
+                    ):
+                        return True
+                    continue
+                pside_modes = (
+                    pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
+                )
+                if not isinstance(pside_modes, dict):
+                    continue
+                if (
+                    Passivbot._pb_mode_to_orchestrator_mode(
+                        self, pside_modes.get(symbol)
+                    )
+                    == "normal"
+                ):
+                    return True
+            return False
+
         is_forager_mode = getattr(
             self, "is_forager_mode", lambda *args, **kwargs: False
         )
@@ -11685,7 +11701,7 @@ class Passivbot:
                     if hasattr(self, "open_orders")
                     else False
                 )
-                if has_pos or has_oo:
+                if has_pos or has_oo or has_normal_planning_mode(sym):
                     priority_symbols.append(sym)
                 else:
                     secondary_symbols.append(sym)
@@ -12641,16 +12657,18 @@ class Passivbot:
                         ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
                     )
                     return snapshots
-                except RuntimeError:
-                    pass
-            logging.debug(
-                "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=%s | invalid_symbols=%s",
-                len(symbols),
-                len(symbols) - len(invalid),
-                len(invalid),
-                Passivbot._log_symbols(invalid, limit=12),
+                except RuntimeError as exc:
+                    raise RuntimeError(
+                        "staged market snapshots incomplete after hyperliquid fallback "
+                        f"| missing={Passivbot._log_symbols(invalid, limit=12)} "
+                        f"| fallback_error={type(exc).__name__}: {exc}"
+                    ) from exc
+            raise RuntimeError(
+                "staged market snapshots incomplete "
+                f"| exchange={getattr(self, 'exchange', '')} "
+                f"| symbols={len(symbols)} "
+                f"| missing={Passivbot._log_symbols(invalid, limit=12)}"
             )
-            return snapshots
         sources = Counter(snap.source for snap in snapshots.values())
         logging.debug(
             "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",

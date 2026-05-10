@@ -1131,10 +1131,10 @@ async def test_staged_market_snapshot_missing_symbols_do_not_use_cm_fallback():
         get_snapshots=fake_get_snapshots
     )
 
-    snapshots = await bot._get_orchestrator_market_snapshots([symbol])
+    with pytest.raises(RuntimeError, match="staged market snapshots incomplete"):
+        await bot._get_orchestrator_market_snapshots([symbol])
 
     assert cm_calls == []
-    assert snapshots == {}
 
 
 def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():

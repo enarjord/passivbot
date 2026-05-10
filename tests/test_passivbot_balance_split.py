@@ -2210,6 +2210,68 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
     assert finalized == [{"balance", "positions", "open_orders", "fills"}]
 
 
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail():
+    bot = Passivbot.__new__(Passivbot)
+    plan = {"balance", "positions", "open_orders", "fills"}
+    bot._authoritative_staged_refresh_plan = lambda: set(plan)
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": 100.0,
+            "positions": [{"symbol": "BTC/USDT:USDT"}],
+            "open_orders": [],
+            "pnls_ok": False,
+        }
+    )
+    bot._apply_positions_snapshot = MagicMock()
+    bot._apply_balance_snapshot = MagicMock()
+    bot._apply_open_orders_snapshot = AsyncMock()
+    bot.handle_balance_update = AsyncMock()
+    bot._finalize_authoritative_refresh_consistency = MagicMock()
+
+    result = await bot._refresh_authoritative_state_staged()
+
+    assert result is False
+    bot._apply_positions_snapshot.assert_not_called()
+    bot._apply_balance_snapshot.assert_not_called()
+    bot._apply_open_orders_snapshot.assert_not_awaited()
+    bot.handle_balance_update.assert_not_awaited()
+    bot._finalize_authoritative_refresh_consistency.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_does_not_publish_when_open_orders_apply_fails():
+    bot = Passivbot.__new__(Passivbot)
+    plan = {"balance", "positions", "open_orders", "fills"}
+    bot._authoritative_staged_refresh_plan = lambda: set(plan)
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": 100.0,
+            "positions": [{"symbol": "BTC/USDT:USDT"}],
+            "open_orders": [],
+            "pnls_ok": True,
+        }
+    )
+    bot._apply_open_orders_snapshot = AsyncMock(return_value=False)
+    bot._apply_positions_snapshot = MagicMock()
+    bot._apply_balance_snapshot = MagicMock()
+    bot.handle_balance_update = AsyncMock()
+    bot._finalize_authoritative_refresh_consistency = MagicMock()
+
+    result = await bot._refresh_authoritative_state_staged()
+
+    assert result is False
+    bot._apply_open_orders_snapshot.assert_awaited_once_with(
+        [],
+        allow_followup_positions_refresh=False,
+        reconcile_balance=False,
+    )
+    bot._apply_positions_snapshot.assert_not_called()
+    bot._apply_balance_snapshot.assert_not_called()
+    bot.handle_balance_update.assert_not_awaited()
+    bot._finalize_authoritative_refresh_consistency.assert_not_called()
+
+
 def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
     import passivbot as pb_mod
 
