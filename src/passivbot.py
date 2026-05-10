@@ -5204,6 +5204,11 @@ class Passivbot:
             return False
         if "fills" in plan and not pnls_ok:
             return False
+        prepared_balance_snapshot = None
+        if "balance" in plan:
+            prepared_balance_snapshot = self._prepare_balance_snapshot(fetched_balance)
+            if prepared_balance_snapshot is None:
+                return False
 
         fetched_positions_old = None
         fetched_positions_new = None
@@ -5220,8 +5225,7 @@ class Passivbot:
                 self._apply_positions_snapshot(fetched_positions)
             )
         if "balance" in plan:
-            if not self._apply_balance_snapshot(fetched_balance):
-                return False
+            self._commit_balance_snapshot(prepared_balance_snapshot)
         if "positions" in plan:
             self._record_authoritative_surface(
                 "positions",
@@ -10687,6 +10691,14 @@ class Passivbot:
 
     def _apply_balance_snapshot(self, balance_raw) -> bool:
         """Validate and apply a fetched balance snapshot to raw/snapped fields."""
+        prepared = self._prepare_balance_snapshot(balance_raw)
+        if prepared is None:
+            return False
+        self._commit_balance_snapshot(prepared)
+        return True
+
+    def _prepare_balance_snapshot(self, balance_raw) -> dict | None:
+        """Validate and normalize a balance snapshot without committing it."""
         if not hasattr(self, "balance_override"):
             self.balance_override = None
         if not hasattr(self, "_balance_override_logged"):
@@ -10719,16 +10731,21 @@ class Passivbot:
                 logging.warning(
                     "non-numeric balance override; keeping previous balance"
                 )
-                return False
+                return None
             if not math.isfinite(balance_raw):
                 logging.warning("non-finite balance override; keeping previous balance")
-                return False
-            if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance_raw)
-                self._balance_override_logged = True
+                return None
             if exchange_balance_raw is not None:
-                self._exchange_reported_balance_raw = exchange_balance_raw
-            balance_snapped = balance_raw
+                exchange_reported_balance_raw = exchange_balance_raw
+            else:
+                exchange_reported_balance_raw = self._exchange_reported_balance_raw
+            return {
+                "balance_raw": balance_raw,
+                "balance_snapped": balance_raw,
+                "exchange_reported_balance_raw": exchange_reported_balance_raw,
+                "previous_hysteresis_balance": self.previous_hysteresis_balance,
+                "used_override": True,
+            }
         else:
             if exchange_balance_raw is None:
                 if exchange_balance_error == "none":
@@ -10743,20 +10760,34 @@ class Passivbot:
                     logging.warning(
                         "non-finite balance fetch result; keeping previous balance"
                     )
-                return False
+                return None
             balance_raw = exchange_balance_raw
-            self._exchange_reported_balance_raw = balance_raw
             if self.previous_hysteresis_balance is None:
-                self.previous_hysteresis_balance = balance_raw
+                previous_hysteresis_balance = balance_raw
+            else:
+                previous_hysteresis_balance = self.previous_hysteresis_balance
             balance_snapped = pbr.hysteresis(
                 balance_raw,
-                self.previous_hysteresis_balance,
+                previous_hysteresis_balance,
                 self.balance_hysteresis_snap_pct,
             )
-            self.previous_hysteresis_balance = balance_snapped
-        self.balance_raw = balance_raw
-        self.balance = balance_snapped
-        return True
+            return {
+                "balance_raw": balance_raw,
+                "balance_snapped": balance_snapped,
+                "exchange_reported_balance_raw": balance_raw,
+                "previous_hysteresis_balance": balance_snapped,
+                "used_override": False,
+            }
+
+    def _commit_balance_snapshot(self, prepared: dict) -> None:
+        """Commit a prevalidated balance snapshot."""
+        if prepared.get("used_override") and not self._balance_override_logged:
+            logging.info("Using balance override: %.6f", float(prepared["balance_raw"]))
+            self._balance_override_logged = True
+        self._exchange_reported_balance_raw = prepared["exchange_reported_balance_raw"]
+        self.previous_hysteresis_balance = prepared["previous_hysteresis_balance"]
+        self.balance_raw = prepared["balance_raw"]
+        self.balance = prepared["balance_snapped"]
 
     async def _apply_open_orders_snapshot(
         self,
@@ -11660,6 +11691,36 @@ class Passivbot:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
 
+        def ema_candle_health_context(symbol: str) -> str:
+            try:
+                last_refresh_ms = int(self.cm.get_last_refresh_ms(symbol) or 0)
+            except Exception:
+                last_refresh_ms = 0
+            try:
+                staleness_ms = int(Passivbot._candle_staleness_ms(self, symbol))
+            except Exception:
+                staleness_ms = -1
+            parts = [
+                f"last_refresh_ms={last_refresh_ms}",
+                f"staleness_ms={staleness_ms}",
+            ]
+            try:
+                health = self.cm.get_completed_candle_health(
+                    symbol, {"1m": 2}, now_ms=utc_ms()
+                )
+                tf = (health.get("timeframes", {}) or {}).get("1m", {})
+                parts.extend(
+                    [
+                        f"latest_expected={tf.get('latest_expected_ts')}",
+                        f"last_cached={tf.get('last_cached_ts')}",
+                        f"missing={tf.get('missing_candles')}",
+                        f"tail={tf.get('open_tail_gap')}",
+                    ]
+                )
+            except Exception as exc:
+                parts.append(f"health_error={type(exc).__name__}")
+            return " ".join(parts)
+
         def has_normal_planning_mode(symbol: str) -> bool:
             """Return True when the current Rust payload may place entries for symbol."""
             pb_modes = getattr(self, "PB_modes", {})
@@ -11679,11 +11740,21 @@ class Passivbot:
                 )
                 if not isinstance(pside_modes, dict):
                     continue
-                if (
-                    Passivbot._pb_mode_to_orchestrator_mode(
-                        self, pside_modes.get(symbol)
-                    )
-                    == "normal"
+                if symbol in pside_modes:
+                    if (
+                        Passivbot._pb_mode_to_orchestrator_mode(
+                            self, pside_modes.get(symbol)
+                        )
+                        == "normal"
+                    ):
+                        return True
+                    continue
+                try:
+                    entries_blocked = Passivbot._pside_blocks_new_entries(self, pside)
+                except Exception:
+                    entries_blocked = False
+                if not entries_blocked and symbol in set(
+                    getattr(self, "active_symbols", []) or []
                 ):
                     return True
             return False
@@ -11898,19 +11969,23 @@ class Passivbot:
                     log_ema_issue(
                         ("close_fallback_stale", symbol),
                         logging.WARNING,
-                        "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s",
+                        "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
                         Passivbot._log_symbol(symbol),
                         ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
                         max_fallback_age_ms,
                         stale[0][1],
+                        ema_candle_health_context(symbol),
+                        interval_ms=60 * 60 * 1000,
                     )
                 else:
                     log_ema_issue(
                         ("close_missing", symbol),
                         logging.WARNING,
-                        "[ema] missing required close EMA %s spans=%s action=block_until_fresh",
+                        "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
                         Passivbot._log_symbol(symbol),
                         ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
+                        ema_candle_health_context(symbol),
+                        interval_ms=60 * 60 * 1000,
                     )
                 raise RuntimeError(
                     f"[ema] missing required close EMA for {symbol}; no previous EMA fallback available: {detail}"
@@ -13945,9 +14020,7 @@ class Passivbot:
             )
             if refresh_started_ms - last_start_log >= 60_000:
                 oldest_ms = int(stale[0][0]) if stale else 0
-                interesting = oldest_ms >= max(300_000, int(target_age_ms) * 3)
-                logging.log(
-                    logging.INFO if interesting else logging.DEBUG,
+                logging.debug(
                     "[candle] forager refresh starting slots_open=%s candidates=%d stale=%d refreshing=%d oldest=%ds target=%ds",
                     "yes" if slots_open_any else "no",
                     len(all_candidates),

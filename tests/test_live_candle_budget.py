@@ -469,7 +469,7 @@ async def test_orchestrator_ema_bundle_uses_cache_only_for_secondary_forager_sym
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_ema_bundle_fetches_flat_normal_planning_symbols(
+async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symbols(
     monkeypatch,
 ):
     import passivbot as pb_mod
@@ -520,7 +520,7 @@ async def test_orchestrator_ema_bundle_fetches_flat_normal_planning_symbols(
         }
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
-        PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+        PB_modes = {"long": {}, "short": {}}
         active_symbols = [symbol]
         inactive_coin_candle_ttl_ms = 600_000
         cm = FakeCM()

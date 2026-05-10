@@ -475,6 +475,8 @@ async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
     ]
     assert len(stale_warnings) == 1
     assert "spans=10,14.142136,20" in stale_warnings[0]
+    assert "last_refresh_ms=" in stale_warnings[0]
+    assert "staleness_ms=" in stale_warnings[0]
 
 
 @pytest.mark.asyncio

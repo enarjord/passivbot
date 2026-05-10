@@ -2272,6 +2272,64 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_open_ord
     bot._finalize_authoritative_refresh_consistency.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_invalid_balance():
+    bot = Passivbot.__new__(Passivbot)
+    plan = {"balance", "positions", "open_orders", "fills"}
+    bot._authoritative_staged_refresh_plan = lambda: set(plan)
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": 100.0,
+            "positions": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "size": 1.0,
+                }
+            ],
+            "open_orders": [{"id": "new", "symbol": "BTC/USDT:USDT"}],
+            "pnls_ok": True,
+        }
+    )
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.previous_hysteresis_balance = 50.0
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_override = "invalid"
+    bot._balance_override_logged = False
+    bot._exchange_reported_balance_raw = 50.0
+    bot.positions = {"OLD/USDT:USDT": {"long": {"size": 1.0, "price": 1.0}}}
+    bot.fetched_positions = [{"symbol": "OLD/USDT:USDT"}]
+    bot.open_orders = {"OLD/USDT:USDT": [{"id": "old", "symbol": "OLD/USDT:USDT"}]}
+    bot.fetched_open_orders = [{"id": "old", "symbol": "OLD/USDT:USDT"}]
+    bot._apply_open_orders_snapshot = AsyncMock(return_value=True)
+    bot._apply_positions_snapshot = MagicMock()
+    bot.handle_balance_update = AsyncMock()
+    bot._finalize_authoritative_refresh_consistency = MagicMock()
+
+    old_positions = deepcopy(bot.positions)
+    old_fetched_positions = deepcopy(bot.fetched_positions)
+    old_open_orders = deepcopy(bot.open_orders)
+    old_fetched_open_orders = deepcopy(bot.fetched_open_orders)
+
+    result = await bot._refresh_authoritative_state_staged()
+
+    assert result is False
+    bot._apply_open_orders_snapshot.assert_not_awaited()
+    bot._apply_positions_snapshot.assert_not_called()
+    bot.handle_balance_update.assert_not_awaited()
+    bot._finalize_authoritative_refresh_consistency.assert_not_called()
+    assert bot.balance == 50.0
+    assert bot.balance_raw == 50.0
+    assert bot.previous_hysteresis_balance == 50.0
+    assert bot._exchange_reported_balance_raw == 50.0
+    assert bot.positions == old_positions
+    assert bot.fetched_positions == old_fetched_positions
+    assert bot.open_orders == old_open_orders
+    assert bot.fetched_open_orders == old_fetched_open_orders
+
+
 def test_get_exchange_time_uses_direct_utc_ms(monkeypatch):
     import passivbot as pb_mod
 
