@@ -25,9 +25,11 @@ def normalize_backtest_coin(coin: Any) -> str:
 
 
 def _normalize_coin_list(coins: Any) -> list[str]:
+    if not isinstance(coins, (list, tuple, set)):
+        raise TypeError("backtest approved coin sides must be explicit list/tuple/set values")
     normalized = []
     seen = set()
-    for coin in coins or []:
+    for coin in coins:
         coin_key = normalize_backtest_coin(coin)
         if not coin_key or coin_key in seen:
             continue

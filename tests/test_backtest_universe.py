@@ -46,3 +46,12 @@ def test_effective_backtest_data_coins_rejects_missing_approved_side():
 
     with pytest.raises(KeyError, match="live\\.approved_coins\\.long"):
         effective_backtest_data_coins(cfg)
+
+
+def test_effective_backtest_data_coins_rejects_null_approved_side():
+    cfg = _base_config()
+    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    cfg["live"]["approved_coins"]["long"] = None
+
+    with pytest.raises(TypeError, match="approved coin sides"):
+        effective_backtest_data_coins(cfg)
