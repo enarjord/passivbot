@@ -89,6 +89,7 @@ from utils import (
     date_to_ts,
 )
 from warmup_utils import compute_backtest_warmup_minutes, compute_per_coin_warmup_minutes
+from backtest_universe import effective_backtest_data_coins
 
 
 @dataclass(frozen=True)
@@ -800,11 +801,7 @@ async def prepare_hlcvs(
         if local_v2 is not None:
             return local_v2
 
-    approved = require_live_value(config, "approved_coins")
-    coins = sorted(
-        set(symbol_to_coin(c) for c in approved["long"])
-        | set(symbol_to_coin(c) for c in approved["short"])
-    )
+    coins = effective_backtest_data_coins(config)
     orig_coins = list(coins)
     exchange = to_ccxt_exchange_id(exchange)
     requested_start_date = require_config_value(config, "backtest.start_date")
@@ -946,11 +943,7 @@ async def try_prepare_hlcvs_v2_local(
     )
     legacy_root = legacy_root_cfg if legacy_root_cfg.exists() else None
 
-    approved = require_live_value(config, "approved_coins")
-    coins = sorted(
-        set(symbol_to_coin(c) for c in approved["long"])
-        | set(symbol_to_coin(c) for c in approved["short"])
-    )
+    coins = effective_backtest_data_coins(config)
     if any(coin.startswith("xyz:") for coin in coins):
         return None
 
@@ -1946,10 +1939,7 @@ async def prepare_hlcvs_combined(
         "combined starting v2-aware candle preparation across %d exchange(s) for %d candidate coin(s)",
         len(set(ohlcv_exchanges)),
         len(
-            sorted(
-                set(symbol_to_coin(c) for c in require_live_value(config, "approved_coins")["long"])
-                | set(symbol_to_coin(c) for c in require_live_value(config, "approved_coins")["short"])
-            )
+            effective_backtest_data_coins(config)
         ),
     )
 
@@ -2097,11 +2087,7 @@ async def _prepare_hlcvs_combined_impl(
     legacy_root: Path | None,
 ):
     market_settings_sources = market_settings_sources or {}
-    approved = require_live_value(config, "approved_coins")
-    coins = sorted(
-        set(symbol_to_coin(c) for c in approved["long"])
-        | set(symbol_to_coin(c) for c in approved["short"])
-    )
+    coins = effective_backtest_data_coins(config)
     orig_coins = list(coins)
     if ohlcv_exchanges is not None:
         exchanges_to_consider = [ex for ex in ohlcv_exchanges if ex in om_dict]

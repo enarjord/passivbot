@@ -481,6 +481,17 @@ mod core {
         bp.total_wallet_exposure_limit > 0.0 && bp.n_positions > 0
     }
 
+    fn symbol_side_input(s: &SymbolInput, pside: PositionSide) -> &SymbolSideInput {
+        match pside {
+            PositionSide::Long => &s.long,
+            PositionSide::Short => &s.short,
+        }
+    }
+
+    fn symbol_side_eligible(s: &SymbolInput, pside: PositionSide) -> bool {
+        s.tradable && symbol_side_input(s, pside).bot_params.wallet_exposure_limit != 0.0
+    }
+
     fn ema_lookup(map: &EmaBySpan, span: f64) -> Option<f64> {
         if !span.is_finite() {
             return None;
@@ -1140,11 +1151,9 @@ mod core {
     ) {
         out.clear();
         for s in symbols {
-            let mode = match pside {
-                PositionSide::Long => s.long.mode,
-                PositionSide::Short => s.short.mode,
-            };
-            if s.tradable && mode == Some(TradingMode::Normal) {
+            if symbol_side_eligible(s, pside)
+                && symbol_side_input(s, pside).mode == Some(TradingMode::Normal)
+            {
                 out.push(s.symbol_idx);
             }
         }
@@ -1190,10 +1199,7 @@ mod core {
         out.clear();
         out.reserve(symbols.len());
         for s in symbols {
-            let side = match pside {
-                PositionSide::Long => &s.long,
-                PositionSide::Short => &s.short,
-            };
+            let side = symbol_side_input(s, pside);
             // For selection of coins to occupy available slots for initial entries:
             // - We rank across all coins (including those with positions), matching legacy.
             // - We exclude modes which categorically block initial entries when `psize == 0.0`.
@@ -1209,13 +1215,13 @@ mod core {
                 s.effective_min_cost,
                 &side.bot_params,
             );
-            let enabled = s.tradable
+            let enabled = symbol_side_eligible(s, pside)
                 && !already_active
                 && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                 && can_open_initial
                 && min_cost_ok;
             if !enabled {
-                if s.tradable
+                if symbol_side_eligible(s, pside)
                     && !already_active
                     && one_way_allows_initial_slot(symbols, s.symbol_idx, pside, hedge_mode)
                     && can_open_initial
@@ -1775,8 +1781,16 @@ mod core {
             &mut workspace.forced_short,
         );
 
-        let eligible_long = input.symbols.iter().filter(|s| s.tradable).count();
-        let eligible_short = eligible_long;
+        let eligible_long = input
+            .symbols
+            .iter()
+            .filter(|s| symbol_side_eligible(s, PositionSide::Long))
+            .count();
+        let eligible_short = input
+            .symbols
+            .iter()
+            .filter(|s| symbol_side_eligible(s, PositionSide::Short))
+            .count();
 
         let enp_long = compute_effective_n_positions(
             input.global.global_bot_params.long.n_positions,
@@ -1998,8 +2012,10 @@ mod core {
                 } else {
                     // No position on either side - decide based on eligibility and EMA band distance
                     let long_enabled = enabled_long
+                        && symbol_side_eligible(s, PositionSide::Long)
                         && should_generate_entries(effective_mode(s.long.mode, false), false, true);
                     let short_enabled = enabled_short
+                        && symbol_side_eligible(s, PositionSide::Short)
                         && should_generate_entries(
                             effective_mode(s.short.mode, false),
                             false,
@@ -2085,7 +2101,8 @@ mod core {
                     mode
                 };
 
-                let allow_initial = actives_long[s.symbol_idx]
+                let allow_initial = symbol_side_eligible(s, PositionSide::Long)
+                    && actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
@@ -2357,7 +2374,8 @@ mod core {
                     mode
                 };
 
-                let allow_initial = actives_short[s.symbol_idx]
+                let allow_initial = symbol_side_eligible(s, PositionSide::Short)
+                    && actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
@@ -3037,7 +3055,8 @@ mod core {
                     .as_ref()
                     .map(|state| state.mode)
                     .unwrap_or_else(|| effective_mode(s.short.mode, s.short.position.size != 0.0));
-                let long_allow_initial = workspace.actives_long[s.symbol_idx]
+                let long_allow_initial = symbol_side_eligible(s, PositionSide::Long)
+                    && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
@@ -3045,7 +3064,8 @@ mod core {
                         s.effective_min_cost,
                         &s.long.bot_params,
                     );
-                if workspace.actives_long[s.symbol_idx]
+                if symbol_side_eligible(s, PositionSide::Long)
+                    && workspace.actives_long[s.symbol_idx]
                     && !workspace.one_way_block_initial_long[s.symbol_idx]
                     && s.long.position.size == 0.0
                     && !long_allow_initial
@@ -3060,7 +3080,8 @@ mod core {
                         &s.long.bot_params,
                     );
                 }
-                let short_allow_initial = workspace.actives_short[s.symbol_idx]
+                let short_allow_initial = symbol_side_eligible(s, PositionSide::Short)
+                    && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && effective_min_cost_is_low_enough(
                         input.balance,
@@ -3068,7 +3089,8 @@ mod core {
                         s.effective_min_cost,
                         &s.short.bot_params,
                     );
-                if workspace.actives_short[s.symbol_idx]
+                if symbol_side_eligible(s, PositionSide::Short)
+                    && workspace.actives_short[s.symbol_idx]
                     && !workspace.one_way_block_initial_short[s.symbol_idx]
                     && s.short.position.size == 0.0
                     && !short_allow_initial
@@ -3088,13 +3110,15 @@ mod core {
                     long: SymbolSideStateDiagnostic {
                         input_mode: s.long.mode,
                         effective_mode: long_mode,
-                        active: workspace.actives_long[s.symbol_idx],
+                        active: symbol_side_eligible(s, PositionSide::Long)
+                            && workspace.actives_long[s.symbol_idx],
                         allow_initial: long_allow_initial,
                     },
                     short: SymbolSideStateDiagnostic {
                         input_mode: s.short.mode,
                         effective_mode: short_mode,
-                        active: workspace.actives_short[s.symbol_idx],
+                        active: symbol_side_eligible(s, PositionSide::Short)
+                            && workspace.actives_short[s.symbol_idx],
                         allow_initial: short_allow_initial,
                     },
                 }
@@ -4007,6 +4031,63 @@ mod core {
             assert_eq!(entry_syms.len(), 2, "should only fill remaining 2 slots");
             assert!(entry_syms.contains(&2));
             assert!(entry_syms.contains(&3));
+        }
+
+        #[test]
+        fn side_zero_wel_excludes_only_that_side_from_active_slots() {
+            let mut syms: Vec<SymbolInput> = (0..4).map(make_basic_symbol).collect();
+            syms[3].long.bot_params.wallet_exposure_limit = 0.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1000.0;
+            global_bp.long.n_positions = 4;
+            global_bp.long.filter_volume_ema_span = 10.0;
+            global_bp.long.filter_volatility_ema_span = 10.0;
+            global_bp.short.total_wallet_exposure_limit = 1000.0;
+            global_bp.short.n_positions = 4;
+            global_bp.short.filter_volume_ema_span = 10.0;
+            global_bp.short.filter_volatility_ema_span = 10.0;
+
+            let input = OrchestratorInput {
+                balance: 1_000_000.0,
+                balance_raw: 1_000_000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: syms,
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            let long_active = out
+                .diagnostics
+                .symbol_states
+                .iter()
+                .filter(|state| state.long.active)
+                .count();
+            let short_active = out
+                .diagnostics
+                .symbol_states
+                .iter()
+                .filter(|state| state.short.active)
+                .count();
+
+            assert_eq!(long_active, 3);
+            assert_eq!(short_active, 4);
+            assert!(!out.diagnostics.symbol_states[3].long.active);
+            assert!(out.diagnostics.symbol_states[3].short.active);
         }
 
         #[test]

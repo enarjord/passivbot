@@ -104,6 +104,11 @@ from warmup_utils import (
     compute_backtest_warmup_minutes,
     compute_per_coin_warmup_minutes,
 )
+from backtest_universe import (
+    POSITION_SIDES,
+    effective_backtest_approved_coins_by_side,
+    normalize_backtest_coin,
+)
 from pathlib import Path
 import re
 from plotting import (
@@ -1063,11 +1068,7 @@ def check_keys(dict0, dict1):
 
 def get_cache_hash(config, exchange):
     exchanges_cfg = require_config_value(config, "backtest.exchanges")
-    approved_coins_raw = require_live_value(config, "approved_coins")
-    approved_coins = {
-        "long": sorted(approved_coins_raw.get("long", [])),
-        "short": sorted(approved_coins_raw.get("short", [])),
-    }
+    approved_coins = effective_backtest_approved_coins_by_side(config)
     minimum_coin_age = require_live_value(config, "minimum_coin_age_days")
     backtest_cfg = config.get("backtest", {}) or {}
     coin_sources = backtest_cfg.get("coin_sources") or {}
@@ -1612,6 +1613,10 @@ def prep_backtest_args(
             config, is_runtime_compiled=True
         )
     coins = sorted(set(require_config_value(config, f"backtest.coins.{exchange}")))
+    approved_by_side = {
+        pside: set(side_coins)
+        for pside, side_coins in effective_backtest_approved_coins_by_side(config).items()
+    }
     candle_interval = int(
         config.get("backtest", {}).get("candle_interval_minutes", 1) or 1
     )
@@ -1631,10 +1636,13 @@ def prep_backtest_args(
                     .get(f"forced_mode_{pside}", "")
                     == "normal"
                 )
-        for pside in ["long", "short"]:
-            if "wallet_exposure_limit" not in config["coin_overrides"].get(
-                coin, {}
-            ).get("bot", {}).get(pside, {}):
+        coin_key = normalize_backtest_coin(coin)
+        for pside in POSITION_SIDES:
+            if coin_key not in approved_by_side[pside]:
+                coin_specific_bot_params[pside]["wallet_exposure_limit"] = 0.0
+            elif "wallet_exposure_limit" not in config["coin_overrides"].get(coin, {}).get(
+                "bot", {}
+            ).get(pside, {}):
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
         bot_params_list.append(coin_specific_bot_params)
     if exchange_params is None:

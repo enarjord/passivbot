@@ -259,6 +259,43 @@ def test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema():
     assert out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] is False
 
 
+def test_side_zero_wel_excludes_only_that_side_from_active_slots():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={"n_positions": 4, "total_wallet_exposure_limit": 1000.0},
+        short_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 1000.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbols = []
+    for idx in range(4):
+        long_bp = {"wallet_exposure_limit": 0.0} if idx == 3 else None
+        symbols.append(
+            make_symbol(
+                idx,
+                bid=100.0,
+                ask=100.0,
+                long_bp=long_bp,
+                short_bp={
+                    "n_positions": 4,
+                    "total_wallet_exposure_limit": 1000.0,
+                    "wallet_exposure_limit": 1.0,
+                },
+            )
+        )
+
+    out = compute(pbr, make_input(balance=1_000_000.0, global_bp=global_bp, symbols=symbols))
+    states = out["diagnostics"]["symbol_states"]
+
+    assert sum(state["long"]["active"] for state in states) == 3
+    assert sum(state["short"]["active"] for state in states) == 4
+    assert states[3]["long"]["active"] is False
+    assert states[3]["short"]["active"] is True
+
+
 def test_panic_mode_emits_close_panic_long():
     import passivbot_rust as pbr
 
