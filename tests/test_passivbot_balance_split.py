@@ -4491,6 +4491,36 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
     assert "open_orders=100/130/159ms" in messages[0]
 
 
+def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(
+    caplog, monkeypatch
+):
+    bot = Passivbot.__new__(Passivbot)
+    now = {"value": 2_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+
+    with caplog.at_level(logging.INFO):
+        for _ in range(60):
+            bot._log_staged_refresh_timings(
+                {"balance", "fills", "open_orders", "positions"},
+                {
+                    "balance": 300,
+                    "fills": 400,
+                    "open_orders": 500,
+                    "positions": 600,
+                },
+                1_500,
+            )
+
+    messages = [record.message for record in caplog.records]
+    assert len(messages) == 1
+    assert "[state] staged refresh timing summary" in messages[0]
+    assert "plan=balance,fills,open_orders,positions" in messages[0]
+    assert "count=60" in messages[0]
+    assert "wall=1500/1500/1500ms" in messages[0]
+
+
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirmation_plan():
     bot = Passivbot.__new__(Passivbot)

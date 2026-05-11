@@ -743,13 +743,34 @@ class CCXTBot(Passivbot):
             Leverage to use (capped by max_leverage for the symbol)
         """
         configured = int(self.config_get(["live", "leverage"], symbol=symbol))
-        raw_max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
-        try:
-            max_lev = int(raw_max_lev)
-        except (TypeError, ValueError):
+        raw_max_lev = (getattr(self, "max_leverage", {}) or {}).get(symbol)
+        if raw_max_lev is None:
+            warned = getattr(self, "_missing_max_leverage_warned", set())
+            if symbol not in warned:
+                logging.warning(
+                    "%s: max leverage unavailable from exchange metadata; using configured leverage %sx",
+                    symbol,
+                    configured,
+                )
+                warned.add(symbol)
+                self._missing_max_leverage_warned = warned
             max_lev = configured
-        if max_lev <= 0:
-            max_lev = configured
+        else:
+            try:
+                max_lev_float = float(raw_max_lev)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                ) from e
+            if not math.isfinite(max_lev_float) or max_lev_float <= 0.0:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                )
+            max_lev = int(max_lev_float)
+            if max_lev <= 0:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                )
 
         if self._get_margin_mode_for_symbol(symbol) == "isolated":
             min_lev = self._calc_min_isolated_leverage()

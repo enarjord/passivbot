@@ -5477,7 +5477,7 @@ class Passivbot:
             parts.append(f"residual={residual_ms}ms")
             parts.append("residual_hint=scheduler_or_lock_wait")
         suffix = " | pending_confirmations=yes" if pending_confirmations else ""
-        if log_level > logging.INFO:
+        if log_level < logging.INFO:
             self._record_staged_refresh_timing_summary(
                 plan,
                 timings_ms,
