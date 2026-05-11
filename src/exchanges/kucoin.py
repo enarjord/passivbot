@@ -560,16 +560,19 @@ class KucoinBot(CCXTBot):
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             try:
                 margin_mode = self._get_margin_mode_for_symbol(symbol)
+                leverage = self._calc_leverage_for_symbol(symbol)
                 params = {
-                    "leverage": self._calc_leverage_for_symbol(symbol),
+                    "leverage": leverage,
                     "symbol": symbol,
                     "params": {"marginMode": margin_mode},
                 }
                 coros_to_call.append(
                     (symbol, "set_leverage", asyncio.create_task(self.cca.set_leverage(**params)))
                 )
+            except ValueError:
+                raise
             except Exception as e:
-                logging.warning(f"{log_symbol}: error set_leverage {e}")
+                logging.warning(f"{log_symbol}: error preparing set_leverage {e}")
         for symbol, task_name, task in coros_to_call:
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             res = None

@@ -77,6 +77,48 @@ async def test_update_exchange_configs_marks_only_successful_symbols(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+    from tests.test_kucoin_exchange_config import DummyTask, make_bot
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
+
+    bot = make_bot()
+    bot.exchange = "kucoin"
+    bot.active_symbols = ["BTC/USDT:USDT"]
+    bot.already_updated_exchange_config_symbols = set()
+    bot._exchange_config_retry_attempts = {}
+    bot._exchange_config_retry_after_ms = {}
+    bot._health_rate_limits = 0
+    bot.max_leverage = {"BTC/USDT:USDT": 0}
+    bot.config_get = lambda path, *, symbol=None: 5
+    bot._is_rate_limit_like_exception = pb_mod.Passivbot._is_rate_limit_like_exception.__get__(
+        bot
+    )
+    bot._exchange_config_backoff_seconds = pb_mod.Passivbot._exchange_config_backoff_seconds.__get__(
+        bot
+    )
+    bot._exchange_config_success_pause_seconds = (
+        pb_mod.Passivbot._exchange_config_success_pause_seconds.__get__(bot)
+    )
+    bot._shutdown_requested = lambda: False
+
+    configured = await pb_mod.Passivbot.update_exchange_configs(bot)
+
+    assert configured == set()
+    assert bot.already_updated_exchange_config_symbols == set()
+    assert bot.cca.leverage_calls == []
+    assert bot._exchange_config_retry_attempts["BTC/USDT:USDT"] == 1
+    assert bot._exchange_config_retry_after_ms["BTC/USDT:USDT"] > 0
+
+
+@pytest.mark.asyncio
 async def test_update_exchange_configs_rate_limit_breaks_and_defers_remaining(monkeypatch):
     import passivbot as pb_mod
 

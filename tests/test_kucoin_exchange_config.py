@@ -238,7 +238,6 @@ async def test_update_exchange_config_by_symbols_treats_missing_max_leverage_as_
 async def test_update_exchange_config_by_symbols_rejects_invalid_max_leverage(
     raw_max_leverage,
     monkeypatch,
-    caplog,
 ):
     bot = make_bot()
     bot.max_leverage = {"BTC/USDT:USDT": raw_max_leverage}
@@ -246,8 +245,7 @@ async def test_update_exchange_config_by_symbols_rejects_invalid_max_leverage(
 
     monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="invalid max leverage from exchange metadata"):
         await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
 
     assert bot.cca.leverage_calls == []
-    assert any("invalid max leverage from exchange metadata" in record.message for record in caplog.records)
