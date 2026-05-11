@@ -4570,6 +4570,53 @@ class Passivbot:
                     break
         return fields
 
+    def _execution_loop_error_endpoint(self, error: str) -> str:
+        """Extract a compact endpoint label from an exchange error string."""
+        match = re.search(r"https?://[^\s]+", str(error or ""))
+        if not match:
+            return "unknown"
+        url = match.group(0).split("?", 1)[0].rstrip("/")
+        endpoint = url.rsplit("/", 1)[-1]
+        return endpoint or "unknown"
+
+    def _log_execution_loop_error_burst(self, fields: dict[str, str]) -> None:
+        """Summarize repeated execution-loop failures without hiding individual errors."""
+        now = utc_ms()
+        window_ms = 15 * 60 * 1000
+        state = getattr(self, "_execution_loop_error_burst", None)
+        if not isinstance(state, dict) or now - int(state.get("first_ms", now)) > window_ms:
+            state = {
+                "first_ms": now,
+                "last_log_ms": now,
+                "count": 0,
+                "endpoints": Counter(),
+            }
+            self._execution_loop_error_burst = state
+        state["count"] = int(state.get("count", 0)) + 1
+        endpoints = state.get("endpoints")
+        if not isinstance(endpoints, Counter):
+            endpoints = Counter()
+            state["endpoints"] = endpoints
+        endpoint = self._execution_loop_error_endpoint(fields.get("error", ""))
+        endpoints[endpoint] += 1
+        count = int(state["count"])
+        last_log_ms = int(state.get("last_log_ms", 0) or 0)
+        should_log = count in {3, 5, 10} or now - last_log_ms >= window_ms
+        if not should_log:
+            return
+        state["last_log_ms"] = now
+        top = ",".join(f"{name}:{n}" for name, n in endpoints.most_common(5))
+        window_s = max(1, int((now - int(state["first_ms"])) / 1000))
+        logging.warning(
+            "[health] execution loop error burst | count=%d window=%ds top=%s latest_type=%s status=%s code=%s action=restart_backoff_continues",
+            count,
+            window_s,
+            top or "-",
+            fields.get("error_type", "-"),
+            fields.get("status", "-"),
+            fields.get("code", "-"),
+        )
+
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
         current_task = asyncio.current_task()
@@ -4809,6 +4856,7 @@ class Passivbot:
                     fields["code"],
                     fields["error"],
                 )
+                self._log_execution_loop_error_burst(fields)
                 traceback.print_exc()
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(1.0)
@@ -5398,15 +5446,26 @@ class Passivbot:
         epoch_changed = set(
             getattr(self, "_authoritative_refresh_epoch_changed", set()) or set()
         )
-        meaningful_change = bool(epoch_changed - {"balance"})
+        meaningful_surfaces = epoch_changed - {"balance"}
+        if pending_confirmations and plan_set == {"open_orders"} and wall_ms < 2_000:
+            meaningful_surfaces -= {"open_orders"}
+        meaningful_change = bool(meaningful_surfaces)
         interesting = (
-            pending_confirmations
+            (pending_confirmations and wall_ms >= 2_000)
             or meaningful_change
             or (unusual_plan and wall_ms >= 1_000)
             or wall_ms >= 10_000
         )
         if not interesting:
             if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
+                self._record_staged_refresh_timing_summary(
+                    plan,
+                    timings_ms,
+                    wall_ms,
+                    sum_ms,
+                    max_surface_ms,
+                    residual_ms,
+                )
                 return
             log_level = logging.DEBUG
         else:
@@ -5418,6 +5477,15 @@ class Passivbot:
             parts.append(f"residual={residual_ms}ms")
             parts.append("residual_hint=scheduler_or_lock_wait")
         suffix = " | pending_confirmations=yes" if pending_confirmations else ""
+        if log_level > logging.INFO:
+            self._record_staged_refresh_timing_summary(
+                plan,
+                timings_ms,
+                wall_ms,
+                sum_ms,
+                max_surface_ms,
+                residual_ms,
+            )
         logging.log(
             log_level,
             "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
@@ -5429,6 +5497,79 @@ class Passivbot:
             " ".join(parts),
             suffix,
         )
+
+    def _record_staged_refresh_timing_summary(
+        self,
+        plan: set[str],
+        timings_ms: dict[str, int],
+        wall_ms: int,
+        sum_ms: int,
+        max_surface_ms: int,
+        residual_ms: int,
+    ) -> None:
+        """Aggregate routine staged refresh timings into periodic operator summaries."""
+
+        def update_stats(stats: dict[str, int], value: int) -> None:
+            value = int(value)
+            count = int(stats.get("count", 0))
+            stats["count"] = count + 1
+            stats["sum"] = int(stats.get("sum", 0)) + value
+            stats["min"] = value if count == 0 else min(int(stats.get("min", value)), value)
+            stats["max"] = value if count == 0 else max(int(stats.get("max", value)), value)
+
+        def format_stats(stats: dict[str, int]) -> str:
+            count = max(1, int(stats.get("count", 0)))
+            mean = int(round(int(stats.get("sum", 0)) / count))
+            return f"{int(stats.get('min', 0))}/{mean}/{int(stats.get('max', 0))}ms"
+
+        now = utc_ms()
+        plan_key = ",".join(sorted(plan))
+        summaries = getattr(self, "_staged_refresh_timing_summaries", None)
+        if not isinstance(summaries, dict):
+            summaries = {}
+            self._staged_refresh_timing_summaries = summaries
+        summary = summaries.get(plan_key)
+        if not isinstance(summary, dict):
+            summary = {
+                "first_ms": now,
+                "wall": {},
+                "surface_sum": {},
+                "surface_max": {},
+                "residual": {},
+                "surfaces": {},
+            }
+            summaries[plan_key] = summary
+        update_stats(summary["wall"], wall_ms)
+        update_stats(summary["surface_sum"], sum_ms)
+        update_stats(summary["surface_max"], max_surface_ms)
+        update_stats(summary["residual"], residual_ms)
+        surfaces = summary.get("surfaces")
+        if not isinstance(surfaces, dict):
+            surfaces = {}
+            summary["surfaces"] = surfaces
+        for surface, value in timings_ms.items():
+            stats = surfaces.setdefault(surface, {})
+            update_stats(stats, int(value))
+        count = int(summary["wall"].get("count", 0))
+        first_ms = int(summary.get("first_ms", now))
+        if count < 60 and now - first_ms < 15 * 60 * 1000:
+            return
+        surface_parts = [
+            f"{surface}={format_stats(stats)}"
+            for surface, stats in sorted(surfaces.items())
+        ]
+        logging.info(
+            "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
+            plan_key,
+            count,
+            ts_to_date(first_ms),
+            format_stats(summary["wall"]),
+            format_stats(summary["surface_sum"]),
+            format_stats(summary["surface_max"]),
+            format_stats(summary["residual"]),
+            " ".join(surface_parts),
+        )
+        summaries.pop(plan_key, None)
 
     async def _log_staged_refresh_progress_until(
         self,
@@ -14349,8 +14490,7 @@ class Passivbot:
                         await asyncio.sleep(10)
                 await asyncio.sleep(1)
             except Exception as e:
-                logging.error(f"error with {get_function_name()} {e}")
-                traceback.print_exc()
+                logging.error("error with %s %s", get_function_name(), e, exc_info=True)
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
 

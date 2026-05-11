@@ -214,3 +214,19 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
     # leverage is clamped by max_leverage
     assert leverage_map["BTC/USDT:USDT"] == 5  # min(10, 5)
     assert leverage_map["ETH/USDT:USDT"] == 2  # min(2, 3)
+
+
+@pytest.mark.asyncio
+async def test_update_exchange_config_by_symbols_treats_missing_max_leverage_as_configured(
+    monkeypatch,
+):
+    bot = make_bot()
+    bot.max_leverage = {"BTC/USDT:USDT": None}
+    bot.config_get = lambda path, *, symbol=None: 5
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
+
+    await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+    assert bot.cca.leverage_calls[0]["symbol"] == "BTC/USDT:USDT"
+    assert bot.cca.leverage_calls[0]["leverage"] == 5

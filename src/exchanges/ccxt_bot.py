@@ -743,7 +743,13 @@ class CCXTBot(Passivbot):
             Leverage to use (capped by max_leverage for the symbol)
         """
         configured = int(self.config_get(["live", "leverage"], symbol=symbol))
-        max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
+        raw_max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
+        try:
+            max_lev = int(raw_max_lev)
+        except (TypeError, ValueError):
+            max_lev = configured
+        if max_lev <= 0:
+            max_lev = configured
 
         if self._get_margin_mode_for_symbol(symbol) == "isolated":
             min_lev = self._calc_min_isolated_leverage()

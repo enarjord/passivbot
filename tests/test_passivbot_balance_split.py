@@ -4441,6 +4441,56 @@ async def test_run_execution_loop_error_log_includes_type_status_and_action(capl
     )
 
 
+def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+
+    fields = {
+        "error_type": "RequestTimeout",
+        "status": "-",
+        "code": "-",
+        "error": "kucoinfutures GET https://api-futures.kucoin.com/api/v1/account-overview?currency=USDT",
+    }
+
+    with caplog.at_level(logging.WARNING):
+        bot._log_execution_loop_error_burst(fields)
+        bot._log_execution_loop_error_burst(fields)
+        bot._log_execution_loop_error_burst(fields)
+
+    messages = [record.message for record in caplog.records]
+    assert len(messages) == 1
+    assert "[health] execution loop error burst" in messages[0]
+    assert "count=3" in messages[0]
+    assert "top=account-overview:3" in messages[0]
+    assert "action=restart_backoff_continues" in messages[0]
+
+
+def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
+    caplog, monkeypatch
+):
+    bot = Passivbot.__new__(Passivbot)
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+
+    with caplog.at_level(logging.INFO):
+        for i in range(60):
+            bot._log_staged_refresh_timings(
+                {"open_orders"},
+                {"open_orders": 100 + i},
+                100 + i,
+            )
+
+    messages = [record.message for record in caplog.records]
+    assert len(messages) == 1
+    assert "[state] staged refresh timing summary" in messages[0]
+    assert "plan=open_orders" in messages[0]
+    assert "count=60" in messages[0]
+    assert "open_orders=100/130/159ms" in messages[0]
+
+
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_uses_open_orders_only_confirmation_plan():
     bot = Passivbot.__new__(Passivbot)

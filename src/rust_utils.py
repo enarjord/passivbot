@@ -366,11 +366,17 @@ def _unlock_file(handle) -> None:
     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
 
-def acquire_lock(lock_file: Path = LOCK_FILE, timeout: Optional[float] = LOCK_TIMEOUT) -> bool:
+def acquire_lock(
+    lock_file: Path = LOCK_FILE,
+    timeout: Optional[float] = LOCK_TIMEOUT,
+    *,
+    wait_message: Optional[str] = None,
+) -> bool:
     global _LOCK_HANDLE
     if _LOCK_HANDLE is not None:
         return True
     start = time.time()
+    logged_wait = False
     try:
         lock_file.parent.mkdir(parents=True, exist_ok=True)
         handle = lock_file.open("a+", encoding="utf-8")
@@ -387,6 +393,9 @@ def acquire_lock(lock_file: Path = LOCK_FILE, timeout: Optional[float] = LOCK_TI
             _LOCK_HANDLE = handle
             return True
         except OSError:
+            if wait_message is not None and not logged_wait:
+                print(wait_message)
+                logged_wait = True
             if timeout is not None and time.time() - start > timeout:
                 try:
                     handle.close()
@@ -540,13 +549,15 @@ def check_and_maybe_compile(
         return
 
     if compiled_path is None:
-        print("Rust extension missing; compiling...")
+        wait_message = "Rust extension missing; waiting for compile lock..."
     elif stale:
-        print("Rust extension is stale; recompiling...")
+        wait_message = "Rust extension is stale; waiting for compile lock..."
     elif force:
-        print("Rust extension rebuild forced; recompiling...")
+        wait_message = "Rust extension rebuild forced; waiting for compile lock..."
+    else:
+        wait_message = "Rust extension rebuild requested; waiting for compile lock..."
 
-    if not acquire_lock():
+    if not acquire_lock(wait_message=wait_message):
         raise RuntimeError("Timed out waiting for Rust compile lock.")
     try:
         prune_shadowing_local_extensions()
@@ -555,7 +566,14 @@ def check_and_maybe_compile(
         compiled_path = preferred_compiled_path()
         stale = extension_needs_rebuild(compiled_path, source_mtime, fingerprint)
         if not (force or stale):
+            print("Rust extension was rebuilt by another process; continuing.")
             return
+        if compiled_path is None:
+            print("Rust extension missing; acquired compile lock; compiling...")
+        elif stale:
+            print("Rust extension is stale; acquired compile lock; recompiling...")
+        elif force:
+            print("Rust extension rebuild forced; acquired compile lock; recompiling...")
         if not recompile_rust():
             raise RuntimeError("Rust compilation failed.")
     finally:
