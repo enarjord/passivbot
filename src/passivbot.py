@@ -41,6 +41,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
+    fill_event_pnl_pending,
 )
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from monitor_publisher import MonitorPublisher
@@ -1222,7 +1223,11 @@ class Passivbot:
         if self._pnls_manager is None:
             return 0.0
         realized = 0.0
-        for event in self._pnls_manager.get_events():
+        events = self._pnls_manager.get_events()
+        self._assert_no_pending_pnl_events(
+            events, context="equity hard stop realized PnL"
+        )
+        for event in events:
             realized += float(getattr(event, "pnl", 0.0) or 0.0)
             realized += self._equity_hard_stop_fee_cost(event)
         return realized
@@ -1244,6 +1249,9 @@ class Passivbot:
         if start_ms is None:
             return self._pnls_manager.get_events()
         return self._pnls_manager.get_events(start_ms=start_ms)
+
+    def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
+        FillEventsManager.assert_no_pending_pnl(events, context=context)
 
     def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
         lookback = parse_pnls_max_lookback_days(
@@ -2528,6 +2536,9 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         if not events:
             return {"status": "no_history"}
+        self._assert_no_pending_pnl_events(
+            events, context="unstuck allowance logging realized PnL"
+        )
 
         pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(
@@ -7976,6 +7987,7 @@ class Passivbot:
                 round(float(getattr(ev, "qty", 0.0) or 0.0), 12),
                 round(float(getattr(ev, "price", 0.0) or 0.0), 12),
                 round(float(getattr(ev, "pnl", 0.0) or 0.0), 12),
+                str(getattr(ev, "pnl_status", "complete") or "complete").lower(),
                 round(float(getattr(ev, "fee", 0.0) or 0.0), 12),
             )
 
@@ -9403,14 +9415,20 @@ class Passivbot:
             # Get existing event IDs and source IDs before refresh
             existing_ids: set[str] = set()
             existing_source_ids: set[str] = set()
+            existing_by_id: dict[str, object] = {}
+            existing_by_source_id: dict[str, object] = {}
             for ev in self._pnls_manager.get_events():
                 if getattr(ev, "id", None):
                     existing_ids.add(ev.id)
+                    existing_by_id[str(ev.id)] = ev
                 src_ids = getattr(ev, "source_ids", None)
                 if src_ids:
-                    existing_source_ids.update(str(x) for x in src_ids if x)
+                    for src_id in (str(x) for x in src_ids if x):
+                        existing_source_ids.add(src_id)
+                        existing_by_source_id[src_id] = ev
                 elif getattr(ev, "id", None):
                     existing_source_ids.add(ev.id)
+                    existing_by_source_id[str(ev.id)] = ev
 
             # Check if we need a full refresh (cache empty or too old)
             events = self._pnls_manager.get_events()
@@ -9494,6 +9512,7 @@ class Passivbot:
             # Find and log new events (those not in cache before refresh)
             all_events = self._pnls_manager.get_events()
             new_events = []
+            enriched_events = []
             seen_new_source_ids: set[str] = set()
             for ev in all_events:
                 src_ids = getattr(ev, "source_ids", None)
@@ -9504,6 +9523,18 @@ class Passivbot:
                 if not src_ids:
                     continue
                 if any(src_id in existing_source_ids for src_id in src_ids):
+                    prev = existing_by_id.get(str(getattr(ev, "id", "")))
+                    if prev is None:
+                        for src_id in src_ids:
+                            prev = existing_by_source_id.get(src_id)
+                            if prev is not None:
+                                break
+                    if (
+                        prev is not None
+                        and fill_event_pnl_pending(prev)
+                        and not fill_event_pnl_pending(ev)
+                    ):
+                        enriched_events.append(ev)
                     continue
                 if any(src_id in seen_new_source_ids for src_id in src_ids):
                     continue
@@ -9512,9 +9543,15 @@ class Passivbot:
             if new_events:
                 self._log_new_fill_events(new_events)
                 self._request_authoritative_confirmation(ACCOUNT_SURFACES)
-            self._record_authoritative_surface(
-                "fills", self._fill_events_signature(all_events)
-            )
+            if enriched_events:
+                self._log_enriched_fill_events(enriched_events)
+                self._request_authoritative_confirmation(ACCOUNT_SURFACES)
+            pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
+            pnls_complete = not pending_pnl_events
+            if pnls_complete:
+                self._record_authoritative_surface(
+                    "fills", self._fill_events_signature(all_events)
+                )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
                 refresh_mode in {"full", "incremental_confirm"}
@@ -9528,7 +9565,7 @@ class Passivbot:
             )
             logging.log(
                 log_level,
-                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s",
+                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s pending_pnl=%d",
                 source,
                 refresh_mode,
                 elapsed_ms,
@@ -9538,9 +9575,10 @@ class Passivbot:
                 str(self.live_value("pnls_max_lookback_days")),
                 self._pnls_manager.get_history_scope(),
                 (f"{overlap_minutes:.3f}" if overlap_minutes is not None else "-"),
+                len(pending_pnl_events),
             )
 
-            return True
+            return pnls_complete
 
         except RateLimitExceeded:
             if self._shutdown_requested():
@@ -9612,8 +9650,11 @@ class Passivbot:
         # Close orders have "close" in their type (e.g., close_grid_long, close_unstuck_long)
         is_close = "close" in order_type
         if is_close or event.pnl != 0.0:
-            pnl_sign = "+" if event.pnl >= 0 else ""
-            msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
+            if fill_event_pnl_pending(event):
+                msg += ", pnl=pending"
+            else:
+                pnl_sign = "+" if event.pnl >= 0 else ""
+                msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
 
         # Add client_order_id for unknown orders
         if order_type == "unknown" and event.client_order_id:
@@ -9635,17 +9676,20 @@ class Passivbot:
 
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
-        self._health_pnl += sum(ev.pnl for ev in new_events)
+        self._health_pnl += sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
 
         if len(new_events) > 20:
             # Truncate to summary
-            total_pnl = sum(ev.pnl for ev in new_events)
+            pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
+            total_pnl = sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
             pnl_sign = "+" if total_pnl >= 0 else ""
+            pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
             logging.info(
-                "[fill] %d fills, pnl=%s%s USDT",
+                "[fill] %d fills, pnl=%s%s USDT%s",
                 len(new_events),
                 pnl_sign,
                 round_dynamic(total_pnl, 3),
+                pending_suffix,
             )
         else:
             # Log each event
@@ -9662,6 +9706,17 @@ class Passivbot:
                 ts=int(getattr(event, "timestamp", 0) or 0) or None,
             )
 
+    def _log_enriched_fill_events(self, events: list) -> None:
+        """Log realized-PnL enrichment for already seen close fills."""
+        if not events:
+            return
+        self._health_pnl += sum(ev.pnl for ev in events if not fill_event_pnl_pending(ev))
+        for event in sorted(events, key=lambda e: e.timestamp):
+            logging.info(
+                "[fill] enriched realized pnl for previously pending fill | %s",
+                self._log_fill_event(event),
+            )
+
     def _calc_unstuck_allowances(self, allow_new_unstuck: bool) -> dict[str, float]:
         """Calculate unstuck allowances using FillEventsManager data."""
         if not allow_new_unstuck or self._pnls_manager is None:
@@ -9670,6 +9725,9 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         if not events:
             return {"long": 0.0, "short": 0.0}
+        self._assert_no_pending_pnl_events(
+            events, context="unstuck allowance realized PnL"
+        )
 
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
@@ -9700,6 +9758,9 @@ class Passivbot:
         events = self._get_effective_pnl_events()
         if not events:
             return {"max": 0.0, "last": 0.0}
+        self._assert_no_pending_pnl_events(
+            events, context="realized loss gate PnL cumsum"
+        )
         pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
         return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
 

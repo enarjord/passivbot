@@ -859,14 +859,25 @@ class CCXTBot(Passivbot):
         for symbol, market in self.markets_dict.items():
             self.symbol_ids[symbol] = market["id"]
             self.min_costs[symbol] = market["limits"]["cost"]["min"] or 0.1
-            raw_min_qty = (
-                market["precision"]["amount"]
-                if market["limits"]["amount"]["min"] is None
-                else market["limits"]["amount"]["min"]
-            )
             qty_step = market["precision"]["amount"]
+            raw_min_qty = market["limits"]["amount"]["min"]
+            if raw_min_qty is None:
+                raw_min_qty = qty_step
+            if raw_min_qty is None:
+                raise ValueError(
+                    f"{symbol}: missing min qty and qty step in exchange market metadata"
+                )
+            raw_min_qty = float(raw_min_qty)
+            if not math.isfinite(raw_min_qty):
+                raise ValueError(
+                    f"{symbol}: invalid min qty in exchange market metadata: {raw_min_qty!r}"
+                )
             if raw_min_qty <= 0.0 and qty_step is not None and qty_step > 0.0:
                 raw_min_qty = qty_step
+            if raw_min_qty <= 0.0:
+                raise ValueError(
+                    f"{symbol}: invalid min qty in exchange market metadata: {raw_min_qty!r}"
+                )
             self.min_qtys[symbol] = raw_min_qty
             self.qty_steps[symbol] = qty_step
             self.price_steps[symbol] = market["precision"]["price"]

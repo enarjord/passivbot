@@ -639,6 +639,41 @@ class TestCCXTBotSetMarketSpecificSettings:
         assert bot.min_qtys["SOL/USDT:USDT"] == 1.0
         assert bot.qty_steps["SOL/USDT:USDT"] == 1.0
 
+    def test_missing_min_qty_and_qty_step_fails_loudly(self):
+        """Test that incomplete executable sizing metadata fails with symbol context."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.symbol_ids = {}
+        bot.min_costs = {}
+        bot.min_qtys = {}
+        bot.qty_steps = {}
+        bot.price_steps = {}
+        bot.c_mults = {}
+
+        bot.markets_dict = {
+            "BAD/USDT:USDT": {
+                "id": "BADUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": None},
+                },
+                "precision": {
+                    "amount": None,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            }
+        }
+
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
+            with pytest.raises(
+                ValueError,
+                match="BAD/USDT:USDT: missing min qty and qty step",
+            ):
+                bot.set_market_specific_settings()
+
 
 class TestCCXTBotFetchTickers:
     """Tests for fetch_tickers."""

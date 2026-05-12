@@ -16,9 +16,19 @@ from backtest import prep_backtest_args
 # ---------------------------------------------------------------------------
 
 
-def _make_fill_event(pnl: float, timestamp: float = 0.0) -> types.SimpleNamespace:
+def _make_fill_event(
+    pnl: float, timestamp: float = 0.0, pnl_status: str = "complete"
+) -> types.SimpleNamespace:
     """Create a minimal fill-event namespace with a .pnl attribute."""
-    return types.SimpleNamespace(pnl=pnl, timestamp=timestamp)
+    return types.SimpleNamespace(
+        pnl=pnl,
+        timestamp=timestamp,
+        pnl_status=pnl_status,
+        id="test-fill",
+        symbol="BTC/USDT:USDT",
+        position_side="long",
+        pb_order_type="close_grid_long",
+    )
 
 
 def _make_bot_with_events(events, balance=10000.0):
@@ -141,6 +151,12 @@ class TestGetRealizedPnlCumsumStats:
 
         assert result["max"] == pytest.approx(100.0)
         assert result["last"] == pytest.approx(30.0)
+
+    def test_pending_close_pnl_fails_loudly(self):
+        bot = _make_bot_with_events([_make_fill_event(0.0, pnl_status="pending")])
+
+        with pytest.raises(RuntimeError, match="realized PnL pending"):
+            bot._get_realized_pnl_cumsum_stats()
 
 
 # ---------------------------------------------------------------------------

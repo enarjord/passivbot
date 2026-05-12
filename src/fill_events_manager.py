@@ -525,6 +525,7 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 aggregated[key]["source_ids"] = src_ids
             aggregated[key]["qty"] = float(ev.get("qty", 0.0))
             aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
+            aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
             aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
@@ -541,6 +542,8 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 agg["source_ids"] = sorted(merged_ids)
             agg["qty"] = float(agg.get("qty", 0.0)) + float(ev.get("qty", 0.0))
             agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
+            if _payload_pnl_status(ev) == "pending":
+                agg["pnl_status"] = "pending"
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
             agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
@@ -684,6 +687,7 @@ class FillEvent:
     qty: float
     price: float
     pnl: float
+    pnl_status: str
     fees: Optional[Sequence]
     pb_order_type: str
     position_side: str
@@ -708,6 +712,7 @@ class FillEvent:
             "qty": self.qty,
             "price": self.price,
             "pnl": self.pnl,
+            "pnl_status": self.pnl_status,
             "fees": self.fees,
             "pb_order_type": self.pb_order_type,
             "position_side": self.position_side,
@@ -748,6 +753,7 @@ class FillEvent:
             qty=float(data["qty"]),
             price=float(data["price"]),
             pnl=float(data["pnl"]),
+            pnl_status=str(data.get("pnl_status") or "complete").lower(),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -756,6 +762,34 @@ class FillEvent:
             pprice=float(data.get("pprice", 0.0)),
             raw=_normalize_raw_field(data.get("raw")),
         )
+
+    @property
+    def pnl_pending(self) -> bool:
+        return str(self.pnl_status).lower() == "pending"
+
+
+def fill_event_pnl_status(event: object) -> str:
+    """Return normalized realized-PnL completeness status for a fill event."""
+    return str(getattr(event, "pnl_status", "complete") or "complete").lower()
+
+
+def fill_event_pnl_pending(event: object) -> bool:
+    return fill_event_pnl_status(event) == "pending"
+
+
+def _payload_pnl_status(payload: Dict[str, object]) -> str:
+    return str(payload.get("pnl_status") or "complete").lower()
+
+
+def _is_close_payload(payload: Dict[str, object]) -> bool:
+    order_type = str(payload.get("pb_order_type") or "").lower()
+    if "close" in order_type:
+        return True
+    try:
+        closed_size = float(payload.get("closed_size") or 0.0)
+    except Exception:
+        closed_size = 0.0
+    return closed_size > 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -2451,6 +2485,15 @@ class FillEventsManager:
                 pnl = float(best_event.pnl) * (qty_signed_sum / float(best_event.qty))
             else:
                 pnl = float(best_event.pnl)
+        pnl_status = (
+            "pending"
+            if any(fill_event_pnl_pending(ev) for ev in group)
+            and not any(
+                isinstance(row, dict) and str(row.get("source")) == "positions_history"
+                for row in non_mt_rows
+            )
+            else "complete"
+        )
 
         raw_payload = [
             {"source": "fetch_my_trades", "data": dict(row)} for row in mt_rows_unique
@@ -2466,6 +2509,7 @@ class FillEventsManager:
             qty=float(qty_signed_sum),
             price=float(price),
             pnl=float(pnl),
+            pnl_status=pnl_status,
             fees=fees_out,
             pb_order_type=str(best_event.pb_order_type),
             position_side=str(best_event.position_side).lower(),
@@ -2904,6 +2948,25 @@ class FillEventsManager:
             events = [ev for ev in events if ev.symbol == symbol]
         return list(events)
 
+    @staticmethod
+    def pending_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
+        return [ev for ev in events if fill_event_pnl_pending(ev)]
+
+    @staticmethod
+    def assert_no_pending_pnl(events: Iterable[FillEvent], *, context: str) -> None:
+        pending = FillEventsManager.pending_pnl_events(events)
+        if not pending:
+            return
+        preview = ",".join(
+            f"{ev.id[:12]}:{ev.symbol}:{ev.position_side}:{ev.pb_order_type}"
+            for ev in pending[:5]
+        )
+        suffix = f", +{len(pending) - 5} more" if len(pending) > 5 else ""
+        raise RuntimeError(
+            f"{context}: realized PnL pending for {len(pending)} close fill(s): "
+            f"{preview}{suffix}"
+        )
+
     def get_pnl_sum(
         self,
         start_ms: Optional[int] = None,
@@ -2911,6 +2974,7 @@ class FillEventsManager:
         symbol: Optional[str] = None,
     ) -> float:
         events = self.get_events(start_ms, end_ms, symbol)
+        self.assert_no_pending_pnl(events, context="FillEventsManager.get_pnl_sum")
         return float(sum(ev.pnl for ev in events))
 
     def get_pnl_cumsum(
@@ -2920,6 +2984,7 @@ class FillEventsManager:
         symbol: Optional[str] = None,
     ) -> List[Tuple[int, float]]:
         events = self.get_events(start_ms, end_ms, symbol)
+        self.assert_no_pending_pnl(events, context="FillEventsManager.get_pnl_cumsum")
         total = 0.0
         result = []
         for ev in events:
@@ -2945,6 +3010,9 @@ class FillEventsManager:
         return positions
 
     def reconstruct_equity_curve(self, starting_equity: float = 0.0) -> List[Tuple[int, float]]:
+        self.assert_no_pending_pnl(
+            self._events, context="FillEventsManager.reconstruct_equity_curve"
+        )
         total = starting_equity
         points: List[Tuple[int, float]] = []
         for ev in self._events:
@@ -3364,6 +3432,7 @@ class BybitFetcher(BaseFetcher):
                     event["pnl"] = pnl_record["closedPnl"]
 
                 matched_count += 1
+                event["pnl_status"] = "complete"
 
                 # Append positions_history (closed-pnl) data to raw field
                 if order_id in raw_pnl_by_order:
@@ -3373,6 +3442,8 @@ class BybitFetcher(BaseFetcher):
                             "data": raw_pnl_by_order[order_id],
                         }
                     )
+            elif closed_size > 0:
+                event["pnl_status"] = "pending"
 
             events.append(event)
 
@@ -3411,6 +3482,7 @@ class BybitFetcher(BaseFetcher):
             "qty": abs(qty),
             "price": price,
             "pnl": pnl,
+            "pnl_status": "pending" if closed_size > 0 else "complete",
             "fees": fee,
             "pb_order_type": "",
             "position_side": position_side,
@@ -4007,6 +4079,7 @@ class KucoinFetcher(BaseFetcher):
             ev = dict(t)
             fee_cost = _fee_cost(ev.get("fees"))
             ev["pnl"] = local_pnls.get(ev["id"], 0.0) - fee_cost
+            ev["pnl_status"] = "pending" if _is_close_payload(ev) else "complete"
             events[ev["id"]] = ev
 
         if closes:
@@ -4202,6 +4275,7 @@ class KucoinFetcher(BaseFetcher):
                     # Fallback: assign all PnL to closest fill
                     closest = min(matching_fills, key=lambda c: abs(c["timestamp"] - p_ts))
                     events[closest["id"]]["pnl"] = p_pnl
+                    events[closest["id"]]["pnl_status"] = "complete"
                     assigned_trade_ids.add(closest["id"])
                 else:
                     # Distribute PnL proportionally by qty
@@ -4209,14 +4283,15 @@ class KucoinFetcher(BaseFetcher):
                         fill_qty = abs(float(fill.get("qty", 0) or fill.get("amount", 0) or 0))
                         proportion = fill_qty / total_qty if total_qty > 0 else 0
                         events[fill["id"]]["pnl"] = p_pnl * proportion
+                        events[fill["id"]]["pnl_status"] = "complete"
                         assigned_trade_ids.add(fill["id"])
 
-        # Set PnL to 0 for closes that weren't assigned any PnL from positions_history
+        # Keep unmatched close fills explicit. Their local trade-derived PnL
+        # may be useful for diagnostics, but realized-PnL consumers must not
+        # treat it as authoritative until positions_history enrichment matches.
         for c in closes:
             if c["id"] not in assigned_trade_ids:
-                # This close didn't match any position_history entry - set local_pnl to 0
-                # since we don't have reliable entry data to compute it
-                events[c["id"]]["pnl"] = 0.0
+                events[c["id"]]["pnl_status"] = "pending"
 
         # Log unmatched positions for debugging
         if unmatched_positions:

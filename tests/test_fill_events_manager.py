@@ -931,6 +931,26 @@ def test_fill_event_from_dict_normalises_datetime():
     assert event.datetime == expected
     assert event.side == "buy"
     assert event.position_side == "long"
+    assert event.pnl_status == "complete"
+
+
+def test_fill_event_from_dict_preserves_pending_pnl_status():
+    data = {
+        "id": "t1",
+        "timestamp": 1_000,
+        "symbol": "BTC/USDT",
+        "side": "sell",
+        "qty": -1.0,
+        "price": 10.0,
+        "pnl": 0.0,
+        "pnl_status": "pending",
+        "pb_order_type": "close_grid_long",
+        "position_side": "long",
+        "client_order_id": "cid",
+    }
+    event = FillEvent.from_dict(data)
+    assert event.pnl_status == "pending"
+    assert event.pnl_pending is True
 
 
 # ---------------------------------------------------------------------------
@@ -1293,6 +1313,7 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
     assert event["pb_order_type"] == "close_grid_long"
     # PnL = (105 - 100) * 0.1 - fees = 0.5 - 0.0002 = 0.4998
     assert event["pnl"] == pytest.approx(0.4998, rel=1e-3)
+    assert event["pnl_status"] == "complete"
     assert event["client_order_id"] == "0xabc"
     assert event["symbol"] == "BTC/USDT"
     assert batches and batches[0][0]["id"] == "trade-1"
@@ -1334,6 +1355,7 @@ async def test_bybit_fetcher_uses_detail_cache(monkeypatch):
     event = events[0]
     assert event["client_order_id"] == "cached-id"
     assert event["pb_order_type"] == "cached-type"
+    assert event["pnl_status"] == "pending"
 
 
 @pytest.mark.asyncio
@@ -1405,6 +1427,7 @@ async def test_bybit_fetcher_distributes_pnl_across_fills():
     # Second fill: (10.5 - 11.0) * 3.0 = -1.5
     assert pnls[0] == pytest.approx(-2.0, rel=1e-3)
     assert pnls[1] == pytest.approx(-1.5, rel=1e-3)
+    assert [event["pnl_status"] for event in events] == ["complete", "complete"]
 
     # Verify raw field includes positions_history data for close fills
     for event in events:
@@ -2105,6 +2128,28 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
     await manager2.ensure_loaded()
     assert manager2.get_last_timestamp() == last_ts
     assert manager2.get_pnl_sum() == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_manager_pnl_helpers_fail_on_pending_close_pnl(tmp_path: Path, sample_events):
+    events = [dict(ev) for ev in sample_events]
+    events[-1]["pnl_status"] = "pending"
+    fetcher = _StaticFetcher(events)
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "fills_pending",
+    )
+
+    await manager.refresh()
+
+    with pytest.raises(RuntimeError, match="realized PnL pending"):
+        manager.get_pnl_sum()
+    with pytest.raises(RuntimeError, match="realized PnL pending"):
+        manager.get_pnl_cumsum()
+    with pytest.raises(RuntimeError, match="realized PnL pending"):
+        manager.reconstruct_equity_curve()
 
 
 @pytest.mark.asyncio
@@ -3134,7 +3179,7 @@ def test_kucoin_match_pnls_distributes_proportionally():
 
 
 def test_kucoin_match_pnls_handles_unmatched_closes():
-    """Test that unmatched closes get PnL set to 0."""
+    """Test that unmatched closes remain explicit pending realized-PnL events."""
     fetcher = KucoinFetcher(api=None)
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -3164,8 +3209,10 @@ def test_kucoin_match_pnls_handles_unmatched_closes():
 
     fetcher._match_pnls(closes, positions, events)
 
-    # Unmatched close should have PnL set to 0
-    assert events["orphan-close"]["pnl"] == 0.0
+    # The local estimate is retained for diagnostics, but it must not be
+    # consumed as authoritative realized PnL until positions_history matches.
+    assert events["orphan-close"]["pnl"] == 999.0
+    assert events["orphan-close"]["pnl_status"] == "pending"
 
 
 def test_kucoin_match_pnls_single_fill_gets_full_pnl():
@@ -3198,6 +3245,7 @@ def test_kucoin_match_pnls_single_fill_gets_full_pnl():
     fetcher._match_pnls(closes, positions, events)
 
     assert events["single-close"]["pnl"] == pytest.approx(25.5)
+    assert events["single-close"]["pnl_status"] == "complete"
 
 
 def test_kucoin_match_pnls_multiple_positions_multiple_fills():
@@ -3244,6 +3292,9 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert events["btc-close-2"]["pnl"] == pytest.approx(50.0)
     # Second position: 50 PnL to single fill
     assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
+    assert events["btc-close-1"]["pnl_status"] == "complete"
+    assert events["btc-close-2"]["pnl_status"] == "complete"
+    assert events["btc-close-3"]["pnl_status"] == "complete"
 
 
 @pytest.mark.asyncio
