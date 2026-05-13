@@ -294,7 +294,7 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
     }
     bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
     assert len(seen) == 1
-    assert "symbol=BTC side=long" in seen[0]
+    assert "symbol=BTC pside=long" in seen[0]
     assert "projected_initial_cost=1.473263" in seen[0]
     assert "required_effective_min_cost=10.100000" in seen[0]
     assert "balance=51.154957" in seen[0]

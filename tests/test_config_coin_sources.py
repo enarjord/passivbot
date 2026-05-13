@@ -24,8 +24,16 @@ def _base_config():
             },
         },
         "bot": {
-            "long": {"n_positions": 4},
-            "short": {"n_positions": 4},
+            "long": {
+                "n_positions": 4,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 0.25,
+            },
+            "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "wallet_exposure_limit": 0.0,
+            },
         },
         "live": {
             "approved_coins": {"long": [], "short": []},

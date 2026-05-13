@@ -9903,7 +9903,7 @@ class Passivbot:
                 effective_min_cost,
             )
             logging.debug(
-                "[entry] initial entry min effective cost detail | symbol=%s side=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
+                "[entry] initial entry min effective cost detail | symbol=%s pside=%s projected_initial_cost=%.6f required_effective_min_cost=%.6f balance=%.6f effective_limit=%.6f entry_initial_qty_pct=%.6f next_steps=increase_balance_or_reduce_bot.%s.n_positions_or_increase_per_slot_sizing override=live.filter_by_min_effective_cost=false caution=override_may_create_exchange-min-sized_entries",
                 Passivbot._log_symbol(symbol),
                 pside,
                 projected_initial_cost,
@@ -13604,7 +13604,7 @@ class Passivbot:
         self._initial_entry_distance_gate_log_state[key] = probe
         if not should_log:
             logging.debug(
-                "[entry] initial entry creation still distance-gated | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
+                "[entry] initial entry creation still distance-gated | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s",
                 Passivbot._log_symbol(probe["symbol"]),
                 probe["position_side"],
                 probe["qty"],
@@ -13617,7 +13617,7 @@ class Passivbot:
             )
             return
         logging.info(
-            "[entry] initial entry staged but not placed | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
+            "[entry] initial entry staged but not placed | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% tolerance=%.4f%% type=%s reason=initial_entry_distance_gate",
             Passivbot._log_symbol(probe["symbol"]),
             probe["position_side"],
             probe["qty"],
@@ -13645,7 +13645,7 @@ class Passivbot:
             return
         state.pop(key, None)
         logging.info(
-            "[entry] initial entry distance gate cleared | symbol=%s side=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
+            "[entry] initial entry distance gate cleared | symbol=%s pside=%s qty=%.10g price=%.10g market=%.10g dist=%.4f%% threshold=%.4f%% type=%s",
             Passivbot._log_symbol(order.get("symbol")),
             str(order.get("position_side") or ""),
             float(order.get("qty", 0.0) or 0.0),
@@ -13707,16 +13707,24 @@ class Passivbot:
         market_prices = await self._fetch_market_prices(
             {order["symbol"] for order in orders}
         )
+        missing_symbols = sorted(
+            {
+                order["symbol"]
+                for order in orders
+                if market_prices.get(order["symbol"]) is None
+            }
+        )
+        if missing_symbols:
+            logging.warning(
+                "[order] preserving %s order because market prices are unavailable | missing=%s",
+                log_label,
+                Passivbot._log_symbols(missing_symbols, limit=8),
+            )
+            return list(orders)
         entries = []
         for order in orders:
             market_price = market_prices.get(order["symbol"])
-            if market_price is None:
-                logging.debug(
-                    "price missing sort %s by mprice_diff %s", log_label, order
-                )
-                diff = 0.0
-            else:
-                diff = order_market_diff(order["side"], order["price"], market_price)
+            diff = order_market_diff(order["side"], order["price"], market_price)
             entries.append((diff, order))
         entries.sort(key=lambda item: item[0])
         return [order for _, order in entries]
@@ -13734,7 +13742,12 @@ class Passivbot:
                 allow_completed_candle_fallback=True,
             )
         except Exception as exc:
-            logging.debug("failed fetching market prices for order sorting: %s", exc)
+            logging.warning(
+                "[order] market price lookup failed for order sorting; preserving original order | symbols=%s error_type=%s error=%s",
+                Passivbot._log_symbols(tuple(sorted(symbols)), limit=8),
+                type(exc).__name__,
+                exc,
+            )
             prices = {}
         for symbol in symbols:
             results[symbol] = prices.get(symbol)
