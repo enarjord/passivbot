@@ -44,13 +44,46 @@ def _dump_json(path: Path, data: Any) -> None:
 def _summarize_remote_calls(call_log: List[dict]) -> dict:
     by_method: Dict[str, int] = {}
     by_step: Dict[str, Dict[str, int]] = {}
+    by_category: Dict[str, int] = {}
+    by_step_category: Dict[str, Dict[str, int]] = {}
+    max_per_step_by_method: Dict[str, int] = {}
     ohlcv_calls: List[dict] = []
+    account_state_methods = {
+        "fetch_balance",
+        "fetch_positions",
+        "fetch_open_orders",
+        "fetch_my_trades",
+    }
+    market_data_methods = {
+        "fetch_ticker",
+        "fetch_tickers",
+        "fetch_ohlcv",
+        "fetch_time",
+        "load_markets",
+    }
+    order_write_methods = {
+        "create_order",
+        "cancel_order",
+    }
     for entry in call_log:
         method = str(entry.get("method") or "unknown")
         step_key = str(entry.get("step_index") if entry.get("step_index") is not None else "unknown")
+        if method in account_state_methods:
+            category = "account_state"
+        elif method in market_data_methods:
+            category = "market_data"
+        elif method in order_write_methods:
+            category = "order_write"
+        elif method.startswith("set_"):
+            category = "account_config"
+        else:
+            category = "other"
         by_method[method] = by_method.get(method, 0) + 1
+        by_category[category] = by_category.get(category, 0) + 1
         step_bucket = by_step.setdefault(step_key, {})
         step_bucket[method] = step_bucket.get(method, 0) + 1
+        category_bucket = by_step_category.setdefault(step_key, {})
+        category_bucket[category] = category_bucket.get(category, 0) + 1
         if method == "fetch_ohlcv":
             ohlcv_calls.append(
                 {
@@ -63,10 +96,18 @@ def _summarize_remote_calls(call_log: List[dict]) -> dict:
                     "rows": entry.get("rows"),
                 }
             )
+    for step_bucket in by_step.values():
+        for method, count in step_bucket.items():
+            max_per_step_by_method[method] = max(max_per_step_by_method.get(method, 0), count)
     return {
         "total_calls": len(call_log),
+        "by_category": dict(sorted(by_category.items())),
         "by_method": dict(sorted(by_method.items())),
         "by_step": {key: dict(sorted(value.items())) for key, value in sorted(by_step.items())},
+        "by_step_category": {
+            key: dict(sorted(value.items())) for key, value in sorted(by_step_category.items())
+        },
+        "max_per_step_by_method": dict(sorted(max_per_step_by_method.items())),
         "ohlcv_calls": ohlcv_calls,
     }
 
@@ -198,6 +239,9 @@ def _apply_assertions(
     *,
     step_summaries: List[dict] | None = None,
     log_text: str = "",
+    remote_calls: List[dict] | None = None,
+    remote_call_summary: dict | None = None,
+    candle_remote_fetches: List[dict] | None = None,
 ) -> None:
     assertions = scenario.get("assertions") or {}
     if not assertions:
@@ -240,6 +284,17 @@ def _apply_assertions(
             "steps": step_summaries or [],
         }
         _apply_path_assertions("summary_paths", summary_root, assertions["summary_paths"])
+    if "remote_call_paths" in assertions:
+        remote_root = {
+            "calls": remote_calls or [],
+            "summary": remote_call_summary or _summarize_remote_calls(remote_calls or []),
+            "candle_fetches": candle_remote_fetches or [],
+        }
+        _apply_path_assertions(
+            "remote_call_paths",
+            remote_root,
+            assertions["remote_call_paths"],
+        )
     if "log_contains" in assertions:
         for fragment in assertions["log_contains"]:
             if str(fragment) not in log_text:
@@ -284,6 +339,12 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
 def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
     if not hasattr(bot, "cm"):
         return
+    # Fake scenarios advance exchange time without advancing wall-clock time.
+    # MarketSnapshotProvider TTLs are wall-clock based, so clear cached tickers
+    # before each fake step to keep HSL/upnl checks aligned with scenario prices.
+    provider = getattr(bot, "market_snapshot_provider", None)
+    if provider is not None and hasattr(provider, "_cache"):
+        provider._cache.clear()
     for symbol in fake_client.symbols:
         rows = fake_client._candles_by_symbol.get(symbol, [])[: fake_client.current_index + 1]
         arr = np.zeros(len(rows), dtype=CANDLE_DTYPE)
@@ -303,6 +364,8 @@ def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:
 def _install_runtime_overrides(bot, scenario: dict) -> None:
     if hasattr(bot, "cca") and isinstance(bot.cca, FakeCCXTClient):
         bot.get_exchange_time = lambda: int(bot.cca.now_ms)
+        if hasattr(bot, "cm"):
+            bot.cm._now_ms_callback = lambda: int(bot.cca.now_ms)
 
 
 def _fake_active_red_psides(bot) -> List[str]:
@@ -319,20 +382,26 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
     active_red_psides = _fake_active_red_psides(bot)
     if not active_red_psides:
         return {"red_supervisor": False}
+    if not await bot.refresh_authoritative_state():
+        return {"red_supervisor": True, "finalized": False, "refreshed": False}
+    active_red_psides = _fake_active_red_psides(bot)
+    if not active_red_psides:
+        return {"red_supervisor": True, "finalized": True}
 
+    needs_panic_execution = False
     for pside in list(active_red_psides):
         state = bot._hsl_state(pside)
         n_positions = bot._equity_hard_stop_count_open_positions(pside)
         entry_orders, nonpanic_close_orders = bot._equity_hard_stop_count_blocking_open_orders(pside)
         if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-            if state["red_flat_confirmations"] == 0:
+            if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
                 state["pending_stop_event"] = await bot._equity_hard_stop_compute_stop_event(
                     pside, int(bot.get_exchange_time())
                 )
             state["red_flat_confirmations"] += 1
         else:
+            needs_panic_execution = True
             state["red_flat_confirmations"] = 0
-            state["pending_stop_event"] = None
         bot._equity_hard_stop_log_red_progress(
             pside,
             n_positions,
@@ -346,12 +415,84 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
     active_red_psides = _fake_active_red_psides(bot)
     if not active_red_psides:
         return {"red_supervisor": True, "finalized": True}
+    if not needs_panic_execution:
+        return {"red_supervisor": True, "finalized": False}
 
     for pside in active_red_psides:
         bot._equity_hard_stop_set_red_runtime_forced_modes(pside)
     bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
-    await bot.execute_to_exchange()
+    if not await bot.refresh_market_state_if_needed():
+        return {"red_supervisor": True, "finalized": False, "market_ready": False}
+    await bot.execute_to_exchange(prepare_cycle=False)
+    finalized_terminal = await _finalize_fake_terminal_red_if_sync_flat(
+        bot, active_red_psides
+    )
+    if finalized_terminal:
+        return {"red_supervisor": True, "finalized": True}
     return {"red_supervisor": True, "finalized": False}
+
+
+async def _finalize_fake_terminal_red_if_sync_flat(
+    bot, active_red_psides: List[str]
+) -> bool:
+    """Finalize terminal RED in fake mode when synchronous panic execution already flattened."""
+    if not active_red_psides or not isinstance(getattr(bot, "cca", None), FakeCCXTClient):
+        return False
+    try:
+        fetched_positions = await bot.fetch_positions()
+        bot._apply_positions_snapshot(fetched_positions)
+        fetched_open_orders = await bot.fetch_open_orders()
+        await bot._apply_open_orders_snapshot(
+            fetched_open_orders,
+            allow_followup_positions_refresh=False,
+            reconcile_balance=False,
+        )
+        if hasattr(bot, "capture_balance_snapshot"):
+            _, balance_raw = await bot.capture_balance_snapshot()
+        else:
+            balance_raw = await bot.fetch_balance()
+        prepared_balance = bot._prepare_balance_snapshot(balance_raw)
+        if prepared_balance is not None:
+            bot._commit_balance_snapshot(prepared_balance)
+    except Exception as exc:
+        logging.debug("fake RED terminal sync confirmation skipped: %s", exc)
+        return False
+
+    finalized = False
+    for pside in list(active_red_psides):
+        if not (
+            bot._equity_hard_stop_enabled(pside)
+            and bot._equity_hard_stop_runtime_red_latched(pside)
+            and not bot._hsl_state(pside)["halted"]
+        ):
+            continue
+        state = bot._hsl_state(pside)
+        n_positions = bot._equity_hard_stop_count_open_positions(pside)
+        entry_orders, nonpanic_close_orders = (
+            bot._equity_hard_stop_count_blocking_open_orders(pside)
+        )
+        if n_positions != 0 or entry_orders != 0 or nonpanic_close_orders != 0:
+            continue
+        stop_event = state.get("pending_stop_event")
+        if stop_event is None:
+            stop_event = await bot._equity_hard_stop_compute_stop_event(
+                pside, int(bot.get_exchange_time())
+            )
+            state["pending_stop_event"] = stop_event
+        no_restart_threshold = float(bot.hsl[pside]["no_restart_drawdown_threshold"])
+        if float(stop_event["drawdown_raw"]) < no_restart_threshold:
+            continue
+        state["red_flat_confirmations"] = 2
+        bot._equity_hard_stop_log_red_progress(
+            pside,
+            n_positions,
+            entry_orders,
+            nonpanic_close_orders,
+            state["red_flat_confirmations"],
+        )
+        await bot._equity_hard_stop_finalize_red_stop(pside, stop_event)
+        finalized = True
+    return finalized
 
 
 async def _run_fake_bot(
@@ -442,26 +583,183 @@ async def _run_fake_cycle(bot):
                 return await _run_fake_red_supervisor_step(bot)
             await bot._equity_hard_stop_run_red_supervisor()
             return {"red_supervisor": True}
-    return await bot.execute_to_exchange()
+    refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
+    if callable(refresh_authoritative) and not await refresh_authoritative():
+        return {"updated": False}
+    refresh_market = getattr(bot, "refresh_market_state_if_needed", None)
+    if callable(refresh_market) and not await refresh_market():
+        return {"updated": False, "market_ready": False}
+    return await bot.execute_to_exchange(prepare_cycle=False)
+
+def _load_run_artifacts(output_dir: Path) -> dict[str, Any]:
+    def _load(name: str, default):
+        path = output_dir / name
+        if not path.exists():
+            return default
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    log_path = output_dir / "fake_live.log"
+    return {
+        "step_summaries": _load("step_summaries.json", []),
+        "fake_exchange_state": _load("fake_exchange_state.json", {}),
+        "fills": _load("fills.json", []),
+        "positions": _load("positions.json", []),
+        "hsl_trace": _load("hsl_trace.json", {}),
+        "run_metadata": _load("run_metadata.json", {}),
+        "remote_calls": _load("remote_calls.json", []),
+        "remote_call_summary": _load("remote_call_summary.json", {}),
+        "candle_remote_fetches": _load("candle_remote_fetches.json", []),
+        "log_text": log_path.read_text(encoding="utf-8") if log_path.exists() else "",
+    }
 
 
-async def _async_main(args: argparse.Namespace) -> int:
-    configure_logging(debug=args.log_level)
+def _canonical_fill(fill: dict[str, Any]) -> dict[str, Any]:
+    normalized = {}
+    for key, value in fill.items():
+        if key in {"clientOrderId", "id", "order"}:
+            continue
+        if key == "info" and isinstance(value, dict):
+            normalized[key] = {
+                info_key: info_value
+                for info_key, info_value in value.items()
+                if info_key not in {"clientOrderId"}
+            }
+            continue
+        normalized[key] = value
+    return normalized
+
+
+def _canonical_hsl_trace(trace: dict[str, Any]) -> dict[str, Any]:
+    normalized = json.loads(json.dumps(trace))
+    for pside_state in normalized.values():
+        if not isinstance(pside_state, dict):
+            continue
+        stop_event = pside_state.get("last_stop_event")
+        if isinstance(stop_event, dict):
+            stop_event.pop("triggered_at", None)
+            stop_event.pop("user", None)
+    return normalized
+
+
+def _canonicalize_artifact(name: str, payload: Any) -> Any:
+    if name == "step_summaries":
+        return payload
+    if name == "fills":
+        return sorted(
+            [_canonical_fill(fill) for fill in payload],
+            key=lambda x: (
+                x.get("timestamp"),
+                x.get("symbol"),
+                x.get("position_side"),
+                x.get("side"),
+                x.get("price"),
+                x.get("amount"),
+                x.get("pnl"),
+                x.get("reduceOnly"),
+            ),
+        )
+    if name == "positions":
+        return sorted(
+            payload,
+            key=lambda x: (
+                x.get("symbol"),
+                x.get("position_side"),
+                x.get("entry_price"),
+                x.get("size"),
+            ),
+        )
+    if name == "fake_exchange_state":
+        normalized = dict(payload)
+        if isinstance(normalized.get("fills"), list):
+            normalized["fills"] = _canonicalize_artifact("fills", normalized["fills"])
+        if isinstance(normalized.get("positions"), list):
+            normalized["positions"] = _canonicalize_artifact("positions", normalized["positions"])
+        if isinstance(normalized.get("open_orders"), list):
+            normalized["open_orders"] = sorted(
+                [
+                    {
+                        key: value
+                        for key, value in order.items()
+                        if key not in {"clientOrderId", "id"}
+                    }
+                    for order in normalized["open_orders"]
+                ],
+                key=lambda x: (
+                    x.get("symbol"),
+                    x.get("position_side"),
+                    x.get("side"),
+                    x.get("price"),
+                    x.get("amount"),
+                    x.get("qty"),
+                ),
+            )
+        return normalized
+    if name == "hsl_trace":
+        return _canonical_hsl_trace(payload)
+    return payload
+
+
+def _compare_run_artifacts(left: dict[str, Any], right: dict[str, Any]) -> dict[str, Any]:
+    keys = ("step_summaries", "fake_exchange_state", "fills", "positions", "hsl_trace")
+    diffs = []
+    for key in keys:
+        left_normalized = _canonicalize_artifact(key, left.get(key))
+        right_normalized = _canonicalize_artifact(key, right.get(key))
+        if left_normalized != right_normalized:
+            diffs.append(
+                {
+                    "artifact": key,
+                    "left": left_normalized,
+                    "right": right_normalized,
+                }
+            )
+    left_summary = left.get("remote_call_summary") or {}
+    right_summary = right.get("remote_call_summary") or {}
+    left_by_method = left_summary.get("by_method") or {}
+    right_by_method = right_summary.get("by_method") or {}
+    remote_call_delta_by_method = {
+        method: int(right_by_method.get(method, 0)) - int(left_by_method.get(method, 0))
+        for method in sorted(set(left_by_method) | set(right_by_method))
+    }
+    return {
+        "match": not diffs,
+        "diff_count": len(diffs),
+        "diffs": diffs,
+        "remote_call_summary": {
+            "left": left_summary,
+            "right": right_summary,
+        },
+        "remote_call_delta": int(right_summary.get("total_calls") or 0)
+        - int(left_summary.get("total_calls") or 0),
+        "remote_call_delta_by_method": remote_call_delta_by_method,
+    }
+
+
+async def _run_fake_case(
+    *,
+    config_path: str,
+    scenario_path: str,
+    user: str | None,
+    max_steps: int | None,
+    output_dir: Path,
+    log_level: int,
+    snapshot_each_step: bool,
+    enforce_assertions: bool = True,
+) -> Path:
     config = load_prepared_config(
-        args.config,
+        config_path,
         verbose=False,
         target="live",
         runtime="live",
     )
     config.setdefault("live", {})
-    config["live"]["fake_scenario_path"] = args.scenario
+    config["live"]["fake_scenario_path"] = scenario_path
 
-    scenario = load_fake_scenario(args.scenario)
-    output_dir = _build_output_dir(args.output_dir, scenario)
+    scenario = load_fake_scenario(scenario_path)
     output_dir.mkdir(parents=True, exist_ok=True)
     log_path = output_dir / "fake_live.log"
     log_handler = _attach_file_logging(log_path)
-    _, restore_user_override = _install_fake_user_override(config, args.scenario, args.user)
+    _, restore_user_override = _install_fake_user_override(config, scenario_path, user)
     bot = None
     restore_candle_trace = lambda: None
 
@@ -480,36 +778,48 @@ async def _async_main(args: argparse.Namespace) -> int:
         _install_runtime_overrides(bot, scenario)
         await bot.start_bot()
         bot.debug_mode = False
-        snapshot_dir = (output_dir / "snapshots") if args.snapshot_each_step else None
+        snapshot_dir = (output_dir / "snapshots") if snapshot_each_step else None
         if snapshot_dir is not None:
             snapshot_dir.mkdir(parents=True, exist_ok=True)
         step_summaries = await _run_fake_bot(
             bot,
             bot.cca,
-            args.max_steps,
+            max_steps,
             snapshot_dir=snapshot_dir,
             run_initial_cycle=bool(scenario.get("run_initial_cycle", True)),
         )
         log_text = log_path.read_text(encoding="utf-8") if log_path.exists() else ""
-        _apply_assertions(
-            bot,
-            bot.cca,
-            scenario,
-            step_summaries=step_summaries,
-            log_text=log_text,
-        )
+        remote_calls = bot.cca.export_request_log()
+        remote_call_summary = _summarize_remote_calls(remote_calls)
+        if enforce_assertions:
+            _apply_assertions(
+                bot,
+                bot.cca,
+                scenario,
+                step_summaries=step_summaries,
+                log_text=log_text,
+                remote_calls=remote_calls,
+                remote_call_summary=remote_call_summary,
+                candle_remote_fetches=candle_remote_fetches,
+            )
 
         _dump_json(output_dir / "step_summaries.json", step_summaries)
         _dump_json(output_dir / "fake_exchange_state.json", bot.cca.export_state())
         _dump_json(output_dir / "fills.json", bot.cca.fills)
         _dump_json(output_dir / "positions.json", bot.cca.export_positions())
         _dump_json(output_dir / "hsl_trace.json", _extract_hsl_trace(bot))
-        remote_calls = bot.cca.export_request_log()
+        _dump_json(
+            output_dir / "run_metadata.json",
+            {
+                "assertions_enforced": bool(enforce_assertions),
+                "user": str(config.get("live", {}).get("user") or ""),
+                "scenario_path": str(scenario_path),
+            },
+        )
         _dump_json(output_dir / "remote_calls.json", remote_calls)
-        _dump_json(output_dir / "remote_call_summary.json", _summarize_remote_calls(remote_calls))
+        _dump_json(output_dir / "remote_call_summary.json", remote_call_summary)
         _dump_json(output_dir / "candle_remote_fetches.json", candle_remote_fetches)
-        print(str(output_dir))
-        return 0
+        return output_dir
     finally:
         try:
             if bot is not None:
@@ -522,6 +832,24 @@ async def _async_main(args: argparse.Namespace) -> int:
             restore_user_override()
             logging.getLogger().removeHandler(log_handler)
             log_handler.close()
+
+
+async def _async_main(args: argparse.Namespace) -> int:
+    configure_logging(debug=args.log_level)
+    scenario = load_fake_scenario(args.scenario)
+    output_dir = _build_output_dir(args.output_dir, scenario)
+
+    run_dir = await _run_fake_case(
+        config_path=args.config,
+        scenario_path=args.scenario,
+        user=args.user,
+        max_steps=args.max_steps,
+        output_dir=output_dir,
+        log_level=args.log_level,
+        snapshot_each_step=args.snapshot_each_step,
+    )
+    print(str(run_dir))
+    return 0
 
 
 def main() -> int:

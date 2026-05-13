@@ -4,6 +4,7 @@ import types
 
 import pytest
 import numpy as np
+from utils import utc_ms
 
 
 def _make_mock_pbr():
@@ -125,9 +126,13 @@ def _make_mock_pbr():
 
             self._last_rolling_peak = float(peak_strategy_equity)
             self._peak_strategy_equity = float(peak_strategy_equity)
-            drawdown_raw = max(0.0, 1.0 - equity / max(self._peak_strategy_equity, 1e-12))
+            drawdown_raw = max(
+                0.0, 1.0 - equity / max(self._peak_strategy_equity, 1e-12)
+            )
             decay = (1.0 - alpha) ** float(elapsed_minutes)
-            self._drawdown_ema = drawdown_raw + (self._drawdown_ema - drawdown_raw) * decay
+            self._drawdown_ema = (
+                drawdown_raw + (self._drawdown_ema - drawdown_raw) * decay
+            )
             drawdown_score = min(drawdown_raw, self._drawdown_ema)
             if self._red_latched or drawdown_score >= red_threshold:
                 self._tier = "red"
@@ -298,7 +303,8 @@ def mock_pbr(monkeypatch):
             return False
 
     portalocker_stub = types.SimpleNamespace(
-        Lock=_DummyLock, exceptions=types.SimpleNamespace(LockException=_DummyLockException)
+        Lock=_DummyLock,
+        exceptions=types.SimpleNamespace(LockException=_DummyLockException),
     )
     monkeypatch.setitem(sys.modules, "portalocker", portalocker_stub)
 
@@ -397,17 +403,17 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "red_flat_confirmations": 0,
                     "pending_red_since_ms": None,
                     "cooldown_until_ms": None,
-                "pending_stop_event": None,
-                "last_stop_event": None,
-                "last_status_log_ms": 0,
-                "last_cooldown_log_ms": 0,
-                "cooldown_intervention_active": False,
-                "cooldown_repanic_reset_pending": False,
-                "last_cooldown_intervention_log_ms": 0,
-                "cooldown_unresolved_residue": False,
+                    "pending_stop_event": None,
+                    "last_stop_event": None,
+                    "last_status_log_ms": 0,
+                    "last_cooldown_log_ms": 0,
+                    "cooldown_intervention_active": False,
+                    "cooldown_repanic_reset_pending": False,
+                    "last_cooldown_intervention_log_ms": 0,
+                    "cooldown_unresolved_residue": False,
+                }
+                for pside in ("long", "short")
             }
-            for pside in ("long", "short")
-        }
             # Test-only aliases for concise fixtures.
             self.equity_hard_stop_loss = self.hsl["long"]
             self._equity_hard_stop_runtime = self._equity_hard_stop["long"]["runtime"]
@@ -467,7 +473,6 @@ def _make_dummy_bot(config, *, last_price=100.0):
             }
             self._live_values = {
                 "filter_by_min_effective_cost": False,
-                "price_distance_threshold": 1.0,
                 "market_orders_allowed": False,
                 "order_match_tolerance_pct": 0.0,
                 "hsl_position_during_cooldown_policy": "panic",
@@ -483,7 +488,21 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     last_price + 10,
                 ),
                 get_current_close=lambda symbol, max_age_ms=None: last_price,
-                get_latest_ema_log_range_many=lambda items, **kwargs: {sym: 0.0 for sym, _ in items},
+                get_completed_candle_health=lambda symbol, windows=None, now_ms=None: {
+                    "ok": True,
+                    "timeframes": {
+                        "1m": {
+                            "coverage_ok": True,
+                            "latest_expected_ts": 60_000,
+                            "last_cached_ts": 60_000,
+                            "runtime_synthetic_count": 0,
+                            "missing_candles": 0,
+                        }
+                    },
+                },
+                get_latest_ema_log_range_many=lambda items, **kwargs: {
+                    sym: 0.0 for sym, _ in items
+                },
                 get_ema_bounds_many=lambda items, **kwargs: {
                     sym: (last_price - 10, last_price + 10) for sym, _, _ in items
                 },
@@ -497,6 +516,9 @@ def _make_dummy_bot(config, *, last_price=100.0):
 
         def live_value(self, key: str):
             return self._live_values.get(key, 0.0)
+
+        async def _get_live_last_prices(self, symbols, **kwargs):
+            return {s: last_price for s in symbols}
 
     return DummyBot(config)
 
@@ -543,6 +565,81 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
     return symbol
 
 
+def _stamp_staged_account_and_candles(bot):
+    from freshness_ledger import ACCOUNT_SURFACES
+    from market_snapshot import MarketSnapshot
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    assert missing == []
+    bot._record_authoritative_surface("completed_candles", candle_signature)
+    symbols = bot._urgent_active_candle_symbols()
+    snapshots = {
+        symbol: MarketSnapshot(
+            symbol=symbol,
+            bid=99.5,
+            ask=100.5,
+            last=100.0,
+            fetched_ms=utc_ms(),
+            source="test",
+        )
+        for symbol in symbols
+    }
+    bot._record_market_snapshot_surface(symbols, snapshots)
+    if getattr(bot, "market_snapshot_provider", None) is None:
+
+        async def _get_snapshots(requested_symbols, max_age_ms=None):
+            del max_age_ms
+            return {
+                symbol: MarketSnapshot(
+                    symbol=symbol,
+                    bid=99.5,
+                    ask=100.5,
+                    last=100.0,
+                    fetched_ms=utc_ms(),
+                    source="test",
+                )
+                for symbol in requested_symbols
+            }
+
+        bot.market_snapshot_provider = types.SimpleNamespace(
+            get_snapshots=_get_snapshots
+        )
+
+
+def test_orchestrator_runtime_hints_reconstruct_forager_incumbents_from_open_orders():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"] = {"size": 0.0, "price": 0.0}
+    bot._live_values["forager_score_hysteresis_pct"] = 0.005
+    bot.open_orders[symbol] = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+            "reduce_only": False,
+            "pb_order_type": "entry_initial_normal_long",
+        }
+    ]
+
+    hints = bot._build_orchestrator_runtime_hints({symbol: 0})
+
+    assert hints["peek_hints"]["expand_grid_long"] == []
+    assert hints["peek_hints"]["expand_close_long"] == []
+    assert hints["forager_hysteresis"] == {
+        "score_hysteresis_pct": 0.005,
+        "incumbent_long": [0],
+        "incumbent_short": [],
+    }
+
+
 def _make_hsl_fill_event(
     timestamp: int,
     *,
@@ -581,7 +678,9 @@ def _infer_long_replay_contract(
 def _apply_replay_contract_to_hsl_state(bot, contract):
     state = _hsl_state(bot)
     state["halted"] = bool(contract["active_cooldown_now"])
-    state["cooldown_until_ms"] = contract["cooldown_until_ms"] if contract["active_cooldown_now"] else None
+    state["cooldown_until_ms"] = (
+        contract["cooldown_until_ms"] if contract["active_cooldown_now"] else None
+    )
     state["cooldown_intervention_active"] = bool(contract["intervention_active"])
     state["cooldown_unresolved_residue"] = bool(contract["unresolved_residue"])
     return state
@@ -674,8 +773,11 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         captured["input"] = input_json
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
-    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    _stamp_staged_account_and_candles(bot)
 
     await bot.calc_ideal_orders_orchestrator()
 
@@ -741,34 +843,80 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
         captured["input"] = json.loads(input_json)
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
-    monkeypatch.setattr(bot, "update_effective_min_cost", types.MethodType(fake_update_effective_min_cost, bot))
+    monkeypatch.setattr(
+        bot,
+        "update_effective_min_cost",
+        types.MethodType(fake_update_effective_min_cost, bot),
+    )
     monkeypatch.setattr(bot, "refresh_approved_ignored_coins_lists", lambda: None)
     monkeypatch.setattr(bot, "set_wallet_exposure_limits", lambda: None)
     monkeypatch.setattr(bot, "is_forager_mode", lambda pside: False)
-    monkeypatch.setattr(bot, "get_max_n_positions", lambda pside: 1 if pside == "long" else 0)
-    monkeypatch.setattr(bot, "get_current_n_positions", lambda pside: 1 if pside == "long" else 0)
-    monkeypatch.setattr(bot, "get_filtered_coins", types.MethodType(fake_get_filtered_coins, bot))
-    monkeypatch.setattr(bot, "update_trailing_data", types.MethodType(fake_update_trailing_data, bot))
-    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    monkeypatch.setattr(
+        bot, "get_max_n_positions", lambda pside: 1 if pside == "long" else 0
+    )
+    monkeypatch.setattr(
+        bot, "get_current_n_positions", lambda pside: 1 if pside == "long" else 0
+    )
+    monkeypatch.setattr(
+        bot, "get_filtered_coins", types.MethodType(fake_get_filtered_coins, bot)
+    )
+    monkeypatch.setattr(
+        bot, "update_trailing_data", types.MethodType(fake_update_trailing_data, bot)
+    )
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
 
     bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
     assert bot._runtime_forced_modes["long"][symbol] == "panic"
 
+    _stamp_staged_account_and_candles(bot)
     await bot.execution_cycle()
     assert symbol in bot.active_symbols
 
+    _stamp_staged_account_and_candles(bot)
     _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
 
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
+    assert captured["input"]["peek_hints"]["expand_grid_long"] == [0]
+    assert captured["input"]["peek_hints"]["expand_close_long"] == [0]
+    assert captured["input"]["peek_hints"]["expand_grid_short"] == []
+    assert captured["input"]["forager_hysteresis"]["score_hysteresis_pct"] == 0.0
     assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
 
 
 @pytest.mark.asyncio
-async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
+async def test_staged_orchestrator_precondition_blocks_before_market_snapshot():
     cfg = _dummy_config()
-    cfg["live"]["authoritative_refresh_mode"] = "staged"
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    symbol = _set_basic_state(bot)
+    bot.markets_dict = {symbol: {"active": True}}
+
+    snapshot_calls = []
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        snapshot_calls.append((list(symbols), max_age_ms))
+        return {}
+
+    bot.market_snapshot_provider = types.SimpleNamespace(
+        get_snapshots=fake_get_snapshots
+    )
+    bot._begin_authoritative_refresh_epoch()
+
+    with pytest.raises(RuntimeError, match="staged planner precondition failed"):
+        await bot.calc_ideal_orders_orchestrator()
+
+    assert snapshot_calls == []
+
+
+@pytest.mark.asyncio
+async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
+    monkeypatch,
+):
+    cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     bot.exchange = "bybit"
     bot.user_info["exchange"] = "bybit"
@@ -794,16 +942,33 @@ async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
         }
     }
 
+    from market_snapshot import MarketSnapshot
+
     cm_calls = []
+    snapshot_calls = []
+    call_order = []
 
     async def fake_get_last_prices(symbols, max_age_ms=None):
         cm_calls.append((list(symbols), max_age_ms))
         return {s: 101.0 for s in symbols}
 
-    async def forbidden_fetch_tickers():
-        raise AssertionError("staged orchestrator should not call fetch_tickers()")
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        call_order.append("market_snapshot")
+        snapshot_calls.append((list(symbols), max_age_ms))
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=100.5,
+                ask=101.5,
+                last=101.0,
+                fetched_ms=utc_ms(),
+                source="test",
+            )
+            for s in symbols
+        }
 
     async def fake_load_bundle(self, symbols, modes):
+        call_order.append("ema_bundle")
         m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
         m1_volume = {symbol: {10.0: 1_000.0}}
         m1_log_range = {symbol: {10.0: 0.01}}
@@ -817,16 +982,159 @@ async def test_staged_orchestrator_uses_cm_last_prices_only(monkeypatch):
         return '{"orders": [], "diagnostics": {"warnings": []}}'
 
     bot.cm.get_last_prices = fake_get_last_prices
-    monkeypatch.setattr(bot, "fetch_tickers", forbidden_fetch_tickers, raising=False)
-    monkeypatch.setattr(bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot))
+    bot.market_snapshot_provider = types.SimpleNamespace(
+        get_snapshots=fake_get_snapshots
+    )
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
     monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    from freshness_ledger import ACCOUNT_SURFACES
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, _missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    bot._record_authoritative_surface("completed_candles", candle_signature)
 
     await bot.calc_ideal_orders_orchestrator()
 
-    assert cm_calls == [([symbol], 10_000)]
+    assert call_order == ["ema_bundle", "market_snapshot"]
+    assert snapshot_calls == [([symbol], 5_000)]
+    assert cm_calls == []
     rust_symbol = captured["input"]["symbols"][0]
-    assert rust_symbol["order_book"]["bid"] == pytest.approx(101.0)
-    assert rust_symbol["order_book"]["ask"] == pytest.approx(101.0)
+    assert rust_symbol["order_book"]["bid"] == pytest.approx(100.5)
+    assert rust_symbol["order_book"]["ask"] == pytest.approx(101.5)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    bot.exchange = "bybit"
+    bot.user_info["exchange"] = "bybit"
+    managed_symbol = _set_basic_state(bot)
+    flat_symbol = "ALT/USDT"
+    bot.active_symbols = [managed_symbol, flat_symbol]
+    bot.open_orders[flat_symbol] = []
+    bot.effective_min_cost[managed_symbol] = 1.0
+    bot.positions[flat_symbol] = {
+        "long": {"size": 0.0, "price": 0.0},
+        "short": {"size": 0.0, "price": 0.0},
+    }
+    for attr, value in (
+        ("qty_steps", 0.01),
+        ("price_steps", 0.01),
+        ("min_qtys", 0.0),
+        ("min_costs", 0.0),
+        ("c_mults", 1.0),
+        ("effective_min_cost", 1.0),
+    ):
+        getattr(bot, attr)[flat_symbol] = value
+    bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
+    bot.PB_modes = {
+        "long": {managed_symbol: "normal", flat_symbol: "normal"},
+        "short": {managed_symbol: "manual", flat_symbol: "manual"},
+    }
+    for symbol in (managed_symbol, flat_symbol):
+        bot.trailing_prices[symbol] = {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+
+    from market_snapshot import MarketSnapshot
+    import passivbot_rust as pbr
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=100.5,
+                ask=101.5,
+                last=101.0,
+                fetched_ms=utc_ms(),
+                source="test",
+            )
+            for s in symbols
+        }
+
+    async def fake_load_bundle(self, symbols, modes):
+        self._orchestrator_ema_unavailable_symbols = {flat_symbol}
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0} for symbol in symbols}
+        m1_volume = {symbol: {10.0: 1_000.0} for symbol in symbols}
+        m1_log_range = {symbol: {10.0: 0.01} for symbol in symbols}
+        h1_log_range = {symbol: {10.0: 0.01} for symbol in symbols}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    captured = {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    bot.market_snapshot_provider = types.SimpleNamespace(
+        get_snapshots=fake_get_snapshots
+    )
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+
+    from freshness_ledger import ACCOUNT_SURFACES
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    candle_signature, _missing = bot._completed_candle_freshness_signature(
+        bot._urgent_active_candle_symbols()
+    )
+    bot._record_authoritative_surface("completed_candles", candle_signature)
+
+    await bot.calc_ideal_orders_orchestrator()
+
+    tradable_by_symbol = {
+        item["symbol_idx"]: item["tradable"] for item in captured["input"]["symbols"]
+    }
+    symbol_to_idx = {s: i for i, s in enumerate(sorted([managed_symbol, flat_symbol]))}
+    assert tradable_by_symbol[symbol_to_idx[managed_symbol]] is True
+    assert tradable_by_symbol[symbol_to_idx[flat_symbol]] is False
+
+
+@pytest.mark.asyncio
+async def test_staged_market_snapshot_missing_symbols_do_not_use_cm_fallback():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    cm_calls = []
+
+    async def fake_get_last_prices(symbols, max_age_ms=None):
+        cm_calls.append((list(symbols), max_age_ms))
+        return {s: 101.0 for s in symbols}
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {}
+
+    bot.cm.get_last_prices = fake_get_last_prices
+    bot.market_snapshot_provider = types.SimpleNamespace(
+        get_snapshots=fake_get_snapshots
+    )
+
+    with pytest.raises(RuntimeError, match="staged market snapshots incomplete"):
+        await bot._get_orchestrator_market_snapshots([symbol])
+
+    assert cm_calls == []
 
 
 def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
@@ -836,7 +1144,10 @@ def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
     flat_symbol = "ALT/USDT"
 
     bot.coin_overrides = {}
-    bot.approved_coins_minus_ignored_coins = {"long": [managed_symbol, flat_symbol], "short": []}
+    bot.approved_coins_minus_ignored_coins = {
+        "long": [managed_symbol, flat_symbol],
+        "short": [],
+    }
     bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
     bot.PB_mode_stop = {"long": "manual", "short": "manual"}
 
@@ -870,7 +1181,9 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     state["cooldown_until_ms"] = 200_000
     bot.positions[symbol]["long"]["size"] = 1.0
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 150_000
+    )
     assert changed is False
     assert state["cooldown_intervention_active"] is True
     assert state["cooldown_repanic_reset_pending"] is True
@@ -903,7 +1216,9 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
     monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 180_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 180_000
+    )
     assert changed is True
     assert captured["compute"] == ("long", 180_000)
     assert state["cooldown_until_ms"] == 240_000
@@ -924,7 +1239,9 @@ async def test_hsl_cooldown_tp_only_keeps_cooldown_and_blocks_entries():
     state["cooldown_until_ms"] = 200_000
     bot.positions[symbol]["long"]["size"] = 1.0
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 150_000
+    )
     assert changed is False
     assert state["cooldown_intervention_active"] is True
     assert state["cooldown_repanic_reset_pending"] is False
@@ -951,7 +1268,9 @@ async def test_hsl_cooldown_normal_resets_runtime_and_clears_halt(monkeypatch):
         lambda pside: removed.__setitem__("count", removed["count"] + 1),
     )
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 150_000
+    )
     assert changed is True
     assert removed["count"] == 1
     assert state["halted"] is False
@@ -985,7 +1304,9 @@ async def test_hsl_cooldown_manual_keeps_cooldown_and_leaves_position_manual():
     state["cooldown_until_ms"] = 200_000
     bot.positions[symbol]["long"]["size"] = 1.0
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 150_000
+    )
     assert changed is False
     assert state["cooldown_until_ms"] == 200_000
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "manual"
@@ -1003,13 +1324,17 @@ async def test_hsl_cooldown_graceful_stop_keeps_cooldown_and_manages_position():
     state["cooldown_until_ms"] = 200_000
     bot.positions[symbol]["long"]["size"] = 1.0
 
-    changed = await bot._equity_hard_stop_handle_position_during_cooldown("long", 150_000)
+    changed = await bot._equity_hard_stop_handle_position_during_cooldown(
+        "long", 150_000
+    )
     assert changed is False
     assert state["cooldown_until_ms"] == 200_000
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
 
 
-@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize(
+    "policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"]
+)
 def test_hsl_replay_contract_s1_clean_panic_flat_cooldown_active(policy):
     p_ts = 100_000
     symbol = "TEST/USDT"
@@ -1039,7 +1364,9 @@ def test_hsl_replay_contract_s1_clean_panic_flat_cooldown_active(policy):
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
 
 
-@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize(
+    "policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"]
+)
 def test_hsl_replay_contract_s2_clean_panic_flat_cooldown_expired(policy):
     p_ts = 100_000
     symbol = "TEST/USDT"
@@ -1068,7 +1395,9 @@ def test_hsl_replay_contract_s2_clean_panic_flat_cooldown_expired(policy):
     assert contract["unresolved_residue"] is False
 
 
-@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize(
+    "policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"]
+)
 def test_hsl_replay_contract_s3_panic_residue_no_later_entry(policy):
     p_ts = 100_000
     symbol = "TEST/USDT"
@@ -1155,7 +1484,9 @@ def test_hsl_replay_contract_s4_later_entry_during_active_cooldown_position_open
         ("graceful_stop", 100_000),
     ],
 )
-def test_hsl_replay_contract_s5_later_entry_during_cooldown_flat_by_restart(policy, expected_boundary):
+def test_hsl_replay_contract_s5_later_entry_during_cooldown_flat_by_restart(
+    policy, expected_boundary
+):
     symbol = "TEST/USDT"
     bot, _, contract = _infer_long_replay_contract(
         policy=policy,
@@ -1196,7 +1527,9 @@ def test_hsl_replay_contract_s5_later_entry_during_cooldown_flat_by_restart(poli
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "graceful_stop"
 
 
-@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize(
+    "policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"]
+)
 def test_hsl_replay_contract_s6_later_entry_after_cooldown_expired(policy):
     symbol = "TEST/USDT"
     bot, _, contract = _infer_long_replay_contract(
@@ -1340,7 +1673,9 @@ def test_hsl_replay_contract_s8_same_minute_panic_and_reentry_follows_fill_order
     assert bot._equity_hard_stop_halted_mode("long", symbol) == expected_mode
 
 
-@pytest.mark.parametrize("policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"])
+@pytest.mark.parametrize(
+    "policy", ["normal", "panic", "manual", "tp_only", "graceful_stop"]
+)
 def test_hsl_replay_contract_s9_opposite_side_trading_is_side_local(policy):
     symbol = "TEST/USDT"
     bot, _, contract = _infer_long_replay_contract(
@@ -1383,7 +1718,9 @@ async def test_manual_mode_skips_side_orders(monkeypatch):
 
     bot.PB_modes["long"][symbol] = "manual"
     bot.open_orders[symbol] = [
-        _make_order(symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0002)
+        _make_order(
+            symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0002
+        )
     ]
     bot.active_symbols = [symbol]
 
@@ -1703,10 +2040,16 @@ def test_hard_stop_apply_sample_same_minute_recomputes_when_inputs_change(monkey
             "red_latched": False,
             "peak_strategy_equity": kwargs["peak_strategy_equity"],
             "rolling_peak_strategy_equity": kwargs["peak_strategy_equity"],
-            "drawdown_ema": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
+            "drawdown_ema": max(
+                0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)
+            ),
             "tier": "green",
-            "drawdown_raw": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
-            "drawdown_score": max(0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)),
+            "drawdown_raw": max(
+                0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)
+            ),
+            "drawdown_score": max(
+                0.0, 1.0 - kwargs["equity"] / max(kwargs["peak_strategy_equity"], 1e-12)
+            ),
             "changed": True,
             "alpha": 0.01,
             "elapsed_minutes": 0,
@@ -1744,7 +2087,9 @@ def test_hard_stop_apply_sample_same_minute_returns_cached_metrics_when_inputs_m
     assert second["timestamp_ms"] == 60_000
     assert second["changed"] is False
     assert second["elapsed_minutes"] == 0
-    assert second["peak_strategy_equity"] == pytest.approx(first["peak_strategy_equity"])
+    assert second["peak_strategy_equity"] == pytest.approx(
+        first["peak_strategy_equity"]
+    )
     assert second["drawdown_raw"] == pytest.approx(first["drawdown_raw"])
 
 
@@ -1856,7 +2201,9 @@ async def test_hard_stop_finalize_red_stop_terminal_latches_and_stops(monkeypatc
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(monkeypatch):
+async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(
+    monkeypatch,
+):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
@@ -1932,7 +2279,9 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
     assert _hsl_state(bot)["no_restart_latched"] is False
     assert captured["payload"]["no_restart_latched"] is False
     assert captured["payload"]["cooldown_until_ms"] is not None
-    assert _hsl_state(bot)["cooldown_until_ms"] == captured["payload"]["cooldown_until_ms"]
+    assert (
+        _hsl_state(bot)["cooldown_until_ms"] == captured["payload"]["cooldown_until_ms"]
+    )
     assert _hsl_state(bot)["runtime"].red_latched() is True
     assert captured["pside"] == "long"
 
@@ -2097,7 +2446,9 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
 
 
 @pytest.mark.asyncio
-async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(monkeypatch):
+async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(
+    monkeypatch,
+):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["enabled"] = True
@@ -2230,7 +2581,14 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
                 return _make_candles(
                     [
                         (1_699_999_980_000, 100.0, 110.0, 95.0, 108.0, 1.0),
-                        (1_699_999_980_000 + 5 * 60_000, 108.0, 112.0, 101.0, 104.0, 1.0),
+                        (
+                            1_699_999_980_000 + 5 * 60_000,
+                            108.0,
+                            112.0,
+                            101.0,
+                            104.0,
+                            1.0,
+                        ),
                     ]
                 )
             if timeframe == "15m":
@@ -2254,17 +2612,24 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
         }
     ]
 
-    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events, current_balance=100.0
+    )
 
     assert len(history["timeline"]) == 5761
     assert history["metadata"]["approximate_price_sources"][symbol]["5m"] > 0
     event_offset = 5761 - 5002
-    assert history["timeline"][event_offset + 4]["equity"] > history["timeline"][event_offset]["equity"]
+    assert (
+        history["timeline"][event_offset + 4]["equity"]
+        > history["timeline"][event_offset]["equity"]
+    )
     assert history["timeline"][-1]["equity"] == pytest.approx(104.0)
 
 
 @pytest.mark.asyncio
-async def test_get_balance_equity_history_records_panic_flatten_with_same_minute_reentry(monkeypatch):
+async def test_get_balance_equity_history_records_panic_flatten_with_same_minute_reentry(
+    monkeypatch,
+):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = "XMR/USDT:USDT"
@@ -2280,15 +2645,15 @@ async def test_get_balance_equity_history_records_panic_flatten_with_same_minute
         async def get_candles(
             self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
         ):
-                assert symbol_ == symbol
-                assert timeframe in (None, "1m")
-                return _make_candles(
-                    [
-                        (base_ts, 100.0, 101.0, 95.0, 95.0, 1.0),
-                        (base_ts + 60_000, 95.0, 96.0, 94.0, 95.0, 1.0),
-                        (base_ts + 120_000, 95.0, 96.0, 94.0, 95.0, 1.0),
-                    ]
-                )
+            assert symbol_ == symbol
+            assert timeframe in (None, "1m")
+            return _make_candles(
+                [
+                    (base_ts, 100.0, 101.0, 95.0, 95.0, 1.0),
+                    (base_ts + 60_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                    (base_ts + 120_000, 95.0, 96.0, 94.0, 95.0, 1.0),
+                ]
+            )
 
     monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
     bot.cm = FakeCM()
@@ -2329,7 +2694,9 @@ async def test_get_balance_equity_history_records_panic_flatten_with_same_minute
         },
     ]
 
-    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events, current_balance=95.0
+    )
 
     row0 = next(row for row in history["timeline"] if row["timestamp"] == base_minute)
     assert row0["is_flat_long"] is False
@@ -2354,7 +2721,12 @@ async def test_get_balance_equity_history_uses_current_positions_to_reconcile_pa
     base_ts = base_minute
     bot.c_mults = {symbol: 1.0}
     bot.inverse = False
-    bot.positions = {symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
 
     async def fake_init_pnls():
         return None
@@ -2422,7 +2794,9 @@ async def test_get_balance_equity_history_uses_current_positions_to_reconcile_pa
         },
     ]
 
-    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events, current_balance=95.0
+    )
 
     assert history["panic_flatten_events"] == [
         {
@@ -2445,7 +2819,12 @@ async def test_get_balance_equity_history_trusts_current_flat_pside_over_residua
     base_ts = base_minute
     bot.c_mults = {symbol: 1.0}
     bot.inverse = False
-    bot.positions = {symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0, "price": 0.0}}}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
 
     async def fake_init_pnls():
         return None
@@ -2466,7 +2845,9 @@ async def test_get_balance_equity_history_trusts_current_flat_pside_over_residua
 
     def fake_compute_psize_pprice(events, *args, **kwargs):
         for ev in events:
-            ev["psize"] = 0.06 if "panic" in str(ev.get("pb_order_type") or "") else 0.16
+            ev["psize"] = (
+                0.06 if "panic" in str(ev.get("pb_order_type") or "") else 0.16
+            )
             ev["pprice"] = 0.0
         return {}
 
@@ -2503,7 +2884,9 @@ async def test_get_balance_equity_history_trusts_current_flat_pside_over_residua
     ]
 
     with caplog.at_level("WARNING"):
-        history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=95.0)
+        history = await bot.get_balance_equity_history(
+            fill_events=fill_events, current_balance=95.0
+        )
 
     assert history["panic_flatten_events"] == [
         {
@@ -2513,7 +2896,11 @@ async def test_get_balance_equity_history_trusts_current_flat_pside_over_residua
             "symbol": symbol,
         }
     ]
-    assert any("trusting current flat long state over residual panic replay size" in rec.message for rec in caplog.records)
+    assert any(
+        "trusting current flat long state over residual panic replay size"
+        in rec.message
+        for rec in caplog.records
+    )
 
 
 @pytest.mark.asyncio
@@ -2610,7 +2997,9 @@ async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_
     monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
     monkeypatch.setattr(bot, "get_exchange_time", lambda: 301_000)
     monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
-    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", lambda pside, payload: "/tmp/latch.json")
+    monkeypatch.setattr(
+        bot, "_equity_hard_stop_write_latch", lambda pside, payload: "/tmp/latch.json"
+    )
 
     await bot._equity_hard_stop_initialize_from_history()
 
@@ -2835,16 +3224,32 @@ async def test_orders_sorted_by_market_diff(monkeypatch):
 
     bot.PB_modes["long"][symbol] = "normal"
     bot.open_orders[symbol] = [
-        _make_order(symbol, side="buy", position_side="long", price=102.0, custom_hex=0x0005),
-        _make_order(symbol, side="buy", position_side="long", price=97.0, custom_hex=0x0006),
+        _make_order(
+            symbol, side="buy", position_side="long", price=102.0, custom_hex=0x0005
+        ),
+        _make_order(
+            symbol, side="buy", position_side="long", price=97.0, custom_hex=0x0006
+        ),
     ]
     bot.active_symbols = [symbol]
 
     async def fake_calc(self):
         return {
             symbol: [
-                _make_order(symbol, side="buy", position_side="long", price=101.0, custom_hex=0x0007),
-                _make_order(symbol, side="buy", position_side="long", price=95.0, custom_hex=0x0008),
+                _make_order(
+                    symbol,
+                    side="buy",
+                    position_side="long",
+                    price=101.0,
+                    custom_hex=0x0007,
+                ),
+                _make_order(
+                    symbol,
+                    side="buy",
+                    position_side="long",
+                    price=95.0,
+                    custom_hex=0x0008,
+                ),
             ]
         }
 

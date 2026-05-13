@@ -5,7 +5,7 @@ import asyncio
 import ccxt
 from copy import deepcopy
 from collections import defaultdict
-from utils import ts_to_date, utc_ms
+from utils import symbol_to_coin, ts_to_date, utc_ms
 from config.access import require_live_value
 from pure_funcs import (
     floatify,
@@ -505,6 +505,7 @@ class BybitBot(CCXTBot):
 
     async def update_exchange_config_by_symbols(self, symbols):
         for symbol in symbols:
+            log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
             to_print = ""
             leverage = self._calc_leverage_for_symbol(symbol)
             margin_mode = self._get_margin_mode_for_symbol(symbol)
@@ -518,7 +519,7 @@ class BybitBot(CCXTBot):
             except ccxt.BadRequest as e:
                 err_str = str(e).lower()
                 if "110026" in err_str or "not modified" in err_str:
-                    logging.debug(f"{symbol}: margin mode already set (not modified)")
+                    logging.debug(f"{log_symbol}: margin mode already set (not modified)")
                 else:
                     raise
             try:
@@ -527,11 +528,11 @@ class BybitBot(CCXTBot):
             except ccxt.BadRequest as e:
                 err_str = str(e).lower()
                 if "110043" in err_str or "not modified" in err_str:
-                    logging.debug(f"{symbol}: leverage already set (not modified)")
+                    logging.debug(f"{log_symbol}: leverage already set (not modified)")
                 else:
                     raise
             if to_print:
-                logging.debug(f"{symbol}: {to_print.strip()}")
+                logging.debug(f"{log_symbol}: {to_print.strip()}")
 
     async def update_exchange_config(self):
         res = await self.cca.set_position_mode(True)

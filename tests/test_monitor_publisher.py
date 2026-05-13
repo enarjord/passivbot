@@ -1,6 +1,9 @@
+import errno
 import json
+import logging
 
 from monitor_publisher import MonitorPublisher
+import monitor_publisher as monitor_publisher_module
 
 
 def _make_publisher(tmp_path, **overrides):
@@ -142,3 +145,22 @@ def test_monitor_publisher_rotates_event_segments(tmp_path):
     assert json.loads(rotated_lines[0])["kind"] == "one"
     assert len(current_lines) == 1
     assert json.loads(current_lines[0])["kind"] == "two"
+
+
+def test_monitor_disk_full_errors_are_coalesced(tmp_path, monkeypatch, caplog):
+    publisher = _make_publisher(tmp_path)
+
+    def fail_write(path, payload):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(monitor_publisher_module, "_atomic_write_json", fail_write)
+
+    with caplog.at_level(logging.ERROR):
+        publisher._write_manifest()
+        publisher._write_manifest()
+        publisher.write_snapshot({}, force=True)
+
+    messages = [record.message for record in caplog.records]
+    disk_messages = [msg for msg in messages if "disk full" in msg]
+    assert len(disk_messages) == 1
+    assert "suppressing repeat disk-full monitor errors for 60s" in disk_messages[0]

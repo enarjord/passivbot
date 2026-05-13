@@ -203,7 +203,18 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_volume_normaliz
 
     config = {
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
-        "bot": {"long": {}, "short": {}},
+        "bot": {
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            },
+            "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "wallet_exposure_limit": 0.0,
+            },
+        },
         "live": {
             "approved_coins": {"long": ["BTC/USDT:USDT"], "short": []},
             "minimum_coin_age_days": 0,

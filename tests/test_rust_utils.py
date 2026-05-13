@@ -19,6 +19,7 @@ from rust_utils import (
     maturin_env,
     prune_shadowing_local_extensions,
     preferred_compiled_path,
+    release_lock,
     source_fingerprint,
     source_stamp_path,
     stamp_compiled_extensions,
@@ -57,7 +58,7 @@ def test_check_and_maybe_compile_errors_on_import(monkeypatch):
 
 
 def test_check_and_maybe_compile_rechecks_after_lock_and_skips_rebuild(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     monkeypatch.delitem(sys.modules, "passivbot_rust", raising=False)
     compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
@@ -73,7 +74,7 @@ def test_check_and_maybe_compile_rechecks_after_lock_and_skips_rebuild(
         "rust_utils.extension_needs_rebuild",
         lambda compiled_path, source_mtime, fingerprint: next(stale_checks),
     )
-    monkeypatch.setattr("rust_utils.acquire_lock", lambda: True)
+    monkeypatch.setattr("rust_utils.acquire_lock", lambda **_kwargs: True)
     monkeypatch.setattr("rust_utils.release_lock", lambda: releases.append(True))
     monkeypatch.setattr(
         "rust_utils.recompile_rust",
@@ -83,6 +84,75 @@ def test_check_and_maybe_compile_rechecks_after_lock_and_skips_rebuild(
     check_and_maybe_compile()
 
     assert releases == [True]
+    out = capsys.readouterr().out
+    assert "Rust extension is stale; recompiling" not in out
+    assert "Rust extension was rebuilt by another process; continuing." in out
+
+
+def test_check_and_maybe_compile_logs_rebuild_only_after_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    monkeypatch.delitem(sys.modules, "passivbot_rust", raising=False)
+    compiled = tmp_path / "passivbot_rust.cpython-312-darwin.so"
+    compiled.write_text("binary")
+    stale_checks = iter([True, True, False])
+    events: list[str] = []
+
+    monkeypatch.setattr("rust_utils.prune_shadowing_local_extensions", lambda: None)
+    monkeypatch.setattr("rust_utils.latest_source_mtime", lambda: 2.0)
+    monkeypatch.setattr("rust_utils.source_fingerprint", lambda: "abc123")
+    monkeypatch.setattr("rust_utils.preferred_compiled_path", lambda: compiled)
+    monkeypatch.setattr(
+        "rust_utils.extension_needs_rebuild",
+        lambda compiled_path, source_mtime, fingerprint: next(stale_checks),
+    )
+
+    def _acquire_lock(**_kwargs):
+        events.append("lock")
+        return True
+
+    def _recompile_rust():
+        events.append("compile")
+        return True
+
+    monkeypatch.setattr("rust_utils.acquire_lock", _acquire_lock)
+    monkeypatch.setattr("rust_utils.release_lock", lambda: events.append("release"))
+    monkeypatch.setattr("rust_utils.recompile_rust", _recompile_rust)
+
+    check_and_maybe_compile()
+
+    out = capsys.readouterr().out
+    assert events == ["lock", "compile", "release"]
+    assert "Rust extension is stale; acquired compile lock; recompiling..." in out
+
+
+def test_acquire_lock_logs_waiter_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys):
+    attempts = iter([False, True])
+    sleeps: list[float] = []
+
+    def _lock_then_succeed(_handle):
+        if not next(attempts):
+            raise BlockingIOError()
+
+    monkeypatch.setattr("rust_utils._lock_file_nonblocking", _lock_then_succeed)
+    monkeypatch.setattr("rust_utils.time.sleep", lambda seconds: sleeps.append(seconds))
+
+    try:
+        assert (
+            acquire_lock(
+                tmp_path / "compile.lock",
+                timeout=10.0,
+                wait_message="Rust extension is stale; waiting for compile lock...",
+            )
+            is True
+        )
+    finally:
+        release_lock()
+
+    assert len(sleeps) == 1
+    assert sleeps[0] > 0.0
+    out = capsys.readouterr().out
+    assert out.count("Rust extension is stale; waiting for compile lock...") == 1
 
 
 def test_acquire_lock_timeout_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

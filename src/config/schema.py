@@ -1,7 +1,6 @@
 from copy import deepcopy
 
-
-CONFIG_SCHEMA_VERSION = "v7.10.0"
+CONFIG_SCHEMA_VERSION = "v7.11.0"
 DEFAULT_EXAMPLE_CONFIG_PATH = "configs/examples/default_trailing_grid_long_npos7.json"
 
 
@@ -140,12 +139,18 @@ def get_template_config():
                     },
                     {
                         "label": "n_positions_3",
-                        "overrides": {"bot.long.n_positions": 3, "bot.short.n_positions": 3},
+                        "overrides": {
+                            "bot.long.n_positions": 3,
+                            "bot.short.n_positions": 3,
+                        },
                         "start_date": "2025-01-01",
                     },
                     {
                         "label": "n_positions_20",
-                        "overrides": {"bot.long.n_positions": 20, "bot.short.n_positions": 20},
+                        "overrides": {
+                            "bot.long.n_positions": 20,
+                            "bot.short.n_positions": 20,
+                        },
                         "start_date": "2025-01-01",
                     },
                     {
@@ -341,9 +346,12 @@ def get_template_config():
                 "balance_hysteresis_snap_pct": 0.01,
                 "balance_override": None,
                 "candle_lock_timeout_seconds": 10,
+                "defer_broad_candle_warmup": True,
                 "enable_archive_candle_fetch": False,
                 "execution_delay_seconds": 2,
                 "filter_by_min_effective_cost": True,
+                "fills_confirmation_overlap_minutes": 60.0,
+                "fills_recent_overlap_minutes": 10.0,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
                 "hedge_mode": False,
@@ -353,22 +361,27 @@ def get_template_config():
                 "inactive_coin_candle_ttl_minutes": 10,
                 "leverage": 10,
                 "margin_mode_preference": "cross",
+                "market_snapshot_ticker_strategy": "auto",
                 "market_order_near_touch_threshold": 0.001,
                 "market_orders_allowed": False,
                 "max_concurrent_api_requests": None,
                 "max_disk_candles_per_symbol_per_tf": 2000000,
                 "max_memory_candles_per_symbol": 200000,
+                "max_active_candle_tail_gap_minutes": 10,
                 "max_n_cancellations_per_batch": 5,
                 "max_n_creations_per_batch": 3,
                 "max_n_restarts_per_day": 10,
-                "max_ohlcv_fetches_per_minute": 30,
+                "max_forager_candle_staleness_minutes": None,
+                "max_forager_candle_refresh_seconds": 45,
+                "max_ohlcv_fetches_per_minute": 24,
                 "max_realized_loss_pct": 1.0,
                 "max_warmup_minutes": 0,
                 "minimum_coin_age_days": 365,
+                "forager_score_hysteresis_pct": 0.02,
+                "initial_entry_exec_max_market_dist_pct": 0.005,
                 "order_match_tolerance_pct": 0.0002,
                 "pnls_max_lookback_days": 30,
-                "price_distance_threshold": 0.002,
-                "recv_window_ms": 5000,
+                "recv_window_ms": 10000,
                 "time_in_force": "good_till_cancelled",
                 "user": "bybit_01",
                 "warmup_concurrency": 0,

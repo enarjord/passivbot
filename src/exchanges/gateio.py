@@ -44,24 +44,32 @@ class GateIOBot(CCXTBot):
     # ═══════════════════ GATEIO-SPECIFIC METHODS ═══════════════════
 
     async def fetch_balance(self) -> float:
-        """GateIO: Fetch balance with special UID logic for websockets.
+        """GateIO: Fetch balance using the same parser as staged snapshots."""
+        balance_fetched = await self._do_fetch_balance()
+        return self._get_balance(balance_fetched)
 
-        GateIO requires UID for websocket subscriptions, which is obtained
-        from the balance response. Also handles classic vs multi_currency
-        margin modes.
+    def _get_balance(self, balance_fetched: dict) -> float:
+        """Extract Gate.io futures balance for classic and multi-currency margin modes.
+
+        Staged refresh calls CCXTBot.capture_balance_snapshot(), which bypasses
+        fetch_balance() and calls this hook directly. Keep Gate.io's margin-mode
+        specific parsing here so legacy and staged paths use the same balance.
         """
-        balance_fetched = await self.cca.fetch_balance()
+        info = balance_fetched.get("info")
+        if not isinstance(info, list) or not info:
+            raise KeyError(f"{self.exchange}: fetch_balance response missing info[0]")
+        primary = info[0]
         if not hasattr(self, "uid") or not self.uid:
-            self.uid = balance_fetched["info"][0]["user"]
+            self.uid = primary["user"]
             self.cca.uid = self.uid
             if self.ccp is not None:
                 self.ccp.uid = self.uid
-        margin_mode_name = balance_fetched["info"][0]["margin_mode_name"]
+        margin_mode_name = primary["margin_mode_name"]
         self.log_once(f"account margin mode: {margin_mode_name}")
         if margin_mode_name == "classic":
             balance = float(balance_fetched[self.quote]["total"])
         elif margin_mode_name == "multi_currency":
-            balance = float(balance_fetched["info"][0]["cross_available"])
+            balance = float(primary["cross_available"])
         else:
             raise Exception(f"unknown margin_mode_name {balance_fetched}")
         return balance

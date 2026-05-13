@@ -345,7 +345,12 @@ async def _calc_upnl_sum_strict(self, pside: Optional[str] = None) -> float:
     }
     if not symbols:
         return 0.0
-    last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
+    if hasattr(self, "_get_live_last_prices"):
+        last_prices = await self._get_live_last_prices(
+            symbols, max_age_ms=60_000, context="hard_stop_upnl"
+        )
+    else:
+        last_prices = await self.cm.get_last_prices(symbols, max_age_ms=60_000)
     upnl_sum = 0.0
     for elm in self.fetched_positions:
         if pside is not None and elm["position_side"] != pside:
@@ -425,7 +430,25 @@ def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> flo
     if self._pnls_manager is None:
         return 0.0
     realized = 0.0
-    for event in self._pnls_manager.get_events():
+    events = self._pnls_manager.get_events()
+    pending = [
+        event
+        for event in events
+        if str(getattr(event, "pnl_status", "complete") or "complete").lower() == "pending"
+        and (pside is None or _equity_hard_stop_fill_pside(event) == pside)
+    ]
+    if pending:
+        preview = ",".join(
+            f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
+            f"{getattr(ev, 'position_side', '')}:{getattr(ev, 'pb_order_type', '')}"
+            for ev in pending[:5]
+        )
+        suffix = f", +{len(pending) - 5} more" if len(pending) > 5 else ""
+        raise RuntimeError(
+            f"equity hard stop realized PnL: realized PnL pending for "
+            f"{len(pending)} close fill(s): {preview}{suffix}"
+        )
+    for event in events:
         if pside is not None and _equity_hard_stop_fill_pside(event) != pside:
             continue
         realized += float(getattr(event, "pnl", 0.0) or 0.0)
@@ -1339,6 +1362,9 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
             self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
         if metrics["tier"] == "red" and not prev_latched:
             state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
+            state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
+                pside, int(metrics["timestamp_ms"])
+            )
             logging.critical(
                 "[risk] HSL[%s] RED triggered | strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_score=%.6f red_threshold=%.6f",
                 pside,
@@ -1506,7 +1532,6 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
         state = self._hsl_state(pside)
         state["red_flat_confirmations"] = 0
         state["last_red_progress"] = None
-        state["pending_stop_event"] = None
     try:
         logging.critical("[risk] entering HSL RED supervisor loop (panic-close until confirmed flat)")
         while not self.stop_signal_received:
@@ -1527,14 +1552,13 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
                 entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders(pside)
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-                    if state["red_flat_confirmations"] == 0:
+                    if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
                         state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
                             pside, int(self.get_exchange_time())
                         )
                     state["red_flat_confirmations"] += 1
                 else:
                     state["red_flat_confirmations"] = 0
-                    state["pending_stop_event"] = None
                 self._equity_hard_stop_log_red_progress(
                     pside,
                     n_positions,

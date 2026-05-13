@@ -234,6 +234,27 @@ def test_filter_markets_with_explicit_quote():
     assert reasons["BTC/USDT:USDT"] == "wrong quote"
 
 
+def test_filter_markets_demotes_boot_inventory_chatter_to_debug(caplog):
+    markets = {
+        "BTC/USDT:USDT": {"active": True, "swap": True, "linear": True},
+        "SPOT/USDT": {"active": True, "swap": False, "linear": True},
+        "DOGE/USDT:USDT": {"active": True, "swap": True, "linear": False},
+        "BTC/USDC:USDC": {"active": True, "swap": True, "linear": True},
+    }
+
+    with caplog.at_level(logging.DEBUG):
+        utils.filter_markets(markets, "binance", quote="USDT", verbose=True)
+
+    debug_messages = {
+        (record.levelname, record.message)
+        for record in caplog.records
+        if record.message.startswith(("not swap", "not linear", "wrong quote"))
+    }
+    assert ("DEBUG", "not swap: SPOT/USDT") in debug_messages
+    assert ("DEBUG", "not linear: DOGE/USDT:USDT") in debug_messages
+    assert ("DEBUG", "wrong quote: BTC/USDC:USDC") in debug_messages
+
+
 def test_coin_to_symbol_with_explicit_quote(tmp_path, monkeypatch):
     """coin_to_symbol() uses explicit quote for fallback symbol construction."""
     monkeypatch.chdir(tmp_path)

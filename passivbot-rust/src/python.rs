@@ -1330,6 +1330,11 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<f64>())
             .transpose()?
             .unwrap_or(0.0005),
+        forager_score_hysteresis_pct: dict
+            .get_item("forager_score_hysteresis_pct")?
+            .map(|item| item.extract::<f64>())
+            .transpose()?
+            .unwrap_or(0.02),
         candle_interval_minutes: dict
             .get_item("candle_interval_minutes")?
             .map(|item| item.extract::<u64>())
@@ -1389,15 +1394,9 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let hsl_tier_ratio_orange: f64 = extract_value(hsl_tier_ratios, "orange")?;
     let hsl_orange_tier_mode: String = extract_value(dict, "hsl_orange_tier_mode")?;
     let hsl_panic_close_order_type: String = extract_value(dict, "hsl_panic_close_order_type")?;
-    let wallet_exposure_limit = if wallet_exposure_limit_raw < 0.0 {
-        wallet_exposure_limit_raw
-    } else if wallet_exposure_limit_raw > 0.0 {
-        wallet_exposure_limit_raw
-    } else if n_positions > 0 {
-        total_wallet_exposure_limit / n_positions as f64
-    } else {
-        0.0
-    };
+    // Callers resolve live fixed denominators before building orchestrator input.
+    // Preserve zero here: per-symbol zero is the explicit side-disable sentinel.
+    let wallet_exposure_limit = wallet_exposure_limit_raw;
 
     Ok(BotParams {
         close_grid_markup_end: extract_value(dict, "close_grid_markup_end")?,

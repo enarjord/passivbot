@@ -1,10 +1,12 @@
 import asyncio
 import logging
+import math
 import types
 
 import pytest
 
 from exchanges.kucoin import AsyncKucoinBrokerFutures, KucoinBot
+from market_snapshot import MarketSnapshotProvider
 
 
 class DummyTask:
@@ -99,6 +101,70 @@ def test_create_ccxt_sessions_requires_complete_futures_broker_config():
         bot.create_ccxt_sessions()
 
 
+def test_kucoin_ticker_normalizer_labels_last_price_fallback(caplog):
+    caplog.set_level(logging.WARNING)
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.markets_dict = {"BTC/USDT:USDT": {}, "ETH/USDT:USDT": {}}
+
+    out = bot._normalize_tickers(
+        {
+            "BTC/USDT:USDT": {
+                "bid": None,
+                "ask": None,
+                "last": 76256.3,
+                "info": {"lastTradePrice": "76255.0", "markPrice": "76254.0"},
+            },
+            "ETH/USDT:USDT": {
+                "bid": 3000.0,
+                "ask": 3001.0,
+                "last": 3000.5,
+            },
+            "DOGE/USDT:USDT": {"last": 0.1},
+        }
+    )
+
+    assert out["BTC/USDT:USDT"]["bid"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["ask"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["last"] == pytest.approx(76256.3)
+    assert out["BTC/USDT:USDT"]["source"] == "kucoin_last_fallback"
+    assert out["ETH/USDT:USDT"]["source"] == "kucoin_ccxt_ticker"
+    assert "DOGE/USDT:USDT" not in out
+    assert "kucoin ticker bid/ask missing" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_kucoin_last_price_fallback_is_valid_market_snapshot():
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.markets_dict = {"BTC/USDT:USDT": {}}
+
+    async def fetch_tickers():
+        return bot._normalize_tickers(
+            {
+                "BTC/USDT:USDT": {
+                    "bid": None,
+                    "ask": None,
+                    "last": None,
+                    "close": None,
+                    "info": {"lastTradePrice": "76255.0"},
+                }
+            }
+        )
+
+    provider = MarketSnapshotProvider(
+        exchange_name="kucoin",
+        fetch_tickers=fetch_tickers,
+        ticker_strategy="bulk",
+    )
+
+    snapshots = await provider.get_snapshots(["BTC/USDT:USDT"], max_age_ms=10_000)
+
+    snap = snapshots["BTC/USDT:USDT"]
+    assert snap.bid == pytest.approx(76255.0)
+    assert snap.ask == pytest.approx(76255.0)
+    assert snap.last == pytest.approx(76255.0)
+    assert snap.source == "kucoin_last_fallback"
+
+
 @pytest.mark.asyncio
 async def test_update_exchange_config_sets_position_mode_when_supported(caplog):
     caplog.set_level(logging.INFO)
@@ -149,3 +215,37 @@ async def test_update_exchange_config_by_symbols_sets_margin_and_leverage(monkey
     # leverage is clamped by max_leverage
     assert leverage_map["BTC/USDT:USDT"] == 5  # min(10, 5)
     assert leverage_map["ETH/USDT:USDT"] == 2  # min(2, 3)
+
+
+@pytest.mark.asyncio
+async def test_update_exchange_config_by_symbols_treats_missing_max_leverage_as_configured(
+    monkeypatch,
+):
+    bot = make_bot()
+    bot.max_leverage = {"BTC/USDT:USDT": None}
+    bot.config_get = lambda path, *, symbol=None: 5
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
+
+    await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+    assert bot.cca.leverage_calls[0]["symbol"] == "BTC/USDT:USDT"
+    assert bot.cca.leverage_calls[0]["leverage"] == 5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("raw_max_leverage", ["bad", 0, -1, math.inf, math.nan])
+async def test_update_exchange_config_by_symbols_rejects_invalid_max_leverage(
+    raw_max_leverage,
+    monkeypatch,
+):
+    bot = make_bot()
+    bot.max_leverage = {"BTC/USDT:USDT": raw_max_leverage}
+    bot.config_get = lambda path, *, symbol=None: 5
+
+    monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
+
+    with pytest.raises(ValueError, match="invalid max leverage from exchange metadata"):
+        await bot.update_exchange_config_by_symbols(["BTC/USDT:USDT"])
+
+    assert bot.cca.leverage_calls == []

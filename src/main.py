@@ -57,7 +57,19 @@ if __name__ == "__main__":
 
     # Recreate argv for the real app without the rust flags
     sys.argv = [sys.argv[0]] + remaining
+    import passivbot as passivbot_module
     from passivbot import main
     verify_loaded_runtime_extension()
-
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nBot shutdown complete.")
+    except RuntimeError as exc:
+        if "Event loop stopped before Future completed" in str(exc):
+            bot = getattr(passivbot_module, "bot", None)
+            if bot is not None and getattr(bot, "stop_signal_received", False):
+                print("\nBot shutdown complete.")
+            else:
+                raise
+        else:
+            raise

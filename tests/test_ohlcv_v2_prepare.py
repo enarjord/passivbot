@@ -35,6 +35,21 @@ def _write_day(root, exchange, symbol, day, rows):
     np.save(symbol_dir / f"{day}.npy", np.array(rows, dtype=LEGACY_DTYPE))
 
 
+def _minimal_bot_config():
+    return {
+        "long": {
+            "n_positions": 1,
+            "total_wallet_exposure_limit": 1.0,
+            "wallet_exposure_limit": 1.0,
+        },
+        "short": {
+            "n_positions": 0,
+            "total_wallet_exposure_limit": 0.0,
+            "wallet_exposure_limit": 0.0,
+        },
+    }
+
+
 @pytest.mark.asyncio
 async def test_fetch_coin_range_into_v2_store_preserves_intraday_end(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
@@ -387,7 +402,7 @@ async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -428,7 +443,7 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -492,7 +507,7 @@ async def test_prepare_hlcvs_mss_skips_inner_v2_after_outer_v2_miss(monkeypatch,
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
@@ -558,7 +573,7 @@ async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch)
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     async def fake_try_prepare(*args, **kwargs):
@@ -648,7 +663,7 @@ async def test_try_prepare_hlcvs_v2_local_fetches_missing_remote_range_into_stor
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")
@@ -729,7 +744,7 @@ async def test_try_prepare_hlcvs_v2_local_persists_persistent_cm_gap_after_empty
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": _minimal_bot_config(),
     }
 
     prepared = await try_prepare_hlcvs_v2_local(config, "binance")

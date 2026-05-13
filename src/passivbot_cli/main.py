@@ -51,6 +51,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.probe_hyperliquid_balance",
         "read-only Hyperliquid balance smoke test",
     ),
+    "hyperliquid-abstraction-probe": CommandSpec(
+        "tools.probe_hyperliquid_abstraction",
+        "read-only Hyperliquid account abstraction probe",
+    ),
     "hyperliquid-order-margin-probe": CommandSpec(
         "tools.probe_hyperliquid_order_margin",
         "mutating Hyperliquid order-margin diagnostic",
@@ -145,6 +149,14 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         requires_full=True,
     ),
     "streamline-json": CommandSpec("tools.streamline_json", "reformat config or result JSON"),
+    "ticker-probe": CommandSpec(
+        "tools.probe_ticker_capabilities",
+        "read-only exchange ticker capability probe",
+    ),
+    "ticker-endpoint-probe": CommandSpec(
+        "tools.probe_ccxt_ticker_endpoints",
+        "multi-user CCXT ticker endpoint latency probe",
+    ),
     "verify-hlcvs-data": CommandSpec(
         "tools.verify_hlcvs_data",
         "verify cached OHLCV datasets (requires full install)",
