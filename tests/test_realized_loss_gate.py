@@ -325,6 +325,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 },
             },
             "live": {
+                "approved_coins": {"long": ["BTC"], "short": []},
                 "hedge_mode": True,
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,
@@ -403,6 +404,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 },
             },
             "live": {
+                "approved_coins": {"long": ["BTC"], "short": []},
                 "hedge_mode": True,
                 "max_realized_loss_pct": 1.0,
                 "pnls_max_lookback_days": 30.0,

@@ -424,7 +424,75 @@ async def _run_fake_red_supervisor_step(bot) -> dict:
     if not await bot.refresh_market_state_if_needed():
         return {"red_supervisor": True, "finalized": False, "market_ready": False}
     await bot.execute_to_exchange(prepare_cycle=False)
+    finalized_terminal = await _finalize_fake_terminal_red_if_sync_flat(
+        bot, active_red_psides
+    )
+    if finalized_terminal:
+        return {"red_supervisor": True, "finalized": True}
     return {"red_supervisor": True, "finalized": False}
+
+
+async def _finalize_fake_terminal_red_if_sync_flat(
+    bot, active_red_psides: List[str]
+) -> bool:
+    """Finalize terminal RED in fake mode when synchronous panic execution already flattened."""
+    if not active_red_psides or not isinstance(getattr(bot, "cca", None), FakeCCXTClient):
+        return False
+    try:
+        fetched_positions = await bot.fetch_positions()
+        bot._apply_positions_snapshot(fetched_positions)
+        fetched_open_orders = await bot.fetch_open_orders()
+        await bot._apply_open_orders_snapshot(
+            fetched_open_orders,
+            allow_followup_positions_refresh=False,
+            reconcile_balance=False,
+        )
+        if hasattr(bot, "capture_balance_snapshot"):
+            _, balance_raw = await bot.capture_balance_snapshot()
+        else:
+            balance_raw = await bot.fetch_balance()
+        prepared_balance = bot._prepare_balance_snapshot(balance_raw)
+        if prepared_balance is not None:
+            bot._commit_balance_snapshot(prepared_balance)
+    except Exception as exc:
+        logging.debug("fake RED terminal sync confirmation skipped: %s", exc)
+        return False
+
+    finalized = False
+    for pside in list(active_red_psides):
+        if not (
+            bot._equity_hard_stop_enabled(pside)
+            and bot._equity_hard_stop_runtime_red_latched(pside)
+            and not bot._hsl_state(pside)["halted"]
+        ):
+            continue
+        state = bot._hsl_state(pside)
+        n_positions = bot._equity_hard_stop_count_open_positions(pside)
+        entry_orders, nonpanic_close_orders = (
+            bot._equity_hard_stop_count_blocking_open_orders(pside)
+        )
+        if n_positions != 0 or entry_orders != 0 or nonpanic_close_orders != 0:
+            continue
+        stop_event = state.get("pending_stop_event")
+        if stop_event is None:
+            stop_event = await bot._equity_hard_stop_compute_stop_event(
+                pside, int(bot.get_exchange_time())
+            )
+            state["pending_stop_event"] = stop_event
+        no_restart_threshold = float(bot.hsl[pside]["no_restart_drawdown_threshold"])
+        if float(stop_event["drawdown_raw"]) < no_restart_threshold:
+            continue
+        state["red_flat_confirmations"] = 2
+        bot._equity_hard_stop_log_red_progress(
+            pside,
+            n_positions,
+            entry_orders,
+            nonpanic_close_orders,
+            state["red_flat_confirmations"],
+        )
+        await bot._equity_hard_stop_finalize_red_stop(pside, stop_event)
+        finalized = True
+    return finalized
 
 
 async def _run_fake_bot(

@@ -237,6 +237,30 @@ async def test_to_create_orders_sorted_by_market_diff(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_order_sort_preserves_original_order_when_market_price_missing(caplog):
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({})
+    bot.register_symbol(symbol)
+    bot.open_orders[symbol] = []
+
+    first = _make_order(symbol, "buy", "long", 0.5, 95.0, "entry_grid_cropped_long")
+    second = _make_order(symbol, "buy", "long", 0.5, 101.0, "entry_grid_normal_long")
+    ideal = {symbol: [first, second]}
+
+    async def fake_calc_ideal_orders(self):
+        return ideal
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    with caplog.at_level(logging.WARNING):
+        to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert not to_cancel
+    assert [order["price"] for order in to_create] == [95.0, 101.0]
+    assert any("preserving to_create order" in rec.message for rec in caplog.records)
+
+
+@pytest.mark.asyncio
 async def test_initial_entry_distance_gate_blocks_far_create_and_throttles_logs(
     caplog,
 ):

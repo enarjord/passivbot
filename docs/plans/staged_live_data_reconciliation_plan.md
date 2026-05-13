@@ -345,9 +345,9 @@ rules. Keep them narrow, visible, and test-covered.
   clamping to `0.0` in Rust.
 - [ ] Audit duplicate runtime defaults added for staged live options and remove any fallback that
   can drift from schema/prepared config.
-- [ ] Fix misleading log labels where `side=` prints `position_side`; use `pside=` for long/short
+- [x] Fix misleading log labels where `side=` prints `position_side`; use `pside=` for long/short
   and reserve `side=` for buy/sell.
-- [ ] Remove order sorting's silent fallback to neutral `diff=0` when market price fetch fails.
+- [x] Remove order sorting's silent fallback to neutral `diff=0` when market price fetch fails.
   Preserve deterministic ordering or block/skip with visible diagnostics according to the
   execution safety contract.
 - [x] Make Hyperliquid unified balance extraction fail on malformed quote balance rows. Missing,
