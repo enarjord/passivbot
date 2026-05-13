@@ -389,6 +389,10 @@ def _make_dummy_bot(config, *, last_price=100.0):
             self.max_leverage = {}
             self.pside_int_map = {"long": 0, "short": 1}
             self._pnls_manager = None
+            self._entry_cooldown_prev_pos_sizes = {}
+            self._entry_cooldown_pos_increase_detected_ts = {}
+            self._entry_cooldown_delta_guard_last_log_ms = {}
+            self._entry_cooldown_delta_guard_log_interval_ms = 60_000
             self.pnls_cache_filepath = ""
             self.state_change_detected_by_symbol = set()
             self.recent_order_executions = []
@@ -585,6 +589,155 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
     bot.approved_coins_minus_ignored_coins = {"long": [symbol], "short": []}
     bot.pnls = [{"pnl": 5.0, "timestamp": 0, "id": 1}]
     return symbol
+
+
+def test_entry_cooldown_delta_guard_bypasses_when_disabled():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._entry_cooldown_prev_pos_sizes = {}
+
+    out = bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+
+    assert out == {symbol: {"long": None, "short": None}}
+    assert bot._entry_cooldown_prev_pos_sizes == {}
+
+
+def test_entry_cooldown_delta_guard_initializes_first_snapshot_without_anchor():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
+
+    out = bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+
+    assert out == {symbol: {"long": None, "short": None}}
+    assert bot._entry_cooldown_prev_pos_sizes[symbol]["long"] == pytest.approx(1.0)
+
+
+def test_entry_cooldown_delta_guard_records_long_position_increase(caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+    bot.positions[symbol]["long"]["size"] = 1.25
+
+    out = bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=121_000)
+
+    assert out[symbol]["long"] == 121_000
+    assert bot._entry_cooldown_pos_increase_detected_ts[symbol]["long"] == 121_000
+    assert any(
+        "[risk] entry cooldown position-delta guard anchored add cooldown"
+        in record.message
+        for record in caplog.records
+    )
+
+
+def test_entry_cooldown_delta_guard_records_short_abs_position_increase():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
+    bot.positions[symbol]["short"] = {"size": -0.5, "price": 100.0}
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+    bot.positions[symbol]["short"]["size"] = -0.75
+
+    out = bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=121_000)
+
+    assert out[symbol]["short"] == 121_000
+    assert bot._entry_cooldown_pos_increase_detected_ts[symbol]["short"] == 121_000
+
+
+def test_entry_cooldown_delta_guard_decrease_does_not_update_existing_anchor():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+    bot.positions[symbol]["long"]["size"] = 1.25
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=121_000)
+    bot.positions[symbol]["long"]["size"] = 1.10
+
+    out = bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=122_000)
+
+    assert out[symbol]["long"] == 121_000
+    assert bot._entry_cooldown_pos_increase_detected_ts[symbol]["long"] == 121_000
+
+
+def test_entry_cooldown_anchor_merge_prefers_available_or_newer_timestamp():
+    from passivbot import Passivbot
+
+    merge = Passivbot._merge_entry_cooldown_anchors
+
+    assert merge(
+        {"BTC/USDT:USDT": {"long": 100, "short": None}},
+        {"BTC/USDT:USDT": {"long": None, "short": None}},
+    ) == {"BTC/USDT:USDT": {"long": 100, "short": None}}
+    assert merge(
+        {"BTC/USDT:USDT": {"long": None, "short": None}},
+        {"BTC/USDT:USDT": {"long": 120, "short": None}},
+    ) == {"BTC/USDT:USDT": {"long": 120, "short": None}}
+    assert merge(
+        {"BTC/USDT:USDT": {"long": 100, "short": None}},
+        {"BTC/USDT:USDT": {"long": 120, "short": None}},
+    ) == {"BTC/USDT:USDT": {"long": 120, "short": None}}
+
+
+@pytest.mark.asyncio
+async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
+
+    bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
+    bot.positions[symbol]["long"]["size"] = 1.25
+    bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=121_000)
+    bot.get_exchange_time = lambda: 122_000
+    bot.markets_dict = {symbol: {"active": True}}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+    captured = {}
+
+    async def fake_load_bundle(self, symbols, modes):
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
+        m1_volume = {symbol: {10.0: 1_000.0}}
+        m1_log_range = {symbol: {10.0: 0.01}}
+        h1_log_range = {symbol: {10.0: 0.01}}
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    _stamp_staged_account_and_candles(bot)
+
+    _orders, snapshot = await bot.calc_ideal_orders_orchestrator(return_snapshot=True)
+
+    rust_symbol = captured["input"]["symbols"][0]
+    assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
+    assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
 
 
 def _stamp_staged_account_and_candles(bot):

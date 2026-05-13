@@ -540,6 +540,42 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
     assert long_add_orders == []
 
 
+def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 1.0}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=102.0,
+                ask=102.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 1.0},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+    long_close_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] < 0.0 and o["order_type"].startswith("close_")
+    ]
+
+    assert long_add_orders == []
+    assert long_close_orders
+
+
 def test_fractional_entry_cooldown_allows_next_minute_updates():
     import passivbot_rust as pbr
 

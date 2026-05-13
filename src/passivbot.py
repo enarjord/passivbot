@@ -925,6 +925,11 @@ class Passivbot:
         # FillEventsManager for PnL tracking (replaces legacy self.pnls list)
         self._pnls_manager: Optional[FillEventsManager] = None
         self._pnls_initialized = False
+        # Live-only cooldown backstop; fill events remain the restart-reconstructable source.
+        self._entry_cooldown_prev_pos_sizes: dict[str, dict[str, float]] = {}
+        self._entry_cooldown_pos_increase_detected_ts: dict[str, dict[str, int]] = {}
+        self._entry_cooldown_delta_guard_last_log_ms: dict[tuple[str, str], int] = {}
+        self._entry_cooldown_delta_guard_log_interval_ms = 60_000
 
         # Health tracking for periodic summary
         self._health_start_ms = utc_ms()
@@ -5303,6 +5308,9 @@ class Passivbot:
             self._record_authoritative_surface(
                 "positions",
                 self._positions_signature(fetched_positions_new),
+            )
+            self._update_entry_cooldown_position_delta_guard(
+                sorted(self.positions), now_ms=int(self.get_exchange_time())
             )
         if "balance" in plan:
             if "open_orders" in plan:
@@ -9833,6 +9841,161 @@ class Passivbot:
                 break
         return out
 
+    def _ensure_entry_cooldown_delta_guard_state(self) -> None:
+        if not hasattr(self, "_entry_cooldown_prev_pos_sizes"):
+            self._entry_cooldown_prev_pos_sizes = {}
+        if not hasattr(self, "_entry_cooldown_pos_increase_detected_ts"):
+            self._entry_cooldown_pos_increase_detected_ts = {}
+        if not hasattr(self, "_entry_cooldown_delta_guard_last_log_ms"):
+            self._entry_cooldown_delta_guard_last_log_ms = {}
+        if not hasattr(self, "_entry_cooldown_delta_guard_log_interval_ms"):
+            self._entry_cooldown_delta_guard_log_interval_ms = 60_000
+
+    def _entry_cooldown_enabled_pairs(
+        self, symbols: Iterable[str]
+    ) -> set[tuple[str, str]]:
+        pairs: set[tuple[str, str]] = set()
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                cooldown_minutes = float(
+                    self.bp(pside, "risk_entry_cooldown_minutes", symbol)
+                )
+                if cooldown_minutes > 0.0:
+                    pairs.add((symbol, pside))
+        return pairs
+
+    def _entry_cooldown_current_abs_position_size(
+        self, symbol: str, pside: str
+    ) -> float:
+        positions = getattr(self, "positions", None)
+        if not isinstance(positions, dict):
+            return 0.0
+        symbol_positions = positions.get(symbol)
+        if not isinstance(symbol_positions, dict):
+            return 0.0
+        pos = symbol_positions.get(pside)
+        if not isinstance(pos, dict):
+            return 0.0
+        raw_size = pos.get("size")
+        size = 0.0 if raw_size is None else float(raw_size)
+        if not math.isfinite(size):
+            raise ValueError(
+                f"non-finite position size for entry cooldown guard: {symbol} {pside} {size}"
+            )
+        return abs(size)
+
+    def _log_entry_cooldown_delta_guard(
+        self,
+        *,
+        symbol: str,
+        pside: str,
+        previous_abs_size: float,
+        current_abs_size: float,
+        qty_step: float,
+        epsilon: float,
+        now_ms: int,
+    ) -> None:
+        self._ensure_entry_cooldown_delta_guard_state()
+        key = (symbol, pside)
+        raw_last_log_ms = self._entry_cooldown_delta_guard_last_log_ms.get(key)
+        last_log_ms = 0 if raw_last_log_ms is None else int(raw_last_log_ms)
+        if (
+            last_log_ms > 0
+            and now_ms - last_log_ms
+            < int(self._entry_cooldown_delta_guard_log_interval_ms)
+        ):
+            return
+        self._entry_cooldown_delta_guard_last_log_ms[key] = int(now_ms)
+        logging.warning(
+            "[risk] entry cooldown position-delta guard anchored add cooldown | "
+            "symbol=%s pside=%s previous_abs_size=%.12g current_abs_size=%.12g "
+            "qty_step=%.12g epsilon=%.12g anchor_ts_ms=%d reason=position_size_increase "
+            "fallback_source=exchange_position_delta",
+            Passivbot._log_symbol(symbol),
+            pside,
+            previous_abs_size,
+            current_abs_size,
+            qty_step,
+            epsilon,
+            int(now_ms),
+        )
+
+    def _update_entry_cooldown_position_delta_guard(
+        self, symbols: Iterable[str], *, now_ms: int
+    ) -> dict[str, dict[str, Optional[int]]]:
+        symbols = list(symbols)
+        out = {symbol: {"long": None, "short": None} for symbol in symbols}
+        enabled_pairs = self._entry_cooldown_enabled_pairs(symbols)
+        if not enabled_pairs:
+            return out
+
+        self._ensure_entry_cooldown_delta_guard_state()
+        for symbol, pside in sorted(enabled_pairs):
+            current_abs = self._entry_cooldown_current_abs_position_size(symbol, pside)
+            prev_by_side = self._entry_cooldown_prev_pos_sizes.setdefault(symbol, {})
+            detected_by_side = self._entry_cooldown_pos_increase_detected_ts.setdefault(
+                symbol, {}
+            )
+            previous_abs_raw = prev_by_side.get(pside)
+            if previous_abs_raw is None:
+                prev_by_side[pside] = current_abs
+                continue
+            previous_abs = float(previous_abs_raw)
+            if not math.isfinite(previous_abs):
+                raise ValueError(
+                    f"non-finite previous position size for entry cooldown guard: "
+                    f"{symbol} {pside} {previous_abs}"
+                )
+            qty_steps = getattr(self, "qty_steps", None)
+            raw_qty_step = qty_steps.get(symbol) if isinstance(qty_steps, dict) else None
+            qty_step = 0.0 if raw_qty_step is None else float(raw_qty_step)
+            if not math.isfinite(qty_step) or qty_step < 0.0:
+                qty_step = 0.0
+            epsilon = max(1e-12, qty_step * 0.5)
+            if current_abs > previous_abs + epsilon:
+                detected_by_side[pside] = int(now_ms)
+                self._log_entry_cooldown_delta_guard(
+                    symbol=symbol,
+                    pside=pside,
+                    previous_abs_size=previous_abs,
+                    current_abs_size=current_abs,
+                    qty_step=qty_step,
+                    epsilon=epsilon,
+                    now_ms=int(now_ms),
+                )
+            existing_ts = detected_by_side.get(pside)
+            if existing_ts is not None:
+                out[symbol][pside] = int(existing_ts)
+            prev_by_side[pside] = current_abs
+        return out
+
+    @staticmethod
+    def _merge_entry_cooldown_anchors(
+        fill_ts: dict[str, dict[str, Optional[int]]],
+        delta_ts: dict[str, dict[str, Optional[int]]],
+    ) -> dict[str, dict[str, Optional[int]]]:
+        symbols = sorted(set(fill_ts) | set(delta_ts))
+        out: dict[str, dict[str, Optional[int]]] = {}
+        for symbol in symbols:
+            out[symbol] = {"long": None, "short": None}
+            fill_by_side = fill_ts.get(symbol)
+            delta_by_side = delta_ts.get(symbol)
+            for pside in ("long", "short"):
+                candidates = []
+                fill_value = (
+                    fill_by_side.get(pside) if isinstance(fill_by_side, dict) else None
+                )
+                delta_value = (
+                    delta_by_side.get(pside) if isinstance(delta_by_side, dict) else None
+                )
+                if fill_value is not None:
+                    candidates.append(int(fill_value))
+                if delta_value is not None:
+                    candidates.append(int(delta_value))
+                if candidates:
+                    out[symbol][pside] = max(candidates)
+        return out
+
     def _log_realized_loss_gate_blocks(self, out: dict, idx_to_symbol: dict[int, str]) -> None:
         """Emit visible warnings for close orders blocked by realized-loss gate."""
         diagnostics = out.get("diagnostics", {}) if isinstance(out, dict) else {}
@@ -12669,8 +12832,14 @@ class Passivbot:
         )
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
-        last_increase_fill_timestamps = self._get_last_increase_fill_timestamps(
+        fill_increase_timestamps = self._get_last_increase_fill_timestamps(
             symbols, now_ms=now_ms
+        )
+        delta_increase_timestamps = self._update_entry_cooldown_position_delta_guard(
+            symbols, now_ms=now_ms
+        )
+        last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
+            fill_increase_timestamps, delta_increase_timestamps
         )
         max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
 
