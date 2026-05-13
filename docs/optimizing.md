@@ -33,6 +33,32 @@ passivbot optimize configs/examples/default_trailing_grid_long_npos7.json --star
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
 
+### Scoring Objectives
+
+`optimize.scoring` defines the metrics the optimizer tries to improve. The canonical form is a
+list of objective objects:
+
+```json
+"scoring": [
+  {"metric": "adg_strategy_eq", "goal": "max"},
+  {"metric": "drawdown_worst_strategy_eq", "goal": "min"}
+]
+```
+
+- `metric` is a canonical backtest metric name.
+- `goal: "max"` means higher raw metric values are better.
+- `goal: "min"` means lower raw metric values are better.
+
+The older shorthand form is still accepted for built-in metrics with known default goals:
+
+```json
+"scoring": ["adg_strategy_eq", "drawdown_worst_strategy_eq"]
+```
+
+Passivbot normalizes that shorthand to the canonical object form during config formatting. For
+custom or newly added metrics, use the explicit object form so the optimizer knows whether to
+minimize or maximize the metric.
+
 ### Backend Selection
 
 Passivbot supports two optimizer backends:
@@ -533,11 +559,12 @@ over all exchanges before scoring.
 
 - `optimize.scoring` lists the objective metrics. Each entry becomes a fitness component in
   sorted order.
+- Each scoring entry is normalized to `{metric, goal}`. `goal: "max"` means higher raw metric
+  values are better; `goal: "min"` means lower raw metric values are better.
 - For every metric, `Evaluator.combine_analyses` computes mean/min/max/std across all
   exchanges in the run. The scoring logic uses the mean (`{metric}_mean`).
-- `Evaluator.scoring_weights` (`src/optimize.py`) assigns the optimization direction: a
-  negative weight means “maximize” (value is multiplied by -1 before minimization), while a
-  positive weight means “minimize.”
+- Internally, Passivbot converts all objectives into optimizer engine space where lower is better,
+  so both the `deap` and `pymoo` backends receive consistent minimization-style values.
 - Penalties from `optimize.limits` are added to every objective when a bound is violated,
   turning constraint breaches into very poor scores.
 - Metrics are emitted with both USD and BTC suffixes (for example, `adg_usd` and `adg_btc`).

@@ -1,4 +1,5 @@
 {
+    "config_version": "v8.0.0",
     "backtest": {
         "aggregate": {
             "default": "mean",
@@ -222,14 +223,15 @@
         "max_n_cancellations_per_batch": 5,
         "max_n_creations_per_batch": 3,
         "max_n_restarts_per_day": 10,
-        "max_ohlcv_fetches_per_minute": 30,
-        "max_realized_loss_pct": 1,
+        "max_forager_candle_staleness_minutes": null,
+        "max_forager_candle_refresh_seconds": 45,
+        "max_ohlcv_fetches_per_minute": 24,
+        "max_realized_loss_pct": 1.0,
         "max_warmup_minutes": 0,
         "minimum_coin_age_days": 180,
         "order_match_tolerance_pct": 0.0002,
-        "pnls_max_lookback_days": 30.0,
-        "price_distance_threshold": 0.002,
-        "recv_window_ms": 5000,
+        "pnls_max_lookback_days": 30,
+        "recv_window_ms": 10000,
         "strategy_kind": "trailing_martingale",
         "time_in_force": "good_till_cancelled",
         "user": "bybit_01",

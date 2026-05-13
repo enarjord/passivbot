@@ -5,7 +5,7 @@ use crate::equity_hard_stop_loss as ehsl;
 use crate::orchestrator;
 use crate::orchestrator::{
     EmaBundle as OrchestratorEmaBundle, EmaTimeframeBundle as OrchestratorEmaTimeframeBundle,
-    EntryPeekHints,
+    EntryPeekHints, ForagerHysteresisState,
 };
 use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
@@ -24,6 +24,7 @@ use crate::utils::{
 };
 use serde::Serialize;
 use std::cmp::Ordering;
+use std::collections::HashSet;
 
 // Orchestrator-only: legacy backtest order-generation path removed in this branch.
 const DEBUG_DUMP_ORDERS: bool = false;
@@ -615,7 +616,7 @@ pub struct Backtest<'a> {
     orchestrator_input_cache: Option<orchestrator::OrchestratorInput>,
     orchestrator_workspace: orchestrator::OrchestratorWorkspace,
     orch_profile: Option<OrchProfile>,
-    max_tradable_coins_seen: usize,
+    max_tradable_coins_seen: EffectiveNPositions,
     hard_stop_pside: [HardStopPsideRuntime; 2],
     hard_stop_state: Option<ehsl::HardStopState>,
     hard_stop_tier: ehsl::HardStopTier,
@@ -1212,6 +1213,7 @@ impl<'a> Backtest<'a> {
         &mut self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
+        forager_hysteresis: Option<ForagerHysteresisState>,
         indices: I,
     ) -> orchestrator::OrchestratorInput
     where
@@ -1477,6 +1479,7 @@ impl<'a> Backtest<'a> {
             },
             symbols,
             peek_hints,
+            forager_hysteresis,
         }
     }
 
@@ -1484,12 +1487,12 @@ impl<'a> Backtest<'a> {
         &mut self,
         k: usize,
         peek_hints: Option<EntryPeekHints>,
+        forager_hysteresis: Option<ForagerHysteresisState>,
     ) -> orchestrator::OrchestratorInput {
         // Take ownership temporarily to avoid borrow conflicts while we also read from `self`.
-        let mut input = self
-            .orchestrator_input_cache
-            .take()
-            .unwrap_or_else(|| self.build_orchestrator_input_iter(k, None, 0..self.n_coins));
+        let mut input = self.orchestrator_input_cache.take().unwrap_or_else(|| {
+            self.build_orchestrator_input_iter(k, None, forager_hysteresis.clone(), 0..self.n_coins)
+        });
 
         input.balance = self.balance.usd_total_balance_rounded;
         input.balance_raw = self.balance.usd_total_balance;
@@ -1528,6 +1531,7 @@ impl<'a> Backtest<'a> {
         input.global.realized_pnl_cumsum_last = effective_cumsum_last;
 
         input.peek_hints = peek_hints;
+        input.forager_hysteresis = forager_hysteresis;
 
         for sym in input.symbols.iter_mut() {
             let idx = sym.symbol_idx;
@@ -1878,6 +1882,7 @@ impl<'a> Backtest<'a> {
         // Normalize per-position WELs the same way the Python config path does:
         // zero means "derive from TWEL / n_positions", negative means dynamic.
         let mut bot_params = bot_params;
+        let bot_params_original = bot_params.clone();
         for bp in bot_params.iter_mut() {
             if bp.long.wallet_exposure_limit == 0.0 && bp.long.n_positions > 0 {
                 bp.long.wallet_exposure_limit =
@@ -1907,9 +1912,6 @@ impl<'a> Backtest<'a> {
         let mut bot_params_master = bot_params[0].clone();
         bot_params_master.long.n_positions = n_coins.min(bot_params_master.long.n_positions);
         bot_params_master.short.n_positions = n_coins.min(bot_params_master.short.n_positions);
-
-        // Store original bot params to preserve dynamic WEL indicators
-        let bot_params_original = bot_params.clone();
 
         let effective_n_positions = configured_n_positions.clone();
         let runtime_budget = bot_params
@@ -2074,7 +2076,7 @@ impl<'a> Backtest<'a> {
                     mode: "orchestrator",
                     ..OrchProfile::default()
                 }),
-            max_tradable_coins_seen: 0,
+            max_tradable_coins_seen: EffectiveNPositions { long: 0, short: 0 },
             hard_stop_pside: [
                 HardStopPsideRuntime::default(),
                 HardStopPsideRuntime::default(),
@@ -2263,24 +2265,48 @@ impl<'a> Backtest<'a> {
             return false; // nothing tradable right now
         }
 
-        let tradable_now = eligible.len();
-        let tradable_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
+        let eligible_long: Vec<usize> = eligible
+            .iter()
+            .copied()
+            .filter(|&idx| self.bot_params_original[idx].long.wallet_exposure_limit != 0.0)
+            .collect();
+        let eligible_short: Vec<usize> = eligible
+            .iter()
+            .copied()
+            .filter(|&idx| self.bot_params_original[idx].short.wallet_exposure_limit != 0.0)
+            .collect();
+
+        let tradable_long_now = eligible_long.len();
+        let tradable_short_now = eligible_short.len();
+        let tradable_long_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
             // Grow-only tradable universe: once a coin has been tradable, later delistings
             // do not reduce the denominator.
-            self.max_tradable_coins_seen = self.max_tradable_coins_seen.max(tradable_now);
-            self.max_tradable_coins_seen
+            self.max_tradable_coins_seen.long =
+                self.max_tradable_coins_seen.long.max(tradable_long_now);
+            self.max_tradable_coins_seen.long
         } else {
-            tradable_now
+            tradable_long_now
+        };
+        let tradable_short_for_denom = if self.backtest_params.dynamic_wel_by_tradability {
+            self.max_tradable_coins_seen.short =
+                self.max_tradable_coins_seen.short.max(tradable_short_now);
+            self.max_tradable_coins_seen.short
+        } else {
+            tradable_short_now
         };
 
         // ---------- 2. denominator/effective position counts ----------
         self.effective_n_positions.long = if self.backtest_params.dynamic_wel_by_tradability {
-            self.configured_n_positions.long.min(tradable_for_denom)
+            self.configured_n_positions
+                .long
+                .min(tradable_long_for_denom)
         } else {
             self.configured_n_positions.long
         };
         self.effective_n_positions.short = if self.backtest_params.dynamic_wel_by_tradability {
-            self.configured_n_positions.short.min(tradable_for_denom)
+            self.configured_n_positions
+                .short
+                .min(tradable_short_for_denom)
         } else {
             self.configured_n_positions.short
         };
@@ -2309,12 +2335,14 @@ impl<'a> Backtest<'a> {
             runtime_budget.long.effective_n_positions = self.effective_n_positions.long;
             runtime_budget.short.effective_n_positions = self.effective_n_positions.short;
         }
-        for &idx in &eligible {
+        for &idx in &eligible_long {
             if self.bot_params_original[idx].long.wallet_exposure_limit < 0.0 {
                 self.runtime_budget[idx]
                     .long
                     .effective_wallet_exposure_limit = dyn_wel_long_base;
             }
+        }
+        for &idx in &eligible_short {
             if self.bot_params_original[idx].short.wallet_exposure_limit < 0.0 {
                 self.runtime_budget[idx]
                     .short
@@ -3981,6 +4009,38 @@ impl<'a> Backtest<'a> {
         self.update_open_orders_all_orchestrator(k);
     }
 
+    fn forager_hysteresis_state_from_open_orders(&self) -> ForagerHysteresisState {
+        let mut incumbent_long: HashSet<usize> = HashSet::new();
+        let mut incumbent_short: HashSet<usize> = HashSet::new();
+        for (idx, bundle) in self.open_orders.long.iter().enumerate() {
+            let flat = self
+                .positions
+                .long
+                .get(idx)
+                .map(|pos| pos.size == 0.0)
+                .unwrap_or(true);
+            if flat && !bundle.entries.is_empty() {
+                incumbent_long.insert(idx);
+            }
+        }
+        for (idx, bundle) in self.open_orders.short.iter().enumerate() {
+            let flat = self
+                .positions
+                .short
+                .get(idx)
+                .map(|pos| pos.size == 0.0)
+                .unwrap_or(true);
+            if flat && !bundle.entries.is_empty() {
+                incumbent_short.insert(idx);
+            }
+        }
+        ForagerHysteresisState {
+            score_hysteresis_pct: self.backtest_params.forager_score_hysteresis_pct,
+            incumbent_long,
+            incumbent_short,
+        }
+    }
+
     fn update_open_orders_all_orchestrator(&mut self, k: usize) {
         let total_t0 = Instant::now();
         if let Some(p) = self.orch_profile.as_mut() {
@@ -3988,6 +4048,7 @@ impl<'a> Backtest<'a> {
         }
 
         let t0 = Instant::now();
+        let forager_hysteresis = self.forager_hysteresis_state_from_open_orders();
         self.open_orders.clear_all();
         if let Some(p) = self.orch_profile.as_mut() {
             OrchProfile::add_ns(&mut p.clear_orders_ns, t0.elapsed());
@@ -4025,7 +4086,7 @@ impl<'a> Backtest<'a> {
 
         let (res, input_update_elapsed, compute_elapsed) = {
             let t0 = Instant::now();
-            let input = self.get_orchestrator_input_cached(k, peek_hints);
+            let input = self.get_orchestrator_input_cached(k, peek_hints, Some(forager_hysteresis));
             let input_update_elapsed = t0.elapsed();
 
             let t1 = Instant::now();
@@ -4992,6 +5053,7 @@ mod tests {
             skip_btc_analysis: false,
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
+            forager_score_hysteresis_pct: 0.0,
             hedge_mode: true,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
@@ -5065,6 +5127,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             liquidation_threshold: 0.05,
@@ -5084,7 +5147,7 @@ mod tests {
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::GracefulStop)
@@ -5132,6 +5195,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             liquidation_threshold: 0.05,
@@ -5155,7 +5219,7 @@ mod tests {
             price: 1.0,
         };
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::TpOnly)
@@ -5200,6 +5264,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             liquidation_threshold: 0.05,
@@ -5219,7 +5284,7 @@ mod tests {
         );
         bt.hard_stop_tier = ehsl::HardStopTier::Orange;
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(input.symbols[0].long.mode, None);
         assert_eq!(input.symbols[0].short.mode, None);
     }
@@ -5260,6 +5325,7 @@ mod tests {
             filter_by_min_effective_cost: false,
             dynamic_wel_by_tradability: true,
             hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
             max_realized_loss_pct: 1.0,
             pnls_max_lookback_days: 30.0,
             liquidation_threshold: 0.05,
@@ -5283,7 +5349,7 @@ mod tests {
             price: 100.0,
         };
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         assert_eq!(
             input.symbols[0].long.mode,
             Some(orchestrator::TradingMode::Panic)
@@ -5343,6 +5409,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5424,6 +5491,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5498,6 +5566,7 @@ mod tests {
             market_orders_allowed: true,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5570,6 +5639,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5645,6 +5715,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5712,6 +5783,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5780,6 +5852,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -5861,6 +5934,7 @@ mod tests {
                 market_orders_allowed: false,
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0005,
+                forager_score_hysteresis_pct: 0.0,
                 candle_interval_minutes: 1,
             };
 
@@ -5935,6 +6009,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6029,6 +6104,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6106,6 +6182,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6199,6 +6276,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6312,6 +6390,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6432,6 +6511,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6523,6 +6603,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: EquityHardStopLossConfig::default(),
             candle_interval_minutes: 1,
         };
@@ -6624,6 +6705,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6725,6 +6807,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
             equity_hard_stop_loss: hs,
             candle_interval_minutes: 1,
         };
@@ -6816,6 +6899,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6872,6 +6956,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6928,6 +7013,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -6997,6 +7083,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7008,7 +7095,7 @@ mod tests {
             &backtest_params,
         );
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         let runtime_budget = input.symbols[0]
             .long
             .runtime_budget
@@ -7022,7 +7109,7 @@ mod tests {
 
         bt.runtime_budget[0].long.effective_wallet_exposure_limit = 0.2;
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         let runtime_budget = input.symbols[0]
             .long
             .runtime_budget
@@ -7074,6 +7161,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7090,7 +7178,7 @@ mod tests {
         bt.pnl_cumsum_max = 10.0;
         bt.pnl_cumsum_running = 0.0;
 
-        let input = bt.get_orchestrator_input_cached(1, None);
+        let input = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
             (input.balance - 100.0).abs() < 1e-12,
             "expected snapped balance to route to input.balance"
@@ -7164,6 +7252,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7181,7 +7270,7 @@ mod tests {
         bt.pnl_cumsum_max = 0.0;
         bt.pnl_cumsum_running = 0.0;
 
-        let input1 = bt.get_orchestrator_input_cached(1, None);
+        let input1 = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
             (input1.balance_raw - 1000.0).abs() < 1e-12,
             "first call: balance_raw should be 1000"
@@ -7199,7 +7288,7 @@ mod tests {
         bt.pnl_cumsum_max = 50.0;
         bt.pnl_cumsum_running = 50.0;
 
-        let input2 = bt.get_orchestrator_input_cached(1, None);
+        let input2 = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
             (input2.balance_raw - 1050.0).abs() < 1e-12,
             "second call: balance_raw should have updated to 1050"
@@ -7257,6 +7346,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
 
@@ -7331,6 +7421,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
 
@@ -7348,13 +7439,13 @@ mod tests {
         record_realized_pnl_for_test(&mut bt, 0, 100.0);
         record_realized_pnl_for_test(&mut bt, 1, -90.0);
 
-        let input1 = bt.get_orchestrator_input_cached(1, None);
+        let input1 = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
             input1.global.unstuck_allowance_long.abs() < 1e-12,
             "expected stale positive peak to suppress allowance while still in-window"
         );
 
-        let input2 = bt.get_orchestrator_input_cached(2, None);
+        let input2 = bt.get_orchestrator_input_cached(2, None, None);
         assert!(
             (input2.global.realized_pnl_cumsum_max - -90.0).abs() < 1e-12,
             "expected rolling peak to decay after the old positive fill expires"
@@ -7437,6 +7528,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
 
@@ -7515,6 +7607,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
 
@@ -7534,7 +7627,7 @@ mod tests {
         record_realized_pnl_for_test(&mut bt, 2, -120.0);
         record_realized_pnl_for_test(&mut bt, 3, 190.0);
 
-        let input = bt.get_orchestrator_input_cached(3, None);
+        let input = bt.get_orchestrator_input_cached(3, None, None);
 
         assert!(
             input.global.realized_pnl_cumsum_max >= input.global.realized_pnl_cumsum_last - 1e-12,
@@ -7595,6 +7688,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 24 * 60,
         };
 
@@ -7630,7 +7724,7 @@ mod tests {
                 expected,
                 actual
             );
-            let input = bt.get_orchestrator_input_cached(k, None);
+            let input = bt.get_orchestrator_input_cached(k, None, None);
             let expected_allowance =
                 calc_auto_unstuck_allowance(1000.0, 0.01, expected.0, expected.1);
             assert!(
@@ -7680,6 +7774,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 
@@ -7722,6 +7817,88 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_wel_by_tradability_uses_side_specific_eligible_counts() {
+        let hlcvs = Array3::from_shape_vec((6, 4, 4), vec![1.0; 6 * 4 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 4;
+        bp_pair.long.total_wallet_exposure_limit = 1.2;
+        bp_pair.long.wallet_exposure_limit = -1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.n_positions = 4;
+        bp_pair.short.total_wallet_exposure_limit = 2.0;
+        bp_pair.short.wallet_exposure_limit = -1.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        let mut short_only = bp_pair.clone();
+        short_only.long.n_positions = 0;
+        short_only.long.total_wallet_exposure_limit = 0.0;
+        short_only.long.wallet_exposure_limit = 0.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec![
+                "A".to_string(),
+                "B".to_string(),
+                "C".to_string(),
+                "D".to_string(),
+            ],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0, 0, 0, 0],
+            last_valid_indices: vec![5, 5, 5, 5],
+            warmup_minutes: vec![0, 0, 0, 0],
+            trade_start_indices: vec![0, 0, 0, 0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair.clone(), bp_pair.clone(), bp_pair, short_only],
+            vec![
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+                ExchangeParams::default(),
+            ],
+            &backtest_params,
+        );
+
+        assert!(bt.update_n_positions_and_wallet_exposure_limits(0));
+        assert_eq!(bt.effective_n_positions.long, 3);
+        assert_eq!(bt.effective_n_positions.short, 4);
+        assert!((bt.runtime_budget[0].long.effective_wallet_exposure_limit - 0.4).abs() < 1e-12);
+        assert!((bt.runtime_budget[0].short.effective_wallet_exposure_limit - 0.5).abs() < 1e-12);
+        assert_eq!(
+            bt.runtime_budget[3].long.effective_wallet_exposure_limit,
+            0.0
+        );
+    }
+
+    #[test]
     fn fixed_backtest_wel_uses_configured_n_positions() {
         let hlcvs = Array3::from_shape_vec((6, 2, 4), vec![1.0; 6 * 2 * 4]).unwrap();
         let btc_usd_prices = Array1::from_vec(vec![20_000.0; 6]);
@@ -7760,6 +7937,7 @@ mod tests {
             market_orders_allowed: false,
             market_order_near_touch_threshold: 0.001,
             market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
             candle_interval_minutes: 1,
         };
 

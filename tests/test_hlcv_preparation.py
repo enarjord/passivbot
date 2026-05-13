@@ -116,6 +116,9 @@ def sample_config():
         "bot": {
             "long": {
                 "enabled": True,
+                "n_positions": 2,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 0.5,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -124,6 +127,9 @@ def sample_config():
             },
             "short": {
                 "enabled": True,
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 0.5,
+                "wallet_exposure_limit": 0.5,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -136,6 +142,7 @@ def sample_config():
                 "long": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
                 "short": ["BTC/USDT:USDT"],
             },
+            "ignored_coins": {"long": [], "short": []},
             "minimum_coin_age_days": 0.0,
             "max_warmup_minutes": 0.0,
             "warmup_ratio": 3.0,
@@ -1660,7 +1667,18 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "warmup_ratio": 0.0,
             "max_warmup_minutes": 0.0,
         },
-        "bot": {"long": {}, "short": {}},
+        "bot": {
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
+            },
+            "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "wallet_exposure_limit": 0.0,
+            },
+        },
     }
 
     with caplog.at_level("INFO"):

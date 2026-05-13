@@ -15,14 +15,15 @@ import sysconfig
 import time
 import hashlib
 from pathlib import Path
-from typing import Iterable, List, Optional, Tuple
+from typing import Iterable, List, Optional, Sequence
 
 LOCK_FILE = Path("passivbot-rust/.compile.lock")
-LOCK_TIMEOUT = 300  # seconds
-LOCK_CHECK_INTERVAL = 2  # seconds
+LOCK_TIMEOUT = 3600  # seconds; timeout fails startup, it never permits stale Rust
+LOCK_CHECK_INTERVAL = 0.25  # seconds
 COMPILED_EXTENSION_NAME = "libpassivbot_rust"
 PYTHON_MODULE_NAME = "passivbot_rust"
 SOURCE_STAMP_SUFFIX = ".rust-src-sha256"
+_LOCK_HANDLE = None
 
 
 def _extension_suffixes() -> list[str]:
@@ -339,47 +340,97 @@ def extension_needs_rebuild(
     return stamp != fingerprint
 
 
-def acquire_lock(lock_file: Path = LOCK_FILE) -> bool:
-    import time
+def _lock_file_nonblocking(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
 
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def acquire_lock(
+    lock_file: Path = LOCK_FILE,
+    timeout: Optional[float] = LOCK_TIMEOUT,
+    *,
+    wait_message: Optional[str] = None,
+) -> bool:
+    global _LOCK_HANDLE
+    if _LOCK_HANDLE is not None:
+        return True
     start = time.time()
+    logged_wait = False
+    try:
+        lock_file.parent.mkdir(parents=True, exist_ok=True)
+        handle = lock_file.open("a+", encoding="utf-8")
+    except OSError:
+        return False
+
     while True:
         try:
-            if lock_file.exists():
-                age = time.time() - lock_file.stat().st_mtime
-                if age > LOCK_TIMEOUT:
-                    try:
-                        lock_file.unlink()
-                    except OSError:
-                        pass
-                else:
-                    if time.time() - start > LOCK_TIMEOUT:
-                        try:
-                            lock_file.unlink()
-                        except OSError:
-                            pass
-                        return True
-                    time.sleep(LOCK_CHECK_INTERVAL)
-                    continue
-            lock_file.parent.mkdir(parents=True, exist_ok=True)
-            lock_file.write_text(str(os.getpid()))
+            _lock_file_nonblocking(handle)
+            handle.seek(0)
+            handle.truncate()
+            handle.write(f"{os.getpid()}\n")
+            handle.flush()
+            _LOCK_HANDLE = handle
             return True
         except OSError:
-            return False
+            if wait_message is not None and not logged_wait:
+                print(wait_message)
+                logged_wait = True
+            if timeout is not None and time.time() - start > timeout:
+                try:
+                    handle.close()
+                except OSError:
+                    pass
+                return False
+            time.sleep(LOCK_CHECK_INTERVAL)
 
 
 def release_lock(lock_file: Path = LOCK_FILE) -> None:
+    global _LOCK_HANDLE
+    handle = _LOCK_HANDLE
+    _LOCK_HANDLE = None
+    if handle is None:
+        return
     try:
-        if lock_file.exists():
-            lock_file.unlink()
+        _unlock_file(handle)
+    except OSError:
+        pass
+    try:
+        handle.close()
     except OSError:
         pass
 
 
-def stamp_compiled_extensions(fingerprint: Optional[str]) -> None:
+def stamp_compiled_extensions(
+    fingerprint: Optional[str],
+    paths: Optional[Sequence[Path]] = None,
+) -> None:
     if fingerprint is None:
         return
-    for compiled_path in compiled_extension_paths():
+    if paths is None:
+        preferred = preferred_compiled_path()
+        paths = [] if preferred is None else [preferred]
+    for compiled_path in paths:
         if not compiled_path.exists():
             continue
         try:
@@ -408,21 +459,51 @@ def prune_shadowing_local_extensions() -> None:
             continue
 
 
+def maturin_develop_command() -> list[str]:
+    if importlib.util.find_spec("maturin") is not None:
+        return [sys.executable, "-m", "maturin", "develop", "--release"]
+
+    suffix = ".exe" if os.name == "nt" else ""
+    venv_maturin = Path(sys.executable).with_name(f"maturin{suffix}")
+    if venv_maturin.exists():
+        return [str(venv_maturin), "develop", "--release"]
+
+    return ["maturin", "develop", "--release"]
+
+
+def maturin_env() -> dict[str, str]:
+    env = os.environ.copy()
+    prefix = Path(sys.prefix)
+    base_prefix = Path(getattr(sys, "base_prefix", sys.prefix))
+    if prefix != base_prefix:
+        env["VIRTUAL_ENV"] = str(prefix)
+        bin_dir = prefix / ("Scripts" if os.name == "nt" else "bin")
+        env["PATH"] = f"{bin_dir}{os.pathsep}{env.get('PATH', '')}"
+    return env
+
+
 def recompile_rust() -> bool:
     try:
         start = time.time()
         result = subprocess.run(  # noqa: S603,S607
-            ["maturin", "develop", "--release"],
+            maturin_develop_command(),
             cwd="passivbot-rust",
             check=True,
             capture_output=True,
             text=True,
+            env=maturin_env(),
         )
         elapsed = time.time() - start
         print(result.stdout)
         print(f"Rust extension rebuild finished in {elapsed:.2f}s")
-        stamp_compiled_extensions(source_fingerprint())
         prune_shadowing_local_extensions()
+        compiled_path = preferred_compiled_path()
+        if compiled_path is not None and compiled_path.exists():
+            try:
+                if compiled_path.stat().st_mtime >= start - 1.0:
+                    stamp_compiled_extensions(source_fingerprint(), paths=[compiled_path])
+            except OSError:
+                pass
         return True
     except subprocess.CalledProcessError as e:
         print(e.stderr)
@@ -468,15 +549,31 @@ def check_and_maybe_compile(
         return
 
     if compiled_path is None:
-        print("Rust extension missing; compiling...")
+        wait_message = "Rust extension missing; waiting for compile lock..."
     elif stale:
-        print("Rust extension is stale; recompiling...")
+        wait_message = "Rust extension is stale; waiting for compile lock..."
     elif force:
-        print("Rust extension rebuild forced; recompiling...")
+        wait_message = "Rust extension rebuild forced; waiting for compile lock..."
+    else:
+        wait_message = "Rust extension rebuild requested; waiting for compile lock..."
 
-    if not acquire_lock():
-        raise RuntimeError("Failed to acquire Rust compile lock.")
+    if not acquire_lock(wait_message=wait_message):
+        raise RuntimeError("Timed out waiting for Rust compile lock.")
     try:
+        prune_shadowing_local_extensions()
+        source_mtime = latest_source_mtime()
+        fingerprint = source_fingerprint()
+        compiled_path = preferred_compiled_path()
+        stale = extension_needs_rebuild(compiled_path, source_mtime, fingerprint)
+        if not (force or stale):
+            print("Rust extension was rebuilt by another process; continuing.")
+            return
+        if compiled_path is None:
+            print("Rust extension missing; acquired compile lock; compiling...")
+        elif stale:
+            print("Rust extension is stale; acquired compile lock; recompiling...")
+        elif force:
+            print("Rust extension rebuild forced; acquired compile lock; recompiling...")
         if not recompile_rust():
             raise RuntimeError("Rust compilation failed.")
     finally:

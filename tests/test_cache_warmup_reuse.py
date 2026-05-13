@@ -54,6 +54,9 @@ def _base_config(**overrides):
         },
         "bot": {
             "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "wallet_exposure_limit": 1.0,
                 "ema_span_0": 1000.0,
                 "ema_span_1": 1500.0,
                 "forager_volume_ema_span_1m": 2000.0,
@@ -61,6 +64,9 @@ def _base_config(**overrides):
                 "entry_volatility_ema_span_1h": 1.0,
             },
             "short": {
+                "n_positions": 0,
+                "total_wallet_exposure_limit": 0.0,
+                "wallet_exposure_limit": 0.0,
                 "ema_span_0": 100.0,
                 "ema_span_1": 100.0,
                 "forager_volume_ema_span_1m": 360.0,

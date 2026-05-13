@@ -179,15 +179,16 @@ def validate_optimize_bounds_against_bot_config(config: dict, optimize_bounds) -
                 f"optimize bound {bound_key} must map to a numeric bot.{pside}.{key}, "
                 f"got {type(value).__name__}"
             )
-        if bound_key == "long_unstuck_ema_dist":
-            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+        target_key = canonical_key or bound_key
+        if target_key == "long_unstuck_ema_dist":
+            bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(
                 bound.low,
                 path="optimize.bounds.long_unstuck_ema_dist lower bound",
                 pside="long",
             )
-        elif bound_key == "short_unstuck_ema_dist":
-            bound = Bound.from_config(bound_key, optimize_bounds[bound_key])
+        elif target_key == "short_unstuck_ema_dist":
+            bound = Bound.from_config(target_key, optimize_bounds[bound_key])
             validate_unstuck_ema_dist_value(
                 bound.high,
                 path="optimize.bounds.short_unstuck_ema_dist upper bound",

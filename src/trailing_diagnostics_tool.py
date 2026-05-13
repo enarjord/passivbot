@@ -9,17 +9,61 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
-from config import load_prepared_config
-from trailing_diagnostics import (
-    CLOSE_CONFIG_KEYS,
-    ENTRY_CONFIG_KEYS,
-    NUMERIC_INPUT_KEYS,
-    TRAILING_EXTREMA_KEYS,
-    build_trailing_diagnostic,
-    build_trailing_inputs_from_snapshot,
-    snapshot_payload,
-)
+ENTRY_CONFIG_KEYS = [
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_volatility_weight",
+    "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_pct",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_retracement_we_weight",
+    "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_pct",
+    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_volatility_weight",
+    "wallet_exposure_limit",
+    "risk_we_excess_allowance_pct",
+]
 
+CLOSE_CONFIG_KEYS = [
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_threshold_pct",
+    "wallet_exposure_limit",
+    "risk_we_excess_allowance_pct",
+    "risk_wel_enforcer_threshold",
+]
+
+TRAILING_EXTREMA_KEYS = [
+    "min_since_open",
+    "max_since_min",
+    "max_since_open",
+    "min_since_max",
+]
+
+NUMERIC_INPUT_KEYS = [
+    "balance_raw",
+    "current_price",
+    "position_size",
+    "position_price",
+    "qty_step",
+    "price_step",
+    "min_qty",
+    "min_cost",
+    "c_mult",
+    "ema_lower",
+    "ema_upper",
+    "h1_log_range_ema",
+    *TRAILING_EXTREMA_KEYS,
+    *sorted(set(ENTRY_CONFIG_KEYS + CLOSE_CONFIG_KEYS)),
+]
 
 EDITABLE_INPUT_KEYS = [
     "balance_raw",
@@ -82,6 +126,32 @@ WIZARD_ADVANCED_KEYS = [
     "close_grid_qty_pct",
     "risk_wel_enforcer_threshold",
 ]
+
+
+def load_prepared_config(*args, **kwargs):
+    from config import load_prepared_config as _load_prepared_config
+
+    return _load_prepared_config(*args, **kwargs)
+
+
+def build_trailing_diagnostic(*args, **kwargs):
+    from trailing_diagnostics import build_trailing_diagnostic as _build_trailing_diagnostic
+
+    return _build_trailing_diagnostic(*args, **kwargs)
+
+
+def build_trailing_inputs_from_snapshot(*args, **kwargs):
+    from trailing_diagnostics import (
+        build_trailing_inputs_from_snapshot as _build_trailing_inputs_from_snapshot,
+    )
+
+    return _build_trailing_inputs_from_snapshot(*args, **kwargs)
+
+
+def snapshot_payload(*args, **kwargs):
+    from trailing_diagnostics import snapshot_payload as _snapshot_payload
+
+    return _snapshot_payload(*args, **kwargs)
 
 
 def _truncate(value: str, width: int) -> str:

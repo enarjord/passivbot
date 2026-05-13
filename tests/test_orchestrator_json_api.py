@@ -188,9 +188,11 @@ def ema_bundle(
 ):
     return {
         "m1": {
-            "close": m1_close
-            if m1_close is not None
-            else [[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]],
+            "close": (
+                m1_close
+                if m1_close is not None
+                else [[10.0, 100.0], [20.0, 100.0], [math.sqrt(10.0 * 20.0), 100.0]]
+            ),
             "volume": m1_volume if m1_volume is not None else [[10.0, 1_000.0]],
             "log_range": m1_log_range if m1_log_range is not None else [[10.0, 0.01]],
         },
@@ -952,6 +954,66 @@ def test_ema_anchor_one_way_mode_blocks_long_entries_while_short_position_exists
     assert out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
 
 
+def test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                tradable=False,
+                long_mode="normal",
+                emas=ema_bundle(m1_close=[], m1_volume=[], m1_log_range=[]),
+            )
+        ],
+    )
+    out = compute(pbr, inp)
+
+    assert out["orders"] == []
+    assert out["diagnostics"]["symbol_states"][0]["long"]["active"] is False
+    assert out["diagnostics"]["symbol_states"][0]["long"]["allow_initial"] is False
+
+
+def test_side_zero_wel_excludes_only_that_side_from_active_slots():
+    import passivbot_rust as pbr
+
+    global_bp = bot_params_pair(
+        long_overrides={"n_positions": 4, "total_wallet_exposure_limit": 1000.0},
+        short_overrides={
+            "n_positions": 4,
+            "total_wallet_exposure_limit": 1000.0,
+            "wallet_exposure_limit": 1.0,
+        },
+    )
+    symbols = []
+    for idx in range(4):
+        long_bp = {"wallet_exposure_limit": 0.0} if idx == 3 else None
+        symbols.append(
+            make_symbol(
+                idx,
+                bid=100.0,
+                ask=100.0,
+                long_bp=long_bp,
+                short_bp={
+                    "n_positions": 4,
+                    "total_wallet_exposure_limit": 1000.0,
+                    "wallet_exposure_limit": 1.0,
+                },
+            )
+        )
+
+    out = compute(pbr, make_input(balance=1_000_000.0, global_bp=global_bp, symbols=symbols))
+    states = out["diagnostics"]["symbol_states"]
+
+    assert sum(state["long"]["active"] for state in states) == 3
+    assert sum(state["short"]["active"] for state in states) == 4
+    assert states[3]["long"]["active"] is False
+    assert states[3]["short"]["active"] is True
+
+
 def test_panic_mode_emits_close_panic_long():
     import passivbot_rust as pbr
 
@@ -996,17 +1058,28 @@ def test_graceful_stop_blocks_initial_entries_only():
         long_pos_size=1.0,
         long_pos_price=100.0,
     )
-    inp_normal = make_input(balance=1_000.0, symbols=[{**sym, "long": {**sym["long"], "mode": None}}])
+    inp_normal = make_input(
+        balance=1_000.0, symbols=[{**sym, "long": {**sym["long"], "mode": None}}]
+    )
     inp_gs = make_input(
-        balance=1_000.0, symbols=[{**sym, "long": {**sym["long"], "mode": "graceful_stop"}}]
+        balance=1_000.0,
+        symbols=[{**sym, "long": {**sym["long"], "mode": "graceful_stop"}}],
     )
     out_normal = compute(pbr, inp_normal)
     out_gs = compute(pbr, inp_gs)
     assert out_normal["orders"] == out_gs["orders"]
-    assert out_normal["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] == "normal"
-    assert out_gs["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] == "normal"
+    assert (
+        out_normal["diagnostics"]["symbol_states"][0]["long"]["effective_mode"]
+        == "normal"
+    )
+    assert (
+        out_gs["diagnostics"]["symbol_states"][0]["long"]["effective_mode"] == "normal"
+    )
     assert out_normal["diagnostics"]["symbol_states"][0]["long"]["input_mode"] is None
-    assert out_gs["diagnostics"]["symbol_states"][0]["long"]["input_mode"] == "graceful_stop"
+    assert (
+        out_gs["diagnostics"]["symbol_states"][0]["long"]["input_mode"]
+        == "graceful_stop"
+    )
     assert any(o["order_type"].startswith("close_") for o in out_gs["orders"])
 
 
@@ -1069,6 +1142,31 @@ def test_forager_respects_n_positions_selects_one_coin():
     out = compute(pbr, inp)
     assert out["orders"], "expected at least one order"
     assert {o["symbol_idx"] for o in out["orders"]} == {1}
+    selection = out["diagnostics"]["forager_selections"][0]
+    assert selection["pside"] == "long"
+    assert selection["selected_symbol_indices"] == [1]
+    assert selection["top_scores"][0]["symbol_idx"] == 1
+    assert selection["top_scores"][0]["selected"] is True
+
+
+def test_json_rejects_invalid_forager_hysteresis_pct():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(0, bid=100.0, ask=100.0),
+            make_symbol(1, bid=100.0, ask=100.0),
+        ],
+    )
+    inp["forager_hysteresis"] = {
+        "score_hysteresis_pct": -0.1,
+        "incumbent_long": [],
+        "incumbent_short": [],
+    }
+
+    with pytest.raises(ValueError, match="forager_score_hysteresis_pct"):
+        compute(pbr, inp)
 
 
 def test_select_forager_candidates_all_zero_weights_fall_back_to_ema_readiness_only():
@@ -1118,7 +1216,11 @@ def test_json_output_is_deterministic():
 
     inp = make_input(
         balance=1_000.0,
-        symbols=[make_symbol(0, bid=100.0, ask=100.0, long_pos_size=1.0, long_pos_price=100.0)],
+        symbols=[
+            make_symbol(
+                0, bid=100.0, ask=100.0, long_pos_size=1.0, long_pos_price=100.0
+            )
+        ],
     )
     out1 = compute(pbr, inp)
     out2 = compute(pbr, inp)
@@ -1164,7 +1266,9 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     assert "close_grid_long" in order_types
 
     closes = [
-        o for o in out["orders"] if o["order_type"].startswith("close_") and o["pside"] == "long"
+        o
+        for o in out["orders"]
+        if o["order_type"].startswith("close_") and o["pside"] == "long"
     ]
     total_close_qty = -sum(o["qty"] for o in closes if o["qty"] < 0.0)
     assert total_close_qty <= 10.0 + 1e-9
@@ -1375,6 +1479,47 @@ def test_twel_enforcer_second_pass_reduces_below_position_floor():
     )
 
 
+def test_twel_enforcer_threshold_reduces_positions_at_wel():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.75,
+        "total_wallet_exposure_limit": 1.5,
+        "risk_twel_enforcer_threshold": 0.99,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym0 = make_symbol(
+        0,
+        bid=49.0,
+        ask=49.0,
+        long_pos_size=15.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    sym1 = make_symbol(
+        1,
+        bid=49.5,
+        ask=49.5,
+        long_pos_size=15.0,
+        long_pos_price=50.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
+    out = compute(pbr, inp)
+    orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    assert orders, (
+        "TWEL enforcer should reduce positions below raw WEL when "
+        "risk_twel_enforcer_threshold is below 1.0"
+    )
+
+    psize_by_symbol = {0: 15.0, 1: 15.0}
+    for order in orders:
+        psize_by_symbol[order["symbol_idx"]] -= abs(order["qty"])
+    twe_after = sum(size * 50.0 / 1_000.0 for size in psize_by_symbol.values())
+    assert twe_after <= 1.5 * 0.99 + 1e-12
+
+
 # ---------------------------------------------------------------------------
 # balance_raw semantics tests
 # ---------------------------------------------------------------------------
@@ -1580,7 +1725,9 @@ def test_twel_enforcer_uses_balance_raw_not_snapped():
     # Two positions: cost = 8*50 + 12*50 = 400 + 600 = 1000.
     # With snapped balance 2000: total WE = 1000/2000 = 0.5 (under 0.9, no trigger).
     # With raw balance 1100: total WE = 1000/1100 ≈ 0.909 (over 0.9, triggers).
-    sym0 = make_symbol(0, bid=50.0, ask=50.0, long_pos_size=8.0, long_pos_price=50.0, long_bp=long_bp)
+    sym0 = make_symbol(
+        0, bid=50.0, ask=50.0, long_pos_size=8.0, long_pos_price=50.0, long_bp=long_bp
+    )
     sym1 = make_symbol(
         1, bid=50.0, ask=50.0, long_pos_size=12.0, long_pos_price=50.0, long_bp=long_bp
     )

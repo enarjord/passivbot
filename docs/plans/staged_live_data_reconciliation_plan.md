@@ -1,0 +1,650 @@
+# Staged Live Data Reconciliation Plan
+
+## Purpose
+
+Track the work needed to make the Python side of live Passivbot fast, accurate, remote-call
+budget aware, and robust before handing required state to Rust for order planning.
+
+Rust remains the source of truth for trading logic. Python owns exchange I/O, state freshness,
+market data plumbing, reconciliation, and safety gates before order execution.
+
+## Current Scope
+
+Primary branch: `feat/staged-live-planner`
+
+Initial live smoke accounts:
+
+- Hyperliquid unified: `hyperliquid_01`
+- Bybit: `ebybitsub03`
+
+Later validation targets:
+
+- Bitget
+- Gate.io
+- OKX
+- Binance
+- KuCoin
+
+## Required Live Inputs
+
+Before order planning/execution, live bot must have coherent state for:
+
+- positions
+- fill events
+- balance
+- open orders
+- completed candlesticks needed by indicators and state replay
+- fresh market snapshot for bid, ask, and last price
+
+## Working Principles
+
+- Python must fail loudly for trading-critical missing or stale inputs.
+- Rust decides ideal orders; Python must not patch trading behavior around stale state.
+- Remote-call economy must not weaken active-symbol safety.
+- Budgeting may delay inactive/secondary work, not required active account or price state.
+- Candlestick manager should be narrowed toward completed candles only.
+- Current in-progress minute/hour price truth should come from ticker/orderbook endpoints, not
+  incomplete candles.
+- Duplicate order prevention is trading-critical and needs explicit tests.
+
+## Accepted Live/Backtest Contract Exceptions
+
+These are deliberate exceptions to the general "Rust owns order behavior" and live/backtest parity
+rules. Keep them narrow, visible, and test-covered.
+
+- Live initial-entry executor distance gate:
+  - Rust still emits the intended `entry_initial_*` order.
+  - Python live may withhold posting far passive initial-entry creates when
+    `live.initial_entry_exec_max_market_dist_pct > 0`.
+  - This is accepted as an executor-level remote-call/order-churn throttle, not a trading-logic
+    source of truth.
+  - Python must not create any order Rust did not request.
+  - Existing matching orders are preserved by order-match tolerance; if an existing order drifts
+    outside tolerance, live may cancel it and withhold the far replacement create.
+  - Blocking must be INFO-visible and throttled by the same order-match tolerance so operators can
+    see that the bot wants the order but is intentionally not posting it yet.
+
+- Hyperliquid `allMids` market snapshot:
+  - User explicitly accepted using a single mid/last-like reference for bid, ask, and last on
+    Hyperliquid where exact top-of-book is not critical for Passivbot's live planning.
+  - This exception must remain exchange-scoped, source-labeled as `hyperliquid_all_mids`, and
+    covered by diagnostics/tests.
+  - Other exchanges must not silently synthesize bid/ask/last from partial ticker payloads unless
+    an explicit, documented fallback is approved.
+
+## Checklist
+
+### 1. Freshness Ledger
+
+- [x] Define a formal freshness ledger for live inputs.
+- [x] Track freshness per surface: positions, fills, balance, open orders, completed candles, market snapshot.
+- [x] Track symbol-level freshness where relevant.
+- [x] Add planner precondition checks for required surfaces.
+- [x] Add execution precondition checks for disappeared self-order creation safety.
+- [x] Add DEBUG/INFO logs explaining disappeared-order freshness blocks.
+- [x] Add tests for stale required inputs blocking order creation.
+
+### 2. Market Snapshot Provider
+
+- [x] Introduce a `MarketSnapshot`/price provider contract with bid, ask, last, source, and fetched timestamp.
+- [x] Route staged orchestrator last-price reads through market snapshots before candle fallback.
+- [x] Require fresh market snapshot before order creation for affected symbols.
+- [x] Keep completed candles for indicators/history only.
+- [x] Add tests proving incomplete candles are not used as live price truth when ticker data is available.
+- [x] Make generic market snapshot construction fail loudly or skip visibly on missing/partial
+  bid/ask/last. Current review found `_snapshot_from_ticker()` can synthesize missing fields
+  (`bid=ask=last`) and `get_snapshots()` can swallow ticker fetch exceptions at DEBUG. Replace
+  this with an explicit fallback contract, warning visibility, and tests.
+- [x] Keep Hyperliquid `allMids` as a documented, exchange-scoped exception only. Ensure logs/tests
+  clearly show `source=hyperliquid_all_mids` and no other exchange uses the same synthetic
+  bid/ask behavior by accident.
+- [x] Make Hyperliquid HIP-3 ticker fallbacks explicit. If HIP-3 asset contexts lack real impact
+  bid/ask and use mid/mark/oracle as bid/ask/last, label the source separately and cover it with
+  exchange-scoped tests; otherwise reject the partial ticker context loudly.
+
+### 3. Exchange Ticker Capability Probes
+
+- [x] Build a probe tool for `fetch_ticker(symbol)`.
+- [x] Build a probe tool for `fetch_tickers(symbols)`.
+- [x] Build a probe tool for `fetch_tickers()` without a symbol list.
+- [x] Capture bid/ask/last availability and timestamp behavior.
+- [x] Capture endpoint failure modes and rate-limit behavior.
+- [x] Run and record Bybit probe.
+- [x] Run and record Hyperliquid probe.
+- [x] Run initial Bitget, Gate.io, OKX, Binance, KuCoin probes.
+- [x] Rerun quote-specific VPS probes for Bitget, Gate.io, OKX, Binance, and KuCoin before
+  locking durable non-Hyperliquid ticker strategies.
+- [x] Store durable exchange quirks/config for cheapest safe ticker strategy for tested exchanges.
+
+### 4. Candlestick Manager Completed-Only Scope
+
+- [x] Define the candlestick manager contract as completed candles only.
+- [x] Stop using candlestick manager as source of current in-progress minute/hour price truth.
+- [x] Ensure incomplete timeframe candles are never persisted.
+- [x] Review runtime synthetic candle behavior and keep only completed-candle-safe usage.
+- [x] Add tests for completed-minute boundary behavior.
+- [x] Add tests for completed-hour boundary behavior.
+- [x] Add tests that current in-progress candles are not persisted.
+
+### 5. Candle Completeness And Health
+
+- [ ] Define required candle windows for HSL replay.
+- [ ] Define required candle windows for trailing extrema.
+- [x] Define required candle windows for EMA close, volatility, and quote volume.
+- [x] Add helper(s) to report whether a symbol has required completed candles.
+- [x] Add diagnostics for last completed 1m/15m/1h candle, gaps, synthetic count, cache coverage, and stale age.
+- [x] Add INFO logs only for interesting candle health events.
+- [x] Keep detailed candle health diagnostics at DEBUG.
+- [x] Make staged completed-candle ledger signatures stable across cache improvements: the
+  signature now represents the required completed minute per symbol, while mutable cache
+  details remain diagnostics only.
+- [x] Enrich staged completed-candle signature-mismatch diagnostics with mismatch type and
+  previewed missing/extra/changed symbols, so INFO logs show whether the planning universe
+  changed or only the completed-candle target advanced.
+- [x] Formalize open-ended tail-gap policy for completed candles:
+  - If a real candle is expected for `floor(now)-1m` but the exchange has not returned it, emit
+    INFO/WARNING with symbol, timeframe, expected timestamp, latest real timestamp, tail age,
+    ticker liveness, and action.
+  - Continue using the latest real candle-derived state for close EMA, log-range EMA, quote-volume
+    EMA, trailing extrema, and HSL tail replay while the tail gap is within a configurable
+    threshold.
+  - [x] Do not synthesize zero candles for unbounded tail gaps.
+  - [x] Only synthesize runtime zero candles for gaps bounded by a real candle before and after the gap.
+  - When a real candle arrives after a tail gap, replay bounded synthetic zero candles if applicable
+    and let EMAs/trailing extrema catch up deterministically.
+  - If the tail gap exceeds the configured maximum, halt trading for the affected coin/pside with
+    loud logs rather than halting unrelated symbols.
+- [ ] Track ticker liveness for symbols under candle scrutiny. If ticker bid/ask/last stops
+  changing for a long time while candles are stale, escalate diagnostics because it may indicate
+  delisting, exchange API trouble, or an extremely illiquid market. If ticker changes while
+  candles remain stale, treat it as likely quote movement without trades and continue cautiously
+  within the tail-gap threshold.
+- [x] Ensure open-tail gaps are not materialized as runtime synthetic candles, and bounded-gap
+  synthesis remains in-memory/runtime only rather than being persisted as real exchange candles.
+- [x] Ensure tail carry-forward is bounded by the configured staleness threshold and never
+  persisted as real exchange candles.
+- [ ] Resolve known live/backtest EMA parity risk for open-ended tail gaps. Current staged live
+  uses bounded carry-forward of the latest real candle/EMA state while the most recent completed
+  1m candle is missing. Backtests have full future candle knowledge and replay bounded no-trade
+  gaps as synthetic zero-candles, so live can keep close/log-range/quote-volume EMAs artificially
+  stale/hot during the open tail. This is accepted as a safety-first interim policy, but the
+  preferred fix is provisional in-memory EMA tail projection: compute temporary EMA values as if
+  missing tail minutes were no-trade candles, do not persist those candles, bound the projection by
+  `live.max_active_candle_tail_gap_minutes`, and replace/replay when real candles arrive.
+- [ ] Add tests for open-ended tail gaps:
+  - [x] No synthetic zero candle for open-ended tails.
+  - [x] Bounded gaps still synthesize runtime zero candles and report health correctly.
+  - [ ] Carry-forward derived EMAs.
+  - [ ] Provisional in-memory EMA tail projection parity against bounded no-trade gaps.
+  - [x] Bounded threshold halt for affected symbol only.
+  - [ ] Ticker-liveness diagnostics.
+  - [ ] Recovery replay.
+  - [ ] No suppression of active position management without visible policy state.
+
+### 6. Remote-Call Budgeting
+
+- [x] Keep active position/open-order symbols highest priority.
+- [x] Keep active forager slots second priority.
+- [x] Rotate eligible inactive symbols by staleness.
+- [x] Add configurable maximum inactive eligible candle staleness, e.g. `live.max_forager_candle_staleness_minutes`.
+- [x] Ensure no active symbol is budget-starved.
+- [ ] Ensure remote-call pacing avoids startup and minute-boundary bursts.
+- [x] Reduce broad background warmup pressure during live operation. Background candle warmup now
+  defaults to one concurrent symbol across exchanges and applies a minimum 0.5s inter-symbol
+  delay unless the operator explicitly configures a slower delay.
+- [ ] Ensure HSL/balance-equity replay candle fetches use the same remote-call economy principles as
+  active/forager candle refreshes; latest VPS Hyperliquid logs show replay can still burst 5m/15m
+  candle fetches and hit 429s during restart.
+- [x] Reduce routine fill-refresh tail latency by separating scheduled recent-fill checks from
+  explicit account-state confirmations. Warm-cache routine refreshes now use
+  `live.fills_recent_overlap_minutes` (default 10m), while pending confirmation refreshes keep
+  `live.fills_confirmation_overlap_minutes` (default 60m) for safety.
+- [x] Move due routine fill refreshes to a single-flight background prefetch lane after the initial
+  fills stamp. The staged account refresh still blocks on fills if fills have never been stamped,
+  if fills fall too far behind, or if an explicit fill/account confirmation is pending.
+- [ ] Continue reducing long account-surface refresh tail latency, especially fill refreshes. Overnight VPS
+  runs showed order execution is usually fast after planning, but pre-plan `fills` refresh can
+  dominate response time: examples include Binance around 224s, KuCoin around 187s, Gate.io
+  around 55s, Bybit around 39s, and Hyperliquid around 33s.
+- [x] Add a request-count/timing pass for fill-event fetchers, preferring incremental recent-fill
+  refresh for active symbols and websocket-triggered windows where exchange APIs allow it.
+- [x] Add live fill-refresh timing logs with mode, elapsed time, before/after event counts,
+  new-event count, lookback, and cache scope. This makes slow `fills` surfaces visible without
+  reconstructing them from broader staged refresh timing lines.
+- [x] Include fill-refresh source context in timing diagnostics so logs distinguish blocking staged
+  confirmations from routine background prefetches.
+- [x] Persist successful empty fill refresh timestamps. Accounts with no fills no longer lose the
+  last-refresh marker and repeatedly fall back to unbounded recent-history refreshes.
+- [x] Reduce forager INFO log noise. INFO now focuses on selected-set/slot changes, hysteresis
+  replacements, and periodic heartbeats; rank-only score movement remains available at DEBUG.
+- [x] Soften active completed-candle refresh-incomplete logs for likely one-candle exchange
+  publication lag. These now emit INFO with slower throttling, while larger/actionable gaps keep
+  WARNING visibility.
+- [x] Further reduce bounded active tail-gap carry-forward log noise. Normal carry-forward is
+  DEBUG for routine one-minute publication lag; INFO is reserved for multi-minute/persistent tails
+  and periodic summaries, recovery is INFO only after persistent/near-cap tails, and WARNING is
+  reserved for near-cap or sustained tail gaps.
+- [x] Demote self-recovering completed-candle target defers to DEBUG and add periodic INFO
+  summaries. Minute-boundary `completed_candle_target_changed` retries no longer appear as
+  repeated operator events unless they persist over a summary window.
+- [x] Aggregate cache-only EMA skip diagnostics per cycle instead of logging one DEBUG line per
+  symbol. This keeps KuCoin DEBUG runs readable while preserving the unavailable-symbol/reason
+  detail needed for remote-call economy diagnosis.
+- [x] Prevent background candle warmup from competing with runtime EMA/active-symbol OHLCV fetches
+  on slow exchanges. Latest KuCoin logs show many concurrent broad warmup and runtime EMA OHLCV
+  timeouts, with pending task piles during startup. Background warmup now uses the common
+  candle-fetch concurrency helper instead of its previous 8-way default, and KuCoin background
+  warmup/history replay is capped at one concurrent candle fetch unless explicitly overridden.
+- [x] Add a general slow-surface progress log for staged account refreshes. If a required surface
+  crosses a threshold, e.g. 10s, log which surface is still pending so long fill/open-order
+  refreshes do not look like a frozen bot.
+- [x] Clarify staged refresh timing logs: report wall time, per-surface sum, per-surface max,
+  whether surfaces ran in parallel, and residual scheduler/lock-wait time instead of ambiguous
+  `sum/max/unaccounted` labels.
+- [ ] Avoid repeated full-scope exchange-specific state sweeps in steady state. Hyperliquid HIP-3
+  full dex sweeps are required at startup, periodically for safety, and after unknown-dex WS
+  activity, but should not run on every ordinary account refresh cycle.
+- [x] Add tests for fair stale-symbol rotation.
+- [x] Add tests proving active symbols bypass non-critical budgeting.
+- [x] Revisit EMA cache-only suppression. Review found missing EMA for cache-only symbols can mark
+  symbols non-tradable instead of failing loudly. Acceptable behavior should be limited to flat
+  forager-only candidates under the formal tail-gap/freshness policy. Active positions, open
+  orders, pending confirmations, and forced-normal symbols must not be silently suppressed.
+  CandlestickManager now has an explicit no-network `allow_remote_fetch=false` cache-only path,
+  and staged orchestrator EMA loading uses it only for flat secondary forager candidates. If cache
+  coverage is insufficient, those candidates become unavailable for that cycle without remote
+  OHLCV fetches; active/priority symbols still use the normal remote/fail-loud path.
+- [x] Bound required close-EMA carry-forward fallback by the same tail-gap/freshness policy.
+  Previous close EMA may be reused only while recent enough, with `[ema]` warning visibility; once
+  stale beyond the threshold, planning must fail or halt the affected symbol/pside loudly.
+
+### 7. Startup/Warmup
+
+- [x] Split minimal trading-ready startup from background broad catch-up.
+- [x] Fetch account-critical state first: positions, fills, balance, open orders.
+- [x] Fetch active-symbol completed candles before broad eligible-universe candles.
+- [x] Fetch fresh active market snapshots before order creation.
+- [x] Pace broad eligible-universe candle catch-up in the background.
+- [x] Add startup timing diagnostics: account-ready, market-ready, active-candle-ready, full-warmup-ready.
+- [x] Add tests preventing broad simultaneous OHLCV startup bursts where feasible.
+
+### 8. Duplicate-Order Guardrail
+
+- [x] Track known bot-emitted orders by exchange/client/order id with symbol, side, position side, qty, and price.
+- [x] Detect when a known bot-created order disappears from open orders.
+- [x] If a known bot-created order disappears, conservatively mark the symbol as suspect fill/stale position.
+- [x] Block order creations for suspect symbols until positions, fills, and open orders are refreshed coherently.
+- [x] Prefer blocking creations over risking duplicate entries.
+- [x] Keep cancellation behavior conservative but avoid churn under ambiguous state.
+- [x] Add tests for bot cancel, unknown manual/exchange cancel, disappeared self-order with stale state,
+  full-refresh recovery, emitted-record matching, and restart/inherited-order recovery.
+
+### 9. Websocket-Triggered Reconciliation
+
+- [x] On order websocket event, mark account-critical state dirty.
+- [x] On missing bot-created order, force account-critical refresh before creations.
+- [x] On position change, force fills refresh.
+- [x] On significant balance change, force planner/order reconciliation.
+- [x] Add DEBUG/INFO reason logs for refresh causes.
+- [x] Add per-order-wave lifecycle diagnostics with a correlation id for plan-to-post timing:
+  plan time, cancel post time, create post time, defer reasons, and final elapsed. This makes
+  most order response timing measurable without reconstructing scattered log lines.
+- [x] Extend order-wave lifecycle diagnostics through authoritative confirmation, so
+  event-to-final-settlement timing includes the post-write open-order/account refresh.
+
+### 10. Validation Matrix
+
+- [x] Unit tests for freshness ledger.
+- [x] Unit tests for market snapshot provider.
+- [x] Unit tests for completed-only candle manager behavior.
+- [x] Unit tests for duplicate-order guardrail.
+- [ ] Fake-live staged-mode request-count and safety regression scenarios where practical.
+- [x] Bybit DEBUG smoke.
+- [x] Hyperliquid unified DEBUG smoke.
+- [x] Hyperliquid non-unified vanilla DEBUG smoke.
+- [ ] Later: Bitget, Gate.io, OKX, Binance, KuCoin smoke tests.
+- [x] Add fake-live support for comparing remote call counts before/after major changes.
+- [x] Add/extend request-count validation for steady-state staged account refreshes. Generic
+  staged tests now prove routine refreshes defer recent fills, open-orders-only confirmations stay
+  narrow, and missing self-orders escalate to a full follow-up account refresh exactly once.
+  Exchange-specific hooks remain useful later to catch repeated broad state sweeps.
+- [ ] Add shutdown/reconnect smoke coverage for exchanges whose CCXT websocket layer emits callback
+  errors outside `watch_orders()`; latest KuCoin logs show `kucoinfutures ping timeout` as an
+  asyncio callback traceback even though the watch loop also reconnects.
+- [x] Throttle websocket reconnect WARN logs generally: first few reconnects remain visible,
+  persistent reconnect storms emit periodic WARNs, and repeated details move to DEBUG.
+- [x] Add exponential reconnect backoff for CCXT order websocket watchers and broaden callback
+  traceback suppression to known CCXT Pro transport callbacks such as ping timeout, request
+  timeout, and connection reset.
+- [x] Add focused overnight-log regression checks for INFO-level noise: aggregate or throttle
+  repeated `initial entries blocked by min effective cost` and `active completed-candle refresh
+  incomplete` without hiding first occurrence and summary counts.
+- [x] Throttle repeated per-symbol OHLCV fetch-failure warnings after the first occurrence/window,
+  especially for KuCoin runtime EMA fetches.
+- [x] Investigate OKX `maintain_hourly_cycle '<=' not supported between instances of 'NoneType'
+  and 'float'` from overnight VPS logs.
+- [x] Investigate Binance `-1021` recvWindow/timestamp drift from overnight VPS logs.
+- [x] Add generic CCXT timestamp/nonce recovery. Binance `-1021` and KuCoin
+  `Invalid KC-API-TIMESTAMP`/`InvalidNonce` now force CCXT `load_time_difference()` before the next
+  retry instead of immediately entering the normal noisy error/restart path.
+- [x] Re-run review-targeted Rust-backed tests after each Rust rebuild:
+  `tests/test_orchestrator_json_api.py::test_json_non_tradable_forced_normal_flat_symbol_does_not_require_ema`
+  and `tests/test_orchestrator_json_api.py::test_forager_respects_n_positions_selects_one_coin`.
+- [x] Add/adjust tests proving flat cache-only forager candidate handling cannot trigger
+  `MissingEma` for forced-normal symbols and cannot hide active-symbol EMA requirements.
+- [x] Add tests for generic market snapshot strictness: ticker fetch exceptions, missing bid,
+  missing ask, missing last, and explicit Hyperliquid `allMids` exception behavior.
+
+### 11. Config And Runtime Validation Cleanup
+
+- [x] Removed `live.authoritative_refresh_mode` and the legacy authoritative-refresh path. Live now
+  always uses the staged account-state pipeline.
+- [x] Consolidate `live.forager_score_hysteresis_pct` defaults so schema/prepared config is the
+  single source. Review found Python backtest fallback at `0.02` and Rust PyO3 fallback at `0.005`.
+- [x] Validate non-finite or negative `forager_score_hysteresis_pct` loudly instead of silently
+  clamping to `0.0` in Rust.
+- [ ] Audit duplicate runtime defaults added for staged live options and remove any fallback that
+  can drift from schema/prepared config.
+- [x] Fix misleading log labels where `side=` prints `position_side`; use `pside=` for long/short
+  and reserve `side=` for buy/sell.
+- [x] Remove order sorting's silent fallback to neutral `diff=0` when market price fetch fails.
+  Preserve deterministic ordering or block/skip with visible diagnostics according to the
+  execution safety contract.
+- [x] Make Hyperliquid unified balance extraction fail on malformed quote balance rows. Missing,
+  empty, non-finite, or negative quote totals must not become `0.0`.
+
+### 12. `src/live/` Module Split
+
+Goal: reduce `src/passivbot.py` size and make staged live data contracts reviewable without
+changing behavior during extraction commits.
+
+- [ ] Create `src/live/` package with narrow, import-safe modules and no exchange side effects.
+- [ ] Move pure/data-contract types first: planning snapshot, freshness helpers, and market snapshot helpers.
+- [ ] Extract account-state refresh orchestration into `src/live/state_refresh.py`.
+- [ ] Extract market/candle/ticker planning helpers into `src/live/market_data.py`.
+- [ ] Extract actual-vs-ideal diffing, stale-state guardrails, and duplicate-order checks into `src/live/reconciler.py`.
+- [ ] Extract order execution payload/cap/safety helpers into `src/live/executor.py`.
+- [ ] Extract startup/shutdown/health timing utilities where practical into `src/live/runtime.py`.
+- [ ] Keep exchange-specific overrides in `src/exchanges/*`; move only generic live orchestration.
+- [ ] Do the split mechanically in small commits with parity tests after each extraction.
+- [x] Legacy authoritative-refresh path was removed before the module split. Keep future
+  extraction commits behavior-preserving against the staged-only path.
+
+## Current Completed Work Relevant To This Plan
+
+- [x] Staged account refresh path exists and logs per-surface timings.
+- [x] Bybit staged smoke run completed with DEBUG logging.
+- [x] Candlestick manager has process-local OHLCV spacing.
+- [x] Initial active/forager candle budget logic exists.
+- [x] Fixed TTL bypass that caused secondary symbols to fetch normal one-candle trailing gaps.
+- [x] Added regression coverage for single trailing present gap TTL behavior.
+- [x] Added read-only `passivbot tool ticker-probe` for exchange ticker/top-of-book capability checks.
+- [x] Recorded initial Bybit and Hyperliquid ticker/top-of-book probe findings.
+- [x] Added `MarketSnapshotProvider` and routed staged orchestrator price reads through it.
+- [x] Bybit DEBUG live smoke on `ebybitsub03` exercised staged market snapshots for 27 symbols:
+  20 `fetch_tickers()` cycles, 0 misses, 0 invalid snapshots, 0 candlestick-manager fallback
+  lines, mean ticker fetch about 1.2s.
+- [x] Added shutdown-aware candle/EMA warmup checks and cancellation of a stuck execution loop
+  before CCXT session close.
+- [x] Verified Bybit Ctrl-C shutdown smoke on `ebybitsub03`: signal during warmup jitter
+  aborted immediately, skipped further warmup/index rebuild work, closed sessions cleanly, and
+  exited with code 0 without traceback.
+- [x] Added a `FreshnessLedger` for live surfaces and symbol-level blocks; staged refresh now
+  stamps account surfaces, market snapshots, and active completed-candle refreshes.
+- [x] Added a disappeared-self-order guardrail: when a bot-created order vanishes without a
+  known bot cancellation, new creations for that symbol are blocked until the next full account
+  freshness cohort confirms balance, positions, open orders, and fills.
+- [x] Added deterministic fake-cycle verification that the disappeared-self-order guardrail blocks
+  a real order-planner create for the affected symbol, logs the freshness block, and clears after
+  a full account freshness cohort.
+- [x] Verified Bybit DEBUG smoke on `ebybitsub03` after freshness-ledger changes:
+  three staged market-snapshot cycles, 27/27 symbols resolved from bulk `fetch_tickers()`,
+  no `ERROR`, `Traceback`, `RecursionError`, or freshness guardrail block in the persisted log.
+- [x] Fixed and regression-tested inline execution-loop shutdown: Ctrl-C during live startup no
+  longer lets `shutdown_gracefully()` cancel the main `start_bot()` task and recurse through
+  asyncio task cancellation.
+- [x] Added staged planner precondition checks: before Rust order calculation, staged mode now
+  requires current-epoch freshness for balance, positions, open orders, fills, completed candles,
+  and market snapshots.
+- [x] Tightened CandlestickManager to completed-candle-only behavior: compatibility
+  `get_current_close()` now returns the latest completed close, ticker/current-price fetches moved
+  to market snapshots, and tests cover no current-minute persistence.
+- [x] Added completed-candle health diagnostics: CandlestickManager can now report 1m/15m/1h
+  coverage without remote fetches, and live health summaries emit detailed DEBUG diagnostics plus
+  INFO only when active-symbol candle health is stale, missing, or synthetic.
+- [x] Tightened live candle budgeting: priority position/open-order symbols bypass forager budgets,
+  forager/eligible symbols are ranked by latest completed-candle staleness, and
+  `live.max_forager_candle_staleness_minutes` caps target staleness for broad eligible refreshes.
+- [x] Added a wall-time cap for best-effort broad forager candidate candle refreshes
+  (`live.max_forager_candle_refresh_seconds`) so sparse/slow exchanges cannot let non-critical
+  candle catch-up monopolize the live runtime; trading-critical active candle refresh remains
+  separate.
+- [x] Split live startup candle work: startup now does a synchronous trading-ready warmup for
+  symbols with positions/open orders, then schedules broad approved-coin warmup as a cancellable
+  background maintainer. `live.defer_broad_candle_warmup=false` keeps legacy blocking warmup.
+- [x] Removed the temporary `live.authoritative_refresh_mode=legacy` opt-out; compare against
+  branch/tag `v7.10` if legacy live behavior is needed for investigation.
+- [x] Added `passivbot tool ticker-endpoint-probe` for multi-user CCXT endpoint timing probes.
+  The JSON output covers ticker variants, bids/asks where available, order book, 1m OHLCV tail
+  current-minute behavior, market metadata, and read-only private account-state endpoint timings.
+- [x] Improved market snapshot remote-call economy: bulk ticker responses now populate the cache
+  for all valid returned symbols, not only the symbols requested by the immediate caller.
+- [x] Added market snapshot fetch coalescing so concurrent cache misses share one in-flight
+  `fetch_tickers()` request instead of stampeding multiple bulk ticker calls.
+- [x] Added explicit market snapshot ticker strategies: broad `fetch_tickers()` remains the default,
+  Hyperliquid keeps its custom `allMids` bulk path, and Bitget defaults to
+  `fetch_tickers(symbols)` because the first VPS probe showed Bitget's broad CCXT response missed
+  requested USDC perp symbols while the symbol-list endpoint was fast and complete.
+- [x] Batched position-change display price lookups so startup or manual-position transitions fetch
+  one market snapshot cohort instead of one ticker request per changed position.
+- [x] Extended the fake-live validation harness for staged remote-call economy: fake exchange
+  request logs now include order writes, and scenario assertions can validate request-count paths
+  and per-method request summaries.
+- [x] Tightened staged planning freshness: completed candles are stamped only after exact
+  required-symbol coverage is verified, planning universe preparation now happens before market
+  refresh, market snapshots are revalidated immediately before order creation, the old
+  price-distance order gate was removed in favor of replacement tolerance, and EMA gating
+  diagnostics now use the correct PB mode shape.
+- [x] Added a formal staged `PlanningSnapshot` contract capturing the exact symbols, ledger
+  surface stamps, candle signature, market snapshots, and max ticker age used for a Rust planning
+  call. The snapshot is validated immediately before payload construction and attached to
+  debug/fake-live return snapshots for review.
+- [x] Split planning-universe preparation from derived market-state refresh in the live loop.
+  The loop now builds the final symbol universe before refreshing completed candles, and trailing
+  data is recomputed only after candle freshness succeeds.
+- [x] Guard order creation against planning-snapshot age. The staged executor now keeps the
+  exact `PlanningSnapshot` used for Rust planning and refuses to create orders if that snapshot
+  is missing, has non-market invalidation, or does not cover the creation symbol. Pure
+  market-snapshot staleness is refreshed at the pre-create gate because ticker freshness is the
+  intended final guard before order writes.
+- [x] Completed the duplicate-order guardrail test matrix for bot-cancel confirmation, unknown
+  manual/exchange disappearance, self-emitted order disappearance, full-refresh recovery, and
+  restart/inherited-order recovery.
+- [x] Added startup readiness timing logs for account-ready, active-candle-ready, first
+  market-ready, startup-ready, and full-warmup-ready milestones.
+- [x] Kept broad forager candidate candle refresh out of the order execution critical path.
+- [x] Verified live staged precondition defers on Binance/OKX are non-fatal in VPS logs:
+  `[state] staged execution deferred` appears with `errors=0/10` instead of restart-counting
+  `RuntimeError` precondition failures.
+- [x] Latest VPS Hyperliquid runs show non-unified HIP-3 account state remains expensive at startup:
+  full dex `positions` and `open_orders` sweeps take roughly 10-22s when all known dexes are queried.
+  Startup full sweep is acceptable; steady-state refresh now logs `positions_scope=active` and avoids
+  HIP-3 dex queries when no HIP-3 dex is currently active, while retaining slower periodic safety
+  full sweeps.
+- [ ] Latest VPS KuCoin runs show two separate robustness issues: frequent REST OHLCV timeouts during
+  broad warmup, and CCXT websocket `ping timeout` exceptions emitted through an asyncio callback
+  before the normal watch-orders reconnect log. Treat these as reconnectable/noisy-runtime issues,
+  while preserving hard failures for required trading inputs.
+  Execution now schedules the coalesced background refresh instead of awaiting it after every
+  cancellation/creation pass.
+- [x] Added staged market snapshot fetch headroom. Rust planning now requests ticker snapshots
+  with a stricter cache TTL than the hard safety max, avoiding false precondition failures from
+  near-expired cached tickers while preserving the pre-create stale-snapshot guard.
+- [x] Added a narrow live-only initial-entry executor distance gate to reduce churn from
+  EMA-drifting `entry_initial_*` orders. Rust still emits the intended initial entry, but live
+  only posts it when it is within `live.initial_entry_exec_max_market_dist_pct` of market; blocked
+  orders are INFO-visible on first block and then throttled to periodic INFO, with repeated drift
+  kept at DEBUG.
+- [x] Increased default forager score hysteresis from `0.005` to `0.02` after VPS logs showed
+  most churn-relevant replacements had score gaps above the old 0.5% threshold.
+- [x] Tightened default OHLCV fetch budget and widened default REST recv window. Defaults are now
+  `live.max_ohlcv_fetches_per_minute=24` and `live.recv_window_ms=10000`.
+- [ ] Continue KuCoin-focused robustness work. Latest DEBUG runs still show websocket
+  ping-timeout reconnect churn and occasional long account/fill refresh tails. Sparse-candle
+  secondary-forager EMA fetch pressure has been addressed with the explicit cache-only/no-network
+  path and needs fresh VPS confirmation.
+- [x] Improve generic execution-loop error diagnostics. Unexpected loop errors now include
+  exception type, status/code when available, abandoned-cycle action, and restart/backoff action
+  so thin exchange errors such as KuCoin account-overview failures are easier to triage.
+- [x] Aggregate broad forager wall-time cap logs. Repeated KuCoin candidate-candle cap hits now
+  produce DEBUG per-event diagnostics plus periodic INFO/WARNING summaries instead of paired
+  WARNING/INFO lines for every skipped symbol.
+
+## Initial Ticker Probe Findings
+
+Initial remaining-exchange probe command, run locally through VPN while some live bots were also
+running:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01,gateio_01,okx_faisal,binance_01,kucoin_01 --coins BTC,ETH,SOL --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining.json
+```
+
+Caveat: because no `--quote` was supplied, symbol resolution selected mixed contract types:
+Bitget and KuCoin resolved USDC perps, Gate.io resolved USDT perps, OKX resolved USD
+coin-margined contracts, and Binance resolved `ETH/BTC:BTC` for ETH. Use these results as
+endpoint-shape evidence, not final USDT-perp strategy evidence.
+
+Bitget:
+
+- `fetch_tickers(symbols)` was fastest of the ticker shapes for the tested symbols
+  (median about 0.54s) and stayed complete.
+- Broad `fetch_tickers()` also worked (median about 0.81s), but the earlier VPS probe showed broad
+  Bitget CCXT responses can miss requested USDC perp symbols.
+- Keep Bitget defaulting to the symbol-list ticker strategy unless a later quote-specific VPS probe
+  disproves it.
+
+Gate.io:
+
+- Broad `fetch_tickers()` worked but was slower and more variable (median about 2.28s).
+- `fetch_tickers(symbols)` worked in one request and was better for the tested set
+  (median about 1.41s).
+- Concurrent per-symbol `fetch_ticker()` was fastest for three symbols (median about 0.68s), but
+  it scales as one remote call per symbol and is not a good default for broad live universes.
+- Later VPS USDT results superseded this local/VPN result; keep the broad default for Gate.io.
+
+OKX:
+
+- Broad `fetch_tickers()` worked but was variable (about 0.63s then 2.18s).
+- `fetch_tickers(symbols)` was stable for the tested set (median about 0.86s).
+- The probe selected USD coin-margined contracts, so this local result was superseded by the later
+  VPS USDT probe.
+
+Binance:
+
+- Broad `fetch_tickers()` was fast (median about 0.78s).
+- `fetch_tickers(symbols)` was slow (median about 2.73s), and sequential per-symbol tickers were
+  slower still.
+- `fetch_bids_asks()` and `fetch_bids_asks(symbols)` were both fast (about 0.58-0.65s), making a
+  future bid/ask strategy attractive if Binance needs more top-of-book economy than broad
+  tickers.
+- Broad `fetch_open_orders()` without a symbol triggered CCXT's high-rate-limit warning; Binance
+  account-state refresh should avoid unsymbolized open-order fetches.
+- Keep Binance on broad tickers for now. Do not infer final USDT-perp behavior from this probe
+  because ETH resolved to `ETH/BTC:BTC`.
+
+KuCoin:
+
+- Broad `fetch_tickers()` and `fetch_tickers(symbols)` were effectively tied for the tested set
+  (both around 0.92s median).
+- `fetch_bids_asks()` is not supported by CCXT for KuCoin.
+- The order-book probe failed without a captured exception type/message; that should be treated as
+  a probe-tool diagnostic gap, not a market-snapshot blocker.
+- Later VPS USDT results did not show a large enough advantage for symbol-list tickers to justify
+  changing the default.
+
+VPS USDT perp probe command:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01,gateio_01,okx_faisal,binance_01,kucoin_01 --coins BTC,ETH,SOL --quote USDT --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining_usdt_vps.json
+```
+
+The initial Bitget private-key probe failed on one VPS, so Bitget was rerun separately from the
+other VPS:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bitget_01 --coins BTC,ETH,SOL --quote USDT --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe_remaining_usdt_vps_bitget.json
+```
+
+VPS USDT results:
+
+- All successful probes resolved active linear USDT swap markets for BTC, ETH, and SOL.
+- Bitget: `fetch_tickers(symbols)` and broad `fetch_tickers()` were both complete and similar
+  on the successful VPS run, but keep Bitget on symbol-list tickers because the earlier VPS probe
+  showed broad Bitget CCXT responses can miss requested perp symbols.
+- Gate.io: broad `fetch_tickers()` was complete and faster than `fetch_tickers(symbols)` on VPS
+  (median about 0.35s vs 0.66s), so keep the default broad strategy.
+- OKX: `fetch_tickers(symbols)` was complete and modestly faster than broad tickers
+  (median about 0.20s vs 0.26s), but the difference is small and broad tickers populate the
+  process cache for more symbols. Keep broad as default unless future live logs show OKX ticker
+  bulk is a bottleneck.
+- Binance: broad `fetch_tickers()` was complete and much faster than `fetch_tickers(symbols)`
+  (median about 0.25s vs 2.13s). `fetch_bids_asks()` was faster still (median about 0.15s), but
+  using it would require a separate market-snapshot provider strategy. Keep broad tickers for now.
+- Binance: unsymbolized `fetch_open_orders()` triggers CCXT's high-rate-limit warning; keep
+  Binance account-state refresh away from broad open-order fetches.
+- KuCoin: broad and symbol-list tickers were both complete, with symbol-list only modestly faster
+  (median about 0.40s vs 0.48s). Keep broad as default for better cache population.
+
+Durable strategy after VPS probes:
+
+- Hyperliquid: broad custom `allMids` path for vanilla symbols, symbol fallback for HIP-3.
+- Bitget: `fetch_tickers(symbols)`.
+- Bybit, Gate.io, OKX, Binance, KuCoin: broad `fetch_tickers()` until live logs show a concrete
+  bottleneck or incomplete coverage.
+
+Lightweight single-user probe command shape:
+
+```bash
+passivbot tool ticker-probe --user {user} --coins BTC,ETH,XMR --quote USDT --all --order-book --json
+```
+
+Multi-user endpoint timing probe command shape for VPS validation:
+
+```bash
+passivbot tool ticker-endpoint-probe --users bybit_01,hyperliquid_01 --coins BTC,ETH,SOL --quote USDT --repeats 2 --sleep-between-seconds 5 --out tmp/ticker_endpoint_probe.json
+```
+
+Bybit USDT perps with `ebybitsub03`:
+
+- `fetch_ticker(symbol)` works for tested symbols and returns bid, ask, and last.
+- `fetch_tickers(symbols)` works for tested symbols and returned the requested symbols in about 1.3s.
+- `fetch_tickers()` works and returned the full swap ticker set in about 1.3s.
+- Ticker payloads did not expose a top-level timestamp/datetime in the tested CCXT response.
+- `fetch_order_book(symbol, limit=5)` works, is per-symbol, and returned timestamped top-of-book data in about 0.5s per tested symbol.
+
+Hyperliquid USDC perps with `hyperliquid_01`:
+
+- `fetch_ticker(symbol)` works for tested symbols and returns bid, ask, and last, but was slow at about 12-13s per symbol in this probe.
+- `fetch_tickers(symbols)` timed out once during a possible local network/VPN interruption, then succeeded on retry in about 13.8s for three symbols.
+- `fetch_tickers()` works and returned the broad ticker set in about 12s.
+- Ticker payloads did not expose a top-level timestamp/datetime in the tested CCXT response.
+- `fetch_order_book(symbol, limit=5)` works, is timestamped, and was much faster than ticker calls at about 0.3-1.2s per tested symbol.
+
+## Current Known Gaps
+
+- Ticker endpoint probing is now systematic in tooling. Bitget, Gate.io, OKX, Binance, and KuCoin
+  have both initial local probe results and quote-specific VPS USDT results; current durable
+  default remains broad tickers except for Hyperliquid and Bitget.
+- Fake-live staged-mode request-count support exists, but still needs practical scenario coverage
+  focused on staged safety and request-count regression.
+- Bybit DEBUG smoke still hit OHLCV rate-limit/availability warnings during broad candle/EMA
+  work, even though market snapshots were healthy.
+- Shutdown responsiveness during candle/EMA warmup is verified for Bybit warmup jitter; further
+  exchange smoke tests should still include Ctrl-C during long startup/warmup phases.
+- Legacy authoritative refresh was removed from this branch. `v7.10` remains the comparison point
+  for legacy live behavior if needed during investigation.
+
+## Update Policy
+
+Update this checklist as implementation proceeds. Mark items done only when code and targeted tests
+exist, or when a live probe/smoke result has been recorded and reviewed.

@@ -154,6 +154,7 @@ __pycache__/
 # C extensions
 *.so
 *.rust-src-sha256
+passivbot-rust/.compile.lock
 
 # Distribution / packaging
 .Python

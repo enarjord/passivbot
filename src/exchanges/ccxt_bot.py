@@ -34,7 +34,6 @@ To customize behavior for a new exchange:
 import asyncio
 import math
 import time
-import traceback
 from copy import deepcopy
 
 from passivbot import Passivbot, logging, custom_id_to_snake
@@ -452,25 +451,34 @@ class CCXTBot(Passivbot):
             return
 
         logging.info(f"[ws] {self.exchange}: starting order watch")
+        consecutive_failures = 0
         while True:
             try:
                 if self.stop_websocket:
                     break
                 raw_orders = await self._do_watch_orders()
+                consecutive_failures = 0
                 normalized = [self._normalize_order_update(o) for o in raw_orders]
                 self.handle_order_update(normalized)
+            except asyncio.CancelledError:
+                break
             except Exception as e:
+                consecutive_failures += 1
                 self._health_ws_reconnects += 1
-                logging.warning(
-                    "[ws] %s: connection lost (reconnect #%d), retrying in 1s: %s",
-                    self.exchange,
-                    self._health_ws_reconnects,
-                    type(e).__name__,
+                clock_synced = await self._maybe_recover_exchange_time_sync(
+                    e, source="watch_orders"
                 )
-                logging.debug("[ws] %s: full exception: %s", self.exchange, e)
-                logging.debug("".join(traceback.format_exc()))
-                await asyncio.sleep(1)
-                logging.info("[ws] %s: reconnecting...", self.exchange)
+                retry_delay_s = min(60.0, 2 ** max(0, consecutive_failures - 1))
+                self._log_ws_reconnect(
+                    reconnect_no=self._health_ws_reconnects,
+                    retry_delay_s=retry_delay_s,
+                    reason="time_sync" if clock_synced else "connection_lost",
+                    exc=e,
+                )
+                await Passivbot._sleep_unless_shutdown(
+                    self, retry_delay_s, stage="watch_orders_reconnect"
+                )
+                logging.debug("[ws] %s: reconnecting...", self.exchange)
 
     async def update_exchange_config(self):
         """Set exchange to hedge mode if supported.
@@ -735,7 +743,34 @@ class CCXTBot(Passivbot):
             Leverage to use (capped by max_leverage for the symbol)
         """
         configured = int(self.config_get(["live", "leverage"], symbol=symbol))
-        max_lev = getattr(self, "max_leverage", {}).get(symbol, configured)
+        raw_max_lev = (getattr(self, "max_leverage", {}) or {}).get(symbol)
+        if raw_max_lev is None:
+            warned = getattr(self, "_missing_max_leverage_warned", set())
+            if symbol not in warned:
+                logging.warning(
+                    "%s: max leverage unavailable from exchange metadata; using configured leverage %sx",
+                    symbol,
+                    configured,
+                )
+                warned.add(symbol)
+                self._missing_max_leverage_warned = warned
+            max_lev = configured
+        else:
+            try:
+                max_lev_float = float(raw_max_lev)
+            except (TypeError, ValueError, OverflowError) as e:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                ) from e
+            if not math.isfinite(max_lev_float) or max_lev_float <= 0.0:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                )
+            max_lev = int(max_lev_float)
+            if max_lev <= 0:
+                raise ValueError(
+                    f"{symbol}: invalid max leverage from exchange metadata: {raw_max_lev!r}"
+                )
 
         if self._get_margin_mode_for_symbol(symbol) == "isolated":
             min_lev = self._calc_min_isolated_leverage()
@@ -824,14 +859,25 @@ class CCXTBot(Passivbot):
         for symbol, market in self.markets_dict.items():
             self.symbol_ids[symbol] = market["id"]
             self.min_costs[symbol] = market["limits"]["cost"]["min"] or 0.1
-            raw_min_qty = (
-                market["precision"]["amount"]
-                if market["limits"]["amount"]["min"] is None
-                else market["limits"]["amount"]["min"]
-            )
             qty_step = market["precision"]["amount"]
+            raw_min_qty = market["limits"]["amount"]["min"]
+            if raw_min_qty is None:
+                raw_min_qty = qty_step
+            if raw_min_qty is None:
+                raise ValueError(
+                    f"{symbol}: missing min qty and qty step in exchange market metadata"
+                )
+            raw_min_qty = float(raw_min_qty)
+            if not math.isfinite(raw_min_qty):
+                raise ValueError(
+                    f"{symbol}: invalid min qty in exchange market metadata: {raw_min_qty!r}"
+                )
             if raw_min_qty <= 0.0 and qty_step is not None and qty_step > 0.0:
                 raw_min_qty = qty_step
+            if raw_min_qty <= 0.0:
+                raise ValueError(
+                    f"{symbol}: invalid min qty in exchange market metadata: {raw_min_qty!r}"
+                )
             self.min_qtys[symbol] = raw_min_qty
             self.qty_steps[symbol] = qty_step
             self.price_steps[symbol] = market["precision"]["price"]
@@ -865,6 +911,24 @@ class CCXTBot(Passivbot):
         elapsed_ms = (time.time() - t0) * 1000
         logging.debug(
             f"{self.exchange}: fetch_tickers completed in {elapsed_ms:.1f}ms, {len(result)} tickers"
+        )
+        return result
+
+    async def fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
+        """Fetch current ticker data for a specific symbol set when supported cheaply."""
+        fetched = await self._do_fetch_tickers_for_symbols(symbols)
+        return self._normalize_tickers(fetched)
+
+    async def _do_fetch_tickers_for_symbols(self, symbols: list[str]) -> dict:
+        """Hook: call CCXT's fetch_tickers(symbols) for exchanges where bulk misses markets."""
+        logging.debug(
+            f"{self.exchange}: fetching tickers via CCXT fetch_tickers(symbols), n={len(symbols)}"
+        )
+        t0 = time.time()
+        result = await self.cca.fetch_tickers(symbols)
+        elapsed_ms = (time.time() - t0) * 1000
+        logging.debug(
+            f"{self.exchange}: fetch_tickers(symbols) completed in {elapsed_ms:.1f}ms, {len(result)} tickers"
         )
         return result
 

@@ -1,6 +1,7 @@
 """Tests for MissingEma fix: EMA paths and error handling."""
 
 import asyncio
+import logging
 import math
 import time
 import json
@@ -356,6 +357,8 @@ class _BundleReproBot:
         self.h1_log_range_value = float(h1_log_range_value)
         self.entry_h1_span_hours = float(entry_h1_span_hours)
         self._orchestrator_close_ema_fallback_counts = {}
+        self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+        self.exchange = "kucoin"
         now_ms = int(time.time() * 1000)
         if prev_close_ema is None:
             self._orchestrator_prev_close_ema = {}
@@ -371,17 +374,23 @@ class _BundleReproBot:
             def __init__(self, outer):
                 self.outer = outer
 
-            async def get_latest_ema_close(self, symbol, span, max_age_ms=30_000):
+            async def get_latest_ema_close(
+                self, symbol, span, max_age_ms=30_000, allow_remote_fetch=True
+            ):
                 if self.outer.close_mode == "timeout":
                     raise TimeoutError("kucoinfutures GET ... RequestTimeout")
                 if self.outer.close_mode == "nan":
                     return float("nan")
                 return float(self.outer.close_value)
 
-            async def get_latest_ema_quote_volume(self, symbol, span, max_age_ms=60_000):
+            async def get_latest_ema_quote_volume(
+                self, symbol, span, max_age_ms=60_000, allow_remote_fetch=True
+            ):
                 return 250000.0
 
-            async def get_latest_ema_log_range(self, symbol, span, tf=None, max_age_ms=60_000):
+            async def get_latest_ema_log_range(
+                self, symbol, span, tf=None, max_age_ms=60_000, allow_remote_fetch=True
+            ):
                 if tf == "1h":
                     if self.outer.h1_mode == "timeout":
                         raise TimeoutError("kucoinfutures GET ... RequestTimeout")
@@ -497,6 +506,41 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
 
 
 @pytest.mark.asyncio
+async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    prev = {span0: 100.04, span1: 100.03, span2: 100.02}
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="timeout",
+        prev_close_ema=prev,
+        prev_age_ms=11 * 60_000,
+    )
+    bot.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
+
+    with caplog.at_level(logging.WARNING):
+        with pytest.raises(RuntimeError, match="previous close EMA stale"):
+            await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    stale_warnings = [
+        record.message
+        for record in caplog.records
+        if "close EMA fallback stale" in record.message
+    ]
+    assert len(stale_warnings) == 1
+    assert "spans=10,14.142136,20" in stale_warnings[0]
+    assert "last_refresh_ms=" in stale_warnings[0]
+    assert "staleness_ms=" in stale_warnings[0]
+
+
+@pytest.mark.asyncio
 async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery():
     try:
         import passivbot as pb_mod
@@ -587,7 +631,7 @@ class _PacingProbeCM:
         self.current_concurrency = 0
         self.max_concurrency = 0
 
-    async def get_latest_ema_close(self, symbol, *, span, max_age_ms):
+    async def get_latest_ema_close(self, symbol, *, span, max_age_ms, allow_remote_fetch=True):
         self.current_concurrency += 1
         self.max_concurrency = max(self.max_concurrency, self.current_concurrency)
         try:
@@ -596,10 +640,14 @@ class _PacingProbeCM:
         finally:
             self.current_concurrency -= 1
 
-    async def get_latest_ema_quote_volume(self, symbol, *, span, max_age_ms):
+    async def get_latest_ema_quote_volume(
+        self, symbol, *, span, max_age_ms, allow_remote_fetch=True
+    ):
         return 0.0
 
-    async def get_latest_ema_log_range(self, symbol, *, span, max_age_ms, tf="1m"):
+    async def get_latest_ema_log_range(
+        self, symbol, *, span, max_age_ms, tf="1m", allow_remote_fetch=True
+    ):
         return 0.0
 
 
@@ -669,3 +717,22 @@ async def test_ema_bundle_serializes_fetches_when_exchange_has_default_pacing(mo
     )
 
     assert bot.cm.max_concurrency == 1
+
+
+@pytest.mark.asyncio
+async def test_ema_bundle_parallel_shutdown_cancel_propagates(monkeypatch):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    monkeypatch.setattr(pb_mod.random, "shuffle", lambda items: None)
+    bot = _PacingProbeBot(exchange="binance", sleep_fn=asyncio.sleep)
+    bot.stop_signal_received = True
+
+    with pytest.raises(asyncio.CancelledError):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot,
+            ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            {"long": {}, "short": {}},
+        )

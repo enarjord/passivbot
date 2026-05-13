@@ -231,6 +231,7 @@ pub struct BacktestParams {
     pub market_orders_allowed: bool,
     pub market_order_near_touch_threshold: f64,
     pub market_order_slippage_pct: f64,
+    pub forager_score_hysteresis_pct: f64,
     pub candle_interval_minutes: u64, // 1 for 1m candles (default), 5 for 5m, etc.
 }
 
