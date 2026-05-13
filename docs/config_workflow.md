@@ -40,10 +40,10 @@ passivbot live configs/live/my_config.json
 
 ## What The Default Profile Is
 
-The default profile mirrored by `configs/examples/default_trailing_grid_long_npos10.json` is:
+The default profile mirrored by `configs/examples/default_trailing_grid_long_npos7.json` is:
 
-- trailing-grid style configuration
-- long enabled with `bot.long.risk.n_positions = 10`
+- trailing martingale style configuration
+- long enabled with `bot.long.risk.n_positions = 7`
 - short disabled with `bot.short.risk.total_wallet_exposure_limit = 0`
 - `bot.long.risk.total_wallet_exposure_limit = 1.25`
 - HSL present in config but disabled with `bot.{long,short}.hsl.enabled = false`

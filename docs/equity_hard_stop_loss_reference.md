@@ -13,8 +13,8 @@ See also:
 
 1. Runtime HSL behavior is side-specific by `pside`.
 2. Config lives under:
-   - `bot.long.hsl_*`
-   - `bot.short.hsl_*`
+   - `bot.long.hsl.*`
+   - `bot.short.hsl.*`
 3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
    - one shared `unified` signal (default)
    - side-local `pside` signals
@@ -122,8 +122,8 @@ Recommended HSL-focused optimizer study:
 
 1. Treat `hsl_no_restart_drawdown_threshold` as an operator/runtime control, not a default optimization variable.
 2. Use fixed optimize-time overrides:
-   - `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
-   - `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
+   - `optimize.fixed_runtime_overrides["bot.long.hsl.no_restart_drawdown_threshold"] = 1.0`
+   - `optimize.fixed_runtime_overrides["bot.short.hsl.no_restart_drawdown_threshold"] = 1.0`
 3. Tune:
    - `long_hsl_red_threshold`
    - `long_hsl_ema_span_minutes`

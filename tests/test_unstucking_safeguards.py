@@ -188,6 +188,29 @@ def _make_mock_pbr():
     module.round_ = lambda value, step: value
     module.compute_ideal_orders_json = lambda *_args, **_kwargs: "{}"
 
+    def _get_strategy_spec(strategy_kind="trailing_martingale"):
+        from config.strategy import get_strategy_defaults, get_strategy_param_keys, normalize_strategy_kind
+
+        normalized = normalize_strategy_kind(strategy_kind)
+        parameters = []
+        for pside in ("long", "short"):
+            for key in get_strategy_param_keys(normalized):
+                parts = [part for part in key.split(".") if part]
+                parameters.append(
+                    {
+                        "name": f"{pside}_{'_'.join(parts)}",
+                        "optimize_key": f"{pside}_{'_'.join(parts)}",
+                        "config_path": ["strategy", pside, *parts],
+                    }
+                )
+        return {
+            "kind": normalized,
+            "parameters": parameters,
+            "defaults": get_strategy_defaults(normalized),
+        }
+
+    module.get_strategy_spec = _get_strategy_spec
+
     def _equity_hard_stop_step_py(
         *,
         initialized,

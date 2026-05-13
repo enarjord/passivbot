@@ -6,6 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - `refactor/rust-strategy-runtime-plan` is versioned as the next major release, `v8.0.0`.
 - Increased the pymoo NSGA3 auto reference-direction cap from `330` to `500`, giving 9-objective auto-population optimizer runs `495` reference directions instead of `165`.
+- Fixed v8 strategy min-effective-cost gating so live and backtest use the active strategy's initial sizing parameter instead of legacy flat `BotParams.entry_initial_qty_pct`.
+- Fixed flat shared bot keys to override grouped defaults during config canonicalization, and changed flat strategy coin overrides to fail loudly instead of being silently discarded.
 - Changed optimizer `fixed_params` and `--fine_tune_params` to v8 dotted config-path selectors, with path-prefix matching such as `long.strategy` for `bot.long.strategy.<active_strategy>.*` and sorted multi-line logs showing each selector expansion.
 - Added fill-activity backtest analysis metrics covering fill counts, per-day rates, long/short and entry/close splits, no-fill gap durations, slot-normalized activity, active fill days, analysis duration, active symbols, and top-symbol fill concentration.
 - Fixed `passivbot tool pareto -o/--objectives` so stored fill-activity metrics such as `fills_gap_p95_hours` can be used for candidate selection even when they were not part of the optimizer run's original `optimize.scoring`.

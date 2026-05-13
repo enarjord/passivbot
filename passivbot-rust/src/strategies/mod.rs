@@ -239,6 +239,13 @@ pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
     }
 }
 
+pub fn strategy_initial_qty_pct(params: &StrategyParams) -> f64 {
+    match params {
+        StrategyParams::TrailingMartingale(params) => params.entry.initial_qty_pct,
+        StrategyParams::EmaAnchor(params) => params.base_qty_pct,
+    }
+}
+
 pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
     match params {
         StrategyParams::TrailingMartingale(params) => {

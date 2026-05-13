@@ -120,6 +120,7 @@ def test_prep_backtest_args_passes_dynamic_wel_by_tradability_flag():
 
 def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coin_override():
     config = _base_config()
+    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
     mss = _base_mss()
 
     bot_params_list, _, _, _ = prep_backtest_args(config, mss, "binance")
@@ -131,6 +132,7 @@ def test_prep_backtest_args_injects_dynamic_wallet_exposure_sentinel_without_coi
 
 def test_prep_backtest_args_preserves_explicit_coin_wallet_exposure_override():
     config = _base_config()
+    config["bot"]["short"]["total_wallet_exposure_limit"] = 1.0
     config["coin_overrides"] = {
         "BTC/USDT:USDT": {
             "bot": {

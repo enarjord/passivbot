@@ -182,7 +182,7 @@ Operational notes:
 * This can intentionally block automatic reducers if they would realize too much loss.
 * If you need immediate forced reduction regardless of realized loss, use panic mode.
 
-### D. Equity Hard Stop Loss (`bot.{long,short}.hsl_*`)
+### D. Equity Hard Stop Loss (`bot.{long,short}.hsl.*`)
 This is a side-specific circuit breaker based on reconstructed strategy drawdown, not just raw exchange equity.
 
 It exists for cases where:
@@ -199,7 +199,7 @@ Behavior:
 
 Operational notes:
 
-1. HSL is configured separately under `bot.long.hsl_*` and `bot.short.hsl_*`.
+1. HSL is configured separately under `bot.long.hsl.*` and `bot.short.hsl.*`.
 2. `live.hsl_signal_mode` defaults to the shared `unified` account-level signal, with `pside` available when each side should use its own side-local strategy signal.
 3. RED can auto-restart after `hsl_cooldown_minutes_after_red`. Terminal no-restart uses persistent cross-restart HSL drawdown.
 4. In backtests, simulated market panic closes use `backtest.market_order_slippage_pct`.

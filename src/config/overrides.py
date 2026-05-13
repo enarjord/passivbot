@@ -73,6 +73,58 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "risk_twel_enforcer_threshold": False,
 }
 
+_UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_threshold_pct",
+    "close_weight_volatility_1h",
+    "close_weight_volatility_1m",
+    "ema_span_0",
+    "ema_span_1",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_pct",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_threshold_pct",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_1m",
+    "entry_weight_volatility_1h",
+    "entry_weight_volatility_1m",
+    "entry_we_weight",
+}
+
+
+def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
+    if not isinstance(overrides, dict):
+        return
+    bot_overrides = overrides.get("bot")
+    if not isinstance(bot_overrides, dict):
+        return
+    for pside in ("long", "short"):
+        side_overrides = bot_overrides.get(pside)
+        if not isinstance(side_overrides, dict):
+            continue
+        bad_keys = sorted(
+            key
+            for key in side_overrides
+            if key in _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS
+            or any(key in keys for keys in STRATEGY_PARAM_KEYS_BY_KIND.values())
+        )
+        if bad_keys:
+            joined = ", ".join(bad_keys)
+            raise ValueError(
+                f"coin_overrides.{coin}.bot.{pside} contains unsupported flat strategy "
+                f"override key(s): {joined}. Use "
+                f"coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
+            )
+
 
 def _allowed_bot_side_modifications() -> dict:
     def _allow_dotted_paths(keys: tuple[str, ...]) -> dict:
@@ -254,9 +306,11 @@ def parse_overrides(
         parsed_overrides = {}
         loaded = override_loader(result, coin)
         if loaded:
+            _reject_flat_strategy_coin_overrides(loaded, coin=coin)
             parsed_overrides = apply_allowed_modifications(
                 result, loaded, get_allowed_modifications(), return_full=False
             )
+        _reject_flat_strategy_coin_overrides(overrides, coin=coin)
         nested_update(
             parsed_overrides,
             apply_allowed_modifications(

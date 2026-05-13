@@ -306,8 +306,8 @@ operator-risk settings such as:
 ```json
 "optimize": {
   "fixed_runtime_overrides": {
-    "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
-    "bot.short.hsl_no_restart_drawdown_threshold": 1.0
+    "bot.long.hsl.no_restart_drawdown_threshold": 1.0,
+    "bot.short.hsl.no_restart_drawdown_threshold": 1.0
   }
 }
 ```

@@ -9,8 +9,9 @@ use crate::orchestrator::{
 };
 use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
-    strategy_has_trailing, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-    strategy_offset_volatility_span_minutes, StrategyParams, TrailingMartingaleParams,
+    strategy_has_trailing, strategy_initial_qty_pct, strategy_needs_log_range_1h,
+    strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, StrategyParams,
+    TrailingMartingaleParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
@@ -845,12 +846,16 @@ impl OrchProfile {
     }
 }
 
-fn calc_entry_balance_pct(params: &BotParams, effective_n_positions: usize) -> f64 {
+fn calc_entry_balance_pct(
+    params: &BotParams,
+    effective_n_positions: usize,
+    entry_initial_qty_pct: f64,
+) -> f64 {
     if effective_n_positions == 0 {
         return 0.0;
     }
     let allowance_multiplier = 1.0 + params.risk_we_excess_allowance_pct.max(0.0);
-    params.total_wallet_exposure_limit * params.entry_initial_qty_pct * allowance_multiplier
+    params.total_wallet_exposure_limit * entry_initial_qty_pct * allowance_multiplier
         / effective_n_positions as f64
 }
 
@@ -2453,7 +2458,13 @@ impl<'a> Backtest<'a> {
         let exchange = &self.exchange_params_list[idx];
         let min_cost = calc_effective_min_cost(price, exchange);
         let bot = self.bp(idx, pside);
-        if bot.entry_initial_qty_pct <= 0.0 {
+        let strategy = match pside {
+            LONG => &self.strategy_params[idx].long,
+            SHORT => &self.strategy_params[idx].short,
+            _ => return false,
+        };
+        let entry_initial_qty_pct = strategy_initial_qty_pct(strategy);
+        if entry_initial_qty_pct <= 0.0 {
             return false;
         }
         let base_limit = self
@@ -2465,7 +2476,7 @@ impl<'a> Backtest<'a> {
         let allowance_multiplier = 1.0 + bot.risk_we_excess_allowance_pct.max(0.0);
         let effective_limit = base_limit * allowance_multiplier;
         let projected_cost =
-            self.balance.usd_total_balance * effective_limit * bot.entry_initial_qty_pct;
+            self.balance.usd_total_balance * effective_limit * entry_initial_qty_pct;
         projected_cost >= min_cost
     }
 
@@ -4476,13 +4487,27 @@ impl<'a> Backtest<'a> {
     }
 
     pub fn initial_entry_balance_pct(&self) -> (f64, f64) {
+        let default_long_qty_pct = self.bot_params_master.long.entry_initial_qty_pct;
+        let default_short_qty_pct = self.bot_params_master.short.entry_initial_qty_pct;
+        let (long_qty_pct, short_qty_pct) = self
+            .strategy_params
+            .first()
+            .map(|params| {
+                (
+                    strategy_initial_qty_pct(&params.long),
+                    strategy_initial_qty_pct(&params.short),
+                )
+            })
+            .unwrap_or((default_long_qty_pct, default_short_qty_pct));
         let long = calc_entry_balance_pct(
             &self.bot_params_master.long,
             self.effective_n_positions.long,
+            long_qty_pct,
         );
         let short = calc_entry_balance_pct(
             &self.bot_params_master.short,
             self.effective_n_positions.short,
+            short_qty_pct,
         );
         (long, short)
     }

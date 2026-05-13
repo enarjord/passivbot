@@ -151,5 +151,11 @@ def canonicalize_shared_bot_side(
                     [*path_prefix, group_name, local_key],
                     moved_value,
                 )
+        elif group_cfg[local_key] != moved_value:
+            old_value = group_cfg[local_key]
+            group_cfg[local_key] = moved_value
+            if tracker is not None:
+                tracker.update([*path_prefix, group_name, local_key], old_value, moved_value)
+                tracker.remove([*path_prefix, flat_key], moved_value)
         elif tracker is not None:
             tracker.remove([*path_prefix, flat_key], moved_value)

@@ -4,8 +4,8 @@ Passivbot includes a side-specific Equity Hard Stop Loss (HSL) that acts as a ci
 
 HSL is configured separately for each `pside`:
 
-1. `bot.long.hsl_*`
-2. `bot.short.hsl_*`
+1. `bot.long.hsl.*`
+2. `bot.short.hsl.*`
 
 Signal construction is selected globally with `live.hsl_signal_mode`:
 
@@ -320,8 +320,8 @@ Some HSL parameters can be optimized through `optimize.bounds` using side-specif
 
 Optimizer runs instead disable terminal no-restart by default through:
 
-1. `optimize.fixed_runtime_overrides["bot.long.hsl_no_restart_drawdown_threshold"] = 1.0`
-2. `optimize.fixed_runtime_overrides["bot.short.hsl_no_restart_drawdown_threshold"] = 1.0`
+1. `optimize.fixed_runtime_overrides["bot.long.hsl.no_restart_drawdown_threshold"] = 1.0`
+2. `optimize.fixed_runtime_overrides["bot.short.hsl.no_restart_drawdown_threshold"] = 1.0`
 
 The optimizer should constrain risk through canonical `*_strategy_eq` metrics rather than by terminating candidates early with terminal no-restart.
 

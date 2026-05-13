@@ -1382,6 +1382,32 @@ def test_twel_entry_gating_blocks_new_entries():
     assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
 
 
+def test_min_effective_cost_uses_strategy_initial_qty_pct():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.0,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        effective_min_cost=10.0,
+        long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(entry={"initial_qty_pct": 0.1}),
+    )
+    inp = make_input(balance=1_000.0, global_bp=bot_params_pair(long_overrides=long_bp), symbols=[sym])
+    inp["global"]["filter_by_min_effective_cost"] = True
+
+    out = compute(pbr, inp)
+
+    assert any(o["order_type"].startswith("entry_") for o in out["orders"])
+    assert out["diagnostics"]["min_effective_cost_blocks"] == []
+
+
 def test_manual_positions_do_not_consume_twel_entry_budget():
     import passivbot_rust as pbr
 

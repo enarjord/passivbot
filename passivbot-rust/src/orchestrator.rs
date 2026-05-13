@@ -41,7 +41,7 @@ mod core {
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
         strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_needs_log_range_1h, strategy_needs_log_range_1m,
+        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
         strategy_offset_volatility_span_minutes, NextStepHint, PeekBehavior, StrategyKind,
         StrategyRequest, StrategySide,
     };
@@ -874,6 +874,7 @@ mod core {
         effective_min_cost: f64,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) -> bool {
         if !filter_enabled {
             return true;
@@ -884,6 +885,7 @@ mod core {
             effective_min_cost,
             bot,
             runtime_budget,
+            entry_initial_qty_pct,
         ) {
             req >= effective_min_cost
         } else {
@@ -897,6 +899,7 @@ mod core {
         effective_min_cost: f64,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) -> Option<(f64, f64)> {
         if !filter_enabled {
             return None;
@@ -915,7 +918,7 @@ mod core {
         if !(effective_limit.is_finite() && effective_limit > 0.0) {
             return None;
         }
-        let req = balance * effective_limit * bot.entry_initial_qty_pct;
+        let req = balance * effective_limit * entry_initial_qty_pct;
         if !(req.is_finite() && req > 0.0) {
             return None;
         }
@@ -931,6 +934,7 @@ mod core {
         filter_enabled: bool,
         bot: &BotParams,
         runtime_budget: &RuntimeBudgetState,
+        entry_initial_qty_pct: f64,
     ) {
         if let Some((effective_limit, projected_initial_cost)) = min_effective_cost_projection(
             balance,
@@ -938,6 +942,7 @@ mod core {
             effective_min_cost,
             bot,
             runtime_budget,
+            entry_initial_qty_pct,
         ) {
             if projected_initial_cost + 1e-12 < effective_min_cost {
                 diagnostics
@@ -947,7 +952,7 @@ mod core {
                         pside,
                         balance,
                         effective_limit,
-                        entry_initial_qty_pct: bot.entry_initial_qty_pct,
+                        entry_initial_qty_pct,
                         projected_initial_cost,
                         effective_min_cost,
                     });
@@ -1467,6 +1472,7 @@ mod core {
                 s.effective_min_cost,
                 &side.bot_params,
                 &runtime_budgets[s.symbol_idx],
+                strategy_initial_qty_pct(&strategy_params),
             );
             let enabled = symbol_side_eligible(s, pside)
                 && !already_active
@@ -1489,6 +1495,7 @@ mod core {
                         filter_enabled,
                         &side.bot_params,
                         &runtime_budgets[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params),
                     );
                 }
                 out.push(ForagerCandidate {
@@ -2455,6 +2462,13 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_params_for_min_cost = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Long,
+                    &s.long,
+                )?;
 
                 let allow_initial = symbol_side_eligible(s, PositionSide::Long)
                     && actives_long[s.symbol_idx]
@@ -2465,6 +2479,7 @@ mod core {
                         s.effective_min_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -2597,6 +2612,13 @@ mod core {
                 } else {
                     mode
                 };
+                let strategy_params_for_min_cost = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Short,
+                    &s.short,
+                )?;
 
                 let allow_initial = symbol_side_eligible(s, PositionSide::Short)
                     && actives_short[s.symbol_idx]
@@ -2607,6 +2629,7 @@ mod core {
                         s.effective_min_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
+                        strategy_initial_qty_pct(&strategy_params_for_min_cost),
                     );
 
                 let mut entries: Vec<IdealOrder> = Vec::new();
@@ -3199,6 +3222,10 @@ mod core {
                         s.effective_min_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 if symbol_side_eligible(s, PositionSide::Long)
                     && workspace.actives_long[s.symbol_idx]
@@ -3215,6 +3242,10 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         &s.long.bot_params,
                         &workspace.runtime_budget_long[s.symbol_idx],
+                        workspace.derived_long[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.long.bot_params.entry_initial_qty_pct),
                     );
                 }
                 let short_allow_initial = symbol_side_eligible(s, PositionSide::Short)
@@ -3226,6 +3257,10 @@ mod core {
                         s.effective_min_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
                     );
                 if symbol_side_eligible(s, PositionSide::Short)
                     && workspace.actives_short[s.symbol_idx]
@@ -3242,6 +3277,10 @@ mod core {
                         input.global.filter_by_min_effective_cost,
                         &s.short.bot_params,
                         &workspace.runtime_budget_short[s.symbol_idx],
+                        workspace.derived_short[s.symbol_idx]
+                            .strategy_params
+                            .map(|params| strategy_initial_qty_pct(&params))
+                            .unwrap_or(s.short.bot_params.entry_initial_qty_pct),
                     );
                 }
                 SymbolStateDiagnostic {
