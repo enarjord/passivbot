@@ -4,6 +4,7 @@ import math
 from typing import Any
 
 from config.access import require_config_value, require_live_value
+from config.shared_bot import require_grouped_bot_value
 from utils import symbol_to_coin
 
 POSITION_SIDES = ("long", "short")
@@ -11,8 +12,12 @@ POSITION_SIDES = ("long", "short")
 
 def backtest_side_enabled(config: dict, pside: str) -> bool:
     bot_cfg = require_config_value(config, f"bot.{pside}")
-    total_wallet_exposure_limit = float(bot_cfg["total_wallet_exposure_limit"])
-    n_positions = int(round(float(bot_cfg["n_positions"])))
+    total_wallet_exposure_limit = float(
+        require_grouped_bot_value(bot_cfg, pside, "total_wallet_exposure_limit")
+    )
+    n_positions = int(
+        round(float(require_grouped_bot_value(bot_cfg, pside, "n_positions")))
+    )
     return (
         math.isfinite(total_wallet_exposure_limit)
         and total_wallet_exposure_limit > 0.0

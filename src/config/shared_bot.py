@@ -46,6 +46,7 @@ FLAT_BOT_KEY_TO_GROUP_PATH = {
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items()
     for local_key, flat_key in field_map.items()
 }
+_MISSING = object()
 
 
 def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
@@ -60,13 +61,29 @@ def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
 def get_grouped_bot_value(bot_side: dict | None, flat_key: str, default=None):
     if not isinstance(bot_side, dict):
         return default
+    if flat_key in bot_side:
+        return bot_side[flat_key]
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is not None:
         group_name, local_key = group_path
         group = get_bot_group(bot_side, group_name)
         if local_key in group:
             return group[local_key]
-    return bot_side.get(flat_key, default)
+    return default
+
+
+def require_grouped_bot_value(
+    bot_side: dict | None,
+    pside: str,
+    flat_key: str,
+):
+    value = get_grouped_bot_value(bot_side, flat_key, default=_MISSING)
+    if value is not _MISSING:
+        return value
+    resolved_path = resolve_shared_bot_path(bot_side, pside, flat_key)
+    if resolved_path is None:
+        resolved_path = ("bot", pside, flat_key)
+    raise KeyError(f"missing required {'.'.join(resolved_path)}")
 
 
 def flatten_shared_bot_side(bot_side: dict | None) -> dict:

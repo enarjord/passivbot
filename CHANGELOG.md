@@ -9,6 +9,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed v8 strategy min-effective-cost gating so live and backtest use the active strategy's initial sizing parameter instead of legacy flat `BotParams.entry_initial_qty_pct`.
 - Fixed flat shared bot keys to override grouped defaults during config canonicalization, and changed flat strategy coin overrides to fail loudly instead of being silently discarded.
 - Added a live-only entry cooldown guard that can anchor `entry_cooldown_minutes` from exchange-observed position increases when fill-event data is temporarily delayed.
+- Fixed optimizer/backtest HLCV universe preparation for canonical v8 grouped bot config, so side enablement reads `bot.<side>.risk.total_wallet_exposure_limit` and `bot.<side>.risk.n_positions` without requiring runtime flat aliases.
 - Changed optimizer `fixed_params` and `--fine_tune_params` to v8 dotted config-path selectors, with path-prefix matching such as `long.strategy` for `bot.long.strategy.<active_strategy>.*` and sorted multi-line logs showing each selector expansion.
 - Added fill-activity backtest analysis metrics covering fill counts, per-day rates, long/short and entry/close splits, no-fill gap durations, slot-normalized activity, active fill days, analysis duration, active symbols, and top-symbol fill concentration.
 - Fixed `passivbot tool pareto -o/--objectives` so stored fill-activity metrics such as `fills_gap_p95_hours` can be used for candidate selection even when they were not part of the optimizer run's original `optimize.scoring`.
