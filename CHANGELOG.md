@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+## v7.11.0 - 2026-05-13
+
 - Fixed backtests with asymmetric `approved_coins` so long-only and short-only coin lists remain side-specific, disabled sides no longer inflate HLCV data preparation, and dynamic WEL-by-tradability counts side-eligible coins separately.
 - Fixed Rust extension auto-rebuild coordination so simultaneous bot startups share one compile, waiters re-check freshness after the lock, stale lock timeouts fail closed, and stale shadow artifacts are no longer stamped as current.
 - Live fill events now distinguish detected fills from realized-PnL enrichment: close fills whose exchange PnL details are not yet available log `pnl=pending`, block PnL-dependent logic until enriched, and emit an enrichment log once the authoritative PnL arrives.
