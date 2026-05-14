@@ -124,6 +124,13 @@ These sub-weights are also available under `optimize.bounds` as:
 - `short_forager_score_weights_ema_readiness`
 - `short_forager_score_weights_volatility`
 
+Important: these weights only rank candidates for available initial-entry slots. They do not force
+entries, bypass entry conditions, or bypass risk/min-size gates. If all three weights are set to
+zero, the canonical config is EMA-readiness-only ranking, so the saved config will show
+`{"volume": 0.0, "ema_readiness": 1.0, "volatility": 0.0}`. That means forager prefers symbols
+closest to their real initial-entry threshold when filling empty slots; it does not mean every
+approved symbol will immediately open or keep adding entries.
+
 ## Failure Policy
 
 Forager inputs are trading-critical.

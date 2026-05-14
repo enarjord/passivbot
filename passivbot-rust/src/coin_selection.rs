@@ -710,9 +710,8 @@ pub fn select_coin_indices_py(
             "forager_score_weights must be finite and non-negative",
         )
     })?;
-    validate_unit_pct("forager_volume_drop_pct", volume_drop_pct).map_err(|err| {
-        pyo3::exceptions::PyValueError::new_err(format!("{err:?}"))
-    })?;
+    validate_unit_pct("forager_volume_drop_pct", volume_drop_pct)
+        .map_err(|err| pyo3::exceptions::PyValueError::new_err(format!("{err:?}")))?;
     let features: Vec<CoinFeature> = py_features.into_iter().map(Into::into).collect();
     let cfg = SelectionConfig {
         slots_to_fill,
