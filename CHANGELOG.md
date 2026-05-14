@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Cleaned up `passivbot tool generate-mcap-list` startup output by routing through its normal CLI entrypoint and suppressing noisy symbol-map lock maintenance warnings.
 - Fixed live fill refreshes so cached close fills with pending realized PnL keep extending the incremental refresh window until exchange enrichment catches up, KuCoin positions-history enrichment uses a bounded delayed-record lookahead, and pending-PnL account refresh blocks no longer burn the generic restart budget.
 - Fixed backtest/data-downloader startup when the legacy `caches/ohlcv` path is a dangling symlink after moving to the v2 `caches/ohlcvs` store.
 

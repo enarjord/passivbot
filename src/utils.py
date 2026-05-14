@@ -8,6 +8,7 @@ import asyncio
 import hjson
 import inspect
 import time
+import warnings
 from collections import defaultdict
 from typing import Dict, Any, List, Union, Optional
 import re
@@ -18,6 +19,10 @@ import portalocker  # type: ignore
 from custom_endpoint_overrides import (
     apply_rest_overrides_to_ccxt,
     resolve_custom_endpoint_override,
+)
+
+warnings.filterwarnings(
+    "ignore", message="timeout has no effect in blocking mode", module="portalocker"
 )
 
 logging.basicConfig(
@@ -87,7 +92,7 @@ def _cleanup_stale_symbol_map_locks() -> None:
                 age = now - stat.st_mtime
                 if age > threshold:
                     lock_path.unlink()
-                    logging.info("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
+                    logging.debug("removed stale symbol map lock %s (age %.1fs)", lock_path, age)
             except FileNotFoundError:
                 continue
             except Exception as exc:

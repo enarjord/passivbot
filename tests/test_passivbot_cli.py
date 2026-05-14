@@ -1,5 +1,6 @@
 import os
 import sys
+import json
 from pathlib import Path
 import asyncio
 
@@ -592,6 +593,41 @@ def test_run_module_falls_back_to_runpy_when_module_has_no_main(monkeypatch):
     assert captured["module_name"] == "tools.generate_mcap_list"
     assert captured["runpy_module_name"] == "tools.generate_mcap_list"
     assert captured["run_name"] == "__main__"
+
+
+def test_generate_mcap_list_tool_uses_main_without_runpy(monkeypatch, tmp_path):
+    from tools import generate_mcap_list
+
+    output_path = tmp_path / "approved.json"
+
+    monkeypatch.setattr(
+        generate_mcap_list,
+        "get_top_market_caps",
+        lambda n_coins, minimum_market_cap_millions, exchange=None: {
+            "BTC": {"symbol": "btc", "market_cap": 1_000_000_000}
+        },
+    )
+    monkeypatch.setattr(
+        cli_main.runpy,
+        "run_module",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("generate-mcap-list should use main(), not runpy")
+        ),
+    )
+
+    assert (
+        cli_main._run_module(
+            "tools.generate_mcap_list",
+            "passivbot tool generate-mcap-list",
+            ["-n", "1", "-o", str(output_path)],
+        )
+        == 0
+    )
+
+    assert json.loads(output_path.read_text(encoding="utf-8")) == ["BTC"]
+    assert json.loads(output_path.with_name("approved_full.json").read_text(encoding="utf-8"))[
+        "BTC"
+    ]["symbol"] == "btc"
 
 
 def test_invoke_module_main_runs_async_entrypoint(monkeypatch):
