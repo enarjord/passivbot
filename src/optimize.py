@@ -75,8 +75,8 @@ from cli_utils import (
 from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
+from config.param_paths import resolve_bound_selectors, resolve_dotted_config_path
 from config.shared_bot import (
-    canonical_shared_bot_path_for_flat_key,
     flatten_shared_bot_side,
     get_bot_group,
     get_grouped_bot_value,
@@ -184,12 +184,7 @@ from optimization.warmup import (
     stamp_warmup_metadata,
 )
 from optimization.shape import OptimizationShape, build_optimization_shape
-from config.strategy import (
-    SUPPORTED_STRATEGY_KINDS,
-    get_strategy_param_keys,
-    normalize_strategy_kind,
-    sync_canonical_strategy_config,
-)
+from config.strategy import normalize_strategy_kind, sync_canonical_strategy_config
 from optimization.deap_adapters import (
     mutPolynomialBoundedWrapper,
     cxSimulatedBinaryBoundedWrapper,
@@ -214,22 +209,10 @@ def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -
     for dotted_path, value in overrides.items():
         if not isinstance(dotted_path, str):
             continue
-        parts = dotted_path.split(".")
-        if not parts:
+        resolved_path = resolve_dotted_config_path(config, dotted_path)
+        if resolved_path is None:
             continue
-        if len(parts) == 3 and parts[0] == "bot" and parts[1] in {"long", "short"}:
-            pside = parts[1]
-            flat_key = parts[2]
-            canonical_path = canonical_shared_bot_path_for_flat_key(pside, flat_key)
-            if canonical_path is not None:
-                parts = list(canonical_path)
-            else:
-                live_cfg = config.get("live")
-                strategy_kind = normalize_strategy_kind(
-                    live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
-                )
-                if flat_key in get_strategy_param_keys(strategy_kind):
-                    parts = ["bot", pside, "strategy", strategy_kind, flat_key]
+        parts = list(resolved_path)
         target = config
         for part in parts[:-1]:
             if part not in target or not isinstance(target[part], dict):
@@ -1645,37 +1628,6 @@ def apply_fine_tune_bounds(
         else:
             set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
 
-    def _normalize_selector_path(selector: str) -> tuple[str, ...]:
-        raw_parts = tuple(part.strip() for part in selector.split(".") if part.strip())
-        if not raw_parts:
-            return ()
-        if raw_parts[0] in ("long", "short") or (
-            raw_parts[0] == "*"
-            and len(raw_parts) >= 2
-            and raw_parts[1] in ("strategy", "risk", "forager", "hsl", "unstuck")
-        ):
-            parts = ("bot", *raw_parts)
-        else:
-            parts = raw_parts
-        if (
-            len(parts) >= 4
-            and parts[0] == "bot"
-            and parts[1] in ("long", "short", "*")
-            and parts[2] == "strategy"
-            and parts[3] not in SUPPORTED_STRATEGY_KINDS
-            and parts[3] != "*"
-        ):
-            parts = (*parts[:3], strategy_kind, *parts[3:])
-        return parts
-
-    def _path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
-        if len(selector_path) > len(path):
-            return False
-        return all(
-            selector_part == "*" or selector_part == path_part
-            for selector_part, path_part in zip(selector_path, path)
-        )
-
     def _resolve_bound_selectors(selectors, label: str) -> set[str]:
         resolved: set[str] = set()
         selectors_sorted = sorted(
@@ -1683,25 +1635,16 @@ def apply_fine_tune_bounds(
         )
         if not selectors_sorted:
             return resolved
-        bound_paths = {
-            key: path
-            for key in flat_bounds
-            if (path := resolve_optimization_bound_path(config, key)) is not None
-        }
         logging.info("%s selectors:", label)
         for selector in selectors_sorted:
-            selector_path = _normalize_selector_path(selector)
-            matches = sorted(
-                key
-                for key, path in bound_paths.items()
-                if _path_matches_selector(path, selector_path)
-            )
+            selector_matches = resolve_bound_selectors(config, [selector], flat_bounds)
+            matches = sorted(selector_matches)
             if not matches:
                 logging.warning("%s selector matched no optimize bounds: %s", label, selector)
                 continue
             logging.info("  %s ->", selector)
             for match in matches:
-                logging.info("    %s (%s)", match, ".".join(bound_paths[match]))
+                logging.info("    %s (%s)", match, ".".join(selector_matches[match]))
             resolved.update(matches)
         return resolved
 

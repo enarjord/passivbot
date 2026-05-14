@@ -2,6 +2,7 @@ from copy import deepcopy
 import json
 import logging
 
+import passivbot_rust as pbr
 import pytest
 
 from config import (
@@ -12,12 +13,65 @@ from config import (
     prepare_config,
     project_config,
 )
+from config.optimize_bounds import get_optimize_bounds_defaults
+from config.strategy_spec import get_supported_strategy_kinds
+
+
+def _set_path(mapping, path, value):
+    current = mapping
+    for part in path[:-1]:
+        current = current.setdefault(part, {})
+    current[path[-1]] = value
+
+
+def _nested_strategy_values_from_spec(spec, field):
+    result = {"long": {}, "short": {}}
+    for param in spec["parameters"]:
+        config_path = param["config_path"]
+        pside = config_path[1]
+        _set_path(result[pside], config_path[2:], param[field])
+    return result
+
+
+def _flatten_strategy_bound_items(bounds, prefix=()):
+    for key, value in bounds.items():
+        path = (*prefix, key)
+        if isinstance(value, dict):
+            yield from _flatten_strategy_bound_items(value, path)
+        else:
+            yield "_".join(path), value
 
 
 def _strategy_side(config, pside, kind=None):
     if kind is None:
         kind = config["live"]["strategy_kind"]
     return config["bot"][pside]["strategy"][kind]
+
+
+@pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
+def test_rust_strategy_spec_matches_python_template_defaults(strategy_kind):
+    source = get_template_config()
+    source["live"]["strategy_kind"] = strategy_kind
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    expected = _nested_strategy_values_from_spec(pbr.get_strategy_spec(strategy_kind), "default")
+
+    assert _strategy_side(prepared, "long", strategy_kind) == expected["long"]
+    assert _strategy_side(prepared, "short", strategy_kind) == expected["short"]
+
+
+@pytest.mark.parametrize("strategy_kind", list(get_supported_strategy_kinds()))
+def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_kind):
+    spec = pbr.get_strategy_spec(strategy_kind)
+    expected = spec["optimize_bounds"]
+    generated = get_optimize_bounds_defaults()
+
+    flat_generated = {}
+    for pside in ("long", "short"):
+        strategy_bounds = generated[pside]["strategy"][strategy_kind]
+        for local_key, value in _flatten_strategy_bound_items(strategy_bounds):
+            flat_generated[f"{pside}_{local_key}"] = value
+
+    assert flat_generated == expected
 
 
 @pytest.mark.parametrize(

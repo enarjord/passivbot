@@ -10,7 +10,8 @@ from utils import symbol_to_coin
 from .load import load_prepared_config
 from .log_output import log_config_message
 from .shared_bot import BOT_GROUP_FIELD_MAP
-from .strategy import STRATEGY_PARAM_KEYS_BY_KIND
+from .strategy import get_strategy_param_keys
+from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
 
 
@@ -115,7 +116,10 @@ def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
             key
             for key in side_overrides
             if key in _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS
-            or any(key in keys for keys in STRATEGY_PARAM_KEYS_BY_KIND.values())
+            or any(
+                key in get_strategy_param_keys(strategy_kind)
+                for strategy_kind in get_supported_strategy_kinds()
+            )
         )
         if bad_keys:
             joined = ", ".join(bad_keys)
@@ -140,7 +144,8 @@ def _allowed_bot_side_modifications() -> dict:
     side = deepcopy(_ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS)
     side["strategy"] = {
         strategy_kind: _allow_dotted_paths(keys)
-        for strategy_kind, keys in STRATEGY_PARAM_KEYS_BY_KIND.items()
+        for strategy_kind in get_supported_strategy_kinds()
+        for keys in (get_strategy_param_keys(strategy_kind),)
     }
     for group_name, field_map in BOT_GROUP_FIELD_MAP.items():
         grouped_allowed = {

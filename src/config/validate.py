@@ -6,7 +6,6 @@ from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal
 from .shared_bot import get_grouped_bot_value
 from .strategy import (
     BOT_POSITION_SIDES,
-    SUPPORTED_STRATEGY_KINDS,
     get_active_strategy_side,
     normalize_strategy_kind,
 )
@@ -20,9 +19,6 @@ def validate_config(
 
     require_config_dict(config, "monitor")
     strategy_kind = normalize_strategy_kind(config["live"].get("strategy_kind"))
-    if strategy_kind not in SUPPORTED_STRATEGY_KINDS:
-        allowed = ", ".join(sorted(SUPPORTED_STRATEGY_KINDS))
-        raise ValueError(f"live.strategy_kind must be one of {{{allowed}}}; got {strategy_kind!r}")
     optimize_bounds = (
         raw_optimize.get("bounds")
         if isinstance(raw_optimize, dict)

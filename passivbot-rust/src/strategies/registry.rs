@@ -1,6 +1,10 @@
 use super::spec::{ema_anchor_spec, trailing_martingale_spec, StrategySpec};
 use super::StrategyKind;
 
+pub fn strategy_kind_names() -> Vec<&'static str> {
+    vec!["trailing_martingale", "ema_anchor"]
+}
+
 pub fn strategy_kind_from_name(name: &str) -> Option<StrategyKind> {
     match name.trim().to_ascii_lowercase().as_str() {
         "trailing_martingale" => Some(StrategyKind::TrailingMartingale),

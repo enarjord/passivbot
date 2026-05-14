@@ -22,8 +22,8 @@ from config import load_prepared_config
 from config.access import require_config_value, require_live_value
 from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
-from config.shared_bot import canonical_shared_bot_path_for_flat_key, canonicalize_shared_bot_side
-from config.strategy import get_strategy_param_keys, normalize_strategy_kind
+from config.param_paths import resolve_dotted_config_path
+from config.shared_bot import canonicalize_shared_bot_side
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
 from utils import (
@@ -818,29 +818,13 @@ def _build_scenario_signature(
     return hashlib.sha256(serialized.encode()).hexdigest()
 
 
-def _resolve_override_parts(config: Dict[str, Any], parts: List[str]) -> List[str]:
-    if len(parts) == 3 and parts[0] == "bot" and parts[1] in {"long", "short"}:
-        pside = parts[1]
-        flat_key = parts[2]
-        canonical_path = canonical_shared_bot_path_for_flat_key(pside, flat_key)
-        if canonical_path is not None:
-            return list(canonical_path)
-        live_cfg = config.get("live")
-        strategy_kind = normalize_strategy_kind(
-            live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
-        )
-        if flat_key in get_strategy_param_keys(strategy_kind):
-            return ["bot", pside, "strategy", strategy_kind, flat_key]
-    return parts
-
-
 def _apply_override(
     config: Dict[str, Any], dotted_path: str, value: Any, tracker: ConfigTransformTracker
 ) -> None:
-    parts = dotted_path.split(".")
-    if not parts:
+    resolved = resolve_dotted_config_path(config, dotted_path)
+    if resolved is None:
         raise ValueError("Override paths must not be empty")
-    parts = _resolve_override_parts(config, parts)
+    parts = list(resolved)
     target = config
     for part in parts[:-1]:
         if part not in target or not isinstance(target[part], dict):

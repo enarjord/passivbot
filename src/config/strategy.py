@@ -2,145 +2,14 @@ from copy import deepcopy
 from typing import Optional
 
 from .shared_bot import BOT_SHARED_GROUPS
-
-
-BOT_POSITION_SIDES = ("long", "short")
-DEFAULT_STRATEGY_KIND = "trailing_martingale"
-EMA_ANCHOR_STRATEGY_KIND = "ema_anchor"
-SUPPORTED_STRATEGY_KINDS = (DEFAULT_STRATEGY_KIND, EMA_ANCHOR_STRATEGY_KIND)
-
-TRAILING_MARTINGALE_PARAM_KEYS = (
-    "ema_span_0",
-    "ema_span_1",
-    "volatility_ema_span_1h",
-    "volatility_ema_span_1m",
-    "entry.double_down_factor",
-    "entry.initial_ema_dist",
-    "entry.initial_qty_pct",
-    "entry.threshold_base_pct",
-    "entry.threshold_we_weight",
-    "entry.threshold_volatility_1h_weight",
-    "entry.threshold_volatility_1m_weight",
-    "entry.retracement_base_pct",
-    "entry.retracement_we_weight",
-    "entry.retracement_volatility_1h_weight",
-    "entry.retracement_volatility_1m_weight",
-    "close.qty_pct",
-    "close.threshold_base_pct",
-    "close.threshold_we_weight",
-    "close.threshold_volatility_1h_weight",
-    "close.threshold_volatility_1m_weight",
-    "close.retracement_base_pct",
-    "close.retracement_volatility_1h_weight",
-    "close.retracement_volatility_1m_weight",
+from .strategy_spec import (
+    BOT_POSITION_SIDES,
+    DEFAULT_STRATEGY_KIND,
+    get_all_strategy_defaults,
+    get_strategy_defaults,
+    get_strategy_param_keys,
+    normalize_strategy_kind,
 )
-
-EMA_ANCHOR_PARAM_KEYS = (
-    "base_qty_pct",
-    "ema_span_0",
-    "ema_span_1",
-    "entry_double_down_factor",
-    "offset",
-    "offset_volatility_ema_span_1m",
-    "offset_volatility_1m_weight",
-    "entry_volatility_ema_span_1h",
-    "offset_volatility_1h_weight",
-    "offset_psize_weight",
-)
-
-STRATEGY_PARAM_KEYS_BY_KIND = {
-    DEFAULT_STRATEGY_KIND: TRAILING_MARTINGALE_PARAM_KEYS,
-    EMA_ANCHOR_STRATEGY_KIND: EMA_ANCHOR_PARAM_KEYS,
-}
-
-STRATEGY_DEFAULTS_BY_KIND = {
-    DEFAULT_STRATEGY_KIND: {
-        "long": {
-            "ema_span_0": 770,
-            "ema_span_1": 210,
-            "volatility_ema_span_1h": 1690,
-            "volatility_ema_span_1m": 60.0,
-            "entry": {
-                "double_down_factor": 0.73,
-                "initial_ema_dist": 0.0097,
-                "initial_qty_pct": 0.0276,
-                "threshold_base_pct": 0.033,
-                "threshold_we_weight": 0.135,
-                "threshold_volatility_1h_weight": 2.4,
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_base_pct": 0.0,
-                "retracement_we_weight": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
-                "retracement_volatility_1m_weight": 0.0,
-            },
-            "close": {
-                "qty_pct": 0.1,
-                "threshold_base_pct": 0.006,
-                "threshold_we_weight": -0.004,
-                "threshold_volatility_1h_weight": 1.0,
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_base_pct": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
-                "retracement_volatility_1m_weight": 0.0,
-            },
-        },
-        "short": {
-            "ema_span_0": 100,
-            "ema_span_1": 100,
-            "volatility_ema_span_1h": 672,
-            "volatility_ema_span_1m": 60.0,
-            "entry": {
-                "double_down_factor": 0.5,
-                "initial_ema_dist": -0.01,
-                "initial_qty_pct": 0.01,
-                "threshold_base_pct": 0.025,
-                "threshold_we_weight": 0.0,
-                "threshold_volatility_1h_weight": 1.0,
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_base_pct": 0.0,
-                "retracement_we_weight": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
-                "retracement_volatility_1m_weight": 0.0,
-            },
-            "close": {
-                "qty_pct": 0.1,
-                "threshold_base_pct": 0.006,
-                "threshold_we_weight": -0.004,
-                "threshold_volatility_1h_weight": 1.0,
-                "threshold_volatility_1m_weight": 0.0,
-                "retracement_base_pct": 0.0,
-                "retracement_volatility_1h_weight": 0.0,
-                "retracement_volatility_1m_weight": 0.0,
-            },
-        },
-    },
-    EMA_ANCHOR_STRATEGY_KIND: {
-        "long": {
-            "base_qty_pct": 0.01,
-            "ema_span_0": 200.0,
-            "ema_span_1": 800.0,
-            "entry_double_down_factor": 0.0,
-            "offset": 0.002,
-            "offset_volatility_ema_span_1m": 60.0,
-            "offset_volatility_1m_weight": 0.0,
-            "entry_volatility_ema_span_1h": 24.0,
-            "offset_volatility_1h_weight": 0.0,
-            "offset_psize_weight": 0.1,
-        },
-        "short": {
-            "base_qty_pct": 0.01,
-            "ema_span_0": 200.0,
-            "ema_span_1": 800.0,
-            "entry_double_down_factor": 0.0,
-            "offset": 0.002,
-            "offset_volatility_ema_span_1m": 60.0,
-            "offset_volatility_1m_weight": 0.0,
-            "entry_volatility_ema_span_1h": 24.0,
-            "offset_volatility_1h_weight": 0.0,
-            "offset_psize_weight": 0.1,
-        },
-    },
-}
 
 
 def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
@@ -193,36 +62,6 @@ def _iter_leaf_paths(mapping: dict, prefix: tuple[str, ...] = ()):
             yield from _iter_leaf_paths(value, path)
         else:
             yield ".".join(path), value
-
-
-def get_all_strategy_defaults() -> dict:
-    return {
-        pside: {kind: deepcopy(defaults[pside]) for kind, defaults in STRATEGY_DEFAULTS_BY_KIND.items()}
-        for pside in BOT_POSITION_SIDES
-    }
-
-
-def normalize_strategy_kind(value) -> str:
-    kind = str(value or DEFAULT_STRATEGY_KIND).strip().lower()
-    return kind or DEFAULT_STRATEGY_KIND
-
-
-def get_strategy_param_keys(strategy_kind: str) -> tuple[str, ...]:
-    normalized_kind = normalize_strategy_kind(strategy_kind)
-    try:
-        return STRATEGY_PARAM_KEYS_BY_KIND[normalized_kind]
-    except KeyError as exc:
-        allowed = ", ".join(sorted(STRATEGY_PARAM_KEYS_BY_KIND))
-        raise ValueError(f"unsupported strategy kind {normalized_kind!r}; expected one of {{{allowed}}}") from exc
-
-
-def get_strategy_defaults(strategy_kind: str) -> dict:
-    normalized_kind = normalize_strategy_kind(strategy_kind)
-    try:
-        return deepcopy(STRATEGY_DEFAULTS_BY_KIND[normalized_kind])
-    except KeyError as exc:
-        allowed = ", ".join(sorted(STRATEGY_DEFAULTS_BY_KIND))
-        raise ValueError(f"unsupported strategy kind {normalized_kind!r}; expected one of {{{allowed}}}") from exc
 
 
 def get_strategy_store(bot_side: dict | None) -> dict:

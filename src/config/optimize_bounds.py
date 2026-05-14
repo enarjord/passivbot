@@ -1,7 +1,12 @@
 from copy import deepcopy
 from typing import Optional
 
-from .strategy import BOT_POSITION_SIDES, SUPPORTED_STRATEGY_KINDS, normalize_strategy_kind
+from .strategy_spec import (
+    BOT_POSITION_SIDES,
+    get_supported_strategy_kinds,
+    get_strategy_optimize_bounds,
+    normalize_strategy_kind,
+)
 
 
 def _flatten_strategy_bound_items(bounds: dict, prefix: tuple[str, ...] = ()):
@@ -113,103 +118,13 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
     },
 }
 
-STRATEGY_OPTIMIZE_BOUNDS_DEFAULTS = {
-    "trailing_martingale": {
-        "long": {
-            "ema_span_0": [200, 1440, 10],
-            "ema_span_1": [200, 1440, 10],
-            "volatility_ema_span_1h": [672, 2016, 1],
-            "volatility_ema_span_1m": [5, 720, 1],
-            "entry": {
-                "double_down_factor": [0.5, 1, 0.01],
-                "initial_ema_dist": [-0.01, 0.01, 0.0001],
-                "initial_qty_pct": [0.01, 0.03, 0.0001],
-                "threshold_base_pct": [0, 0.04, 1e-05],
-                "threshold_we_weight": [0, 5, 0.001],
-                "threshold_volatility_1h_weight": [0, 40, 0.1],
-                "threshold_volatility_1m_weight": [0, 40, 0.1],
-                "retracement_base_pct": [0, 0.015, 1e-05],
-                "retracement_we_weight": [0, 5, 0.001],
-                "retracement_volatility_1h_weight": [0, 40, 0.1],
-                "retracement_volatility_1m_weight": [0, 40, 0.1],
-            },
-            "close": {
-                "qty_pct": [0.05, 1, 0.01],
-                "threshold_base_pct": [-0.02, 0.02, 1e-05],
-                "threshold_we_weight": [-0.05, 0.05, 0.0001],
-                "threshold_volatility_1h_weight": [0, 40, 0.1],
-                "threshold_volatility_1m_weight": [0, 40, 0.1],
-                "retracement_base_pct": [0, 0.015, 1e-05],
-                "retracement_volatility_1h_weight": [0, 40, 0.1],
-                "retracement_volatility_1m_weight": [0, 40, 0.1],
-            },
-        },
-        "short": {
-            "ema_span_0": [200, 1440, 10],
-            "ema_span_1": [200, 1440, 10],
-            "volatility_ema_span_1h": [672, 2016, 1],
-            "volatility_ema_span_1m": [5, 720, 1],
-            "entry": {
-                "double_down_factor": [0.5, 1, 0.01],
-                "initial_ema_dist": [-0.01, 0.01, 0.0001],
-                "initial_qty_pct": [0.01, 0.03, 0.0001],
-                "threshold_base_pct": [0, 0.04, 1e-05],
-                "threshold_we_weight": [0, 5, 0.001],
-                "threshold_volatility_1h_weight": [0, 40, 0.1],
-                "threshold_volatility_1m_weight": [0, 40, 0.1],
-                "retracement_base_pct": [0, 0.015, 1e-05],
-                "retracement_we_weight": [0, 5, 0.001],
-                "retracement_volatility_1h_weight": [0, 40, 0.1],
-                "retracement_volatility_1m_weight": [0, 40, 0.1],
-            },
-            "close": {
-                "qty_pct": [0.05, 1, 0.01],
-                "threshold_base_pct": [-0.02, 0.02, 1e-05],
-                "threshold_we_weight": [-0.05, 0.05, 0.0001],
-                "threshold_volatility_1h_weight": [0, 40, 0.1],
-                "threshold_volatility_1m_weight": [0, 40, 0.1],
-                "retracement_base_pct": [0, 0.015, 1e-05],
-                "retracement_volatility_1h_weight": [0, 40, 0.1],
-                "retracement_volatility_1m_weight": [0, 40, 0.1],
-            },
-        },
-    },
-    "ema_anchor": {
-        "long": {
-            "base_qty_pct": [0.001, 0.05, 0.0001],
-            "ema_span_0": [20.0, 1440.0, 1.0],
-            "ema_span_1": [20.0, 1440.0, 1.0],
-            "entry_double_down_factor": [0.0, 2.0, 0.01],
-            "offset": [0.0, 0.05, 0.0001],
-            "offset_volatility_ema_span_1m": [5.0, 720.0, 1.0],
-            "offset_volatility_1m_weight": [0.0, 40.0, 0.1],
-            "entry_volatility_ema_span_1h": [1.0, 672.0, 1.0],
-            "offset_volatility_1h_weight": [0.0, 40.0, 0.1],
-            "offset_psize_weight": [0.0, 2.0, 0.001],
-        },
-        "short": {
-            "base_qty_pct": [0.001, 0.05, 0.0001],
-            "ema_span_0": [20.0, 1440.0, 1.0],
-            "ema_span_1": [20.0, 1440.0, 1.0],
-            "entry_double_down_factor": [0.0, 2.0, 0.01],
-            "offset": [0.0, 0.05, 0.0001],
-            "offset_volatility_ema_span_1m": [5.0, 720.0, 1.0],
-            "offset_volatility_1m_weight": [0.0, 40.0, 0.1],
-            "entry_volatility_ema_span_1h": [1.0, 672.0, 1.0],
-            "offset_volatility_1h_weight": [0.0, 40.0, 0.1],
-            "offset_psize_weight": [0.0, 2.0, 0.001],
-        },
-    },
-}
-
-
 def get_optimize_bounds_defaults() -> dict:
     result = {}
     for pside in BOT_POSITION_SIDES:
         result[pside] = deepcopy(SHARED_OPTIMIZE_BOUNDS_DEFAULTS[pside])
         result[pside]["strategy"] = {
-            kind: deepcopy(STRATEGY_OPTIMIZE_BOUNDS_DEFAULTS[kind][pside])
-            for kind in SUPPORTED_STRATEGY_KINDS
+            kind: deepcopy(get_strategy_optimize_bounds(kind)[pside])
+            for kind in get_supported_strategy_kinds()
         }
     return result
 

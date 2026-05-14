@@ -50,7 +50,7 @@ from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
 from optimization.shape import build_optimization_shape
 from optimize_suite import ScenarioEvalContext
-from config import load_prepared_config
+from config import load_prepared_config, prepare_config
 from config.parse import load_raw_config
 from config.schema import get_template_config
 
@@ -129,14 +129,42 @@ class TestApplyConfigOverrides:
                 "long": {
                     "hsl": {"no_restart_drawdown_threshold": 0.3},
                     "hsl_no_restart_drawdown_threshold": 0.3,
+                    "risk": {"entry_cooldown_minutes": 0.0},
+                    "risk_entry_cooldown_minutes": 9.0,
                 }
             }
         }
 
-        _apply_config_overrides(config, {"bot.long.hsl_no_restart_drawdown_threshold": 1.0})
+        _apply_config_overrides(
+            config,
+            {
+                "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+                "bot.long.risk.entry_cooldown_minutes": 2.5,
+            },
+        )
 
         assert config["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert config["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert config["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+        assert config["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
+
+    def test_strategy_flat_override_uses_active_strategy_optimizer_key_path(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {"entry": {"threshold_base_pct": 0.1}},
+                    }
+                }
+            },
+        }
+
+        _apply_config_overrides(config, {"bot.long.entry_threshold_base_pct": 0.25})
+
+        assert config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
+            "threshold_base_pct"
+        ] == pytest.approx(0.25)
 
 
 class TestLiquidationHelpers:
@@ -890,6 +918,59 @@ class TestIndividualToConfig:
         )
         assert result["bot"]["short"]["strategy"]["ema_anchor"] == {"ema_span_0": 123.0}
 
+    @pytest.mark.parametrize(
+        ("strategy_kind", "bound_key", "expected_path", "new_value"),
+        [
+            (
+                "trailing_martingale",
+                "long_entry_threshold_base_pct",
+                ("bot", "long", "strategy", "trailing_martingale", "entry", "threshold_base_pct"),
+                0.0123,
+            ),
+            (
+                "ema_anchor",
+                "long_offset",
+                ("bot", "long", "strategy", "ema_anchor", "offset"),
+                0.0045,
+            ),
+        ],
+    )
+    def test_strategy_override_survives_optimizer_round_trip_without_inactive_tree(
+        self, strategy_kind, bound_key, expected_path, new_value
+    ):
+        template = {
+            "live": {"strategy_kind": strategy_kind},
+            "bot": {
+                "long": {
+                    "risk": {"n_positions": 1, "total_wallet_exposure_limit": 1.0},
+                    "strategy": {strategy_kind: {}},
+                },
+                "short": {
+                    "risk": {"n_positions": 0, "total_wallet_exposure_limit": 0.0},
+                    "strategy": {strategy_kind: {}},
+                },
+            },
+            "optimize": {"bounds": {bound_key: [new_value, new_value]}},
+        }
+        prepared = prepare_config(template, verbose=False, target="canonical", runtime=None)
+        key_paths = get_optimization_key_paths(prepared)
+        target_idx = next(idx for idx, (key, _) in enumerate(key_paths) if key == bound_key)
+        individual = []
+        for _, path in key_paths:
+            target = prepared
+            for part in path:
+                target = target[part]
+            individual.append(target)
+        individual[target_idx] = new_value
+
+        result = individual_to_config(individual, optimize.optimizer_overrides, [], prepared, key_paths=key_paths)
+
+        target = result
+        for part in expected_path:
+            target = target[part]
+        assert target == pytest.approx(new_value)
+        assert set(result["bot"]["long"]["strategy"]) == {strategy_kind}
+
     def test_lossless_close_trailing_override_supports_trailing_martingale_shape(self):
         config = load_prepared_config(
             "configs/examples/default_trailing_grid_long_npos7.json",
@@ -1429,6 +1510,45 @@ class TestApplyFineTuneBounds:
         assert long_tm_bounds["entry"]["threshold_base_pct"] == [0.1, 0.1]
         assert short_tm_bounds["entry"]["threshold_base_pct"] == [0.5, 0.5]
         assert long_tm_bounds["close"]["qty_pct"] == [0.0, 1.0]
+
+    def test_dotted_selector_does_not_match_by_substring(self, caplog):
+        caplog.set_level(logging.WARNING)
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "close": {
+                                    "qty_pct": [0.0, 1.0],
+                                    "threshold_base_pct": [0.0, 1.0],
+                                }
+                            }
+                        }
+                    }
+                },
+                "fixed_params": ["long.strategy.cl"],
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "close": {"qty_pct": 0.3, "threshold_base_pct": 0.1},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        close_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"][
+            "close"
+        ]
+        assert close_bounds["qty_pct"] == [0.0, 1.0]
+        assert close_bounds["threshold_base_pct"] == [0.0, 1.0]
+        assert "selector matched no optimize bounds: long.strategy.cl" in caplog.text
 
     def test_fine_tune_and_fixed_params_share_single_effective_fixing_path(self):
         config = {

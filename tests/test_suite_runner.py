@@ -225,6 +225,57 @@ def test_apply_scenario_overrides_update_config():
     assert "bot.long.risk.n_positions" in paths
 
 
+def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "bot": {
+            "long": {
+                "hsl": {"no_restart_drawdown_threshold": 0.3},
+                "hsl_no_restart_drawdown_threshold": 0.1,
+                "risk": {"entry_cooldown_minutes": 0.0},
+                "risk_entry_cooldown_minutes": 9.0,
+            },
+            "short": {},
+        },
+    }
+    scenario = SuiteScenario(
+        label="override",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=[],
+        overrides={
+            "bot.long.hsl_no_restart_drawdown_threshold": 1.0,
+            "bot.long.risk.entry_cooldown_minutes": 2.5,
+        },
+    )
+
+    cfg, _ = apply_scenario(
+        base_config,
+        scenario,
+        master_coins=["BTC"],
+        master_ignored=[],
+        available_exchanges=["binance"],
+        available_coins={"BTC"},
+        base_coin_sources={"BTC": "binance"},
+    )
+
+    assert cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
+    assert cfg["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
+    assert "hsl_no_restart_drawdown_threshold" not in cfg["bot"]["long"]
+    assert "risk_entry_cooldown_minutes" not in cfg["bot"]["long"]
+
+
 def test_resolve_coin_sources_merges_overrides():
     base = {"BTC": "binance"}
     overrides = {"ETH": "bybit"}

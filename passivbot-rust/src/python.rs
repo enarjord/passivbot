@@ -16,7 +16,7 @@ use crate::risk::{
     GateEntriesDecision, GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
 };
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
-use crate::strategies::registry::{strategy_kind_from_name, strategy_spec};
+use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
 use crate::strategies::{
     EmaAnchorParams, StrategySide, TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
 };
@@ -3541,4 +3541,9 @@ pub fn get_strategy_spec(py: Python<'_>, strategy_kind: &str) -> PyResult<Py<PyD
         pyo3::exceptions::PyValueError::new_err(format!("unknown strategy kind: {}", strategy_kind))
     })?;
     struct_to_py_dict(py, &strategy_spec(kind))
+}
+
+#[pyfunction]
+pub fn get_strategy_kinds() -> Vec<&'static str> {
+    strategy_kind_names()
 }
