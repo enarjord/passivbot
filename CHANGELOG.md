@@ -5,6 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Fixed live fill refreshes so cached close fills with pending realized PnL keep extending the incremental refresh window until exchange enrichment catches up, KuCoin positions-history enrichment uses a bounded delayed-record lookahead, and pending-PnL account refresh blocks no longer burn the generic restart budget.
+- Fixed backtest/data-downloader startup when the legacy `caches/ohlcv` path is a dangling symlink after moving to the v2 `caches/ohlcvs` store.
 
 ## v7.11.0 - 2026-05-13
 

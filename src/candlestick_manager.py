@@ -93,6 +93,26 @@ _LOCK_BACKOFF_INITIAL = 0.1
 _LOCK_BACKOFF_MAX = 2.0
 _GATEIO_RECENT_1M_LIMIT_CANDLES = 9_990
 
+
+def _ensure_legacy_ohlcv_cache_base(cache_dir: str) -> str:
+    """Create the legacy daily-shard cache root, repairing stale symlinks left by v2 migration."""
+    cache_base = Path(cache_dir) / "ohlcv"
+    try:
+        cache_base.mkdir(parents=True, exist_ok=True)
+    except FileExistsError:
+        if cache_base.is_symlink() and not cache_base.exists():
+            target = os.readlink(cache_base)
+            cache_base.unlink()
+            cache_base.mkdir(parents=True, exist_ok=True)
+            logging.info(
+                "removed dangling legacy OHLCV cache symlink %s -> %s; created local directory",
+                cache_base,
+                target,
+            )
+        else:
+            raise
+    return str(cache_base)
+
 # See: https://github.com/enarjord/passivbot/issues/547
 # True if running on Windows (used for file/path compatible names)
 windows_compatibility = (
@@ -689,8 +709,7 @@ class CandlestickManager:
         # Standardize cache directory names (e.g., binanceusdm -> binance),
         # migrate any legacy data from historical_data/ to caches/ohlcv/,
         # and merge any duplicate symbol directories from inconsistent sanitization
-        ohlcv_cache_base = os.path.join(self.cache_dir, "ohlcv")
-        os.makedirs(ohlcv_cache_base, exist_ok=True)
+        ohlcv_cache_base = _ensure_legacy_ohlcv_cache_base(self.cache_dir)
         historical_data_path = os.path.join(
             os.path.dirname(os.path.abspath(self.cache_dir)),
             "historical_data",
