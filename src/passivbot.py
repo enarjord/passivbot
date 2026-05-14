@@ -4674,9 +4674,16 @@ class Passivbot:
                     if self._shutdown_requested():
                         break
                     await asyncio.sleep(0.5)
-                    failed_update_pos_oos_pnls_ohlcvs_count += 1
-                    if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
-                        await self.restart_bot_on_too_many_errors()
+                    if (
+                        getattr(self, "_last_authoritative_block_reason", None)
+                        == "pending_pnl"
+                    ):
+                        failed_update_pos_oos_pnls_ohlcvs_count = 0
+                        self._maybe_log_pending_pnl_authoritative_block()
+                    else:
+                        failed_update_pos_oos_pnls_ohlcvs_count += 1
+                        if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
+                            await self.restart_bot_on_too_many_errors()
                     continue
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self.stop_signal_received:
@@ -4901,6 +4908,18 @@ class Passivbot:
         if context == "history_replay":
             return 2
         return max(1, int(getattr(self, "max_n_concurrent_ohlcvs_1m_updates", 4) or 4))
+
+    def _maybe_log_pending_pnl_authoritative_block(self) -> None:
+        pending_count = int(getattr(self, "_last_authoritative_pending_pnl_count", 0) or 0)
+        now = utc_ms()
+        last_log = int(getattr(self, "_pending_pnl_authoritative_block_log_ms", 0) or 0)
+        if now - last_log < 60_000:
+            return
+        self._pending_pnl_authoritative_block_log_ms = now
+        logging.info(
+            "[fills] authoritative refresh waiting for realized PnL enrichment | pending_pnl=%d action=retry_without_restart",
+            pending_count,
+        )
 
     def _install_asyncio_runtime_exception_handler(self) -> None:
         """Install a narrow asyncio callback exception classifier for noisy WS libraries."""
@@ -5248,6 +5267,8 @@ class Passivbot:
 
     async def _refresh_authoritative_state_staged(self) -> bool:
         """Refresh live account state through the staged authoritative cohort."""
+        self._last_authoritative_block_reason = None
+        self._last_authoritative_pending_pnl_count = 0
         plan = self._authoritative_staged_refresh_plan()
         snapshot = await self._fetch_authoritative_state_staged_snapshot(plan)
         fetched_balance = snapshot.get("balance")
@@ -5262,6 +5283,10 @@ class Passivbot:
         if "open_orders" in plan and fetched_open_orders in [None, False]:
             return False
         if "fills" in plan and not pnls_ok:
+            self._last_authoritative_block_reason = "pending_pnl"
+            self._last_authoritative_pending_pnl_count = int(
+                snapshot.get("pending_pnl_count", 0) or 0
+            )
             return False
         prepared_balance_snapshot = None
         if "balance" in plan:
@@ -5736,6 +5761,9 @@ class Passivbot:
                 out["open_orders"] = result
             elif key == "fills":
                 out["pnls_ok"] = result
+                out["pending_pnl_count"] = int(
+                    getattr(self, "_last_fill_refresh_pending_pnl_count", 0) or 0
+                )
         return out
 
     def _staged_defer_balance_publication(self) -> bool:
@@ -9547,6 +9575,7 @@ class Passivbot:
                 self._log_enriched_fill_events(enriched_events)
                 self._request_authoritative_confirmation(ACCOUNT_SURFACES)
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
+            self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             pnls_complete = not pending_pnl_events
             if pnls_complete:
                 self._record_authoritative_surface(

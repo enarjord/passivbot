@@ -4194,6 +4194,68 @@ async def test_run_execution_loop_defers_staged_precondition_without_error_count
 
 
 @pytest.mark.asyncio
+async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    executes = []
+
+    async def fake_sleep(_seconds):
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        if cycle["n"] <= 12:
+            bot._last_authoritative_block_reason = "pending_pnl"
+            bot._last_authoritative_pending_pnl_count = 2
+            return False
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    async def fake_refresh_market_state_if_needed():
+        executes.append("market")
+        return True
+
+    async def fake_prepare_planning_universe():
+        executes.append("universe")
+
+    async def fake_execute_to_exchange(*, prepare_cycle=True):
+        executes.append(("execute", prepare_cycle, cycle["n"]))
+        return {"executed_cycle": cycle["n"]}
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.prepare_planning_universe = fake_prepare_planning_universe
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"executed_cycle": 13}
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert executes == ["universe", "market", ("execute", False, 13)]
+
+
+@pytest.mark.asyncio
 async def test_refresh_market_state_updates_trailing_after_candles():
     bot = Passivbot.__new__(Passivbot)
     bot.stop_signal_received = False

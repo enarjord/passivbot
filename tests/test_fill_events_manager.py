@@ -29,6 +29,8 @@ from src.fill_events_manager import (
     FillEventCacheDiskFullError,
     FillEventsManager,
     GAP_REASON_FETCH_FAILED,
+    KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+    PENDING_PNL_REFRESH_MARGIN_MS,
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
@@ -2248,6 +2250,83 @@ async def test_manager_refresh_latest_can_bound_start_from_last_successful_refre
 
 
 @pytest.mark.asyncio
+async def test_manager_refresh_latest_extends_start_for_pending_pnl_enrichment(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_latest_pending_pnl"
+    pending_ts = 1_700_000_000_000
+    later_ts = pending_ts + 2 * 60 * 60 * 1000
+    last_refresh_ms = pending_ts + 4 * 60 * 60 * 1000
+    overlap_ms = 10 * 60 * 1000
+
+    pending_event = dict(
+        id="pending-close",
+        timestamp=pending_ts,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="sell",
+        qty=-7.0,
+        price=2.09,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_unstuck_long",
+        position_side="long",
+        client_order_id="cid-pending",
+    )
+    later_event = dict(
+        id="later-entry",
+        timestamp=later_ts,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="buy",
+        qty=10.0,
+        price=2.07,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-later",
+    )
+    enriched_event = dict(pending_event)
+    enriched_event["pnl"] = 1.23
+    enriched_event["pnl_status"] = "complete"
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self, batches):
+            self.batches = list(batches)
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = self.batches.pop(0) if self.batches else []
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _RecordingFetcher([[pending_event, later_event], [enriched_event]])
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+    assert FillEventsManager.pending_pnl_events(manager.get_events())
+
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = last_refresh_ms
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=overlap_ms)
+
+    expected_start = pending_ts - PENDING_PNL_REFRESH_MARGIN_MS
+    assert fetcher.calls[1] == (expected_start, None)
+    assert manager.get_events(symbol="TON/USDT:USDT")[0].pnl == pytest.approx(1.23)
+    assert not FillEventsManager.pending_pnl_events(manager.get_events())
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_records_successful_empty_refresh(tmp_path: Path):
     cache_dir = tmp_path / "fills_empty_refresh"
 
@@ -3213,6 +3292,31 @@ def test_kucoin_match_pnls_handles_unmatched_closes():
     # consumed as authoritative realized PnL until positions_history matches.
     assert events["orphan-close"]["pnl"] == 999.0
     assert events["orphan-close"]["pnl_status"] == "pending"
+
+
+def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():
+    fetcher = KucoinFetcher(api=None)
+    close_ts = 1_700_000_000_000
+    closes = [
+        {
+            "id": "delayed-close",
+            "symbol": "TON/USDT:USDT",
+            "timestamp": close_ts,
+            "qty": 7.0,
+        }
+    ]
+
+    start_ms, end_ms = fetcher._positions_history_window(
+        closes, close_ts + 4 * 60 * 1000
+    )
+
+    assert start_ms == close_ts - 60_000
+    assert end_ms == close_ts + 4 * 60 * 1000
+
+    _start_ms, capped_end_ms = fetcher._positions_history_window(
+        closes, close_ts + 60 * 60 * 1000
+    )
+    assert capped_end_ms == close_ts + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
 
 
 def test_kucoin_match_pnls_single_fill_gets_full_pnl():
