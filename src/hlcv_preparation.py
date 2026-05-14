@@ -782,6 +782,138 @@ class HLCVManager:
         )
         return df.reset_index(drop=True)
 
+    async def fetch_ohlcvs_for_v2_store(
+        self, coin: str, *, start_ts: int, end_ts: int
+    ) -> pd.DataFrame:
+        """Fetch 1m candles for the v2 store without writing legacy daily shards."""
+        empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        if not self.markets:
+            await self.load_markets()
+        if not self.has_coin(coin):
+            logging.debug("[%s] v2 fetch: coin %s not found in markets", self.exchange, coin)
+            return empty_df
+        if int(start_ts) > int(end_ts):
+            logging.debug(
+                "[%s] v2 fetch: invalid range start_ts=%s > end_ts=%s",
+                self.exchange,
+                start_ts,
+                end_ts,
+            )
+            return empty_df
+
+        symbol = self.get_symbol(coin)
+        if self.ohlcv_source_dir:
+            df = self._try_load_ohlcvs_from_source_dir(coin, symbol, int(start_ts), int(end_ts))
+            if df is not None and not df.empty:
+                self.load_cc()
+                assert self.cm is not None
+                src = np.zeros(
+                    len(df),
+                    dtype=[
+                        ("ts", "i8"),
+                        ("o", "f8"),
+                        ("h", "f8"),
+                        ("l", "f8"),
+                        ("c", "f8"),
+                        ("bv", "f8"),
+                    ],
+                )
+                src["ts"] = df["timestamp"].astype(np.int64, copy=False).values
+                src["o"] = df["open"].astype(float, copy=False).values
+                src["h"] = df["high"].astype(float, copy=False).values
+                src["l"] = df["low"].astype(float, copy=False).values
+                src["c"] = df["close"].astype(float, copy=False).values
+                src["bv"] = df["volume"].astype(float, copy=False).values
+                filled = self.cm.standardize_gaps(
+                    src,
+                    start_ts=int(start_ts),
+                    end_ts=int(end_ts),
+                    strict=False,
+                    assume_sorted=True,
+                )
+                if filled.size == 0:
+                    return empty_df
+                logging.info(
+                    "[%s] v2 fetch: using source dir for %s",
+                    self.exchange,
+                    coin,
+                )
+                return pd.DataFrame(
+                    {
+                        "timestamp": filled["ts"].astype(np.int64),
+                        "open": filled["o"].astype(float),
+                        "high": filled["h"].astype(float),
+                        "low": filled["l"].astype(float),
+                        "close": filled["c"].astype(float),
+                        "volume": filled["bv"].astype(float),
+                    }
+                ).reset_index(drop=True)
+            logging.debug(
+                "[%s] v2 fetch: source dir had no data for %s; fetching remote",
+                self.exchange,
+                coin,
+            )
+
+        self.load_cc()
+        assert self.cm is not None
+
+        async with self.cm._acquire_fetch_lock(symbol, "1m"):
+            fetched = await self.cm._fetch_ohlcv_paginated(
+                symbol,
+                int(start_ts),
+                int(end_ts) + 60_000,
+                timeframe="1m",
+            )
+        real = (
+            self.cm._slice_ts_range(fetched, int(start_ts), int(end_ts))
+            if fetched.size
+            else fetched
+        )
+        if real.size == 0:
+            logging.warning(
+                "[%s] v2 fetch returned empty for %s range %s to %s",
+                self.exchange,
+                symbol,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return empty_df
+
+        ts = real["ts"].astype(np.int64, copy=False)
+        if ts.size > 1:
+            gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
+            intervals = np.diff(ts)
+            greatest_gap_ms = int(intervals.max(initial=60_000))
+            if greatest_gap_ms > gap_tolerance_ms:
+                if self.verbose:
+                    logging.warning(
+                        "[%s] gaps detected in %s v2 OHLCV fetch; greatest gap: %.1f minutes. Returning empty.",
+                        self.exchange,
+                        coin,
+                        greatest_gap_ms / 60_000.0,
+                    )
+                return empty_df
+
+        filled = self.cm.standardize_gaps(
+            real,
+            start_ts=int(start_ts),
+            end_ts=int(end_ts),
+            strict=False,
+            assume_sorted=True,
+        )
+        if filled.size == 0:
+            return empty_df
+        return pd.DataFrame(
+            {
+                "timestamp": filled["ts"].astype(np.int64),
+                "open": filled["o"].astype(float),
+                "high": filled["h"].astype(float),
+                "low": filled["l"].astype(float),
+                "close": filled["c"].astype(float),
+                "volume": filled["bv"].astype(float),
+            }
+        ).reset_index(drop=True)
+
 
 async def prepare_hlcvs(
     config: dict,
@@ -1519,7 +1651,11 @@ async def _fetch_coin_range_into_v2_store(
     fetch_started = time.perf_counter()
     attempt = len(catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)) + 1
     try:
-        df = await om.get_ohlcvs(coin)
+        v2_fetcher = getattr(om, "fetch_ohlcvs_for_v2_store", None)
+        if callable(v2_fetcher):
+            df = await v2_fetcher(coin, start_ts=start_ts, end_ts=end_ts)
+        else:
+            df = await om.get_ohlcvs(coin)
     except Exception as exc:
         latency_ms = int(round((time.perf_counter() - fetch_started) * 1000.0))
         catalog.record_fetch_attempt(
