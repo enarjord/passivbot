@@ -58,10 +58,16 @@ def get_bot_group(bot_side: dict | None, group_name: str) -> dict:
     return {}
 
 
-def get_grouped_bot_value(bot_side: dict | None, flat_key: str, default=None):
+def get_grouped_bot_value(
+    bot_side: dict | None,
+    flat_key: str,
+    default=None,
+    *,
+    prefer_flat: bool = False,
+):
     if not isinstance(bot_side, dict):
         return default
-    if flat_key in bot_side:
+    if prefer_flat and flat_key in bot_side:
         return bot_side[flat_key]
     group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
     if group_path is not None:
@@ -69,6 +75,8 @@ def get_grouped_bot_value(bot_side: dict | None, flat_key: str, default=None):
         group = get_bot_group(bot_side, group_name)
         if local_key in group:
             return group[local_key]
+    if flat_key in bot_side:
+        return bot_side[flat_key]
     return default
 
 
@@ -76,8 +84,15 @@ def require_grouped_bot_value(
     bot_side: dict | None,
     pside: str,
     flat_key: str,
+    *,
+    prefer_flat: bool = False,
 ):
-    value = get_grouped_bot_value(bot_side, flat_key, default=_MISSING)
+    value = get_grouped_bot_value(
+        bot_side,
+        flat_key,
+        default=_MISSING,
+        prefer_flat=prefer_flat,
+    )
     if value is not _MISSING:
         return value
     resolved_path = resolve_shared_bot_path(bot_side, pside, flat_key)

@@ -10,13 +10,17 @@ from utils import symbol_to_coin
 POSITION_SIDES = ("long", "short")
 
 
+def _required_side_value(bot_cfg: dict, pside: str, key: str):
+    return require_grouped_bot_value(bot_cfg, pside, key, prefer_flat=True)
+
+
 def backtest_side_enabled(config: dict, pside: str) -> bool:
     bot_cfg = require_config_value(config, f"bot.{pside}")
     total_wallet_exposure_limit = float(
-        require_grouped_bot_value(bot_cfg, pside, "total_wallet_exposure_limit")
+        _required_side_value(bot_cfg, pside, "total_wallet_exposure_limit")
     )
     n_positions = int(
-        round(float(require_grouped_bot_value(bot_cfg, pside, "n_positions")))
+        round(float(_required_side_value(bot_cfg, pside, "n_positions")))
     )
     return (
         math.isfinite(total_wallet_exposure_limit)
