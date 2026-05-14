@@ -1480,6 +1480,54 @@ def test_manual_positions_do_not_consume_twel_entry_budget():
     ), "manual positions are outside bot-scope TWE and must not block active-symbol entries"
 
 
+def test_twel_entry_gating_uses_snapped_balance_not_raw():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_grid_spacing_pct": 0.02,
+        "entry_grid_double_down_factor": 10.0,
+        "total_wallet_exposure_limit": 0.2,
+        "wallet_exposure_limit": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=1.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp_low_raw = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp_low_raw["balance_raw"] = 500.0
+
+    inp_high_raw = copy.deepcopy(inp_low_raw)
+    inp_high_raw["balance_raw"] = 1_500.0
+
+    out_low_raw = compute(pbr, inp_low_raw)
+    out_high_raw = compute(pbr, inp_high_raw)
+    entries_low_raw = [
+        o for o in out_low_raw["orders"] if o["order_type"].startswith("entry_")
+    ]
+    entries_high_raw = [
+        o for o in out_high_raw["orders"] if o["order_type"].startswith("entry_")
+    ]
+
+    assert entries_low_raw, (
+        "snapped balance should permit a TWEL-gated entry even when raw balance "
+        "would already put current exposure at the TWEL cap"
+    )
+    assert [
+        (o["symbol_idx"], o["order_type"], o["pside"], o["qty"], o["price"])
+        for o in entries_low_raw
+    ] == [
+        (o["symbol_idx"], o["order_type"], o["pside"], o["qty"], o["price"])
+        for o in entries_high_raw
+    ]
+
+
 def test_twel_enforcer_emits_auto_reduce():
     import passivbot_rust as pbr
 

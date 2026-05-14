@@ -5,6 +5,23 @@ import pytest
 from candlestick_manager import CandlestickManager, ONE_MIN_MS, CANDLE_DTYPE, _sanitize_symbol
 
 
+def test_dangling_legacy_ohlcv_symlink_is_repaired(tmp_path):
+    cache_dir = tmp_path / "caches"
+    cache_dir.mkdir()
+    ohlcv_link = cache_dir / "ohlcv"
+    missing_target = tmp_path / "deleted_central_ohlcv"
+    try:
+        ohlcv_link.symlink_to(missing_target, target_is_directory=True)
+    except (NotImplementedError, OSError) as exc:
+        pytest.skip(f"symlinks unavailable: {exc}")
+
+    CandlestickManager(exchange=None, exchange_name="binance", cache_dir=str(cache_dir))
+
+    assert ohlcv_link.exists()
+    assert ohlcv_link.is_dir()
+    assert not ohlcv_link.is_symlink()
+
+
 @pytest.mark.asyncio
 async def test_loads_legacy_historical_data_shard_when_primary_missing(tmp_path, monkeypatch):
     # Work in an isolated cwd so relative historical_data/ paths are inside tmp_path

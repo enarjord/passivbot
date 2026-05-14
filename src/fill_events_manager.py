@@ -810,6 +810,8 @@ GAP_REASON_AUTO = "auto_detected"
 GAP_REASON_FETCH_FAILED = "fetch_failed"
 GAP_REASON_CONFIRMED = "confirmed_legitimate"
 GAP_REASON_MANUAL = "manual"
+PENDING_PNL_REFRESH_MARGIN_MS = 5 * 60 * 1000
+KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS = 10 * 60 * 1000
 
 
 class KnownGap(TypedDict, total=False):
@@ -2743,6 +2745,19 @@ class FillEventsManager:
             if last_refresh_ms > 0:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
                 start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
+        pending_pnl_events = self.pending_pnl_events(self._events)
+        if pending_pnl_events:
+            oldest_pending_ts = min(int(ev.timestamp) for ev in pending_pnl_events)
+            pending_start_ms = max(0, oldest_pending_ts - PENDING_PNL_REFRESH_MARGIN_MS)
+            if start_ms is None or pending_start_ms < start_ms:
+                logger.debug(
+                    "[fills] pending realized PnL extends refresh window | pending=%d oldest=%s previous_start=%s adjusted_start=%s",
+                    len(pending_pnl_events),
+                    _format_ms(oldest_pending_ts),
+                    _format_ms(start_ms),
+                    _format_ms(pending_start_ms),
+                )
+                start_ms = pending_start_ms
         await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_for_lookback(
@@ -4088,10 +4103,8 @@ class KucoinFetcher(BaseFetcher):
                 "KucoinFetcher: fetching positions history for %d close fills",
                 len(closes),
             )
-            ph = await self._fetch_positions_history(
-                start_ms=closes[0]["timestamp"] - 60_000,
-                end_ms=closes[-1]["timestamp"] + 60_000,
-            )
+            ph_start_ms, ph_end_ms = self._positions_history_window(closes, self._now_func())
+            ph = await self._fetch_positions_history(start_ms=ph_start_ms, end_ms=ph_end_ms)
             logger.info(
                 "KucoinFetcher: fetched %d positions-history rows in %.1fs",
                 len(ph),
@@ -4105,6 +4118,18 @@ class KucoinFetcher(BaseFetcher):
         if on_batch and ordered:
             on_batch(ordered)
         return ordered
+
+    @staticmethod
+    def _positions_history_window(
+        closes: Sequence[Dict[str, object]], now_ms: int
+    ) -> Tuple[int, int]:
+        first_close_ts = int(closes[0]["timestamp"])
+        last_close_ts = int(closes[-1]["timestamp"])
+        start_ms = first_close_ts - 60_000
+        minimum_end_ms = last_close_ts + 60_000
+        lookahead_end_ms = last_close_ts + KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
+        end_ms = min(max(minimum_end_ms, int(now_ms)), lookahead_end_ms)
+        return start_ms, end_ms
 
     async def _fetch_trades(
         self, since_ms: Optional[int], until_ms: Optional[int]
