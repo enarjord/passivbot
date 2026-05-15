@@ -1668,7 +1668,7 @@ def test_completed_candle_freshness_allows_bounded_active_tail_gap(monkeypatch, 
         ),
     )
     assert any(
-        "active tail gap carry-forward" in record.message
+        "active tail gap EMA projection" in record.message
         and record.levelno == logging.INFO
         for record in caplog.records
     )
@@ -1715,7 +1715,7 @@ def test_completed_candle_tail_gap_fallback_repeats_at_debug(monkeypatch, caplog
             bot, ["TAIL/USDT:USDT"], now_ms=current_now["ms"]
         )
 
-    records = [r for r in caplog.records if "active tail gap carry-forward" in r.message]
+    records = [r for r in caplog.records if "active tail gap EMA projection" in r.message]
     assert [r.levelno for r in records] == [logging.DEBUG, logging.DEBUG]
 
 
@@ -1759,7 +1759,7 @@ def test_completed_candle_tail_gap_fallback_warns_near_cap(monkeypatch, caplog):
     assert missing == []
     assert signature[0][2] == "tail_gap_fallback"
     assert any(
-        "active tail gap carry-forward" in record.message
+        "active tail gap EMA projection" in record.message
         and record.levelno == logging.WARNING
         for record in caplog.records
     )
@@ -1892,3 +1892,163 @@ def test_completed_candle_freshness_blocks_bounded_gap_plus_tail(monkeypatch):
 
     assert signature == ()
     assert missing[0]["reason"] == "missing_latest_completed_1m"
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_metrics_are_read_only(tmp_path, monkeypatch):
+    import math
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "TAIL/USDT:USDT"
+    last_cached = 60 * ONE_MIN_MS
+    latest_expected = last_cached + 3 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    seed = np.array(
+        [(last_cached, 100.0, 101.0, 99.0, 100.0, 2.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = seed.copy()
+    cm._ema_cache[symbol] = {("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)}
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0], "qv": [4.0], "log_range": [4.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    projected_rows = np.array(
+        [
+            (last_cached, 100.0, 101.0, 99.0, 100.0, 2.0),
+            (last_cached + ONE_MIN_MS, 100.0, 100.0, 100.0, 100.0, 0.0),
+            (last_cached + 2 * ONE_MIN_MS, 100.0, 100.0, 100.0, 100.0, 0.0),
+            (latest_expected, 100.0, 100.0, 100.0, 100.0, 0.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    assert projected["close"][4.0] == pytest.approx(100.0)
+    assert projected["qv"][4.0] == pytest.approx(
+        cm._ema(cm._ema_metric_series("qv", projected_rows), 4.0)
+    )
+    assert projected["log_range"][4.0] == pytest.approx(
+        cm._ema(cm._ema_metric_series("log_range", projected_rows), 4.0)
+    )
+    assert np.array_equal(cm._cache[symbol], seed)
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+    assert cm._ema_cache[symbol] == {
+        ("sentinel", 1.0, str(ONE_MIN_MS)): (123.0, last_cached, last_cached)
+    }
+    assert math.isfinite(projected["qv"][4.0])
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_recomputes_when_late_real_candles_arrive(
+    tmp_path, monkeypatch
+):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "LATE/USDT:USDT"
+    t58 = 58 * ONE_MIN_MS
+    t59 = 59 * ONE_MIN_MS
+    t60 = 60 * ONE_MIN_MS
+    t61 = 61 * ONE_MIN_MS
+
+    monkeypatch.setattr("time.time", lambda: (t60 + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array([(t58, 100.0, 100.0, 100.0, 100.0, 1.0)], dtype=CANDLE_DTYPE)
+    first_projection = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [4.0]},
+        latest_expected_ts=t60,
+        last_cached_ts=t58,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+    assert first_projection["close"][4.0] == pytest.approx(100.0)
+    assert cm._ema_cache.get(symbol, {}) == {}
+
+    real_late = np.array(
+        [
+            (t59, 110.0, 110.0, 110.0, 110.0, 3.0),
+            (t61, 120.0, 120.0, 120.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, real_late, timeframe="1m", merge_cache=True, last_refresh_ms=t61)
+    monkeypatch.setattr("time.time", lambda: (t61 + ONE_MIN_MS) / 1000.0)
+
+    ema = await cm.get_latest_ema_close(symbol, 4.0, allow_remote_fetch=False)
+    expected_rows = np.array(
+        [
+            (t58, 100.0, 100.0, 100.0, 100.0, 1.0),
+            (t59, 110.0, 110.0, 110.0, 110.0, 3.0),
+            (t60, 110.0, 110.0, 110.0, 110.0, 0.0),
+            (t61, 120.0, 120.0, 120.0, 120.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    assert ema == pytest.approx(cm._ema(expected_rows["c"].astype(float), 4.0))
+    assert ema != pytest.approx(first_projection["close"][4.0])
+    assert t60 in cm._synthetic_timestamps.get(symbol, set())
+    assert t59 not in cm._synthetic_timestamps.get(symbol, set())
+    assert t61 not in cm._synthetic_timestamps.get(symbol, set())
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_seeds_when_tail_exceeds_span(tmp_path, monkeypatch):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "SHORTSPAN/USDT:USDT"
+    last_cached = 60 * ONE_MIN_MS
+    latest_expected = last_cached + 3 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    seed = np.array(
+        [(last_cached, 100.0, 101.0, 99.0, 100.0, 2.0)],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._cache[symbol] = seed.copy()
+
+    projected = await cm.get_projected_open_tail_ema_metrics(
+        symbol,
+        {"close": [2.0], "qv": [2.0], "log_range": [2.0]},
+        latest_expected_ts=latest_expected,
+        last_cached_ts=last_cached,
+        max_tail_gap_ms=10 * ONE_MIN_MS,
+    )
+
+    assert projected["close"][2.0] == pytest.approx(100.0)
+    assert projected["qv"][2.0] == pytest.approx(0.0)
+    assert projected["log_range"][2.0] == pytest.approx(0.0)
+    assert np.array_equal(cm._cache[symbol], seed)
+    assert cm._ema_cache.get(symbol, {}) == {}
+    assert cm._synthetic_timestamps.get(symbol, set()) == set()
+
+
+@pytest.mark.asyncio
+async def test_projected_open_tail_ema_refuses_tail_beyond_threshold(tmp_path, monkeypatch):
+    import numpy as np
+    from candlestick_manager import CANDLE_DTYPE, CandlestickManager, ONE_MIN_MS
+
+    cm = CandlestickManager(exchange=None, exchange_name="testex", cache_dir=str(tmp_path / "caches"))
+    symbol = "STALE/USDT:USDT"
+    last_cached = 10 * ONE_MIN_MS
+    latest_expected = last_cached + 11 * ONE_MIN_MS
+    monkeypatch.setattr("time.time", lambda: (latest_expected + ONE_MIN_MS) / 1000.0)
+    cm._cache[symbol] = np.array(
+        [(last_cached, 100.0, 100.0, 100.0, 100.0, 1.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    with pytest.raises(ValueError, match="exceeds max_tail_gap_ms"):
+        await cm.get_projected_open_tail_ema_metrics(
+            symbol,
+            {"close": [4.0]},
+            latest_expected_ts=latest_expected,
+            last_cached_ts=last_cached,
+            max_tail_gap_ms=10 * ONE_MIN_MS,
+        )

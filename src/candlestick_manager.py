@@ -6422,6 +6422,163 @@ class CandlestickManager:
             out[i] = num / den
         return out
 
+    @staticmethod
+    def _normalize_spans_by_metric(
+        spans_by_metric: Dict[str, Any],
+    ) -> Dict[str, List[float]]:
+        normalized: Dict[str, List[float]] = {}
+        for metric_key, raw_spans in (spans_by_metric or {}).items():
+            if raw_spans is None:
+                spans_iter = []
+            elif isinstance(raw_spans, (int, float)):
+                spans_iter = [raw_spans]
+            else:
+                spans_iter = list(raw_spans)
+            spans: List[float] = []
+            for raw_span in spans_iter:
+                span = float(raw_span)
+                if not math.isfinite(span) or span <= 0.0:
+                    raise ValueError(
+                        f"projected open-tail EMA span must be finite and > 0.0; "
+                        f"metric={metric_key} span={raw_span!r}"
+                    )
+                spans.append(span)
+            if spans:
+                normalized[str(metric_key)] = sorted(set(spans))
+        return normalized
+
+    def _ema_metric_series(self, metric_key: str, arr: np.ndarray) -> np.ndarray:
+        if metric_key == "close":
+            return np.asarray(arr["c"], dtype=np.float64)
+        if metric_key == "volume":
+            return np.asarray(arr["bv"], dtype=np.float64)
+        if metric_key == "qv":
+            return (
+                np.asarray(arr["bv"], dtype=np.float64)
+                * (
+                    np.asarray(arr["h"], dtype=np.float64)
+                    + np.asarray(arr["l"], dtype=np.float64)
+                    + np.asarray(arr["c"], dtype=np.float64)
+                )
+                / 3.0
+            )
+        if metric_key == "log_range":
+            return np.log(
+                np.maximum(np.asarray(arr["h"], dtype=np.float64), 1e-12)
+                / np.maximum(np.asarray(arr["l"], dtype=np.float64), 1e-12)
+            )
+        raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
+
+    async def get_projected_open_tail_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        *,
+        latest_expected_ts: int,
+        last_cached_ts: int,
+        max_tail_gap_ms: int,
+        timeframe: str = "1m",
+    ) -> Dict[str, Dict[float, float]]:
+        """Return provisional open-tail EMA metrics without mutating candle/EMA state.
+
+        Projection is intentionally stateless. Real candles and existing bounded
+        internal gap synthesis are used first; flat zero-volume rows are appended
+        only for the still-open tail of this single read.
+        """
+        period_ms = _tf_to_ms(timeframe)
+        if period_ms != ONE_MIN_MS:
+            raise ValueError("open-tail EMA projection currently supports only 1m candles")
+        latest_expected = _floor_minute(int(latest_expected_ts))
+        last_cached = _floor_minute(int(last_cached_ts))
+        max_tail_gap = int(max_tail_gap_ms)
+        if latest_expected < last_cached:
+            raise ValueError(
+                f"latest_expected_ts must be >= last_cached_ts for open-tail projection: "
+                f"latest_expected_ts={latest_expected} last_cached_ts={last_cached}"
+            )
+        tail_gap_ms = int(max(0, latest_expected - last_cached))
+        if max_tail_gap <= 0 or tail_gap_ms > max_tail_gap:
+            raise ValueError(
+                f"open-tail projection exceeds max_tail_gap_ms: "
+                f"tail_gap_ms={tail_gap_ms} max_tail_gap_ms={max_tail_gap}"
+            )
+
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        if not normalized:
+            return {}
+        max_span = max(span for spans in normalized.values() for span in spans)
+        window_candles = max(1, int(math.ceil(max_span)))
+        start_ts = min(
+            int(latest_expected - ONE_MIN_MS * (window_candles - 1)),
+            last_cached,
+        )
+
+        before_cache_keys = set(self._ema_cache.get(symbol, {}).keys())
+        before_synthetic = set(self._synthetic_timestamps.get(symbol, set()))
+        arr = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=latest_expected,
+            max_age_ms=None,
+            timeframe="1m",
+            allow_remote_fetch=False,
+        )
+        # get_candles may legitimately record bounded internal synthetic gaps.
+        # Projection itself must not write EMA cache entries or open-tail synthetic timestamps.
+        if symbol in self._ema_cache:
+            after_cache_keys = set(self._ema_cache.get(symbol, {}).keys())
+            if after_cache_keys != before_cache_keys:
+                self._ema_cache[symbol] = {
+                    key: self._ema_cache[symbol][key]
+                    for key in before_cache_keys
+                    if key in self._ema_cache[symbol]
+                }
+        projected_open_tail: List[int] = []
+        if arr.size == 0:
+            raise RuntimeError(
+                f"open-tail projection unavailable for {symbol}: no local candles "
+                f"start_ts={start_ts} latest_expected_ts={latest_expected}"
+            )
+        arr = np.sort(_ensure_dtype(arr), order="ts")
+        newest_ts = int(arr[-1]["ts"])
+        if newest_ts > latest_expected:
+            arr = self._slice_ts_range(arr, start_ts, latest_expected, assume_sorted=True)
+            if arr.size == 0:
+                raise RuntimeError(
+                    f"open-tail projection unavailable for {symbol}: no candles after range clamp"
+                )
+            newest_ts = int(arr[-1]["ts"])
+        if newest_ts < latest_expected:
+            prev_close = float(arr[-1]["c"])
+            rows = []
+            for ts in range(newest_ts + ONE_MIN_MS, latest_expected + ONE_MIN_MS, ONE_MIN_MS):
+                rows.append((int(ts), prev_close, prev_close, prev_close, prev_close, 0.0))
+                projected_open_tail.append(int(ts))
+            if rows:
+                arr = np.concatenate([arr, np.array(rows, dtype=CANDLE_DTYPE)])
+
+        if projected_open_tail:
+            current_synthetic = set(self._synthetic_timestamps.get(symbol, set()))
+            self._synthetic_timestamps[symbol] = current_synthetic - set(projected_open_tail)
+            if not self._synthetic_timestamps[symbol]:
+                self._synthetic_timestamps.pop(symbol, None)
+        elif before_synthetic and symbol not in self._synthetic_timestamps:
+            self._synthetic_timestamps[symbol] = before_synthetic
+
+        out: Dict[str, Dict[float, float]] = {}
+        for metric_key, spans in normalized.items():
+            series = self._ema_metric_series(metric_key, arr)
+            metric_out: Dict[float, float] = {}
+            for span in spans:
+                span_candles = max(1, int(math.ceil(span)))
+                tail = series[-span_candles:] if series.shape[0] > span_candles else series
+                if tail.shape[0] == 0:
+                    metric_out[span] = float("nan")
+                else:
+                    metric_out[span] = float(self._ema(tail, span))
+            out[metric_key] = metric_out
+        return out
+
     async def _latest_finalized_range(
         self, span: float, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:

@@ -8528,10 +8528,41 @@ class Passivbot:
             "",
         )
 
+    def _active_tail_gap_projection_context(self, symbol: str) -> dict | None:
+        """Return bounded open-tail projection context for one symbol, if allowed."""
+        cm = getattr(self, "cm", None)
+        if cm is None or not hasattr(cm, "get_completed_candle_health"):
+            return None
+        now = Passivbot._completed_candle_health_now_ms(self)
+        report = cm.get_completed_candle_health(symbol, {"1m": 1}, now_ms=now)
+        tf_report = (report.get("timeframes") or {}).get("1m") or {}
+        if bool(report.get("ok")) and bool(tf_report.get("coverage_ok")):
+            return None
+        allowed, signature, reason = Passivbot._completed_candle_tail_gap_fallback_signature(
+            self, symbol, tf_report
+        )
+        if not allowed:
+            return None
+        try:
+            latest_expected = int(signature[1])
+            last_cached = int(signature[3])
+            tail_gap_age_ms = int(signature[4])
+        except Exception:
+            return None
+        return {
+            "symbol": str(symbol),
+            "latest_expected_ts": latest_expected,
+            "last_cached_ts": last_cached,
+            "tail_gap_age_ms": tail_gap_age_ms,
+            "tail_gap_candles": int(tf_report.get("tail_gap_candles") or 0),
+            "max_tail_gap_ms": int(Passivbot._active_candle_tail_gap_max_ms(self)),
+            "reason": reason or "open_tail_gap_projection",
+        }
+
     def _log_completed_candle_tail_gap_fallbacks(
         self, signatures: Iterable[tuple]
     ) -> None:
-        """Operator-visible batch log for bounded open-tail carry-forward."""
+        """Operator-visible batch log for bounded open-tail EMA projection."""
         try:
             fallbacks = [
                 sig
@@ -8620,7 +8651,7 @@ class Passivbot:
             }
             logging.log(
                 level,
-                "[candle] active tail gap carry-forward | symbols=%s count=%d expected=%s oldest_real=%s max_tail_age=%.1fm max=%.1fm action=carry_forward_latest_real",
+                "[candle] active tail gap EMA projection | symbols=%s count=%d expected=%s oldest_real=%s max_tail_age=%.1fm max=%.1fm action=project_open_tail_ema",
                 Passivbot._log_symbols(symbols, limit=8),
                 len(parsed),
                 ts_to_date(newest_expected)[:19],
@@ -12054,6 +12085,23 @@ class Passivbot:
         else:
             cache_only_never_fetched = set()
 
+        projection_contexts: dict[str, dict] = {}
+        for sym in symbols:
+            try:
+                ctx = Passivbot._active_tail_gap_projection_context(self, sym)
+            except Exception as exc:
+                logging.debug(
+                    "[candle] open-tail EMA projection context failed %s | error_type=%s error=%s",
+                    Passivbot._log_symbol(sym),
+                    type(exc).__name__,
+                    exc,
+                )
+                ctx = None
+            if ctx is not None:
+                projection_contexts[sym] = ctx
+        self._orchestrator_ema_projection_symbols = set()
+        self._orchestrator_ema_projection_details = {}
+
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
             if not spans:
@@ -12223,6 +12271,37 @@ class Passivbot:
                 )
             return out
 
+        def projected_optional_map(
+            symbol: str,
+            projected: dict,
+            metric_key: str,
+            spans: list[float],
+            ema_type: str,
+        ) -> dict[float, float]:
+            out: dict[float, float] = {}
+            metric_values = projected.get(metric_key, {}) or {}
+            for sp in spans:
+                span = float(sp)
+                if span not in metric_values:
+                    record_optional_ema_drop(
+                        ema_type,
+                        symbol,
+                        span,
+                        f"projected open-tail {metric_key} EMA missing",
+                    )
+                    continue
+                val = float(metric_values[span])
+                if math.isfinite(val):
+                    out[span] = val
+                else:
+                    record_optional_ema_drop(
+                        ema_type,
+                        symbol,
+                        span,
+                        f"projected open-tail {metric_key} EMA non-finite value {val}",
+                    )
+            return out
+
         async def ema_close(symbol: str, span: float) -> float:
             # 1m candles finalize once/min; 60s TTL avoids redundant network fetches.
             return float(
@@ -12271,15 +12350,67 @@ class Passivbot:
                 mark_ema_unavailable(sym, "never_fetched_cache_only")
                 return {}, {}, {}, {}
             try:
-                close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
+                projection_ctx = projection_contexts.get(sym)
+                if projection_ctx is not None:
+                    try:
+                        projected = await self.cm.get_projected_open_tail_ema_metrics(
+                            sym,
+                            {
+                                "close": sorted(need_close_spans[sym]),
+                                "qv": m1_volume_spans,
+                                "log_range": m1_lr_spans,
+                            },
+                            latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
+                            last_cached_ts=int(projection_ctx["last_cached_ts"]),
+                            max_tail_gap_ms=int(projection_ctx["max_tail_gap_ms"]),
+                        )
+                    except Exception as exc:
+                        log_ema_issue(
+                            ("open_tail_projection_failed", sym),
+                            logging.WARNING,
+                            "[candle] open-tail EMA projection failed %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s error_type=%s error=%s",
+                            Passivbot._log_symbol(sym),
+                            projection_ctx.get("tail_gap_age_ms"),
+                            projection_ctx.get("latest_expected_ts"),
+                            projection_ctx.get("last_cached_ts"),
+                            type(exc).__name__,
+                            exc,
+                            interval_ms=15 * 60 * 1000,
+                        )
+                        raise
+                    close = dict(projected.get("close", {}))
+                    vol = projected_optional_map(
+                        sym, projected, "qv", m1_volume_spans, "m1_volume"
+                    )
+                    lr1m = projected_optional_map(
+                        sym, projected, "log_range", m1_lr_spans, "m1_log_range"
+                    )
+                    missing_close = [
+                        span
+                        for span in sorted(need_close_spans[sym])
+                        if span not in close or not math.isfinite(float(close[span]))
+                    ]
+                    if missing_close:
+                        raise RuntimeError(
+                            "[ema] projected open-tail close EMA incomplete for "
+                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
+                        )
+                    self._orchestrator_ema_projection_symbols.add(sym)
+                    self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
+                else:
+                    close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
+                    vol = None
+                    lr1m = None
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 h1 = await fetch_required_map(
                     sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
                 )
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
+                if vol is None:
+                    vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
-                lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
+                if lr1m is None:
+                    lr1m = await fetch_map(sym, m1_lr_spans, ema_lr_1m, "m1_log_range")
             except Exception:
                 if sym not in cache_only_symbols:
                     raise
