@@ -172,4 +172,3 @@ def resolve_bound_selectors(
             if path_matches_selector(path, selector_path):
                 resolved[key] = path
     return resolved
-
