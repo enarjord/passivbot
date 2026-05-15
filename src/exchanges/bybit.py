@@ -125,30 +125,25 @@ class BybitBot(CCXTBot):
         fetched = await self._do_fetch_positions_paginated()
         return fetched, self._normalize_positions_snapshot(deepcopy(fetched))
 
-    async def fetch_balance(self) -> float:
-        """Bybit: Complex UNIFIED account balance calculation."""
-        fetched_balance = await self.cca.fetch_balance()
+    def _get_balance(self, fetched_balance: dict) -> float:
+        """Bybit UTA raw balance is account equity excluding perpetual UPNL."""
         balinfo = fetched_balance["info"]["result"]["list"][0]
         if balinfo["accountType"] == "UNIFIED":
-            balance = 0.0
-            for elm in balinfo["coin"]:
-                if elm["marginCollateral"] and elm["collateralSwitch"]:
-                    balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-        else:
-            balance = fetched_balance[self.quote]["total"]
-        return balance
+            if "totalEquity" in balinfo and "totalPerpUPL" in balinfo:
+                return float(balinfo["totalEquity"]) - float(balinfo["totalPerpUPL"])
 
-    async def capture_balance_snapshot(self) -> tuple[dict, float]:
-        fetched_balance = await self.cca.fetch_balance()
-        balinfo = fetched_balance["info"]["result"]["list"][0]
-        if balinfo["accountType"] == "UNIFIED":
             balance = 0.0
+            used_collateral = False
             for elm in balinfo["coin"]:
-                if elm["marginCollateral"] and elm["collateralSwitch"]:
-                    balance += float(elm["usdValue"]) + float(elm["unrealisedPnl"])
-        else:
-            balance = fetched_balance[self.quote]["total"]
-        return fetched_balance, balance
+                margin_collateral = str(elm["marginCollateral"]).lower() in {"true", "1"}
+                collateral_switch = str(elm["collateralSwitch"]).lower() in {"true", "1"}
+                if margin_collateral and collateral_switch:
+                    used_collateral = True
+                    balance += float(elm["usdValue"]) - float(elm["unrealisedPnl"])
+            if not used_collateral:
+                raise KeyError("bybit: UNIFIED balance response has no enabled collateral coins")
+            return balance
+        return super()._get_balance(fetched_balance)
 
     async def fetch_pnls_sub(
         self,

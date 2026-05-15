@@ -184,6 +184,94 @@ def test_bybit_position_side_uses_determine_pos_side_ccxt_contract():
     assert bot._get_position_side_for_order({"info": {"positionSide": "LONG"}}) == "long"
 
 
+@pytest.mark.asyncio
+async def test_bybit_unified_balance_uses_equity_minus_perp_upl():
+    bot = BybitBot.__new__(BybitBot)
+    bot.exchange = "bybit"
+    bot.quote = "USDT"
+
+    fetched = {
+        "total": {"BTC": 0.01654816, "USDT": -130.46645492},
+        "info": {
+            "result": {
+                "list": [
+                    {
+                        "accountType": "UNIFIED",
+                        "totalEquity": "1019.90778334",
+                        "totalPerpUPL": "-51.42503948",
+                        "coin": [
+                            {
+                                "coin": "BTC",
+                                "marginCollateral": True,
+                                "collateralSwitch": True,
+                                "walletBalance": "0.01654816",
+                                "usdValue": "1310.47850227",
+                                "unrealisedPnl": "0",
+                            },
+                            {
+                                "coin": "USDT",
+                                "marginCollateral": True,
+                                "collateralSwitch": True,
+                                "walletBalance": "-130.46645492",
+                                "usdValue": "-290.57071892",
+                                "unrealisedPnl": "-51.4485",
+                            },
+                        ],
+                    }
+                ]
+            }
+        },
+    }
+
+    async def _fetch_balance():
+        return fetched
+
+    bot.cca = SimpleNamespace(fetch_balance=_fetch_balance)
+
+    legacy_balance = await bot.fetch_balance()
+    _raw_snapshot, staged_balance = await bot.capture_balance_snapshot()
+
+    assert legacy_balance == pytest.approx(1071.33282282)
+    assert staged_balance == pytest.approx(legacy_balance)
+
+
+def test_bybit_unified_balance_falls_back_to_collateral_equity_without_upnl():
+    bot = BybitBot.__new__(BybitBot)
+    bot.exchange = "bybit"
+    bot.quote = "USDT"
+
+    fetched = {
+        "total": {"USDT": 10.0},
+        "info": {
+            "result": {
+                "list": [
+                    {
+                        "accountType": "UNIFIED",
+                        "coin": [
+                            {
+                                "coin": "BTC",
+                                "marginCollateral": "true",
+                                "collateralSwitch": "true",
+                                "usdValue": "1310.0",
+                                "unrealisedPnl": "0",
+                            },
+                            {
+                                "coin": "USDT",
+                                "marginCollateral": True,
+                                "collateralSwitch": True,
+                                "usdValue": "-290.0",
+                                "unrealisedPnl": "-50.0",
+                            },
+                        ],
+                    }
+                ]
+            }
+        },
+    }
+
+    assert bot._get_balance(fetched) == pytest.approx(1070.0)
+
+
 def test_bitget_determine_side_uses_trade_side_reduce_only_and_pos_side():
     bot = BitgetBot.__new__(BitgetBot)
     close_short = {
