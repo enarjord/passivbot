@@ -2325,11 +2325,122 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
 
     await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=overlap_ms)
 
-    assert fetcher.calls[1] == (last_refresh_ms - overlap_ms, None)
+    assert fetcher.calls[1] == (
+        max(0, pending_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS),
+        None,
+    )
     close = manager.get_events(symbol="TON/USDT:USDT")[-1]
     assert close.pnl == pytest.approx(1.23)
     assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
     assert not FillEventsManager.pending_pnl_events(manager.get_events())
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_latest_keeps_synthetic_pnl_in_enrichment_window(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_synthetic_window"
+    entry_ts = 1_700_000_000_000
+    close_ts = entry_ts + 1_000
+    last_refresh_ms = close_ts + 40 * 60_000
+    overlap_ms = 10 * 60_000
+
+    entry = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="buy",
+        qty=5.0,
+        price=10.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
+    pending_close = dict(
+        id="close",
+        timestamp=close_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="sell",
+        qty=-2.0,
+        price=12.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-close",
+    )
+    authoritative_close = dict(pending_close)
+    authoritative_close["pnl"] = 9.99
+    authoritative_close["pnl_status"] = "complete"
+    later_events = [
+        dict(
+            id=f"later-{idx}",
+            timestamp=close_ts + (idx + 1) * 60_000,
+            datetime="",
+            symbol="SOL/USDT:USDT",
+            side="buy",
+            qty=0.1,
+            price=12.0 + idx,
+            pnl=0.0,
+            pnl_status="complete",
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id=f"cid-later-{idx}",
+        )
+        for idx in range(30)
+    ]
+
+    class _SinceFilteringFetcher(BaseFetcher):
+        def __init__(self, batches):
+            self.batches = list(batches)
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [dict(ev) for ev in (self.batches.pop(0) if self.batches else [])]
+            if since_ms is not None:
+                batch = [ev for ev in batch if int(ev["timestamp"]) >= since_ms]
+            if until_ms is not None:
+                batch = [ev for ev in batch if int(ev["timestamp"]) <= until_ms]
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _SinceFilteringFetcher(
+        [
+            [entry, pending_close, *later_events],
+            [authoritative_close, *later_events],
+        ]
+    )
+    manager = FillEventsManager(
+        exchange="example",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+    close = [ev for ev in manager.get_events(symbol="SOL/USDT:USDT") if ev.id == "close"][0]
+    assert close.pnl == pytest.approx(4.0)
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = last_refresh_ms
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=overlap_ms)
+
+    assert fetcher.calls[1] == (
+        max(0, close_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS),
+        None,
+    )
+    close = [ev for ev in manager.get_events(symbol="SOL/USDT:USDT") if ev.id == "close"][0]
+    assert close.pnl == pytest.approx(9.99)
+    assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
 
 
 @pytest.mark.asyncio

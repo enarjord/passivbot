@@ -2974,18 +2974,23 @@ class FillEventsManager:
                 metadata_start_ms = max(0, last_refresh_ms - int(last_refresh_overlap_ms))
                 start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
         pending_pnl_events = self.pending_pnl_events(self._events)
-        if pending_pnl_events:
-            oldest_pending_ts = min(int(ev.timestamp) for ev in pending_pnl_events)
-            pending_start_ms = max(0, oldest_pending_ts - PENDING_PNL_REFRESH_MARGIN_MS)
-            if start_ms is None or pending_start_ms < start_ms:
+        synthetic_pnl_events = self.synthetic_pnl_events(self._events)
+        pnl_refresh_events = pending_pnl_events + synthetic_pnl_events
+        if pnl_refresh_events:
+            oldest_pnl_refresh_ts = min(int(ev.timestamp) for ev in pnl_refresh_events)
+            pnl_refresh_start_ms = max(
+                0, oldest_pnl_refresh_ts - PENDING_PNL_REFRESH_MARGIN_MS
+            )
+            if start_ms is None or pnl_refresh_start_ms < start_ms:
                 logger.debug(
-                    "[fills] pending realized PnL extends refresh window | pending=%d oldest=%s previous_start=%s adjusted_start=%s",
+                    "[fills] realized PnL enrichment extends refresh window | pending=%d synthetic=%d oldest=%s previous_start=%s adjusted_start=%s",
                     len(pending_pnl_events),
-                    _format_ms(oldest_pending_ts),
+                    len(synthetic_pnl_events),
+                    _format_ms(oldest_pnl_refresh_ts),
                     _format_ms(start_ms),
-                    _format_ms(pending_start_ms),
+                    _format_ms(pnl_refresh_start_ms),
                 )
-                start_ms = pending_start_ms
+                start_ms = pnl_refresh_start_ms
         await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_for_lookback(
@@ -3194,6 +3199,10 @@ class FillEventsManager:
     @staticmethod
     def pending_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
         return [ev for ev in events if fill_event_pnl_pending(ev)]
+
+    @staticmethod
+    def synthetic_pnl_events(events: Iterable[FillEvent]) -> List[FillEvent]:
+        return [ev for ev in events if _is_synthetic_pnl_source(ev.pnl_source)]
 
     @staticmethod
     def assert_no_pending_pnl(events: Iterable[FillEvent], *, context: str) -> None:
