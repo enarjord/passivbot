@@ -4198,8 +4198,10 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     bot = Passivbot.__new__(Passivbot)
     cycle = {"n": 0}
     executes = []
+    sleeps = []
 
-    async def fake_sleep(_seconds):
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
         return None
 
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
@@ -4253,6 +4255,8 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     assert result == {"executed_cycle": 13}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
     assert executes == ["universe", "market", ("execute", False, 13)]
+    assert sleeps[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
+    assert sleeps[7:12] == [60.0] * 5
 
 
 @pytest.mark.asyncio

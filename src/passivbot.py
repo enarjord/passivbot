@@ -152,6 +152,8 @@ PARTIAL_FILL_MERGE_MAX_DELAY_MS = 60_000
 FILL_EVENT_FETCH_OVERLAP_COUNT = 20
 FILL_EVENT_FETCH_OVERLAP_MAX_MS = 86_400_000  # 24 hours
 FILL_EVENT_FETCH_LIMIT_DEFAULT = 20
+PENDING_PNL_AUTHORITATIVE_RETRY_BASE_SECONDS = 1.0
+PENDING_PNL_AUTHORITATIVE_RETRY_MAX_SECONDS = 60.0
 
 
 # Match "...0xABCD..." anywhere (case-insensitive)
@@ -4636,6 +4638,7 @@ class Passivbot:
         self._execution_loop_task_is_inline = True
         self._execution_loop_stopped = execution_loop_stopped
         failed_update_pos_oos_pnls_ohlcvs_count = 0
+        pending_pnl_authoritative_retry_count = 0
         max_n_fails = 10
         if self._equity_hard_stop_enabled() and not all(
             self._equity_hard_stop_runtime_initialized(pside)
@@ -4673,18 +4676,29 @@ class Passivbot:
                 if not authoritative_ok:
                     if self._shutdown_requested():
                         break
-                    await asyncio.sleep(0.5)
                     if (
                         getattr(self, "_last_authoritative_block_reason", None)
                         == "pending_pnl"
                     ):
+                        pending_pnl_authoritative_retry_count += 1
                         failed_update_pos_oos_pnls_ohlcvs_count = 0
-                        self._maybe_log_pending_pnl_authoritative_block()
+                        retry_delay_seconds = (
+                            self._pending_pnl_authoritative_retry_delay_seconds(
+                                pending_pnl_authoritative_retry_count
+                            )
+                        )
+                        self._maybe_log_pending_pnl_authoritative_block(
+                            retry_delay_seconds=retry_delay_seconds
+                        )
+                        await asyncio.sleep(retry_delay_seconds)
                     else:
+                        pending_pnl_authoritative_retry_count = 0
                         failed_update_pos_oos_pnls_ohlcvs_count += 1
+                        await asyncio.sleep(0.5)
                         if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
                             await self.restart_bot_on_too_many_errors()
                     continue
+                pending_pnl_authoritative_retry_count = 0
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self.stop_signal_received:
                     break
@@ -4909,7 +4923,15 @@ class Passivbot:
             return 2
         return max(1, int(getattr(self, "max_n_concurrent_ohlcvs_1m_updates", 4) or 4))
 
-    def _maybe_log_pending_pnl_authoritative_block(self) -> None:
+    @staticmethod
+    def _pending_pnl_authoritative_retry_delay_seconds(retry_count: int) -> float:
+        retry_index = max(0, int(retry_count) - 1)
+        delay = PENDING_PNL_AUTHORITATIVE_RETRY_BASE_SECONDS * (2**retry_index)
+        return float(min(PENDING_PNL_AUTHORITATIVE_RETRY_MAX_SECONDS, delay))
+
+    def _maybe_log_pending_pnl_authoritative_block(
+        self, *, retry_delay_seconds: float
+    ) -> None:
         pending_count = int(getattr(self, "_last_authoritative_pending_pnl_count", 0) or 0)
         now = utc_ms()
         last_log = int(getattr(self, "_pending_pnl_authoritative_block_log_ms", 0) or 0)
@@ -4917,8 +4939,9 @@ class Passivbot:
             return
         self._pending_pnl_authoritative_block_log_ms = now
         logging.info(
-            "[fills] authoritative refresh waiting for realized PnL enrichment | pending_pnl=%d action=retry_without_restart",
+            "[fills] authoritative refresh waiting for realized PnL enrichment | pending_pnl=%d action=retry_without_restart retry_in=%.1fs",
             pending_count,
+            float(retry_delay_seconds),
         )
 
     def _install_asyncio_runtime_exception_handler(self) -> None:

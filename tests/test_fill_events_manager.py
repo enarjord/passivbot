@@ -30,7 +30,6 @@ from src.fill_events_manager import (
     FillEventsManager,
     GAP_REASON_FETCH_FAILED,
     KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
-    PENDING_PNL_REFRESH_MARGIN_MS,
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
@@ -89,6 +88,19 @@ class _StaticFetcher(BaseFetcher):
         if on_batch:
             on_batch(payload)
         return payload
+
+
+class _SequencedFetcher(BaseFetcher):
+    def __init__(self, batches: List[List[Dict[str, object]]]):
+        self.batches = list(batches)
+        self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+    async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+        self.calls.append((since_ms, until_ms))
+        batch = [dict(ev) for ev in (self.batches.pop(0) if self.batches else [])]
+        if on_batch and batch:
+            on_batch(batch)
+        return batch
 
 
 class _FakeBybitAPI:
@@ -2134,17 +2146,18 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
 
 @pytest.mark.asyncio
 async def test_manager_pnl_helpers_fail_on_pending_close_pnl(tmp_path: Path, sample_events):
-    events = [dict(ev) for ev in sample_events]
-    events[-1]["pnl_status"] = "pending"
-    fetcher = _StaticFetcher(events)
     manager = FillEventsManager(
         exchange="bybit",
         user="default",
-        fetcher=fetcher,
+        fetcher=_StaticFetcher([]),
         cache_path=tmp_path / "fills_pending",
     )
-
-    await manager.refresh()
+    events = [FillEvent.from_dict(dict(ev)) for ev in sample_events]
+    pending_payload = dict(sample_events[-1])
+    pending_payload["pnl_status"] = "pending"
+    events[-1] = FillEvent.from_dict(pending_payload)
+    manager._events = events
+    manager._loaded = True
 
     with pytest.raises(RuntimeError, match="realized PnL pending"):
         manager.get_pnl_sum()
@@ -2250,60 +2263,48 @@ async def test_manager_refresh_latest_can_bound_start_from_last_successful_refre
 
 
 @pytest.mark.asyncio
-async def test_manager_refresh_latest_extends_start_for_pending_pnl_enrichment(
+async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
     tmp_path: Path,
 ):
-    cache_dir = tmp_path / "fills_latest_pending_pnl"
-    pending_ts = 1_700_000_000_000
-    later_ts = pending_ts + 2 * 60 * 60 * 1000
+    cache_dir = tmp_path / "fills_synthetic_replaced"
+    entry_ts = 1_700_000_000_000
+    pending_ts = entry_ts + 60_000
     last_refresh_ms = pending_ts + 4 * 60 * 60 * 1000
     overlap_ms = 10 * 60 * 1000
 
+    entry_event = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="buy",
+        qty=10.0,
+        price=2.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
     pending_event = dict(
         id="pending-close",
         timestamp=pending_ts,
         datetime="",
         symbol="TON/USDT:USDT",
         side="sell",
-        qty=-7.0,
-        price=2.09,
+        qty=-4.0,
+        price=2.5,
         pnl=0.0,
         pnl_status="pending",
         pb_order_type="close_unstuck_long",
         position_side="long",
         client_order_id="cid-pending",
     )
-    later_event = dict(
-        id="later-entry",
-        timestamp=later_ts,
-        datetime="",
-        symbol="TON/USDT:USDT",
-        side="buy",
-        qty=10.0,
-        price=2.07,
-        pnl=0.0,
-        pnl_status="complete",
-        pb_order_type="entry_grid_long",
-        position_side="long",
-        client_order_id="cid-later",
-    )
     enriched_event = dict(pending_event)
     enriched_event["pnl"] = 1.23
     enriched_event["pnl_status"] = "complete"
 
-    class _RecordingFetcher(BaseFetcher):
-        def __init__(self, batches):
-            self.batches = list(batches)
-            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
-
-        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
-            self.calls.append((since_ms, until_ms))
-            batch = self.batches.pop(0) if self.batches else []
-            if on_batch and batch:
-                on_batch(batch)
-            return batch
-
-    fetcher = _RecordingFetcher([[pending_event, later_event], [enriched_event]])
+    fetcher = _SequencedFetcher([[entry_event, pending_event], [enriched_event]])
     manager = FillEventsManager(
         exchange="kucoin",
         user="default",
@@ -2312,7 +2313,11 @@ async def test_manager_refresh_latest_extends_start_for_pending_pnl_enrichment(
     )
 
     await manager.refresh()
-    assert FillEventsManager.pending_pnl_events(manager.get_events())
+    close = manager.get_events(symbol="TON/USDT:USDT")[-1]
+    assert close.pnl_status == "complete"
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+    assert close.pnl == pytest.approx(2.0)
+    assert not FillEventsManager.pending_pnl_events(manager.get_events())
 
     metadata = manager.cache.load_metadata()
     metadata["last_refresh_ms"] = last_refresh_ms
@@ -2320,10 +2325,161 @@ async def test_manager_refresh_latest_extends_start_for_pending_pnl_enrichment(
 
     await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=overlap_ms)
 
-    expected_start = pending_ts - PENDING_PNL_REFRESH_MARGIN_MS
-    assert fetcher.calls[1] == (expected_start, None)
-    assert manager.get_events(symbol="TON/USDT:USDT")[0].pnl == pytest.approx(1.23)
+    assert fetcher.calls[1] == (last_refresh_ms - overlap_ms, None)
+    close = manager.get_events(symbol="TON/USDT:USDT")[-1]
+    assert close.pnl == pytest.approx(1.23)
+    assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
     assert not FillEventsManager.pending_pnl_events(manager.get_events())
+
+
+@pytest.mark.asyncio
+async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
+    tmp_path: Path, caplog
+):
+    entry_ts = 1_700_000_000_000
+    close_ts = entry_ts + 1_000
+    events = [
+        dict(
+            id="entry-contract",
+            timestamp=entry_ts,
+            datetime="",
+            symbol="BTC/USDT:USDT",
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            pnl=0.0,
+            pnl_status="complete",
+            fees=None,
+            raw=[{"source": "fetch_my_trades", "data": {"cost": "1.0"}}],
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id="cid-entry",
+        ),
+        dict(
+            id="close-contract",
+            timestamp=close_ts,
+            datetime="",
+            symbol="BTC/USDT:USDT",
+            side="sell",
+            qty=-1.0,
+            price=20.0,
+            pnl=0.0,
+            pnl_status="pending",
+            fees={"currency": "USDT", "cost": 0.1},
+            raw=[{"source": "fetch_my_trades", "data": {"cost": "2.0"}}],
+            pb_order_type="close_grid_long",
+            position_side="long",
+            client_order_id="cid-close",
+        ),
+    ]
+    manager = FillEventsManager(
+        exchange="example",
+        user="default",
+        fetcher=_StaticFetcher(events),
+        cache_path=tmp_path / "fills_synthetic_exact",
+    )
+
+    with caplog.at_level(logging.WARNING, logger=fem.logger.name):
+        await manager.refresh()
+
+    close = manager.get_events(symbol="BTC/USDT:USDT")[-1]
+    assert close.pnl_status == "complete"
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+    assert close.pnl_synthetic_reason == ""
+    assert close.pnl == pytest.approx(0.9)
+    assert not FillEventsManager.pending_pnl_events(manager.get_events())
+    assert any(
+        "synthesized missing realized PnL from fill events" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_manager_synthesizes_degraded_pnl_when_cache_starts_mid_position(
+    tmp_path: Path,
+):
+    event = dict(
+        id="orphan-close",
+        timestamp=1_700_000_000_000,
+        datetime="",
+        symbol="ETH/USDT:USDT",
+        side="sell",
+        qty=-2.0,
+        price=1500.0,
+        pnl=0.42,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-close",
+    )
+    manager = FillEventsManager(
+        exchange="example",
+        user="default",
+        fetcher=_StaticFetcher([event]),
+        cache_path=tmp_path / "fills_synthetic_degraded",
+    )
+
+    await manager.refresh()
+
+    close = manager.get_events(symbol="ETH/USDT:USDT")[0]
+    assert close.pnl_status == "complete"
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_DEGRADED
+    assert close.pnl_synthetic_reason == "incomplete_position_basis"
+    assert close.pnl == pytest.approx(0.42)
+    assert not FillEventsManager.pending_pnl_events(manager.get_events())
+
+
+@pytest.mark.asyncio
+async def test_manager_preserves_synthetic_pnl_when_later_fetch_is_still_pending(
+    tmp_path: Path,
+):
+    entry_ts = 1_700_000_000_000
+    close_ts = entry_ts + 1_000
+    entry = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="buy",
+        qty=5.0,
+        price=10.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
+    close = dict(
+        id="close",
+        timestamp=close_ts,
+        datetime="",
+        symbol="SOL/USDT:USDT",
+        side="sell",
+        qty=-2.0,
+        price=12.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-close",
+    )
+    later_pending = dict(close)
+    later_pending["pnl"] = 0.0
+    fetcher = _SequencedFetcher([[entry, close], [later_pending]])
+    manager = FillEventsManager(
+        exchange="example",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "fills_synthetic_preserved",
+    )
+
+    await manager.refresh()
+    await manager.refresh_latest()
+
+    close_event = manager.get_events(symbol="SOL/USDT:USDT")[-1]
+    assert close_event.pnl_status == "complete"
+    assert close_event.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+    assert close_event.pnl == pytest.approx(4.0)
 
 
 @pytest.mark.asyncio

@@ -63,6 +63,46 @@ def test_handle_pull_glob_archives_remote_matches_and_extracts_to_parent(tmp_pat
     assert not local_archive.exists()
 
 
+def test_merge_path_merges_directories_and_replaces_same_leaf_files(tmp_path):
+    local_dest = tmp_path / "caches" / "fill_events"
+    local_dest.joinpath("hyperliquid", "local_bot").mkdir(parents=True)
+    local_dest.joinpath("hyperliquid", "local_bot", "fills.jsonl").write_text("local-only")
+    local_dest.joinpath("hyperliquid", "shared_bot").mkdir(parents=True)
+    local_dest.joinpath("hyperliquid", "shared_bot", "fills.jsonl").write_text("old")
+
+    extracted = tmp_path / "extract" / "fill_events" / "hyperliquid"
+    extracted.joinpath("remote_bot").mkdir(parents=True)
+    extracted.joinpath("remote_bot", "fills.jsonl").write_text("remote-only")
+    extracted.joinpath("shared_bot").mkdir(parents=True)
+    extracted.joinpath("shared_bot", "fills.jsonl").write_text("new")
+
+    sync_tar._merge_path(extracted, local_dest / "hyperliquid")
+
+    assert local_dest.joinpath("hyperliquid", "local_bot", "fills.jsonl").read_text() == "local-only"
+    assert local_dest.joinpath("hyperliquid", "remote_bot", "fills.jsonl").read_text() == "remote-only"
+    assert local_dest.joinpath("hyperliquid", "shared_bot", "fills.jsonl").read_text() == "new"
+    assert not extracted.exists()
+
+
+def test_merge_path_refuses_to_replace_local_directory_with_remote_file(tmp_path):
+    source = tmp_path / "extract" / "hyperliquid"
+    source.parent.mkdir()
+    source.write_text("remote file")
+    target = tmp_path / "caches" / "fill_events" / "hyperliquid"
+    target.mkdir(parents=True)
+    target.joinpath("local_bot").mkdir()
+
+    try:
+        sync_tar._merge_path(source, target)
+    except IsADirectoryError:
+        pass
+    else:
+        raise AssertionError("expected IsADirectoryError")
+
+    assert target.joinpath("local_bot").is_dir()
+    assert source.read_text() == "remote file"
+
+
 def test_create_archive_supports_single_file(tmp_path):
     source = tmp_path / "template.json"
     source.write_text('{"ok": true}')

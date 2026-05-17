@@ -48,6 +48,10 @@ _pnl_discrepancy_last_delta: Dict[str, float] = {}  # exchange:user -> last delt
 _PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta unchanged
 _PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Consider delta "changed" if >10%
 _PNL_DISCREPANCY_MIN_SECONDS = 900.0  # Minimum seconds between logs even if delta changes
+PNL_SOURCE_AUTHORITATIVE = "authoritative"
+PNL_SOURCE_PENDING = "pending"
+PNL_SOURCE_SYNTHETIC_EXACT = "synthetic_fill_reconstruction_exact"
+PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
 
 
 class FillEventCacheDiskFullError(RuntimeError):
@@ -295,6 +299,74 @@ def _fee_cost(fees: Optional[Sequence]) -> float:
     return total
 
 
+def _payload_pnl_source(payload: Dict[str, object]) -> str:
+    source = str(payload.get("pnl_source") or "").strip().lower()
+    if source:
+        return source
+    status = _payload_pnl_status(payload)
+    return PNL_SOURCE_PENDING if status == "pending" else PNL_SOURCE_AUTHORITATIVE
+
+
+def _is_synthetic_pnl_source(source: object) -> bool:
+    return str(source or "").lower().startswith("synthetic_")
+
+
+def _raw_quote_value(payload: Dict[str, object]) -> float:
+    for raw in _normalize_raw_field(payload.get("raw")):
+        data = raw.get("data") if isinstance(raw, dict) else raw
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        info = info if isinstance(info, dict) else {}
+        for source in (data, info):
+            for key in (
+                "cost",
+                "value",
+                "execValue",
+                "exec_value",
+                "tradeValue",
+                "trade_value",
+                "notional",
+            ):
+                try:
+                    value = abs(float(source.get(key) or 0.0))
+                except Exception:
+                    value = 0.0
+                if value > 0.0:
+                    return value
+    return 0.0
+
+
+def _payload_contract_multiplier(payload: Dict[str, object]) -> float:
+    try:
+        explicit = float(payload.get("c_mult") or payload.get("contract_size") or 0.0)
+    except Exception:
+        explicit = 0.0
+    if explicit > 0.0:
+        return explicit
+
+    try:
+        qty_abs = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
+        price = float(payload.get("price") or 0.0)
+    except Exception:
+        return 1.0
+    denominator = qty_abs * price
+    if denominator <= 0.0:
+        return 1.0
+    quote_value = _raw_quote_value(payload)
+    if quote_value <= 0.0:
+        return 1.0
+    return quote_value / denominator
+
+
+def _payload_signed_effective_qty(payload: Dict[str, object]) -> float:
+    try:
+        qty = float(payload.get("qty") or payload.get("amount") or 0.0)
+    except Exception:
+        qty = 0.0
+    return qty * _payload_contract_multiplier(payload)
+
+
 def ensure_qty_signage(events: List[Dict[str, object]]) -> None:
     """Normalize qty sign convention: buys positive, sells negative."""
     for ev in events:
@@ -526,6 +598,8 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
             aggregated[key]["qty"] = float(ev.get("qty", 0.0))
             aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
             aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
+            aggregated[key]["pnl_source"] = _payload_pnl_source(ev)
+            aggregated[key]["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason") or "")
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
             aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
@@ -544,6 +618,11 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
             agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
             if _payload_pnl_status(ev) == "pending":
                 agg["pnl_status"] = "pending"
+                agg["pnl_source"] = PNL_SOURCE_PENDING
+            if _is_synthetic_pnl_source(_payload_pnl_source(ev)):
+                agg["pnl_source"] = _payload_pnl_source(ev)
+                if ev.get("pnl_synthetic_reason"):
+                    agg["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason"))
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
             agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
@@ -696,6 +775,8 @@ class FillEvent:
     psize: float = 0.0
     pprice: float = 0.0
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
+    pnl_source: str = PNL_SOURCE_AUTHORITATIVE
+    pnl_synthetic_reason: str = ""
 
     @property
     def key(self) -> str:
@@ -713,6 +794,8 @@ class FillEvent:
             "price": self.price,
             "pnl": self.pnl,
             "pnl_status": self.pnl_status,
+            "pnl_source": self.pnl_source,
+            "pnl_synthetic_reason": self.pnl_synthetic_reason,
             "fees": self.fees,
             "pb_order_type": self.pb_order_type,
             "position_side": self.position_side,
@@ -754,6 +837,15 @@ class FillEvent:
             price=float(data["price"]),
             pnl=float(data["pnl"]),
             pnl_status=str(data.get("pnl_status") or "complete").lower(),
+            pnl_source=(
+                str(data.get("pnl_source") or "").lower()
+                or (
+                    PNL_SOURCE_PENDING
+                    if str(data.get("pnl_status") or "complete").lower() == "pending"
+                    else PNL_SOURCE_AUTHORITATIVE
+                )
+            ),
+            pnl_synthetic_reason=str(data.get("pnl_synthetic_reason") or ""),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -2220,7 +2312,11 @@ class FillEventsManager:
                 payload = [ev.to_dict() for ev in self._events]
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
+                synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
+                if synthesized_days:
+                    self.cache.save_days(self._events_for_days(self._events, synthesized_days))
+                    self.cache.update_metadata_from_events(self._events)
 
             logger.debug(
                 "[fills] ensure_loaded: %d cached events (dropped %d without raw)",
@@ -2228,6 +2324,124 @@ class FillEventsManager:
                 dropped,
             )
             self._loaded = True
+
+    def _synthesize_missing_pnls(self, payload: List[Dict[str, object]]) -> set[str]:
+        if not payload:
+            return set()
+
+        grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for ev in payload:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            grouped[key].append(ev)
+
+        synthesized: List[Dict[str, object]] = []
+        days_touched: set[str] = set()
+
+        for key, evs in grouped.items():
+            evs.sort(key=lambda ev: ev.get("timestamp", 0))
+            psize = 0.0
+            pprice = 0.0
+            basis_complete = True
+
+            for ev in evs:
+                signed_qty = _payload_signed_effective_qty(ev)
+                price = float(ev.get("price") or 0.0)
+                add_amt, reduce_amt = _compute_add_reduce(key[1], signed_qty)
+                status = _payload_pnl_status(ev)
+
+                if status == "pending":
+                    reason = ""
+                    source = PNL_SOURCE_SYNTHETIC_EXACT
+                    synthetic_pnl = float(ev.get("pnl") or 0.0)
+
+                    if reduce_amt > 0.0 and price > 0.0 and psize > 0.0 and pprice > 0.0:
+                        closing_qty = min(reduce_amt, psize)
+                        if key[1] == "short":
+                            gross = (pprice - price) * closing_qty
+                        else:
+                            gross = (price - pprice) * closing_qty
+                        synthetic_pnl = gross - _fee_cost(ev.get("fees"))
+                        if not basis_complete:
+                            source = PNL_SOURCE_SYNTHETIC_DEGRADED
+                            reason = "prior_position_basis_incomplete"
+                        elif reduce_amt > psize + 1e-12:
+                            source = PNL_SOURCE_SYNTHETIC_DEGRADED
+                            reason = "close_exceeds_known_position"
+                    elif reduce_amt > 0.0:
+                        source = PNL_SOURCE_SYNTHETIC_DEGRADED
+                        reason = "incomplete_position_basis"
+                        basis_complete = False
+                    else:
+                        source = PNL_SOURCE_SYNTHETIC_DEGRADED
+                        reason = "non_reducing_pending_pnl"
+
+                    ev["pnl"] = float(synthetic_pnl)
+                    ev["pnl_status"] = "complete"
+                    ev["pnl_source"] = source
+                    ev["pnl_synthetic_reason"] = reason
+                    synthesized.append(ev)
+                    try:
+                        days_touched.add(_day_key(int(ev["timestamp"])))
+                    except Exception:
+                        pass
+
+                if add_amt > 0.0 and price > 0.0:
+                    if psize <= 0.0:
+                        pprice = price
+                        basis_complete = True
+                    else:
+                        pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
+                    psize += add_amt
+
+                if reduce_amt > 0.0:
+                    if psize <= 0.0:
+                        basis_complete = False
+                    elif reduce_amt > psize + 1e-12:
+                        psize = 0.0
+                        pprice = 0.0
+                        basis_complete = False
+                    else:
+                        psize = max(0.0, psize - reduce_amt)
+                        if psize <= 1e-12:
+                            psize = 0.0
+                            pprice = 0.0
+                            basis_complete = True
+
+        if synthesized:
+            exact_count = sum(
+                1 for ev in synthesized if ev.get("pnl_source") == PNL_SOURCE_SYNTHETIC_EXACT
+            )
+            degraded_count = len(synthesized) - exact_count
+            examples = ", ".join(
+                f"{str(ev.get('id'))[:12]}:{ev.get('symbol')}:{ev.get('position_side')}:"
+                f"{ev.get('pnl_source')}:{ev.get('pnl_synthetic_reason') or 'basis_complete'}"
+                for ev in synthesized[:5]
+            )
+            suffix = f", +{len(synthesized) - 5} more" if len(synthesized) > 5 else ""
+            degraded_note = (
+                "cache_may_start_mid_position_accurate_pprice_psize_not_computable"
+                if degraded_count
+                else "none"
+            )
+            logger.warning(
+                "[fills] synthesized missing realized PnL from fill events | exchange=%s user=%s "
+                "events=%d exact=%d degraded=%d action=continue_with_synthetic_pnl "
+                "replacement=authoritative_pnl_will_overwrite_if_later_available "
+                "degraded_note=%s examples=%s%s",
+                self.exchange,
+                self.user,
+                len(synthesized),
+                exact_count,
+                degraded_count,
+                degraded_note,
+                examples,
+                suffix,
+            )
+
+        return days_touched
 
     @staticmethod
     def _bybit_event_trade_rows(event: FillEvent) -> List[Dict[str, object]]:
@@ -2625,6 +2839,18 @@ class FillEventsManager:
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
                     continue
+                if (
+                    prev is not None
+                    and event.pnl_pending
+                    and not prev.pnl_pending
+                    and _is_synthetic_pnl_source(prev.pnl_source)
+                ):
+                    merged = event.to_dict()
+                    merged["pnl"] = prev.pnl
+                    merged["pnl_status"] = prev.pnl_status
+                    merged["pnl_source"] = prev.pnl_source
+                    merged["pnl_synthetic_reason"] = prev.pnl_synthetic_reason
+                    event = FillEvent.from_dict(merged)
                 updated_map[event.id] = event
                 if source_key:
                     source_ids_index[source_key].add(event.id)
@@ -2691,7 +2917,9 @@ class FillEventsManager:
             payload = [ev.to_dict() for ev in self._events]
             ensure_qty_signage(payload)
             compute_psize_pprice(payload)
+            synthesized_days = self._synthesize_missing_pnls(payload)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
+            all_days_persisted.update(synthesized_days)
 
             # Re-persist touched days with annotated psize/pprice values
             if all_days_persisted:
