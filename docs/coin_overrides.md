@@ -8,13 +8,14 @@ resolved, and shows examples for both inline and file-based overrides.
 
 Allowed fields are intentionally limited:
 
-- **Bot params** (per side): grid spacing, double-down factors, EMA spans, initial qty/EMA dist,
-  trailing/unstuck settings, wallet exposure limits, selected risk knobs (see the allowlist in
-  `src/config/overrides.py:get_allowed_modifications()` for the full set).
+- **Bot params** (per side): wallet exposure limits, unstuck settings, selected risk knobs, and
+  nested active strategy parameters under `bot.<side>.strategy.<strategy_kind>.*` (see the
+  allowlist in `src/config/overrides.py:get_allowed_modifications()` for the full set).
 - **Live flags**: `forced_mode_long`, `forced_mode_short`, `leverage`.
 
 Not overrideable: approved/ignored coins, exchange settings, arbitrary new keys—anything outside the
-allowlist is ignored.
+allowlist is ignored. Flat v7-style strategy keys such as `entry_grid_spacing_pct` are rejected;
+use the nested v8 strategy path instead.
 
 ## How overrides are loaded
 
@@ -42,11 +43,23 @@ base values are used.
     "XRP": {
       "bot": {
         "long": {
-          "entry_grid_spacing_pct": 0.05,
+          "strategy": {
+            "trailing_martingale": {
+              "entry": {
+                "threshold_base_pct": 0.05
+              }
+            }
+          },
           "wallet_exposure_limit": 0.18
         },
         "short": {
-          "entry_grid_spacing_pct": 0.055
+          "strategy": {
+            "trailing_martingale": {
+              "entry": {
+                "threshold_base_pct": 0.055
+              }
+            }
+          }
         }
       },
       "live": {
@@ -78,13 +91,27 @@ Main config:
 {
   "bot": {
     "long": {
-      "entry_grid_spacing_pct": 0.021,
-      "entry_initial_ema_dist": 0.001,
+      "strategy": {
+        "trailing_martingale": {
+          "entry": {
+            "threshold_base_pct": 0.021,
+            "initial_ema_dist": 0.001
+          }
+        }
+      },
       "wallet_exposure_limit": 0.12
     },
     "short": {
-      "entry_grid_spacing_pct": 0.019,
-      "close_grid_markup_start": 0.004
+      "strategy": {
+        "trailing_martingale": {
+          "entry": {
+            "threshold_base_pct": 0.019
+          },
+          "close": {
+            "threshold_base_pct": 0.004
+          }
+        }
+      }
     }
   },
   "live": {
@@ -100,13 +127,14 @@ Main config:
   value is used.
 - Ensure `live.base_config_path` is set so relative `override_config_path` values resolve.
 - Verify the override file changes *allowed* fields versus the base config; disallowed keys are
-  dropped.
+  dropped unless they are rejected flat strategy keys.
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
   main config.
 
 ## Common pitfalls
 
 - Bad paths: `override_config_path` not found → override silently empty.
-- Disallowed keys: fields outside the allowlist are ignored.
+- Disallowed keys: fields outside the allowlist are ignored; flat strategy keys are rejected with an
+  error so stale v7-style overrides cannot disappear silently.
 - No diff: if the override matches the base on allowed fields, nothing is applied.
 - Mis-keyed coins: if a coin name cannot be mapped to an exchange symbol, the override is discarded.

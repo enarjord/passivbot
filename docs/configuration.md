@@ -23,7 +23,8 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.
 - **filter_by_min_effective_cost**: When `true`, skip coins whose projected initial entry
-  (balance × wallet_exposure_limit × entry_initial_qty_pct, including WE excess allowance)
+  (balance × wallet_exposure_limit × the active strategy initial sizing fraction, including WE
+  excess allowance)
   would fall below the exchange’s effective minimum cost.
 - **dynamic_wel_by_tradability**: Backtest-only WEL denominator mode.  
   - `true` (default): `wallet_exposure_limit = total_wallet_exposure_limit / min(n_positions, n_tradable_max)` where `n_tradable_max` is the highest number of coins that have had real candles at any timestep so far (non-shrinking).  
@@ -246,6 +247,8 @@ The canonical V8 strategy kind is `trailing_martingale`. It replaces the v7 `tra
   - See `ema_span_0`/`ema_span_1`.
 - **strategy.trailing_martingale.entry.initial_qty_pct**:
   - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
+  - This is the initial sizing fraction used by min-effective-cost checks when
+    `live.strategy_kind = "trailing_martingale"`.
 
 ### Trailing Martingale Closes
 
@@ -392,7 +395,11 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
-- **filter_by_min_effective_cost**: If `true`, disallows coins where `balance * WE_limit * entry_initial_qty_pct < min_effective_cost`.
+- **filter_by_min_effective_cost**: If `true`, disallows coins where
+  `balance * WE_limit * strategy_initial_sizing_fraction < min_effective_cost`.
+  For `trailing_martingale`, the sizing fraction is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
+  `bot.<side>.strategy.ema_anchor.base_qty_pct`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
   - Choices: `[m (manual), gs (graceful_stop), p (panic), t (take_profit_only)]`.

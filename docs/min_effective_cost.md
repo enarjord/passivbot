@@ -16,13 +16,16 @@ effective min cost. If it cannot meet the minimum, the symbol is excluded (leadi
 
 ## How is the initial entry computed?
 
-For most perpetuals, `initial_notional ≈ balance * (twel / n_positions) * (1 + we_allowance) * entry_initial_qty_pct`.
+For most perpetuals, `initial_notional ≈ balance * (twel / n_positions) * (1 + we_allowance) * strategy_initial_sizing_fraction`.
 
 With:
 - `balance`: current account balance in quote currency (e.g., USDT/USDC).
 - `twel = total_wallet_exposure_limit`: side-level cap; divided by `n_positions` to get per-position WE.
 - `we_allowance = risk_we_excess_allowance_pct`: optional headroom multiplier on per-position WEL.
-- `entry_initial_qty_pct`: fraction of the per-position exposure used for the first order.
+- `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
+  order. For `live.strategy_kind = "trailing_martingale"`, this is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for
+  `live.strategy_kind = "ema_anchor"`, this is `bot.<side>.strategy.ema_anchor.base_qty_pct`.
 
 
 ## Pass/fail check
@@ -37,15 +40,15 @@ If this fails, the symbol is dropped, unless `filter_by_min_effective_cost` is s
 
 Rearrange the inequality to solve for the minimum balance:
 
-`balance_required ≈ effective_min_cost / ((twel / n_positions) * (1 + we_allowance) * entry_initial_qty_pct)`  
+`balance_required ≈ effective_min_cost / ((twel / n_positions) * (1 + we_allowance) * strategy_initial_sizing_fraction)`
 or  
-`balance_required ≈ effective_min_cost / (effective_wel * entry_initial_qty_pct)`
+`balance_required ≈ effective_min_cost / (effective_wel * strategy_initial_sizing_fraction)`
 
 Use the highest effective_min_cost among the symbols you want to trade. Example:
 - `effective_min_cost = 10 USDT`
 - `total_wallet_exposure_limit = 0.6`, `n_positions = 3` → `wallet_exposure_limit = 0.2`
 - `risk_we_excess_allowance_pct = 0.5` (effective_wel = 0.2 * (1 + 0.5) = 0.3)
-- `entry_initial_qty_pct = 0.015`
+- `strategy_initial_sizing_fraction = 0.015`
 → `balance_required >= 10 / (0.3 * 0.015) ≈ 2,222.22 USDT`
 
 If you run multiple positions concurrently, ensure your balance comfortably exceeds this threshold so
@@ -54,7 +57,7 @@ other risk checks (total exposure, n_positions) aren’t immediately binding.
 ## Practical tips
 
 - To lower the required balance (while preserving filtering):
-  - Increase `entry_initial_qty_pct` (if risk allows).
+  - Increase the active strategy initial sizing fraction (if risk allows).
   - Increase `wallet_exposure_limit` (raises per-position sizing; increases risk).
   - Reduce `n_positions` so fewer symbols compete for balance.
 - Avoid disabling `filter_by_min_effective_cost` unless you accept higher initial qty.
