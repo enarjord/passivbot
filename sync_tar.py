@@ -93,6 +93,29 @@ def extract_archive(archive_path: Path, destination: Path) -> None:
     print("Extraction complete.")
 
 
+def _merge_path(source: Path, target: Path) -> None:
+    if source.is_dir() and not source.is_symlink():
+        if target.exists() or target.is_symlink():
+            if target.is_dir() and not target.is_symlink():
+                for child in list(source.iterdir()):
+                    _merge_path(child, target / child.name)
+                source.rmdir()
+                return
+            target.unlink()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(source), target)
+        return
+
+    if target.exists() or target.is_symlink():
+        if target.is_dir() and not target.is_symlink():
+            raise IsADirectoryError(
+                f"Refusing to replace local directory with remote file: {target}"
+            )
+        target.unlink()
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(source), target)
+
+
 def scp_transfer(local_path: Path, remote: str, remote_path: str) -> None:
     _run(["scp", str(local_path), f"{remote}:{remote_path}"])
 
@@ -182,14 +205,8 @@ def handle_pull(args: argparse.Namespace) -> None:
         extract_archive(local_archive, local_dest)
         extracted_root = local_dest / remote_base
         if not _contains_glob(remote_base) and extracted_root.is_dir():
-            for child in extracted_root.iterdir():
-                target = local_dest / child.name
-                if target.exists():
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-                shutil.move(str(child), target)
+            for child in list(extracted_root.iterdir()):
+                _merge_path(child, local_dest / child.name)
             extracted_root.rmdir()
         local_archive.unlink()
         print(f"Removed downloaded archive {local_archive}")
