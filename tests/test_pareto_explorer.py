@@ -195,6 +195,25 @@ def test_load_candidates_accepts_run_or_pareto_dir(sample_pareto_dir: Path):
     assert [spec.metric for spec in specs_from_run] == ["metric_a", "metric_b", "metric_c"]
 
 
+def test_load_candidates_ignores_non_candidate_json_artifacts(sample_pareto_dir: Path):
+    (sample_pareto_dir / "selection.json").write_text(
+        json.dumps({"selected_count": 4, "selected": []}) + "\n",
+        encoding="utf-8",
+    )
+
+    pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
+
+    assert pareto_dir == sample_pareto_dir.resolve()
+    assert len(candidates) == 4
+    assert [candidate.path.name for candidate in candidates] == [
+        "a_extreme.json",
+        "b_extreme.json",
+        "balanced.json",
+        "c_extreme.json",
+    ]
+    assert [spec.metric for spec in specs] == ["metric_a", "metric_b", "metric_c"]
+
+
 def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
     _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
     filtered, limits = filter_candidates(
