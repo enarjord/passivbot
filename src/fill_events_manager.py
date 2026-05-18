@@ -4672,7 +4672,7 @@ class KucoinFetcher(BaseFetcher):
                 unmatched_positions.extend(pos_list)
                 continue
 
-            symbol_closes = closes_by_symbol[symbol]
+            symbol_closes = sorted(closes_by_symbol[symbol], key=lambda c: c["timestamp"])
             for p in pos_list:
                 p_ts = p.get("lastUpdateTimestamp", 0)
                 p_pnl = float(p.get("realizedPnl", 0.0) or 0.0)
@@ -4689,7 +4689,10 @@ class KucoinFetcher(BaseFetcher):
                     unmatched_positions.append(p)
                     continue
 
-                marker = max(matching_fills, key=lambda c: c["timestamp"])
+                marker = min(
+                    matching_fills,
+                    key=lambda c: (abs(int(c["timestamp"]) - int(p_ts)), -int(c["timestamp"])),
+                )
                 marker_event = events[marker["id"]]
                 info = p.get("info", {})
                 info = info if isinstance(info, dict) else {}
@@ -4697,7 +4700,7 @@ class KucoinFetcher(BaseFetcher):
                 marker_event["pnl_cycle_source_id"] = str(p.get("id") or info.get("closeId") or "")
                 marker_event["pnl_status"] = "pending"
                 marker_event["pnl_source"] = PNL_SOURCE_PENDING
-                assigned_trade_ids.update(str(fill["id"]) for fill in matching_fills)
+                assigned_trade_ids.add(str(marker["id"]))
 
         # Log unmatched positions for debugging
         if unmatched_positions:

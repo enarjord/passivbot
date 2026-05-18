@@ -2421,6 +2421,93 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
 
 
 @pytest.mark.asyncio
+async def test_manager_reconciles_multiple_closed_cycles_from_markers(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_multiple_cycles_reconciled"
+    entry_ts = 1_700_000_000_000
+    events = [
+        dict(
+            id="entry-1",
+            timestamp=entry_ts,
+            datetime="",
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            pnl=0.0,
+            pnl_status="complete",
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id="cid-entry-1",
+        ),
+        dict(
+            id="close-1",
+            timestamp=entry_ts + 60_000,
+            datetime="",
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=-1.0,
+            price=11.0,
+            pnl=0.0,
+            pnl_status="pending",
+            pb_order_type="close_grid_long",
+            position_side="long",
+            client_order_id="cid-close-1",
+            pnl_cycle_realized_pnl=1.0,
+            pnl_cycle_source_id="kucoin-cycle-1",
+        ),
+        dict(
+            id="entry-2",
+            timestamp=entry_ts + 120_000,
+            datetime="",
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+            price=20.0,
+            pnl=0.0,
+            pnl_status="complete",
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id="cid-entry-2",
+        ),
+        dict(
+            id="close-2",
+            timestamp=entry_ts + 180_000,
+            datetime="",
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=-1.0,
+            price=22.0,
+            pnl=0.0,
+            pnl_status="pending",
+            pb_order_type="close_grid_long",
+            position_side="long",
+            client_order_id="cid-close-2",
+            pnl_cycle_realized_pnl=2.0,
+            pnl_cycle_source_id="kucoin-cycle-2",
+        ),
+    ]
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher(events),
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+
+    stored = manager.get_events(symbol="TON/USDT:USDT")
+    by_id = {ev.id: ev for ev in stored}
+    assert by_id["close-1"].pnl == pytest.approx(1.0)
+    assert by_id["close-2"].pnl == pytest.approx(2.0)
+    assert sum(ev.pnl for ev in stored if "close" in ev.pb_order_type) == pytest.approx(3.0)
+    assert by_id["close-1"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+    assert by_id["close-2"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+    assert not FillEventsManager.synthetic_pnl_events(stored)
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_latest_keeps_synthetic_pnl_in_enrichment_window(
     tmp_path: Path,
 ):
@@ -3756,6 +3843,40 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert "pnl_cycle_realized_pnl" not in events["btc-close-1"]
     assert events["btc-close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(100.0)
     assert events["btc-close-3"]["pnl_cycle_realized_pnl"] == pytest.approx(50.0)
+
+
+def test_kucoin_match_pnls_rapid_lifecycles_match_nearest_close():
+    """Test that rapid independent lifecycles inside the match window get distinct markers."""
+    fetcher = KucoinFetcher(api=None)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    closes = [
+        {"id": "close-1", "symbol": "TON/USDT:USDT", "timestamp": now_ms + 60_000, "qty": -1.0},
+        {"id": "close-2", "symbol": "TON/USDT:USDT", "timestamp": now_ms + 180_000, "qty": -1.0},
+    ]
+    positions = [
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 60_000,
+            "realizedPnl": 1.0,
+        },
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 180_000,
+            "realizedPnl": 2.0,
+        },
+    ]
+    events = {
+        "close-1": {"id": "close-1", "pnl": 0.0, "symbol": "TON/USDT:USDT"},
+        "close-2": {"id": "close-2", "pnl": 0.0, "symbol": "TON/USDT:USDT"},
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    assert events["close-1"]["pnl_cycle_realized_pnl"] == pytest.approx(1.0)
+    assert events["close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(2.0)
+    assert events["close-1"]["pnl_status"] == "pending"
+    assert events["close-2"]["pnl_status"] == "pending"
 
 
 @pytest.mark.asyncio
