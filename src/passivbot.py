@@ -7206,6 +7206,44 @@ class Passivbot:
         }
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
 
+    def symbols_requiring_market_sizing(self) -> set[str]:
+        """Return symbols whose order sizing metadata must be complete."""
+        markets = getattr(self, "markets_dict", {}) or {}
+        eligible = getattr(self, "eligible_symbols", None)
+        if eligible is None:
+            symbols = set(markets)
+        else:
+            symbols = set(eligible)
+
+        symbols.update(getattr(self, "active_symbols", []) or [])
+        symbols.update((getattr(self, "coin_overrides", {}) or {}).keys())
+
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        if isinstance(approved, dict):
+            for side_symbols in approved.values():
+                symbols.update(side_symbols or [])
+
+        positions = getattr(self, "positions", {}) or {}
+        if isinstance(positions, dict):
+            for symbol, sides in positions.items():
+                if not isinstance(sides, dict):
+                    continue
+                for pside in ("long", "short"):
+                    side = sides.get(pside, {})
+                    if not isinstance(side, dict):
+                        continue
+                    if float(side.get("size", 0.0) or 0.0) != 0.0:
+                        symbols.add(symbol)
+                        break
+
+        open_orders = getattr(self, "open_orders", {}) or {}
+        if isinstance(open_orders, dict):
+            for symbol, orders in open_orders.items():
+                if orders:
+                    symbols.add(symbol)
+
+        return {symbol for symbol in symbols if symbol in markets}
+
     def get_symbol_id(self, symbol):
         """Return the exchange-native identifier for `symbol`, caching defaults."""
         try:
