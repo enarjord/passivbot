@@ -665,14 +665,6 @@ def _check_pagination_progress(
     return params_key
 
 
-def _natural_sort_key(value: object) -> Tuple[int, object]:
-    text = str(value or "")
-    try:
-        return (0, int(text))
-    except (TypeError, ValueError):
-        return (1, text)
-
-
 # ---------------------------------------------------------------------------
 # Data model
 # ---------------------------------------------------------------------------
@@ -2519,15 +2511,10 @@ class FillEventsManager:
         observation: PnlObservation,
         lifecycle: Dict[str, object],
     ) -> bool:
-        if observation.close_time is not None:
-            if abs(int(lifecycle["end_ts"]) - int(observation.close_time)) > 5_000:
-                return False
-        elif observation.update_time is not None:
-            if (
-                abs(int(observation.update_time) - int(lifecycle["end_ts"]))
-                > KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS
-            ):
-                return False
+        if observation.close_time is None:
+            return False
+        if abs(int(lifecycle["end_ts"]) - int(observation.close_time)) > 5_000:
+            return False
         if observation.open_time is not None:
             if abs(int(lifecycle["start_ts"]) - int(observation.open_time)) > 5_000:
                 return False
@@ -2617,37 +2604,6 @@ class FillEventsManager:
                     f"fills={fill_count} delta={delta:.8f}"
                 )
 
-        remaining_by_key: Dict[Tuple[str, str], List[PnlObservation]] = defaultdict(list)
-        for obs in cycle_observations:
-            if id(obs) not in matched_observation_ids and obs.close_time is None:
-                remaining_by_key[(obs.symbol, obs.position_side)].append(obs)
-
-        for key, obs_group in remaining_by_key.items():
-            ordered = self._observations_in_stable_order(obs_group)
-            candidates = [
-                lifecycle
-                for lifecycle in lifecycles_by_key.get(key, [])
-                if id(lifecycle) not in used_lifecycle_ids
-            ]
-            if ordered is None or len(ordered) != len(candidates):
-                continue
-            candidates = sorted(candidates, key=lambda lifecycle: int(lifecycle["end_ts"]))
-            for obs, lifecycle in zip(ordered, candidates):
-                if not self._observation_matches_lifecycle(obs, lifecycle):
-                    continue
-                touched, delta, fill_count = self._apply_cycle_observation(lifecycle, obs)
-                days_touched.update(touched)
-                used_lifecycle_ids.add(id(lifecycle))
-                matched_observation_ids.add(id(obs))
-                reconciled_cycles += 1
-                reconciled_fills += fill_count
-                total_delta += delta
-                if len(examples) < 5:
-                    examples.append(
-                        f"{obs.source_id[:12] or '-'}:{obs.symbol}:{obs.position_side}:"
-                        f"fills={fill_count} delta={delta:.8f}"
-                    )
-
         if reconciled_cycles:
             suffix = f", +{reconciled_cycles - 5} more" if reconciled_cycles > 5 else ""
             logger.warning(
@@ -2686,16 +2642,6 @@ class FillEventsManager:
             )
 
         return days_touched
-
-    @staticmethod
-    def _observations_in_stable_order(
-        observations: Sequence[PnlObservation],
-    ) -> Optional[List[PnlObservation]]:
-        if not observations:
-            return []
-        if all(obs.source_id for obs in observations):
-            return sorted(observations, key=lambda obs: _natural_sort_key(obs.source_id))
-        return None
 
     @staticmethod
     def _bybit_event_trade_rows(event: FillEvent) -> List[Dict[str, object]]:

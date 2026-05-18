@@ -3926,7 +3926,8 @@ async def test_manager_reconciles_out_of_order_delayed_rows_by_close_time(
 
 
 @pytest.mark.asyncio
-async def test_manager_reconciles_source_id_order_when_close_time_missing(
+async def test_manager_defers_source_id_only_observations_when_close_time_missing(
+    caplog,
     tmp_path: Path,
 ):
     ts = 1_700_000_000_000
@@ -3947,11 +3948,18 @@ async def test_manager_reconciles_source_id_order_when_close_time_missing(
         cache_path=tmp_path / "source_id_order",
     )
 
+    caplog.set_level(logging.WARNING, logger=fem.logger.name)
     await manager.refresh()
 
     by_id = {event.id: event for event in manager.get_events(symbol="TON/USDT:USDT")}
-    assert by_id["close-1"].pnl == pytest.approx(1.25)
-    assert by_id["close-2"].pnl == pytest.approx(2.5)
+    assert by_id["close-1"].pnl == pytest.approx(1.0)
+    assert by_id["close-2"].pnl == pytest.approx(2.0)
+    assert by_id["close-1"].pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+    assert by_id["close-2"].pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+    assert any(
+        "deferred aggregate realized PnL observation matching" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
