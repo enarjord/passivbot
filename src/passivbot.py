@@ -2920,7 +2920,6 @@ class Passivbot:
         )
         self.eligible_symbols = set(eligible)
         self.ineligible_symbols = reasons
-        self.set_market_specific_settings()
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
@@ -2928,11 +2927,13 @@ class Passivbot:
         self.init_coin_overrides()
         # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
+        self.set_market_specific_settings()
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         await self.refresh_authoritative_state()
         self._assert_supported_live_state()
+        self.set_market_specific_settings()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
