@@ -719,7 +719,7 @@ def execute_backtest(payload: BacktestPayload, config: dict):
 
     if payload.backtest_params.get("metrics_only", False):
         payload.hard_stop_plot_data = {}
-        analysis = expand_analysis(analysis_usd, analysis_btc, None, None, config)
+        analysis = expand_analysis(analysis_usd, analysis_btc, None, equities_array, config)
         return None, None, analysis
 
     equities_array = np.asarray(equities_array)
@@ -742,6 +742,33 @@ def execute_backtest(payload: BacktestPayload, config: dict):
             ),
         )
     return fills, equities_array, analysis
+
+
+def calc_backtest_completion_ratio(equities_array, config: dict) -> float | None:
+    backtest_cfg = config.get("backtest", {}) if isinstance(config, dict) else {}
+    if not isinstance(backtest_cfg, dict):
+        return None
+    start_date = backtest_cfg.get("start_date")
+    end_date = backtest_cfg.get("end_date")
+    if start_date is None or end_date is None:
+        return None
+    equities = np.asarray(equities_array)
+    if equities.ndim != 2 or equities.shape[0] == 0 or equities.shape[1] == 0:
+        return None
+    requested_start_ts = int(date_to_ts(str(start_date)))
+    requested_end_ts = int(date_to_ts(format_end_date(str(end_date))))
+    requested_span = requested_end_ts - requested_start_ts
+    if requested_span <= 0:
+        return 1.0
+    first_equity_ts = int(equities[0, 0])
+    last_equity_ts = int(equities[-1, 0])
+    if last_equity_ts < first_equity_ts:
+        return 0.0
+    candle_interval_minutes = int(backtest_cfg.get("candle_interval_minutes", 1) or 1)
+    final_covered_ts = last_equity_ts + max(1, candle_interval_minutes) * 60_000
+    covered_end_ts = min(requested_end_ts, final_covered_ts)
+    covered_span = max(0, covered_end_ts - requested_start_ts)
+    return float(np.clip(covered_span / requested_span, 0.0, 1.0))
 
 
 def subset_backtest_payload(
@@ -1891,6 +1918,9 @@ def expand_analysis(analysis_usd, analysis_btc, fills, equities_array, config):
 
     _add_metrics(analysis_usd, "usd")
     _add_metrics(analysis_btc, "btc")
+    completion_ratio = calc_backtest_completion_ratio(equities_array, config)
+    if completion_ratio is not None:
+        result["backtest_completion_ratio"] = completion_ratio
 
     return result
 
