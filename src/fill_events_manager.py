@@ -4676,7 +4676,18 @@ class KucoinFetcher(BaseFetcher):
 
             symbol_closes = sorted(closes_by_symbol[symbol], key=lambda c: c["timestamp"])
             symbol_cycle_markers = cycle_markers_by_symbol.get(symbol) or symbol_closes
-            for p in sorted(pos_list, key=lambda pos: int(pos.get("lastUpdateTimestamp", 0) or 0)):
+            ordered_positions = self._kucoin_positions_in_cycle_order(pos_list)
+            if ordered_positions is None:
+                unmatched_positions.extend(pos_list)
+                logger.warning(
+                    "[pnl] KucoinFetcher._match_pnls: deferred %d positions-history rows "
+                    "for %s because KuCoin did not provide a stable cycle ordering key",
+                    len(pos_list),
+                    symbol,
+                )
+                continue
+
+            for p in ordered_positions:
                 p_ts = int(p.get("lastUpdateTimestamp", 0) or 0)
                 p_pnl = float(p.get("realizedPnl", 0.0) or 0.0)
 
@@ -4786,6 +4797,66 @@ class KucoinFetcher(BaseFetcher):
             )
             for symbol, markers in markers_by_symbol.items()
         }
+
+    @staticmethod
+    def _kucoin_position_info(position: Dict[str, object]) -> Dict[str, object]:
+        info = position.get("info", {})
+        return info if isinstance(info, dict) else {}
+
+    @classmethod
+    def _kucoin_position_close_id(cls, position: Dict[str, object]) -> Optional[int]:
+        info = cls._kucoin_position_info(position)
+        raw = info.get("closeId")
+        if raw is None and "positionId" not in info:
+            raw = position.get("id")
+        if raw is None:
+            return None
+        try:
+            return int(str(raw))
+        except Exception:
+            return None
+
+    @classmethod
+    def _kucoin_position_close_time(cls, position: Dict[str, object]) -> Optional[int]:
+        info = cls._kucoin_position_info(position)
+        for key in ("closeTime", "closingTime"):
+            value = info.get(key)
+            if value is None:
+                continue
+            try:
+                return int(ensure_millis(float(value)))
+            except Exception:
+                continue
+        return None
+
+    @classmethod
+    def _kucoin_positions_in_cycle_order(
+        cls, positions: Sequence[Dict[str, object]]
+    ) -> Optional[List[Dict[str, object]]]:
+        if len(positions) <= 1:
+            return sorted(positions, key=lambda pos: int(pos.get("lastUpdateTimestamp", 0) or 0))
+
+        close_ids = [cls._kucoin_position_close_id(pos) for pos in positions]
+        if all(close_id is not None for close_id in close_ids) and len(set(close_ids)) == len(
+            close_ids
+        ):
+            return [
+                pos
+                for _close_id, pos in sorted(
+                    zip(close_ids, positions), key=lambda item: int(item[0])
+                )
+            ]
+
+        close_times = [cls._kucoin_position_close_time(pos) for pos in positions]
+        if all(close_time is not None for close_time in close_times):
+            return [
+                pos
+                for _close_time, pos in sorted(
+                    zip(close_times, positions), key=lambda item: int(item[0])
+                )
+            ]
+
+        return None
 
     @staticmethod
     def _position_history_symbol(position: Dict[str, object]) -> str:
