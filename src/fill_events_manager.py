@@ -4663,6 +4663,8 @@ class KucoinFetcher(BaseFetcher):
             events[close["id"]]["pnl_status"] = "pending"
             events[close["id"]]["pnl_source"] = PNL_SOURCE_PENDING
 
+        cycle_markers_by_symbol = self._kucoin_closed_cycle_markers(events.values(), closes)
+
         # Track fills already claimed by a positions_history cycle marker.
         assigned_trade_ids: set[str] = set()
         unmatched_positions = []
@@ -4673,26 +4675,23 @@ class KucoinFetcher(BaseFetcher):
                 continue
 
             symbol_closes = sorted(closes_by_symbol[symbol], key=lambda c: c["timestamp"])
-            for p in pos_list:
-                p_ts = p.get("lastUpdateTimestamp", 0)
+            symbol_cycle_markers = cycle_markers_by_symbol.get(symbol) or symbol_closes
+            for p in sorted(pos_list, key=lambda pos: int(pos.get("lastUpdateTimestamp", 0) or 0)):
+                p_ts = int(p.get("lastUpdateTimestamp", 0) or 0)
                 p_pnl = float(p.get("realizedPnl", 0.0) or 0.0)
 
-                # Find all fills within the match window that haven't been assigned yet
-                matching_fills = [
+                matching_markers = [
                     c
-                    for c in symbol_closes
+                    for c in symbol_cycle_markers
                     if c["id"] not in assigned_trade_ids
-                    and abs(c["timestamp"] - p_ts) < match_window_ms
+                    and abs(int(c["timestamp"]) - p_ts) < match_window_ms
                 ]
 
-                if not matching_fills:
+                if not matching_markers:
                     unmatched_positions.append(p)
                     continue
 
-                marker = min(
-                    matching_fills,
-                    key=lambda c: (abs(int(c["timestamp"]) - int(p_ts)), -int(c["timestamp"])),
-                )
+                marker = matching_markers[0]
                 marker_event = events[marker["id"]]
                 info = p.get("info", {})
                 info = info if isinstance(info, dict) else {}
@@ -4713,6 +4712,80 @@ class KucoinFetcher(BaseFetcher):
                 len(unmatched_positions),
                 f"{total_unmatched_pnl:.4f}",
             )
+
+    @staticmethod
+    def _kucoin_signed_qty(event: Dict[str, object]) -> float:
+        try:
+            raw_qty = float(event.get("qty") or event.get("amount") or 0.0)
+        except Exception:
+            return 0.0
+        qty = abs(raw_qty)
+        side = str(event.get("side") or "").lower()
+        if side == "sell":
+            return -qty
+        if side == "buy":
+            return qty
+        return raw_qty
+
+    @classmethod
+    def _kucoin_closed_cycle_markers(
+        cls,
+        events: Iterable[Dict[str, object]],
+        closes: Sequence[Dict[str, object]],
+    ) -> Dict[str, List[Dict[str, object]]]:
+        close_ids = {str(close.get("id") or "") for close in closes}
+        grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for ev in events:
+            symbol = str(ev.get("symbol") or "")
+            pos_side = str(ev.get("position_side") or ev.get("pside") or "long").lower()
+            if symbol:
+                grouped[(symbol, pos_side)].append(ev)
+
+        markers_by_symbol: Dict[str, List[Dict[str, object]]] = defaultdict(list)
+        covered_close_ids: set[str] = set()
+        for (symbol, pos_side), evs in grouped.items():
+            psize = 0.0
+            cycle_close_ids: List[str] = []
+            for ev in sorted(evs, key=lambda item: item.get("timestamp", 0)):
+                ev_id = str(ev.get("id") or "")
+                signed_qty = cls._kucoin_signed_qty(ev)
+                add_amt, reduce_amt = _compute_add_reduce(pos_side, signed_qty)
+                if add_amt > 0.0:
+                    psize += add_amt
+                if reduce_amt > 0.0:
+                    if psize <= 1e-12:
+                        continue
+                    if ev_id in close_ids:
+                        cycle_close_ids.append(ev_id)
+                    psize = max(0.0, psize - reduce_amt)
+                    if psize <= 1e-12:
+                        psize = 0.0
+                        if ev_id in close_ids:
+                            markers_by_symbol[symbol].append(ev)
+                            covered_close_ids.update(cycle_close_ids)
+                        cycle_close_ids = []
+
+        for (symbol, pos_side), evs in grouped.items():
+            fallback_marker: Optional[Dict[str, object]] = None
+            for ev in sorted(evs, key=lambda item: item.get("timestamp", 0)):
+                ev_id = str(ev.get("id") or "")
+                signed_qty = cls._kucoin_signed_qty(ev)
+                add_amt, reduce_amt = _compute_add_reduce(pos_side, signed_qty)
+                if add_amt > 0.0 and fallback_marker is not None:
+                    markers_by_symbol[symbol].append(fallback_marker)
+                    fallback_marker = None
+                if reduce_amt > 0.0 and ev_id in close_ids and ev_id not in covered_close_ids:
+                    fallback_marker = ev
+            if fallback_marker is not None:
+                markers_by_symbol[symbol].append(fallback_marker)
+
+        return {
+            symbol: sorted(
+                {str(marker.get("id") or ""): marker for marker in markers}.values(),
+                key=lambda marker: marker.get("timestamp", 0),
+            )
+            for symbol, markers in markers_by_symbol.items()
+        }
 
     @staticmethod
     def _position_history_symbol(position: Dict[str, object]) -> str:

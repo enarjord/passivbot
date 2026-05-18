@@ -3651,6 +3651,26 @@ async def test_okx_fetcher_on_batch_callback(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+def _kucoin_test_fill(
+    fill_id: str,
+    ts: int,
+    *,
+    symbol: str = "BTC/USDT:USDT",
+    side: str = "buy",
+    qty: float = 1.0,
+    position_side: str = "long",
+) -> Dict[str, object]:
+    return {
+        "id": fill_id,
+        "symbol": symbol,
+        "timestamp": ts,
+        "side": side,
+        "qty": qty,
+        "position_side": position_side,
+        "pnl": 0.0,
+    }
+
+
 def test_kucoin_match_pnls_marks_cycle_aggregate_on_latest_matching_close():
     """Test that KuCoin positions-history PnL is kept as cycle-scoped metadata."""
     fetcher = KucoinFetcher(api=None)
@@ -3659,18 +3679,8 @@ def test_kucoin_match_pnls_marks_cycle_aggregate_on_latest_matching_close():
 
     # Create closing trades that match a single position close
     closes = [
-        {
-            "id": "close-1",
-            "symbol": "BTC/USDT:USDT",
-            "timestamp": now_ms,
-            "qty": 80.0,  # 80% of position
-        },
-        {
-            "id": "close-2",
-            "symbol": "BTC/USDT:USDT",
-            "timestamp": now_ms + 100,
-            "qty": 20.0,  # 20% of position
-        },
+        _kucoin_test_fill("close-1", now_ms, side="sell", qty=80.0),
+        _kucoin_test_fill("close-2", now_ms + 100, side="sell", qty=20.0),
     ]
 
     # Position history entry with total PnL
@@ -3684,8 +3694,9 @@ def test_kucoin_match_pnls_marks_cycle_aggregate_on_latest_matching_close():
 
     # Events dict that _match_pnls will modify
     events = {
-        "close-1": {"id": "close-1", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
-        "close-2": {"id": "close-2", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+        "entry": _kucoin_test_fill("entry", now_ms - 1_000, side="buy", qty=100.0),
+        "close-1": dict(closes[0]),
+        "close-2": dict(closes[1]),
     }
 
     fetcher._match_pnls(closes, positions, events)
@@ -3706,12 +3717,13 @@ def test_kucoin_match_pnls_handles_unmatched_closes():
 
     # Close trade with no matching position
     closes = [
-        {
-            "id": "orphan-close",
-            "symbol": "ETH/USDT:USDT",
-            "timestamp": now_ms,
-            "qty": 10.0,
-        },
+        _kucoin_test_fill(
+            "orphan-close",
+            now_ms,
+            symbol="ETH/USDT:USDT",
+            side="sell",
+            qty=10.0,
+        ),
     ]
 
     # Position history from a different time window (>5 min away)
@@ -3724,7 +3736,7 @@ def test_kucoin_match_pnls_handles_unmatched_closes():
     ]
 
     events = {
-        "orphan-close": {"id": "orphan-close", "pnl": 999.0, "symbol": "ETH/USDT:USDT"},
+        "orphan-close": dict(closes[0], pnl=999.0),
     }
 
     fetcher._match_pnls(closes, positions, events)
@@ -3767,12 +3779,13 @@ def test_kucoin_match_pnls_single_fill_gets_full_pnl():
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     closes = [
-        {
-            "id": "single-close",
-            "symbol": "SOL/USDT:USDT",
-            "timestamp": now_ms,
-            "qty": 50.0,
-        },
+        _kucoin_test_fill(
+            "single-close",
+            now_ms,
+            symbol="SOL/USDT:USDT",
+            side="sell",
+            qty=50.0,
+        ),
     ]
 
     positions = [
@@ -3784,7 +3797,14 @@ def test_kucoin_match_pnls_single_fill_gets_full_pnl():
     ]
 
     events = {
-        "single-close": {"id": "single-close", "pnl": 0.0, "symbol": "SOL/USDT:USDT"},
+        "entry": _kucoin_test_fill(
+            "entry",
+            now_ms - 1_000,
+            symbol="SOL/USDT:USDT",
+            side="buy",
+            qty=50.0,
+        ),
+        "single-close": dict(closes[0]),
     }
 
     fetcher._match_pnls(closes, positions, events)
@@ -3804,15 +3824,10 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
 
     closes = [
         # First position close fills (at time 0)
-        {"id": "btc-close-1", "symbol": "BTC/USDT:USDT", "timestamp": now_ms, "qty": 10.0},
-        {"id": "btc-close-2", "symbol": "BTC/USDT:USDT", "timestamp": now_ms + 50, "qty": 10.0},
+        _kucoin_test_fill("btc-close-1", now_ms, side="sell", qty=10.0),
+        _kucoin_test_fill("btc-close-2", now_ms + 50, side="sell", qty=10.0),
         # Second position close fills (10 min later - well outside 5-min window)
-        {
-            "id": "btc-close-3",
-            "symbol": "BTC/USDT:USDT",
-            "timestamp": now_ms + ten_min_ms,
-            "qty": 5.0,
-        },
+        _kucoin_test_fill("btc-close-3", now_ms + ten_min_ms, side="sell", qty=5.0),
     ]
 
     positions = [
@@ -3827,9 +3842,16 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     ]
 
     events = {
-        "btc-close-1": {"id": "btc-close-1", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
-        "btc-close-2": {"id": "btc-close-2", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
-        "btc-close-3": {"id": "btc-close-3", "pnl": 0.0, "symbol": "BTC/USDT:USDT"},
+        "btc-entry-1": _kucoin_test_fill("btc-entry-1", now_ms - 1_000, side="buy", qty=20.0),
+        "btc-close-1": dict(closes[0]),
+        "btc-close-2": dict(closes[1]),
+        "btc-entry-2": _kucoin_test_fill(
+            "btc-entry-2",
+            now_ms + ten_min_ms - 1_000,
+            side="buy",
+            qty=5.0,
+        ),
+        "btc-close-3": dict(closes[2]),
     }
 
     fetcher._match_pnls(closes, positions, events)
@@ -3845,14 +3867,26 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
     assert events["btc-close-3"]["pnl_cycle_realized_pnl"] == pytest.approx(50.0)
 
 
-def test_kucoin_match_pnls_rapid_lifecycles_match_nearest_close():
+def test_kucoin_match_pnls_rapid_lifecycles_match_closed_lifecycle_order():
     """Test that rapid independent lifecycles inside the match window get distinct markers."""
     fetcher = KucoinFetcher(api=None)
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
 
     closes = [
-        {"id": "close-1", "symbol": "TON/USDT:USDT", "timestamp": now_ms + 60_000, "qty": -1.0},
-        {"id": "close-2", "symbol": "TON/USDT:USDT", "timestamp": now_ms + 180_000, "qty": -1.0},
+        _kucoin_test_fill(
+            "close-1",
+            now_ms + 60_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=1.0,
+        ),
+        _kucoin_test_fill(
+            "close-2",
+            now_ms + 180_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=1.0,
+        ),
     ]
     positions = [
         {
@@ -3867,8 +3901,22 @@ def test_kucoin_match_pnls_rapid_lifecycles_match_nearest_close():
         },
     ]
     events = {
-        "close-1": {"id": "close-1", "pnl": 0.0, "symbol": "TON/USDT:USDT"},
-        "close-2": {"id": "close-2", "pnl": 0.0, "symbol": "TON/USDT:USDT"},
+        "entry-1": _kucoin_test_fill(
+            "entry-1",
+            now_ms,
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+        ),
+        "close-1": dict(closes[0]),
+        "entry-2": _kucoin_test_fill(
+            "entry-2",
+            now_ms + 120_000,
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+        ),
+        "close-2": dict(closes[1]),
     }
 
     fetcher._match_pnls(closes, positions, events)
@@ -3877,6 +3925,124 @@ def test_kucoin_match_pnls_rapid_lifecycles_match_nearest_close():
     assert events["close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(2.0)
     assert events["close-1"]["pnl_status"] == "pending"
     assert events["close-2"]["pnl_status"] == "pending"
+
+
+def test_kucoin_match_pnls_delayed_row_uses_next_unclaimed_closed_lifecycle():
+    """Test that delayed KuCoin positions rows do not swap rapid lifecycle markers."""
+    fetcher = KucoinFetcher(api=None)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    closes = [
+        _kucoin_test_fill(
+            "close-1",
+            now_ms + 60_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=1.0,
+        ),
+        _kucoin_test_fill(
+            "close-2",
+            now_ms + 180_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=1.0,
+        ),
+    ]
+    positions = [
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 150_000,
+            "realizedPnl": 1.0,
+        },
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 180_000,
+            "realizedPnl": 2.0,
+        },
+    ]
+    events = {
+        "entry-1": _kucoin_test_fill(
+            "entry-1",
+            now_ms,
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+        ),
+        "close-1": dict(closes[0]),
+        "entry-2": _kucoin_test_fill(
+            "entry-2",
+            now_ms + 120_000,
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+        ),
+        "close-2": dict(closes[1]),
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    assert events["close-1"]["pnl_cycle_realized_pnl"] == pytest.approx(1.0)
+    assert events["close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(2.0)
+
+
+def test_kucoin_match_pnls_mid_position_window_uses_close_run_endpoint():
+    """Test fallback marker selection when fetched fills start after lifecycle entry."""
+    fetcher = KucoinFetcher(api=None)
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+
+    closes = [
+        _kucoin_test_fill(
+            "close-1a",
+            now_ms + 60_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=0.4,
+        ),
+        _kucoin_test_fill(
+            "close-1b",
+            now_ms + 61_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=0.6,
+        ),
+        _kucoin_test_fill(
+            "close-2",
+            now_ms + 180_000,
+            symbol="TON/USDT:USDT",
+            side="sell",
+            qty=1.0,
+        ),
+    ]
+    positions = [
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 150_000,
+            "realizedPnl": 1.0,
+        },
+        {
+            "symbol": "TON/USDT:USDT",
+            "lastUpdateTimestamp": now_ms + 180_000,
+            "realizedPnl": 2.0,
+        },
+    ]
+    events = {
+        "close-1a": dict(closes[0]),
+        "close-1b": dict(closes[1]),
+        "entry-2": _kucoin_test_fill(
+            "entry-2",
+            now_ms + 120_000,
+            symbol="TON/USDT:USDT",
+            side="buy",
+            qty=1.0,
+        ),
+        "close-2": dict(closes[2]),
+    }
+
+    fetcher._match_pnls(closes, positions, events)
+
+    assert "pnl_cycle_realized_pnl" not in events["close-1a"]
+    assert events["close-1b"]["pnl_cycle_realized_pnl"] == pytest.approx(1.0)
+    assert events["close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(2.0)
 
 
 @pytest.mark.asyncio
