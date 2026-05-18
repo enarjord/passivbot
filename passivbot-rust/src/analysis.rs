@@ -564,16 +564,13 @@ fn analyze_backtest_basic(
     let position_held_days_max = position_held_hours_max / 24.0;
     let position_held_days_median = position_held_hours_median / 24.0;
     let position_unchanged_days_max = position_unchanged_hours_max / 24.0;
-    // Entry interval tracking: collect initial entry fills per coin+side
+    // Entry interval tracking: collect normal initial entry fills per coin+side
     // and compute gaps between consecutive initial entries for the same coin+side.
     let mut initial_entry_times: HashMap<String, Vec<u64>> = HashMap::new();
     for fill in fills {
         let is_initial_entry = matches!(
             fill.order_type,
-            OrderType::EntryInitialNormalLong
-                | OrderType::EntryInitialPartialLong
-                | OrderType::EntryInitialNormalShort
-                | OrderType::EntryInitialPartialShort
+            OrderType::EntryInitialNormalLong | OrderType::EntryInitialNormalShort
         );
         if is_initial_entry {
             let side = if fill.order_type.is_long() {
@@ -1610,6 +1607,34 @@ mod tests {
 
         assert!((analysis.drawdown_worst - 0.5).abs() < 1e-12);
         assert!((analysis.drawdown_worst_mean_1pct - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_entry_interval_hours_ignore_partial_initial_entries() {
+        let balance = 10000.0;
+        let mut partial_long =
+            make_trade_fill(60, MS_PER_HOUR, "BTC", 0.0, 0.02, 0.12, balance, true);
+        partial_long.order_type = OrderType::EntryInitialPartialLong;
+        let mut partial_long_later =
+            make_trade_fill(660, 11 * MS_PER_HOUR, "BTC", 0.0, 0.02, 0.12, balance, true);
+        partial_long_later.order_type = OrderType::EntryInitialPartialLong;
+
+        let fills = vec![
+            make_trade_fill(0, 0, "BTC", 0.0, 0.1, 0.1, balance, true),
+            partial_long,
+            make_trade_fill(600, 10 * MS_PER_HOUR, "BTC", 0.0, 0.1, 0.1, balance, true),
+            partial_long_later,
+            make_trade_fill(1500, 25 * MS_PER_HOUR, "BTC", 0.0, 0.1, 0.1, balance, true),
+        ];
+        let equities: Vec<f64> = vec![balance; 1600];
+        let timestamps: Vec<u64> = (0..1600).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        assert!((analysis.entry_interval_hours_mean - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_median - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_max - 15.0).abs() < 1e-9);
     }
 
     #[test]
