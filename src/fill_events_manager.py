@@ -49,6 +49,7 @@ _PNL_DISCREPANCY_THROTTLE_SECONDS = 3600.0  # Log at most once per hour if delta
 _PNL_DISCREPANCY_CHANGE_THRESHOLD = 0.10  # Consider delta "changed" if >10%
 _PNL_DISCREPANCY_MIN_SECONDS = 900.0  # Minimum seconds between logs even if delta changes
 PNL_SOURCE_AUTHORITATIVE = "authoritative"
+PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED = "authoritative_cycle_reconciled"
 PNL_SOURCE_PENDING = "pending"
 PNL_SOURCE_SYNTHETIC_EXACT = "synthetic_fill_reconstruction_exact"
 PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
@@ -600,6 +601,8 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
             aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
             aggregated[key]["pnl_source"] = _payload_pnl_source(ev)
             aggregated[key]["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason") or "")
+            aggregated[key]["pnl_cycle_realized_pnl"] = _payload_pnl_cycle_realized_pnl(ev)
+            aggregated[key]["pnl_cycle_source_id"] = str(ev.get("pnl_cycle_source_id") or "")
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
             aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
@@ -623,6 +626,10 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 agg["pnl_source"] = _payload_pnl_source(ev)
                 if ev.get("pnl_synthetic_reason"):
                     agg["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason"))
+            cycle_realized_pnl = _payload_pnl_cycle_realized_pnl(ev)
+            if cycle_realized_pnl is not None:
+                agg["pnl_cycle_realized_pnl"] = cycle_realized_pnl
+                agg["pnl_cycle_source_id"] = str(ev.get("pnl_cycle_source_id") or "")
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
             agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
@@ -777,6 +784,8 @@ class FillEvent:
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
     pnl_source: str = PNL_SOURCE_AUTHORITATIVE
     pnl_synthetic_reason: str = ""
+    pnl_cycle_realized_pnl: Optional[float] = None
+    pnl_cycle_source_id: str = ""
 
     @property
     def key(self) -> str:
@@ -796,6 +805,8 @@ class FillEvent:
             "pnl_status": self.pnl_status,
             "pnl_source": self.pnl_source,
             "pnl_synthetic_reason": self.pnl_synthetic_reason,
+            "pnl_cycle_realized_pnl": self.pnl_cycle_realized_pnl,
+            "pnl_cycle_source_id": self.pnl_cycle_source_id,
             "fees": self.fees,
             "pb_order_type": self.pb_order_type,
             "position_side": self.position_side,
@@ -846,6 +857,8 @@ class FillEvent:
                 )
             ),
             pnl_synthetic_reason=str(data.get("pnl_synthetic_reason") or ""),
+            pnl_cycle_realized_pnl=_payload_pnl_cycle_realized_pnl(data),
+            pnl_cycle_source_id=str(data.get("pnl_cycle_source_id") or ""),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -871,6 +884,16 @@ def fill_event_pnl_pending(event: object) -> bool:
 
 def _payload_pnl_status(payload: Dict[str, object]) -> str:
     return str(payload.get("pnl_status") or "complete").lower()
+
+
+def _payload_pnl_cycle_realized_pnl(payload: Dict[str, object]) -> Optional[float]:
+    value = payload.get("pnl_cycle_realized_pnl")
+    if value is None or value == "":
+        return None
+    try:
+        return float(value)
+    except Exception:
+        return None
 
 
 def _is_close_payload(payload: Dict[str, object]) -> bool:
@@ -2313,9 +2336,11 @@ class FillEventsManager:
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
+                cycle_reconciled_days = self._reconcile_cycle_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
-                if synthesized_days:
-                    self.cache.save_days(self._events_for_days(self._events, synthesized_days))
+                touched_days = synthesized_days | cycle_reconciled_days
+                if touched_days:
+                    self.cache.save_days(self._events_for_days(self._events, touched_days))
                     self.cache.update_metadata_from_events(self._events)
 
             logger.debug(
@@ -2438,6 +2463,138 @@ class FillEventsManager:
                 degraded_count,
                 degraded_note,
                 examples,
+                suffix,
+            )
+
+        return days_touched
+
+    def _reconcile_cycle_pnls(self, payload: List[Dict[str, object]]) -> set[str]:
+        """Apply exchange-provided position-cycle PnL to reconstructed fill lifecycles."""
+        if not payload:
+            return set()
+
+        grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for ev in payload:
+            realized_pnl = _payload_pnl_cycle_realized_pnl(ev)
+            if realized_pnl is None:
+                continue
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            grouped[key].append(ev)
+
+        if not grouped:
+            return set()
+
+        all_grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for ev in payload:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            all_grouped[key].append(ev)
+
+        days_touched: set[str] = set()
+        reconciled_cycles = 0
+        reconciled_fills = 0
+        total_delta = 0.0
+        incomplete_cycle_count = 0
+        examples: List[str] = []
+
+        for key, markers in grouped.items():
+            evs = sorted(all_grouped.get(key, []), key=lambda ev: ev.get("timestamp", 0))
+            id_to_index = {str(ev.get("id") or ""): idx for idx, ev in enumerate(evs)}
+            for marker in sorted(markers, key=lambda ev: ev.get("timestamp", 0)):
+                marker_id = str(marker.get("id") or "")
+                idx = id_to_index.get(marker_id)
+                if idx is None:
+                    continue
+                if _payload_pnl_source(marker) == PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED:
+                    continue
+
+                signed_qty = _payload_signed_effective_qty(marker)
+                _add_amt, marker_reduce_amt = _compute_add_reduce(key[1], signed_qty)
+                if marker_reduce_amt <= 0.0:
+                    continue
+                try:
+                    marker_psize = abs(float(marker.get("psize") or 0.0))
+                except Exception:
+                    marker_psize = 0.0
+                if marker_psize > 1e-12:
+                    continue
+
+                cycle_start = 0
+                has_prior_flat = False
+                for pos in range(idx - 1, -1, -1):
+                    try:
+                        psize = abs(float(evs[pos].get("psize") or 0.0))
+                    except Exception:
+                        psize = 0.0
+                    if psize <= 1e-12:
+                        cycle_start = pos + 1
+                        has_prior_flat = True
+                        break
+
+                cycle = evs[cycle_start : idx + 1]
+                has_add = False
+                close_fills: List[Dict[str, object]] = []
+                for ev in cycle:
+                    ev_signed_qty = _payload_signed_effective_qty(ev)
+                    add_amt, reduce_amt = _compute_add_reduce(key[1], ev_signed_qty)
+                    if add_amt > 0.0:
+                        has_add = True
+                    if reduce_amt > 0.0:
+                        close_fills.append(ev)
+
+                if not close_fills:
+                    continue
+                if not has_prior_flat and cycle:
+                    first_add, first_reduce = _compute_add_reduce(
+                        key[1], _payload_signed_effective_qty(cycle[0])
+                    )
+                    has_prior_flat = first_add > 0.0 and first_reduce <= 0.0
+                if not has_add or not has_prior_flat:
+                    incomplete_cycle_count += 1
+
+                authoritative_total = _payload_pnl_cycle_realized_pnl(marker)
+                if authoritative_total is None:
+                    continue
+                synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
+                delta = authoritative_total - synthetic_total
+                marker["pnl"] = float(marker.get("pnl") or 0.0) + delta
+                for close in close_fills:
+                    close["pnl_status"] = "complete"
+                    close["pnl_source"] = PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+                    close["pnl_synthetic_reason"] = ""
+                    try:
+                        days_touched.add(_day_key(int(close["timestamp"])))
+                    except Exception:
+                        pass
+
+                reconciled_cycles += 1
+                reconciled_fills += len(close_fills)
+                total_delta += delta
+                if len(examples) < 5:
+                    examples.append(
+                        f"{marker_id[:12]}:{key[0]}:{key[1]}:"
+                        f"fills={len(close_fills)} delta={delta:.8f}"
+                    )
+
+        if reconciled_cycles:
+            suffix = f", +{reconciled_cycles - 5} more" if reconciled_cycles > 5 else ""
+            logger.warning(
+                "[fills] reconciled aggregate realized PnL to fill lifecycle | "
+                "exchange=%s user=%s cycles=%d fills=%d total_delta=%.8f "
+                "incomplete_cycles=%d source=%s examples=%s%s",
+                self.exchange,
+                self.user,
+                reconciled_cycles,
+                reconciled_fills,
+                total_delta,
+                incomplete_cycle_count,
+                PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED,
+                ", ".join(examples),
                 suffix,
             )
 
@@ -2918,8 +3075,10 @@ class FillEventsManager:
             ensure_qty_signage(payload)
             compute_psize_pprice(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
+            cycle_reconciled_days = self._reconcile_cycle_pnls(payload)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
             all_days_persisted.update(synthesized_days)
+            all_days_persisted.update(cycle_reconciled_days)
 
             # Re-persist touched days with annotated psize/pprice values
             if all_days_persisted:
@@ -4485,12 +4644,11 @@ class KucoinFetcher(BaseFetcher):
         positions: List[Dict[str, object]],
         events: Dict[str, Dict[str, object]],
     ) -> None:
-        """Match position close PnL from positions_history to trade fills.
+        """Attach KuCoin position-cycle PnL records to their final close fill.
 
-        Uses a 5-minute window to find all fills that could be part of a position close.
-        When multiple fills match a single position close:
-        - The PnL is distributed proportionally by fill quantity
-        - This ensures the total PnL sums correctly regardless of how many fills closed the position
+        KuCoin positions_history realizedPnl is cycle-scoped, not fill-scoped.
+        The manager reconciles these markers against the full cached lifecycle
+        after psize/pprice reconstruction.
         """
         match_window_ms = 5 * 60 * 1000  # 5 minute window for matching
 
@@ -4499,9 +4657,13 @@ class KucoinFetcher(BaseFetcher):
             closes_by_symbol[c["symbol"]].append(c)
         positions_by_symbol: Dict[str, List[Dict[str, object]]] = defaultdict(list)
         for p in positions:
-            positions_by_symbol[p.get("symbol", "")].append(p)
+            positions_by_symbol[self._position_history_symbol(p)].append(p)
 
-        # Track which trades have been assigned PnL
+        for close in closes:
+            events[close["id"]]["pnl_status"] = "pending"
+            events[close["id"]]["pnl_source"] = PNL_SOURCE_PENDING
+
+        # Track fills already claimed by a positions_history cycle marker.
         assigned_trade_ids: set[str] = set()
         unmatched_positions = []
 
@@ -4524,36 +4686,18 @@ class KucoinFetcher(BaseFetcher):
                 ]
 
                 if not matching_fills:
-                    # Try expanding window for this position
                     unmatched_positions.append(p)
                     continue
 
-                # Compute total qty across matching fills
-                total_qty = sum(
-                    abs(float(f.get("qty", 0) or f.get("amount", 0) or 0)) for f in matching_fills
-                )
-
-                if total_qty <= 0:
-                    # Fallback: assign all PnL to closest fill
-                    closest = min(matching_fills, key=lambda c: abs(c["timestamp"] - p_ts))
-                    events[closest["id"]]["pnl"] = p_pnl
-                    events[closest["id"]]["pnl_status"] = "complete"
-                    assigned_trade_ids.add(closest["id"])
-                else:
-                    # Distribute PnL proportionally by qty
-                    for fill in matching_fills:
-                        fill_qty = abs(float(fill.get("qty", 0) or fill.get("amount", 0) or 0))
-                        proportion = fill_qty / total_qty if total_qty > 0 else 0
-                        events[fill["id"]]["pnl"] = p_pnl * proportion
-                        events[fill["id"]]["pnl_status"] = "complete"
-                        assigned_trade_ids.add(fill["id"])
-
-        # Keep unmatched close fills explicit. Their local trade-derived PnL
-        # may be useful for diagnostics, but realized-PnL consumers must not
-        # treat it as authoritative until positions_history enrichment matches.
-        for c in closes:
-            if c["id"] not in assigned_trade_ids:
-                events[c["id"]]["pnl_status"] = "pending"
+                marker = max(matching_fills, key=lambda c: c["timestamp"])
+                marker_event = events[marker["id"]]
+                info = p.get("info", {})
+                info = info if isinstance(info, dict) else {}
+                marker_event["pnl_cycle_realized_pnl"] = p_pnl
+                marker_event["pnl_cycle_source_id"] = str(p.get("id") or info.get("closeId") or "")
+                marker_event["pnl_status"] = "pending"
+                marker_event["pnl_source"] = PNL_SOURCE_PENDING
+                assigned_trade_ids.update(str(fill["id"]) for fill in matching_fills)
 
         # Log unmatched positions for debugging
         if unmatched_positions:

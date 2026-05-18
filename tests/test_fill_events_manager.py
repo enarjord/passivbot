@@ -2336,6 +2336,91 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
 
 
 @pytest.mark.asyncio
+async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_cycle_reconciled"
+    entry_ts = 1_700_000_000_000
+
+    entry_event = dict(
+        id="entry",
+        timestamp=entry_ts,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="buy",
+        qty=10.0,
+        price=10.0,
+        pnl=0.0,
+        pnl_status="complete",
+        pb_order_type="entry_grid_long",
+        position_side="long",
+        client_order_id="cid-entry",
+    )
+    partial_close = dict(
+        id="partial-close",
+        timestamp=entry_ts + 60_000,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="sell",
+        qty=-4.0,
+        price=8.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-partial",
+    )
+    final_close = dict(
+        id="final-close",
+        timestamp=entry_ts + 120_000,
+        datetime="",
+        symbol="TON/USDT:USDT",
+        side="sell",
+        qty=-6.0,
+        price=12.0,
+        pnl=0.0,
+        pnl_status="pending",
+        pb_order_type="close_grid_long",
+        position_side="long",
+        client_order_id="cid-final",
+        pnl_cycle_realized_pnl=5.0,
+        pnl_cycle_source_id="kucoin-cycle-1",
+    )
+
+    fetcher = _StaticFetcher([entry_event, partial_close, final_close])
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+
+    events = manager.get_events(symbol="TON/USDT:USDT")
+    by_id = {ev.id: ev for ev in events}
+    assert by_id["partial-close"].pnl == pytest.approx(-8.0)
+    assert by_id["final-close"].pnl == pytest.approx(13.0)
+    assert sum(ev.pnl for ev in events if "close" in ev.pb_order_type) == pytest.approx(5.0)
+    assert by_id["partial-close"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+    assert by_id["final-close"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+    assert by_id["final-close"].pnl_cycle_realized_pnl == pytest.approx(5.0)
+    assert not FillEventsManager.pending_pnl_events(events)
+    assert not FillEventsManager.synthetic_pnl_events(events)
+
+    reloaded = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+    await reloaded.ensure_loaded()
+    reloaded_events = reloaded.get_events(symbol="TON/USDT:USDT")
+    assert sum(ev.pnl for ev in reloaded_events if "close" in ev.pb_order_type) == pytest.approx(5.0)
+    assert not FillEventsManager.synthetic_pnl_events(reloaded_events)
+
+
+@pytest.mark.asyncio
 async def test_manager_refresh_latest_keeps_synthetic_pnl_in_enrichment_window(
     tmp_path: Path,
 ):
@@ -3479,9 +3564,8 @@ async def test_okx_fetcher_on_batch_callback(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_kucoin_match_pnls_distributes_proportionally():
-    """Test that _match_pnls distributes PnL proportionally across multiple fills."""
-    # Mock fetcher (we only need the _match_pnls method)
+def test_kucoin_match_pnls_marks_cycle_aggregate_on_latest_matching_close():
+    """Test that KuCoin positions-history PnL is kept as cycle-scoped metadata."""
     fetcher = KucoinFetcher(api=None)
 
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -3519,9 +3603,12 @@ def test_kucoin_match_pnls_distributes_proportionally():
 
     fetcher._match_pnls(closes, positions, events)
 
-    # PnL should be distributed 80/20
-    assert events["close-1"]["pnl"] == pytest.approx(80.0, rel=0.01)
-    assert events["close-2"]["pnl"] == pytest.approx(20.0, rel=0.01)
+    assert events["close-1"]["pnl"] == pytest.approx(0.0)
+    assert events["close-2"]["pnl"] == pytest.approx(0.0)
+    assert events["close-1"]["pnl_status"] == "pending"
+    assert events["close-2"]["pnl_status"] == "pending"
+    assert "pnl_cycle_realized_pnl" not in events["close-1"]
+    assert events["close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(100.0)
 
 
 def test_kucoin_match_pnls_handles_unmatched_closes():
@@ -3615,8 +3702,10 @@ def test_kucoin_match_pnls_single_fill_gets_full_pnl():
 
     fetcher._match_pnls(closes, positions, events)
 
-    assert events["single-close"]["pnl"] == pytest.approx(25.5)
-    assert events["single-close"]["pnl_status"] == "complete"
+    assert events["single-close"]["pnl"] == pytest.approx(0.0)
+    assert events["single-close"]["pnl_status"] == "pending"
+    assert events["single-close"]["pnl_source"] == fem.PNL_SOURCE_PENDING
+    assert events["single-close"]["pnl_cycle_realized_pnl"] == pytest.approx(25.5)
 
 
 def test_kucoin_match_pnls_multiple_positions_multiple_fills():
@@ -3658,14 +3747,15 @@ def test_kucoin_match_pnls_multiple_positions_multiple_fills():
 
     fetcher._match_pnls(closes, positions, events)
 
-    # First position: 100 PnL distributed 50/50 (10+10 qty)
-    assert events["btc-close-1"]["pnl"] == pytest.approx(50.0)
-    assert events["btc-close-2"]["pnl"] == pytest.approx(50.0)
-    # Second position: 50 PnL to single fill
-    assert events["btc-close-3"]["pnl"] == pytest.approx(50.0)
-    assert events["btc-close-1"]["pnl_status"] == "complete"
-    assert events["btc-close-2"]["pnl_status"] == "complete"
-    assert events["btc-close-3"]["pnl_status"] == "complete"
+    assert events["btc-close-1"]["pnl"] == pytest.approx(0.0)
+    assert events["btc-close-2"]["pnl"] == pytest.approx(0.0)
+    assert events["btc-close-3"]["pnl"] == pytest.approx(0.0)
+    assert events["btc-close-1"]["pnl_status"] == "pending"
+    assert events["btc-close-2"]["pnl_status"] == "pending"
+    assert events["btc-close-3"]["pnl_status"] == "pending"
+    assert "pnl_cycle_realized_pnl" not in events["btc-close-1"]
+    assert events["btc-close-2"]["pnl_cycle_realized_pnl"] == pytest.approx(100.0)
+    assert events["btc-close-3"]["pnl_cycle_realized_pnl"] == pytest.approx(50.0)
 
 
 @pytest.mark.asyncio
