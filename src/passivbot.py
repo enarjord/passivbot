@@ -2920,7 +2920,6 @@ class Passivbot:
         )
         self.eligible_symbols = set(eligible)
         self.ineligible_symbols = reasons
-        self.set_market_specific_settings()
         # for prettier printing
         self.max_len_symbol = max([len(s) for s in self.markets_dict])
         self.sym_padding = max(self.sym_padding, self.max_len_symbol + 1)
@@ -2928,11 +2927,13 @@ class Passivbot:
         self.init_coin_overrides()
         # await self.update_tickers()
         self.refresh_approved_ignored_coins_lists()
+        self.set_market_specific_settings()
         self._assert_supported_live_state()
         # self.set_live_configs()
         self.set_wallet_exposure_limits()
         await self.refresh_authoritative_state()
         self._assert_supported_live_state()
+        self.set_market_specific_settings()
         await self.update_effective_min_cost()
         # Legacy: no 1m OHLCV REST maintenance; CandlestickManager handles caching
         if self.is_forager_mode():
@@ -7205,6 +7206,44 @@ class Passivbot:
             symbol: self.markets_dict[symbol]["id"] for symbol in self.markets_dict
         }
         self.symbol_ids_inv = {v: k for k, v in self.symbol_ids.items()}
+
+    def symbols_requiring_market_sizing(self) -> set[str]:
+        """Return symbols whose order sizing metadata must be complete."""
+        markets = getattr(self, "markets_dict", {}) or {}
+        eligible = getattr(self, "eligible_symbols", None)
+        if eligible is None:
+            symbols = set(markets)
+        else:
+            symbols = set(eligible)
+
+        symbols.update(getattr(self, "active_symbols", []) or [])
+        symbols.update((getattr(self, "coin_overrides", {}) or {}).keys())
+
+        approved = getattr(self, "approved_coins_minus_ignored_coins", {}) or {}
+        if isinstance(approved, dict):
+            for side_symbols in approved.values():
+                symbols.update(side_symbols or [])
+
+        positions = getattr(self, "positions", {}) or {}
+        if isinstance(positions, dict):
+            for symbol, sides in positions.items():
+                if not isinstance(sides, dict):
+                    continue
+                for pside in ("long", "short"):
+                    side = sides.get(pside, {})
+                    if not isinstance(side, dict):
+                        continue
+                    if float(side.get("size", 0.0) or 0.0) != 0.0:
+                        symbols.add(symbol)
+                        break
+
+        open_orders = getattr(self, "open_orders", {}) or {}
+        if isinstance(open_orders, dict):
+            for symbol, orders in open_orders.items():
+                if orders:
+                    symbols.add(symbol)
+
+        return {symbol for symbol in symbols if symbol in markets}
 
     def get_symbol_id(self, symbol):
         """Return the exchange-native identifier for `symbol`, caching defaults."""

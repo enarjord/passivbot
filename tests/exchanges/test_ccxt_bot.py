@@ -674,6 +674,117 @@ class TestCCXTBotSetMarketSpecificSettings:
             ):
                 bot.set_market_specific_settings()
 
+    def test_skips_ineligible_market_missing_sizing_metadata(self):
+        """Incomplete metadata on non-executable exchange inventory must not block startup."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.symbol_ids = {}
+        bot.min_costs = {}
+        bot.min_qtys = {}
+        bot.qty_steps = {}
+        bot.price_steps = {}
+        bot.c_mults = {}
+        bot.eligible_symbols = {"BTC/USDT:USDT"}
+        bot.active_symbols = []
+        bot.coin_overrides = {}
+        bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+        bot.positions = {}
+        bot.open_orders = {}
+
+        bot.markets_dict = {
+            "BTC/USDT:USDT": {
+                "id": "BTCUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": 0.001},
+                },
+                "precision": {
+                    "amount": 0.001,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            },
+            "TRX-USD_UM_XPERP": {
+                "id": "TRX-USD_UM_XPERP",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": None},
+                },
+                "precision": {
+                    "amount": None,
+                    "price": 0.0001,
+                },
+                "contractSize": 1.0,
+            },
+        }
+
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
+            bot.set_market_specific_settings()
+
+        assert bot.min_qtys["BTC/USDT:USDT"] == 0.001
+        assert "TRX-USD_UM_XPERP" not in bot.min_qtys
+        assert "TRX-USD_UM_XPERP" not in bot.qty_steps
+
+    def test_position_symbol_missing_sizing_metadata_fails_even_when_ineligible(self):
+        """Live-state symbols remain executable sizing inputs and must fail loudly."""
+        from exchanges.ccxt_bot import CCXTBot
+        from passivbot import Passivbot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.symbol_ids = {}
+        bot.min_costs = {}
+        bot.min_qtys = {}
+        bot.qty_steps = {}
+        bot.price_steps = {}
+        bot.c_mults = {}
+        bot.eligible_symbols = {"BTC/USDT:USDT"}
+        bot.active_symbols = []
+        bot.coin_overrides = {}
+        bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+        bot.positions = {
+            "BAD/USDT:USDT": {
+                "long": {"size": 1.0},
+                "short": {"size": 0.0},
+            }
+        }
+        bot.open_orders = {}
+
+        bot.markets_dict = {
+            "BTC/USDT:USDT": {
+                "id": "BTCUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": 0.001},
+                },
+                "precision": {
+                    "amount": 0.001,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            },
+            "BAD/USDT:USDT": {
+                "id": "BADUSDT",
+                "limits": {
+                    "cost": {"min": 0.1},
+                    "amount": {"min": None},
+                },
+                "precision": {
+                    "amount": None,
+                    "price": 0.01,
+                },
+                "contractSize": 1.0,
+            },
+        }
+
+        with patch.object(Passivbot, "set_market_specific_settings", lambda self: None):
+            with pytest.raises(
+                ValueError,
+                match="BAD/USDT:USDT: missing min qty and qty step",
+            ):
+                bot.set_market_specific_settings()
+
 
 class TestCCXTBotFetchTickers:
     """Tests for fetch_tickers."""
