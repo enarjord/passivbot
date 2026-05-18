@@ -1,4 +1,4 @@
-use crate::types::{Analysis, Equities, Fill};
+use crate::types::{Analysis, Equities, Fill, OrderType};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -564,6 +564,65 @@ fn analyze_backtest_basic(
     let position_held_days_max = position_held_hours_max / 24.0;
     let position_held_days_median = position_held_hours_median / 24.0;
     let position_unchanged_days_max = position_unchanged_hours_max / 24.0;
+    // Entry interval tracking: collect initial entry fills per coin+side
+    // and compute gaps between consecutive initial entries for the same coin+side.
+    let mut initial_entry_times: HashMap<String, Vec<u64>> = HashMap::new();
+    for fill in fills {
+        let is_initial_entry = matches!(
+            fill.order_type,
+            OrderType::EntryInitialNormalLong
+                | OrderType::EntryInitialPartialLong
+                | OrderType::EntryInitialNormalShort
+                | OrderType::EntryInitialPartialShort
+        );
+        if is_initial_entry {
+            let side = if fill.order_type.is_long() {
+                "long"
+            } else {
+                "short"
+            };
+            let key = format!("{}_{}", fill.coin, side);
+            let ts = if fill.timestamp_ms > 0 {
+                fill.timestamp_ms
+            } else {
+                fallback_timestamp_ms(fill.index)
+            };
+            initial_entry_times
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(ts);
+        }
+    }
+    let mut entry_intervals_ms: Vec<u64> = Vec::new();
+    for (_key, mut times) in initial_entry_times {
+        times.sort_unstable();
+        for window in times.windows(2) {
+            entry_intervals_ms.push(window[1].saturating_sub(window[0]));
+        }
+    }
+    let entry_interval_hours_mean = if !entry_intervals_ms.is_empty() {
+        entry_intervals_ms.iter().sum::<u64>() as f64
+            / (entry_intervals_ms.len() as f64 * MS_PER_HOUR as f64)
+    } else {
+        0.0
+    };
+    let entry_interval_hours_max = if !entry_intervals_ms.is_empty() {
+        *entry_intervals_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
+    } else {
+        0.0
+    };
+    let entry_interval_hours_median = if !entry_intervals_ms.is_empty() {
+        let mut sorted = entry_intervals_ms.clone();
+        sorted.sort_unstable();
+        let mid = sorted.len() / 2;
+        if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] + sorted[mid]) as f64 / (2.0 * MS_PER_HOUR as f64)
+        } else {
+            sorted[mid] as f64 / MS_PER_HOUR as f64
+        }
+    } else {
+        0.0
+    };
     let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
         if completed_trades.is_empty() {
             (0.0, 0.0, 0.0, 0.0)
@@ -656,6 +715,9 @@ fn analyze_backtest_basic(
     analysis.position_held_days_max = position_held_days_max;
     analysis.position_held_days_median = position_held_days_median;
     analysis.position_unchanged_days_max = position_unchanged_days_max;
+    analysis.entry_interval_hours_mean = entry_interval_hours_mean;
+    analysis.entry_interval_hours_median = entry_interval_hours_median;
+    analysis.entry_interval_hours_max = entry_interval_hours_max;
     analysis.win_rate = win_rate;
     analysis.trade_loss_max = trade_loss_max;
     analysis.trade_loss_mean = trade_loss_mean;
