@@ -1105,9 +1105,15 @@ fn run_backtest_core<'py>(
         let py_analysis_usd = struct_to_py_dict(py, &analysis_usd)?;
         let py_analysis_btc = struct_to_py_dict(py, &analysis_btc)?;
         if metrics_only {
+            let equities_timestamps_array =
+                Array2::from_shape_fn((equities.timestamps_ms.len(), 1), |(i, _)| {
+                    equities.timestamps_ms[i] as f64
+                })
+                .into_pyarray_bound(py)
+                .unbind();
             return Ok((
                 py.None().into_py(py),
-                py.None().into_py(py),
+                equities_timestamps_array.into_py(py),
                 py_analysis_usd,
                 py_analysis_btc,
                 py.None().into_py(py),
