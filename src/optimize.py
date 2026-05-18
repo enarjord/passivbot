@@ -437,15 +437,23 @@ _RECOVERABLE_BACKTEST_PANIC_PATTERNS = (
 
 
 def _format_objectives(
-    values: Sequence[float] | dict[str, float],
+    values: Sequence[float] | dict[str, Any],
     *,
     scoring_keys: Sequence[str] | None = None,
 ) -> str:
     if isinstance(values, dict):
-        order = list(scoring_keys or values.keys())
         parts = []
-        for key in order:
-            value = values.get(key)
+        if scoring_keys:
+            for idx, key in enumerate(scoring_keys):
+                value = resolve_metric_value(values, key)
+                if value is None:
+                    value = values.get(f"w_{idx}")
+                if value is None:
+                    continue
+                parts.append(f"{key}={float(value):.3g}")
+            if parts:
+                return "[" + ", ".join(parts) + "]"
+        for key, value in values.items():
             if value is None:
                 continue
             parts.append(f"{key}={float(value):.3g}")
@@ -455,6 +463,16 @@ def _format_objectives(
     if not values:
         return "[]"
     return "[" + ", ".join(f"{float(v):.3g}" for v in values) + "]"
+
+
+def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -> str:
+    keys = sorted(str(key) for key in metrics)
+    if not keys:
+        return "<none>"
+    rendered = ", ".join(keys[:limit])
+    if len(keys) > limit:
+        rendered += f", ... ({len(keys) - limit} more)"
+    return rendered
 
 
 def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
@@ -1041,6 +1059,12 @@ class Evaluator:
         global_modifier = 0.0
         for check in self.limit_checks:
             val = resolve_metric_value(analyses_combined, check["metric_key"])
+            if val is None:
+                raise ValueError(
+                    "missing optimizer limit metric "
+                    f"{check['metric_key']!r} for limit on {check['metric']!r}; "
+                    f"available metrics: {_format_available_metric_keys(analyses_combined)}"
+                )
             penalty = compute_limit_violation(check, val)
             if not penalty:
                 continue
@@ -1061,7 +1085,11 @@ class Evaluator:
                 val = resolve_metric_value(analyses_combined, f"{spec.metric.rsplit('_', 1)[0]}_mean")
 
             if val is None:
-                val = 0
+                raise ValueError(
+                    "missing optimizer scoring metric "
+                    f"{spec.metric!r} (expected {spec.metric}_mean); "
+                    f"available metrics: {_format_available_metric_keys(analyses_combined)}"
+                )
             raw_value = float(val)
             raw_objectives[spec.metric] = raw_value
             penalty_total = global_modifier + per_objective_modifier[idx]

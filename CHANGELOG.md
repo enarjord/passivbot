@@ -15,6 +15,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed backtest/data-downloader startup when the legacy `caches/ohlcv` path is a dangling symlink after moving to the v2 `caches/ohlcvs` store.
 - Increased the pymoo NSGA3 auto reference-direction cap from `330` to `500`, giving 9-objective auto-population optimizer runs `495` reference directions instead of `165`.
 - Restored `backtest_completion_ratio` in backtest analysis and optimizer suite metrics so default optimizer limits can reject early-stopped backtests without failing on a missing metric.
+- Changed optimizer scoring and limit handling to fail loudly when a configured metric is absent from backtest analysis instead of silently treating it as zero or no violation.
 
 ## v7.11.0 - 2026-05-13
 
