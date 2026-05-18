@@ -513,7 +513,11 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
     for entry_path in json_paths:
         with open(entry_path) as f:
             entry = json.load(f)
+        if not isinstance(entry, Mapping):
+            continue
         specs = extract_objective_specs(entry)
+        if not specs:
+            continue
         metrics = [spec.metric for spec in specs]
         if baseline_specs is None:
             baseline_specs = specs
@@ -547,7 +551,11 @@ def load_candidates(path: str | os.PathLike[str]) -> tuple[Path, List[ParetoCand
             )
         )
 
-    assert baseline_specs is not None
+    if baseline_specs is None:
+        raise ValueError(
+            f"No Pareto candidate JSON files found in {pareto_dir}; "
+            "JSON artifacts without optimize.scoring were ignored."
+        )
     return pareto_dir, candidates, baseline_specs
 
 

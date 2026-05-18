@@ -291,6 +291,57 @@ def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot tool pareto"
 
 
+def test_pareto_analyze_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+    original_argv = sys.argv[:]
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "pareto-analyze", "optimize_results/example/pareto"]) == 0
+
+    assert captured["module_name"] == "tools.pareto_analyzer"
+    assert captured["argv"] == [
+        "passivbot tool pareto-analyze",
+        "optimize_results/example/pareto",
+    ]
+    assert captured["prog_env"] == "passivbot tool pareto-analyze"
+    assert sys.argv == original_argv
+    assert os.environ.get("PASSIVBOT_CLI_PROG") is None
+
+
+def test_pareto_compress_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+    original_argv = sys.argv[:]
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "pareto-compress", "optimize_results/example/pareto", "8"]) == 0
+
+    assert captured["module_name"] == "tools.pareto_compress"
+    assert captured["argv"] == [
+        "passivbot tool pareto-compress",
+        "optimize_results/example/pareto",
+        "8",
+    ]
+    assert captured["prog_env"] == "passivbot tool pareto-compress"
+    assert sys.argv == original_argv
+    assert os.environ.get("PASSIVBOT_CLI_PROG") is None
+
+
 def test_merge_paretos_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 
