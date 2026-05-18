@@ -5,7 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Fixed Bybit UTA live balance parsing so Passivbot uses account equity minus perpetual UPNL as raw balance instead of double-applying UPNL from collateral `usdValue` fields.
-- Fixed KuCoin aggregate realized-PnL enrichment so positions-history cycle PnL reconciles the full cached fill lifecycle instead of being assigned only to the final close fills, preventing double-counted synthetic partial-close PnL.
+- Fixed KuCoin aggregate realized-PnL enrichment so positions-history rows are reconciled as cycle observations against reconstructed fill lifecycles only when unambiguous, preventing rapid or delayed position cycles from being assigned to the wrong close fill while ambiguous rows stay synthetic and refreshable.
 - Changed staged live bounded active 1m tail gaps to project provisional no-trade EMA inputs for close, quote-volume, and log-range instead of carrying forward latest-real EMA values; projected rows and EMA values are not persisted or reused once real candles arrive.
 - Live fill events now synthesize missing realized PnL from canonical fill history when exchange enrichment remains unavailable, with explicit synthetic/degraded provenance and later authoritative replacement when enriched data is fetched.
 - Added exponential backoff while live account refresh is blocked by pending realized-PnL enrichment, so stale KuCoin close fills no longer trigger continuous fill-history polling while PnL-dependent logic remains blocked.
