@@ -25,9 +25,10 @@ Optimizer selector contract:
 
 - `optimize.fixed_params` and `--fine_tune_params` use dotted config-path selectors.
 - `long.*` / `short.*` selectors are aliases for `bot.long.*` / `bot.short.*`.
-- Selectors match path segments by prefix, not substring. Use `long.strategy` to match the
-  whole active strategy subtree, or `long.strategy.close` to match only
-  `bot.long.strategy.<active_strategy>.close.*`.
+- Selectors match path segments by prefix or suffix, not partial substring. Use `long.strategy`
+  to match the whole active strategy subtree, `long.strategy.close` to match only
+  `bot.long.strategy.<active_strategy>.close.*`, or a leaf selector such as
+  `we_excess_allowance_pct` to match every bound ending with that parameter name.
 - `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
 - Do not use flattened underscore selector names such as `long_entry_*` in v8 user-facing docs
   or agent instructions.

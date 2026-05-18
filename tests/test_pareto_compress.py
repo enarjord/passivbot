@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from pathlib import Path
 
 import pytest
@@ -114,15 +115,33 @@ def test_compress_from_args_writes_selected_json_and_manifest(sample_pareto_dir:
     assert manifest["selected"][0]["output_path"] == str(out_dir / "diverse_fill.json")
 
 
-def test_compress_refuses_output_dir_with_stale_files(sample_pareto_dir: Path, tmp_path: Path):
+def test_compress_writes_to_non_empty_output_dir_without_deleting_files(
+    sample_pareto_dir: Path,
+    tmp_path: Path,
+    caplog,
+):
+    caplog.set_level(logging.INFO)
     out_dir = tmp_path / "compressed"
     out_dir.mkdir()
-    (out_dir / "stale.json").write_text("{}\n")
+    stale_file = out_dir / "stale.json"
+    stale_file.write_text('{"keep": true}\n')
+    selected_file = out_dir / "diverse_fill.json"
+    selected_file.write_text('{"old": true}\n')
+    (out_dir / "selection.json").write_text('{"old_manifest": true}\n')
     parser = build_parser()
     args = parser.parse_args([str(sample_pareto_dir), "2", "--output-dir", str(out_dir)])
 
-    with pytest.raises(ValueError, match="remove stale files"):
-        compress_from_args(args)
+    payload = compress_from_args(args)
+
+    assert payload["selected_count"] == 2
+    assert json.loads(stale_file.read_text()) == {"keep": True}
+    selected_payload = json.loads(selected_file.read_text())
+    assert selected_payload["metrics"]["objectives"]["adg_strategy_eq"] == 0.003
+    manifest = json.loads((out_dir / "selection.json").read_text())
+    assert manifest["selected_count"] == 2
+    assert "Output directory is non-empty" in caplog.text
+    assert "Overwriting existing output file: diverse_fill.json" in caplog.text
+    assert "Overwriting existing output file: selection.json" in caplog.text
 
 
 def test_compress_applies_limits_before_selection(sample_pareto_dir: Path):

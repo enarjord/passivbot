@@ -153,6 +153,22 @@ def path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...])
     )
 
 
+def path_suffix_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+    if len(selector_path) > len(path):
+        return False
+    suffix = path[-len(selector_path) :] if selector_path else ()
+    return all(
+        selector_part == "*" or selector_part == path_part
+        for selector_part, path_part in zip(selector_path, suffix)
+    )
+
+
+def bound_path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
+    return path_matches_selector(path, selector_path) or path_suffix_matches_selector(
+        path, selector_path
+    )
+
+
 def resolve_bound_selectors(
     config: dict,
     selectors: Iterable[str],
@@ -169,6 +185,6 @@ def resolve_bound_selectors(
         if selector_path is None:
             continue
         for key, path in bound_paths.items():
-            if path_matches_selector(path, selector_path):
+            if bound_path_matches_selector(path, selector_path):
                 resolved[key] = path
     return resolved

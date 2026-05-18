@@ -1231,6 +1231,53 @@ class TestApplyFineTuneBounds:
         assert tm_bounds["entry"]["threshold_base_pct"] == [0.33, 0.33]
         assert config["optimize"]["bounds"]["long"]["unstuck"]["threshold"] == [0.44, 0.44]
 
+    def test_fine_tune_params_accept_leaf_suffix_selectors(self, caplog):
+        caplog.set_level(logging.INFO)
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "we_excess_allowance_pct": [0.0, 0.1],
+                            "total_wallet_exposure_limit": [0.3, 0.8],
+                        }
+                    },
+                    "short": {"risk": {"we_excess_allowance_pct": [0.0, 0.1]}},
+                }
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "we_excess_allowance_pct": 0.04,
+                        "total_wallet_exposure_limit": 0.55,
+                    }
+                },
+                "short": {"risk": {"we_excess_allowance_pct": 0.05}},
+            },
+        }
+
+        apply_fine_tune_bounds(config, ["we_excess_allowance_pct"], set())
+
+        assert config["optimize"]["bounds"]["long"]["risk"]["we_excess_allowance_pct"] == [
+            0.0,
+            0.1,
+        ]
+        assert config["optimize"]["bounds"]["short"]["risk"]["we_excess_allowance_pct"] == [
+            0.0,
+            0.1,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.55,
+            0.55,
+        ]
+        assert (
+            "    long.risk.we_excess_allowance_pct "
+            "(bot.long.risk.we_excess_allowance_pct)"
+        ) in caplog.text
+        assert "  long.risk.we_excess_allowance_pct" in caplog.text
+        assert "  long.risk.total_wallet_exposure_limit" in caplog.text
+        assert "long_risk_we_excess_allowance_pct" not in caplog.text
+
     def test_cli_override_single_value_becomes_fixed(self):
         config = {
             "optimize": {
@@ -1420,11 +1467,11 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long"]["unstuck"]["close_pct"] == [0.0, 1.0]
         assert "  long.strategy ->" in caplog.text
         assert (
-            "    long_entry_threshold_base_pct "
+            "    long.entry.threshold_base_pct "
             "(bot.long.strategy.trailing_martingale.entry.threshold_base_pct)"
         ) in caplog.text
         assert (
-            "    long_close_qty_pct "
+            "    long.close.qty_pct "
             "(bot.long.strategy.trailing_martingale.close.qty_pct)"
         ) in caplog.text
 
@@ -1460,6 +1507,46 @@ class TestApplyFineTuneBounds:
         apply_fine_tune_bounds(config, [], set())
 
         assert config["optimize"]["bounds"]["long"]["hsl"]["red_threshold"] == [0.22, 0.22]
+
+    def test_config_fixed_params_accept_leaf_suffix_selectors(self):
+        config = {
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "we_excess_allowance_pct": [0.0, 0.1],
+                            "total_wallet_exposure_limit": [0.3, 0.8],
+                        }
+                    },
+                    "short": {"risk": {"we_excess_allowance_pct": [0.0, 0.1]}},
+                },
+                "fixed_params": ["we_excess_allowance_pct"],
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "we_excess_allowance_pct": 0.04,
+                        "total_wallet_exposure_limit": 0.55,
+                    }
+                },
+                "short": {"risk": {"we_excess_allowance_pct": 0.05}},
+            },
+        }
+
+        apply_fine_tune_bounds(config, [], set())
+
+        assert config["optimize"]["bounds"]["long"]["risk"]["we_excess_allowance_pct"] == [
+            0.04,
+            0.04,
+        ]
+        assert config["optimize"]["bounds"]["short"]["risk"]["we_excess_allowance_pct"] == [
+            0.05,
+            0.05,
+        ]
+        assert config["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+            0.3,
+            0.8,
+        ]
 
     def test_fixed_params_support_side_wildcard_path_segment(self):
         config = {

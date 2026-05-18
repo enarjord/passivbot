@@ -1643,18 +1643,45 @@ def apply_fine_tune_bounds(
                 logging.warning("%s selector matched no optimize bounds: %s", label, selector)
                 continue
             logging.info("  %s ->", selector)
-            for match in matches:
-                logging.info("    %s (%s)", match, ".".join(selector_matches[match]))
+            for match in sorted(
+                matches,
+                key=lambda key: _format_bound_key_for_log(key, selector_matches[key]),
+            ):
+                logging.info(
+                    "    %s (%s)",
+                    _format_bound_key_for_log(match, selector_matches[match]),
+                    ".".join(selector_matches[match]),
+                )
             resolved.update(matches)
         return resolved
+
+    def _format_bound_path_for_log(path) -> str:
+        if (
+            len(path) >= 5
+            and path[0] == "bot"
+            and path[1] in ("long", "short")
+            and path[2] == "strategy"
+        ):
+            return ".".join((path[1], *path[4:]))
+        if len(path) >= 3 and path[0] == "bot" and path[1] in ("long", "short"):
+            return ".".join(path[1:])
+        return ".".join(path)
+
+    def _format_bound_key_for_log(bound_key: str, path=None) -> str:
+        resolved_path = path if path is not None else resolve_optimization_bound_path(
+            config, bound_key
+        )
+        if resolved_path is None:
+            return bound_key
+        return _format_bound_path_for_log(resolved_path)
 
     def _log_bound_set(header: str, keys: set[str]) -> None:
         if not keys:
             logging.info("%s: none", header)
             return
         logging.info("%s:", header)
-        for key in sorted(keys):
-            logging.info("  %s", key)
+        for key in sorted(keys, key=_format_bound_key_for_log):
+            logging.info("  %s", _format_bound_key_for_log(key))
 
     def _resolve_bound_key_path(bound_key: str):
         return resolve_optimization_bound_path(config, bound_key)

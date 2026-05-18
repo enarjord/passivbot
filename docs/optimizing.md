@@ -257,10 +257,13 @@ Trade-offs:
 When you only want to adjust a handful of parameters and keep everything else fixed, use
 `--fine_tune_params` (short: `-ft`). Provide a comma-separated list of dotted config-path
 selectors to keep tunable; all other bounds are locked to their current config values
-before the run starts. Selectors match full path segments by prefix, not substring.
+before the run starts. Selectors match full path segments by prefix or suffix, not partial
+substrings.
 The leading `bot.` may be omitted for side-local paths, so `long.risk` is equivalent to
 `bot.long.risk`. A `*` segment may be used as a one-segment wildcard, for example
-`*.strategy.close` matches both long and short active-strategy close params.
+`*.strategy.close` matches both long and short active-strategy close params. A leaf selector
+such as `we_excess_allowance_pct` matches every bound whose config path ends with that
+parameter name.
 
 ```bash
 passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
@@ -273,7 +276,7 @@ configured. The optimizer logs each selector expansion on separate sorted lines 
 the run starts.
 
 `optimize.fixed_params` provides the config-file equivalent for selectors that should always
-be fixed to their current config values. It uses the same dotted path-prefix matching as
+be fixed to their current config values. It uses the same dotted path matching as
 `--fine_tune_params`.
 
 Useful examples:
