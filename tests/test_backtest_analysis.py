@@ -1,10 +1,13 @@
 import numpy as np
 import pandas as pd
+import pytest
 
 import backtest as bt
 import plotting
 from backtest import (
+    BacktestPayload,
     calc_backtest_completion_ratio,
+    execute_backtest,
     expand_analysis,
     parse_disabled_plot_groups,
     process_forager_fills,
@@ -313,7 +316,6 @@ def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     payload = BacktestPayload(
         bundle=object(),
         bot_params_list=[],
-        strategy_params_list=[],
         exchange_params=[],
         backtest_params={"metrics_only": True},
     )
