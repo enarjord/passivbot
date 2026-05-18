@@ -107,6 +107,55 @@ def _write_suite_candidate(
         json.dump(payload, f, indent=2)
 
 
+def _write_fill_suite_candidate(
+    path: Path,
+    name: str,
+    *,
+    adg: float,
+    p95_gap: float,
+    p99_gap: float,
+) -> None:
+    payload = {
+        "optimize": {
+            "scoring": [
+                {"metric": "adg_strategy_eq", "goal": "max"},
+                {"metric": "fills_gap_p99_hours", "goal": "min"},
+            ]
+        },
+        "suite_metrics": {
+            "metrics": {
+                "adg_strategy_eq": {
+                    "stats": {"mean": adg, "min": adg, "max": adg, "std": 0.0},
+                    "aggregated": adg,
+                    "scenarios": {},
+                },
+                "fills_gap_p95_hours": {
+                    "stats": {
+                        "mean": p95_gap,
+                        "min": p95_gap,
+                        "max": p95_gap,
+                        "std": 0.0,
+                    },
+                    "aggregated": p95_gap,
+                    "scenarios": {},
+                },
+                "fills_gap_p99_hours": {
+                    "stats": {
+                        "mean": p99_gap,
+                        "min": p99_gap,
+                        "max": p99_gap,
+                        "std": 0.0,
+                    },
+                    "aggregated": p99_gap,
+                    "scenarios": {},
+                },
+            }
+        },
+    }
+    with open(path / f"{name}.json", "w") as f:
+        json.dump(payload, f, indent=2)
+
+
 @pytest.fixture()
 def sample_pareto_dir(tmp_path: Path) -> Path:
     pareto_dir = tmp_path / "run" / "pareto"
@@ -406,6 +455,36 @@ def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_di
     assert result.candidate.path.stem == "balanced"
     assert "sharpe_ratio_strategy_pnl_rebased" in result.objective_values
     assert result.objective_values["sharpe_ratio_strategy_pnl_rebased"] == pytest.approx(1.4)
+
+
+def test_select_candidate_accepts_non_scoring_fill_metric_from_suite_metrics(tmp_path: Path):
+    pareto_dir = tmp_path / "run" / "pareto"
+    pareto_dir.mkdir(parents=True)
+    _write_fill_suite_candidate(
+        pareto_dir,
+        "low_p95_gap",
+        adg=0.01,
+        p95_gap=12.0,
+        p99_gap=80.0,
+    )
+    _write_fill_suite_candidate(
+        pareto_dir,
+        "high_p95_gap",
+        adg=0.01,
+        p95_gap=48.0,
+        p99_gap=80.0,
+    )
+
+    _pareto_dir, candidates, specs = load_candidates(pareto_dir)
+    result = select_candidate(
+        candidates,
+        specs,
+        method="ideal",
+        objectives_arg="adg_strategy_eq,fills_gap_p95_hours",
+    )
+
+    assert result.candidate.path.stem == "low_p95_gap"
+    assert result.objective_values["fills_gap_p95_hours"] == pytest.approx(12.0)
 
 
 def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Path, capsys):

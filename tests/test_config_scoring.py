@@ -22,3 +22,14 @@ def test_normalize_scoring_entries_accepts_new_ratio_metrics():
         ("exposure_ratio_usd", "max"),
         ("exposure_mean_ratio_w_usd", "max"),
     ]
+
+
+def test_default_objective_goal_recognizes_fill_activity_metrics():
+    assert default_objective_goal("fills_gap_p95_hours") == "min"
+    assert default_objective_goal("fills_gap_p99_hours") == "min"
+    assert default_objective_goal("fills_gap_longest_days") == "min"
+    assert default_objective_goal("fills_per_day") == "max"
+    assert default_objective_goal("fills_per_day_entry") == "max"
+    assert default_objective_goal("fills_active_days_ratio") == "max"
+    assert default_objective_goal("fills_top_symbol_share") == "min"
+    assert default_objective_goal("backtest_completion_ratio") == "max"
