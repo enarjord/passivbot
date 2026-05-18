@@ -203,6 +203,34 @@ def test_resolve_population_plan_uses_auto_nsga3_population_when_null():
     assert len(plan["ref_dirs"]) == 330
 
 
+def test_resolve_population_plan_uses_next_auto_nsga3_resolution_for_nine_objectives():
+    plan = pymoo_backend._resolve_pymoo_population_plan(
+        config={
+            "optimize": {
+                "backend": "pymoo",
+                "population_size": None,
+                "pymoo": {
+                    "algorithm": "auto",
+                    "algorithms": {
+                        "nsga3": {
+                            "ref_dirs": {
+                                "method": "das_dennis",
+                                "n_partitions": "auto",
+                            }
+                        }
+                    },
+                },
+            }
+        },
+        n_obj=9,
+    )
+
+    assert plan["requested_population_size"] is None
+    assert plan["actual_population_size"] == 495
+    assert plan["n_partitions"] == 4
+    assert len(plan["ref_dirs"]) == 495
+
+
 def test_build_algorithm_falls_back_to_nsga2_for_single_objective():
     bounds = [Bound(0.0, 1.0, 0.1) for _ in range(4)]
     config = {
