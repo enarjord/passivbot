@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import math
 import shutil
 from dataclasses import dataclass
@@ -354,25 +355,32 @@ def _write_outputs(output_dir: Path, pareto_dir: Path, members: Sequence[Compres
     output_dir = output_dir.expanduser().resolve()
     if output_dir == pareto_dir.resolve():
         raise ValueError("Refusing to write compressed output into the source Pareto directory.")
-    expected_files = {member.candidate.path.name for member in members}
-    expected_files.add("selection.json")
     if output_dir.exists():
-        unexpected_files = sorted(
-            path.name for path in output_dir.iterdir() if path.is_file() and path.name not in expected_files
-        )
-        if unexpected_files:
-            preview = ", ".join(unexpected_files[:5])
-            suffix = "" if len(unexpected_files) <= 5 else f", ... (+{len(unexpected_files) - 5} more)"
-            raise ValueError(
-                "Output directory contains files not produced by this selection. "
-                f"Use an empty output directory or remove stale files first: {preview}{suffix}"
+        existing_entries = sorted(path.name for path in output_dir.iterdir())
+        if existing_entries:
+            preview = ", ".join(existing_entries[:5])
+            suffix = "" if len(existing_entries) <= 5 else f", ... (+{len(existing_entries) - 5} more)"
+            logging.info(
+                "Output directory is non-empty; existing files will be left in place unless "
+                "selected outputs reuse the same filename: %s%s",
+                preview,
+                suffix,
             )
     output_dir.mkdir(parents=True, exist_ok=True)
     for member in members:
         destination = output_dir / member.candidate.path.name
         if destination.resolve() != member.candidate.path.resolve():
+            if destination.exists():
+                if destination.is_dir():
+                    raise IsADirectoryError(f"Output path is a directory: {destination}")
+                logging.info("Overwriting existing output file: %s", destination.name)
             shutil.copy2(member.candidate.path, destination)
-    (output_dir / "selection.json").write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True) + "\n")
+    selection_path = output_dir / "selection.json"
+    if selection_path.exists():
+        if selection_path.is_dir():
+            raise IsADirectoryError(f"Output path is a directory: {selection_path}")
+        logging.info("Overwriting existing output file: %s", selection_path.name)
+    selection_path.write_text(json.dumps(_json_ready(payload), indent=2, sort_keys=True) + "\n")
 
 
 def compress_from_args(args: argparse.Namespace) -> Dict[str, Any]:
