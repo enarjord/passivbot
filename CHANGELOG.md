@@ -5,7 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Added backtest `entry_interval_hours_mean`, `entry_interval_hours_median`, and `entry_interval_hours_max` analysis metrics, measuring gaps between normal initial entries per coin and side.
+- Fixed CCXT live startup so malformed metadata on unrelated ineligible exchange markets no longer blocks the bot, while executable symbols still fail loudly when required qty sizing metadata is missing.
 - Fixed Bybit UTA live balance parsing so Passivbot uses account equity minus perpetual UPNL as raw balance instead of double-applying UPNL from collateral `usdValue` fields.
+- Fixed KuCoin aggregate realized-PnL enrichment so positions-history rows are reconciled as cycle observations against reconstructed fill lifecycles only when unambiguous, preventing rapid or delayed position cycles from being assigned to the wrong close fill while ambiguous rows stay synthetic and refreshable.
 - Changed staged live bounded active 1m tail gaps to project provisional no-trade EMA inputs for close, quote-volume, and log-range instead of carrying forward latest-real EMA values; projected rows and EMA values are not persisted or reused once real candles arrive.
 - Live fill events now synthesize missing realized PnL from canonical fill history when exchange enrichment remains unavailable, with explicit synthetic/degraded provenance and later authoritative replacement when enriched data is fetched.
 - Added exponential backoff while live account refresh is blocked by pending realized-PnL enrichment, so stale KuCoin close fills no longer trigger continuous fill-history polling while PnL-dependent logic remains blocked.
@@ -13,6 +15,12 @@ All notable user-facing changes will be documented in this file.
 - Cleaned up `passivbot tool generate-mcap-list` startup output by routing through its normal CLI entrypoint and suppressing noisy symbol-map lock maintenance warnings.
 - Fixed live fill refreshes so cached close fills with pending realized PnL keep extending the incremental refresh window until exchange enrichment catches up, KuCoin positions-history enrichment uses a bounded delayed-record lookahead, and pending-PnL account refresh blocks no longer burn the generic restart budget.
 - Fixed backtest/data-downloader startup when the legacy `caches/ohlcv` path is a dangling symlink after moving to the v2 `caches/ohlcvs` store.
+- Increased the pymoo NSGA3 auto reference-direction cap from `330` to `500`, giving 9-objective auto-population optimizer runs `495` reference directions instead of `165`.
+- Restored `backtest_completion_ratio` in backtest analysis and optimizer suite metrics so default optimizer limits can reject early-stopped backtests without failing on a missing metric.
+- Changed optimizer scoring and limit handling to fail loudly when a configured metric is absent from backtest analysis instead of silently treating it as zero or no violation.
+- Fixed `passivbot tool pareto -o/--objectives` so stored fill-activity metrics such as `fills_gap_p95_hours` can be used for candidate selection even when they were not part of the optimizer run's original `optimize.scoring`.
+- Fixed `position_held_*` and `position_unchanged_*` backtest metrics so still-open positions are measured through the backtest end timestamp instead of stopping at the last fill.
+- Added `passivbot tool pareto-analyze` and `passivbot tool pareto-compress` for inspecting Pareto-front metric/config distributions and selecting compact representative subsets with optional copied JSON output. When `pareto-compress` writes to a non-empty output directory, it leaves unrelated files in place and overwrites only selected output filenames plus `selection.json`.
 
 ## v7.11.0 - 2026-05-13
 

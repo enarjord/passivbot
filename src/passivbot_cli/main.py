@@ -138,6 +138,21 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "launch Pareto dashboard (requires full install)",
         requires_full=True,
     ),
+    "pareto-analyze": CommandSpec(
+        "tools.pareto_analyzer",
+        "analyze Pareto front config and metric distributions (requires full install)",
+        requires_full=True,
+    ),
+    "pareto-analysis": CommandSpec(
+        "tools.pareto_analyzer",
+        "analyze Pareto front config and metric distributions (requires full install)",
+        requires_full=True,
+    ),
+    "pareto-compress": CommandSpec(
+        "tools.pareto_compress",
+        "select a compact representative subset from a Pareto front (requires full install)",
+        requires_full=True,
+    ),
     "pareto-explorer": CommandSpec(
         "tools.pareto_explorer",
         "select a single candidate from a Pareto front (requires full install)",

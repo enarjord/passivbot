@@ -264,6 +264,26 @@ class TestResolveCliLimitsOverride:
             },
         ]
 
+    def test_limit_entries_preserve_explicit_max_stat(self):
+        args = argparse.Namespace(
+            **{
+                "optimize.limits": None,
+                "limit_entries": ["fills_gap_p99_hours<72 stat=max"],
+                "clear_limits": False,
+            }
+        )
+
+        result = _resolve_cli_limits_override(args)
+
+        assert result == [
+            {
+                "metric": "fills_gap_p99_hours",
+                "penalize_if": "greater_than_or_equal",
+                "value": 72.0,
+                "stat": "max",
+            }
+        ]
+
     def test_limits_payload_replaces_existing_config_limits_before_appending(self):
         args = argparse.Namespace(
             **{
@@ -496,6 +516,20 @@ class TestFormatObjectives:
     def test_mixed_magnitude(self):
         result = _format_objectives([1000, 0.001, 10])
         assert result == "[1e+03, 0.001, 10]"
+
+    def test_dict_uses_scoring_keys_for_weighted_suite_objectives(self):
+        result = _format_objectives(
+            {"w_0": -0.00123, "w_1": 58.0},
+            scoring_keys=["adg_strategy_eq", "peak_recovery_days_strategy_eq"],
+        )
+        assert result == "[adg_strategy_eq=-0.00123, peak_recovery_days_strategy_eq=58]"
+
+    def test_dict_uses_named_objectives_before_weighted_suite_fallback(self):
+        result = _format_objectives(
+            {"adg_strategy_eq": 0.00123, "w_0": -999.0},
+            scoring_keys=["adg_strategy_eq"],
+        )
+        assert result == "[adg_strategy_eq=0.00123]"
 
 
 class TestIndividualToConfig:

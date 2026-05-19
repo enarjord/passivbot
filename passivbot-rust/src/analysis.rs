@@ -9,6 +9,14 @@ fn fallback_timestamp_ms(index: usize) -> u64 {
     (index as u64) * 60_000
 }
 
+fn fill_timestamp_ms(fill: &Fill) -> u64 {
+    if fill.timestamp_ms > 0 {
+        fill.timestamp_ms
+    } else {
+        fallback_timestamp_ms(fill.index)
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EquitySeriesMetrics {
     pub gain: f64,
@@ -126,7 +134,7 @@ fn analyze_backtest_basic(
     timestamps_ms: &[u64],
     exposures_series: &[f64],
 ) -> Analysis {
-    if fills.len() <= 1 {
+    if fills.is_empty() {
         return Analysis::default();
     }
     // Calculate daily equities
@@ -134,6 +142,13 @@ fn analyze_backtest_basic(
     let mut daily_eqs_mins = Vec::new(); // stores min equity of each day
 
     let use_timestamps = !timestamps_ms.is_empty() && timestamps_ms.len() == equities.len();
+    let analysis_end_ts = if use_timestamps {
+        timestamps_ms.last().copied()
+    } else {
+        equities.len().checked_sub(1).map(fallback_timestamp_ms)
+    }
+    .or_else(|| fills.last().map(fill_timestamp_ms))
+    .unwrap_or(0);
     let mut current_day = if use_timestamps {
         (timestamps_ms[0] / MS_PER_DAY) as usize
     } else {
@@ -459,11 +474,7 @@ fn analyze_backtest_basic(
             "short"
         };
         let key = format!("{}_{}", fill.coin, side);
-        let fill_ts = if fill.timestamp_ms > 0 {
-            fill.timestamp_ms
-        } else {
-            fallback_timestamp_ms(fill.index)
-        };
+        let fill_ts = fill_timestamp_ms(fill);
 
         // Record the opening time if the position is new
         if !positions_opened.contains_key(&key) {
@@ -500,13 +511,11 @@ fn analyze_backtest_basic(
     }
 
     // Add unchanged durations and total durations for remaining open positions
-    let last_ts = fills.last().map_or(0u64, |f| {
-        if f.timestamp_ms > 0 {
-            f.timestamp_ms
-        } else {
-            fallback_timestamp_ms(f.index)
-        }
-    });
+    let last_ts = fills
+        .last()
+        .map(fill_timestamp_ms)
+        .map(|fill_ts| analysis_end_ts.max(fill_ts))
+        .unwrap_or(analysis_end_ts);
     for (key, &start_idx) in positions_opened.iter() {
         durations_ms.push(last_ts.saturating_sub(start_idx)); // Total duration for open positions
         if let Some(&last_time) = last_fill_time.get(key) {
@@ -666,11 +675,7 @@ fn analyze_backtest_basic(
         },
         false,
     );
-    let final_timestamp_ms = if use_timestamps {
-        timestamps_ms.last().copied()
-    } else {
-        equities.len().checked_sub(1).map(fallback_timestamp_ms)
-    };
+    let final_timestamp_ms = Some(analysis_end_ts);
     let peak_recovery_hours_pnl = calc_peak_recovery_hours_pnl(fills, final_timestamp_ms);
     let peak_recovery_days_equity = peak_recovery_hours_equity / 24.0;
     let peak_recovery_days_pnl = peak_recovery_hours_pnl / 24.0;
@@ -1454,6 +1459,46 @@ mod tests {
             twe_short: if is_long { 0.0 } else { -0.1 },
             twe_net: if is_long { 0.1 } else { -0.1 },
         }
+    }
+
+    #[test]
+    fn position_duration_metrics_include_open_tail_to_backtest_end() {
+        let start = 1_740_000_000_000_u64;
+        let timestamps: Vec<u64> = (0..=10).map(|i| start + i * MS_PER_DAY).collect();
+        let equities: Vec<f64> = vec![10000.0; timestamps.len()];
+        let exposures_series: Vec<f64> = vec![];
+        let fills = vec![
+            make_trade_fill(0, timestamps[0], "BTC", 0.0, 0.1, 0.1, 1000.0, true),
+            make_trade_fill(1, timestamps[1], "BTC", 0.0, 0.1, 0.2, 1000.0, true),
+        ];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+
+        assert!((analysis.position_held_days_max - 10.0).abs() < 1e-12);
+        assert!((analysis.position_unchanged_days_max - 9.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn single_open_fill_position_duration_uses_backtest_end() {
+        let start = 1_740_000_000_000_u64;
+        let timestamps: Vec<u64> = (0..=3).map(|i| start + i * MS_PER_DAY).collect();
+        let equities: Vec<f64> = vec![10000.0; timestamps.len()];
+        let exposures_series: Vec<f64> = vec![];
+        let fills = vec![make_trade_fill(
+            0,
+            timestamps[0],
+            "BTC",
+            0.0,
+            0.1,
+            0.1,
+            1000.0,
+            true,
+        )];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures_series);
+
+        assert!((analysis.position_held_days_max - 3.0).abs() < 1e-12);
+        assert!((analysis.position_unchanged_days_max - 3.0).abs() < 1e-12);
     }
 
     #[test]

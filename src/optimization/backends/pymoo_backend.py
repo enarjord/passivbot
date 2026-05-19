@@ -51,7 +51,7 @@ DEFAULT_PYMOO_REF_DIRS = {
     "method": "das_dennis",
     "n_partitions": "auto",
 }
-DEFAULT_AUTO_REF_DIR_TARGET = 330
+DEFAULT_AUTO_REF_DIR_TARGET = 500
 SUPPORTED_PYMOO_ALGORITHMS = {"auto", "nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
