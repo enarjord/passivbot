@@ -143,6 +143,8 @@ ANALYSIS_SHARED_KEYS = SHARED_METRICS | {
     "entry_initial_balance_pct_short",
     "entry_interval_hours_mean",
     "entry_interval_hours_median",
+    "entry_interval_hours_p95",
+    "entry_interval_hours_p99",
     "entry_interval_hours_max",
     "drawdown_worst_strategy_eq_long",
     "drawdown_worst_strategy_eq_short",

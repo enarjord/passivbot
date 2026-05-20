@@ -25,6 +25,8 @@ def test_normalize_scoring_entries_accepts_new_ratio_metrics():
 
 
 def test_default_objective_goal_recognizes_fill_activity_metrics():
+    assert default_objective_goal("entry_interval_hours_p95") == "min"
+    assert default_objective_goal("entry_interval_hours_p99") == "min"
     assert default_objective_goal("fills_gap_p95_hours") == "min"
     assert default_objective_goal("fills_gap_p99_hours") == "min"
     assert default_objective_goal("fills_gap_longest_days") == "min"

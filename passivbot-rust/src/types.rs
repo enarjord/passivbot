@@ -713,6 +713,8 @@ pub struct Analysis {
     pub entry_initial_balance_pct_short: f64,
     pub entry_interval_hours_mean: f64,
     pub entry_interval_hours_median: f64,
+    pub entry_interval_hours_p95: f64,
+    pub entry_interval_hours_p99: f64,
     pub entry_interval_hours_max: f64,
 
     pub hard_stop_triggers: u32,
@@ -862,6 +864,8 @@ impl Default for Analysis {
             entry_initial_balance_pct_short: 0.0,
             entry_interval_hours_mean: 0.0,
             entry_interval_hours_median: 0.0,
+            entry_interval_hours_p95: 0.0,
+            entry_interval_hours_p99: 0.0,
             entry_interval_hours_max: 0.0,
             hard_stop_triggers: 0,
             hard_stop_triggers_per_year: 0.0,

@@ -606,28 +606,30 @@ fn analyze_backtest_basic(
             entry_intervals_ms.push(window[1].saturating_sub(window[0]));
         }
     }
-    let entry_interval_hours_mean = if !entry_intervals_ms.is_empty() {
-        entry_intervals_ms.iter().sum::<u64>() as f64
-            / (entry_intervals_ms.len() as f64 * MS_PER_HOUR as f64)
-    } else {
-        0.0
-    };
-    let entry_interval_hours_max = if !entry_intervals_ms.is_empty() {
-        *entry_intervals_ms.iter().max().unwrap() as f64 / MS_PER_HOUR as f64
-    } else {
-        0.0
-    };
-    let entry_interval_hours_median = if !entry_intervals_ms.is_empty() {
-        let mut sorted = entry_intervals_ms.clone();
+    let (
+        entry_interval_hours_mean,
+        entry_interval_hours_median,
+        entry_interval_hours_p95,
+        entry_interval_hours_p99,
+        entry_interval_hours_max,
+    ) = if !entry_intervals_ms.is_empty() {
+        let mut sorted = entry_intervals_ms;
         sorted.sort_unstable();
         let mid = sorted.len() / 2;
-        if sorted.len() % 2 == 0 {
-            (sorted[mid - 1] + sorted[mid]) as f64 / (2.0 * MS_PER_HOUR as f64)
+        let median = if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] as f64 + sorted[mid] as f64) / (2.0 * MS_PER_HOUR as f64)
         } else {
             sorted[mid] as f64 / MS_PER_HOUR as f64
-        }
+        };
+        (
+            sorted.iter().sum::<u64>() as f64 / (sorted.len() as f64 * MS_PER_HOUR as f64),
+            median,
+            percentile_sorted_u64(&sorted, 95.0) / MS_PER_HOUR as f64,
+            percentile_sorted_u64(&sorted, 99.0) / MS_PER_HOUR as f64,
+            *sorted.last().unwrap() as f64 / MS_PER_HOUR as f64,
+        )
     } else {
-        0.0
+        (0.0, 0.0, 0.0, 0.0, 0.0)
     };
     let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
         if completed_trades.is_empty() {
@@ -719,6 +721,8 @@ fn analyze_backtest_basic(
     analysis.position_unchanged_days_max = position_unchanged_days_max;
     analysis.entry_interval_hours_mean = entry_interval_hours_mean;
     analysis.entry_interval_hours_median = entry_interval_hours_median;
+    analysis.entry_interval_hours_p95 = entry_interval_hours_p95;
+    analysis.entry_interval_hours_p99 = entry_interval_hours_p99;
     analysis.entry_interval_hours_max = entry_interval_hours_max;
     analysis.win_rate = win_rate;
     analysis.trade_loss_max = trade_loss_max;
@@ -1100,6 +1104,25 @@ fn median(values: &[f64]) -> f64 {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]
+    }
+}
+
+fn percentile_sorted_u64(sorted: &[u64], percentile: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0] as f64;
+    }
+    let pct = percentile.clamp(0.0, 100.0);
+    let rank = (pct / 100.0) * (sorted.len() - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted[lower] as f64
+    } else {
+        let weight = rank - lower as f64;
+        sorted[lower] as f64 + (sorted[upper] as f64 - sorted[lower] as f64) * weight
     }
 }
 
@@ -1679,6 +1702,8 @@ mod tests {
 
         assert!((analysis.entry_interval_hours_mean - 12.5).abs() < 1e-9);
         assert!((analysis.entry_interval_hours_median - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_p95 - 14.75).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_p99 - 14.95).abs() < 1e-9);
         assert!((analysis.entry_interval_hours_max - 15.0).abs() < 1e-9);
     }
 
