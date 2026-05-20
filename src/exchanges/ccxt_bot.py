@@ -856,7 +856,8 @@ class CCXTBot(Passivbot):
         from CCXT's unified market structure.
         """
         super().set_market_specific_settings()
-        for symbol, market in self.markets_dict.items():
+        for symbol in sorted(self.symbols_requiring_market_sizing()):
+            market = self.markets_dict[symbol]
             self.symbol_ids[symbol] = market["id"]
             self.min_costs[symbol] = market["limits"]["cost"]["min"] or 0.1
             qty_step = market["precision"]["amount"]

@@ -63,6 +63,8 @@ def _make_analysis_entry(value):
         "high_exposure_days_max_short",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "entry_interval_hours_p95",
+        "entry_interval_hours_p99",
     ]
     analysis = {key: value for key in base_keys}
     analysis.update(
@@ -301,11 +303,16 @@ def test_expand_analysis_includes_backtest_completion_ratio_when_available():
 def test_execute_backtest_metrics_only_keeps_completion_ratio(monkeypatch):
     analysis_usd = _make_analysis_entry(0.25)
     analysis_btc = _make_analysis_entry(0.25)
-    analysis_usd["backtest_completion_ratio"] = 1.0
-    analysis_btc["backtest_completion_ratio"] = 1.0
+    equities = np.array(
+        [
+            [1767225600000],
+            [1767311940000],
+        ],
+        dtype=np.float64,
+    )
 
     def fake_run_backtest_bundle(*_args):
-        return None, None, analysis_usd, analysis_btc
+        return None, equities, analysis_usd, analysis_btc
 
     monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
     payload = BacktestPayload(
@@ -338,9 +345,16 @@ def test_execute_backtest_captures_metrics_only_rust_profile(monkeypatch):
     analysis_usd = _make_analysis_entry(0.25)
     analysis_btc = _make_analysis_entry(0.25)
     rust_profile = {"rust_simulation_ms": 12.5, "rust_analysis_pair_ms": 3.25}
+    equities = np.array(
+        [
+            [1767225600000],
+            [1767311940000],
+        ],
+        dtype=np.float64,
+    )
 
     def fake_run_backtest_bundle(*_args):
-        return None, None, analysis_usd, analysis_btc, {"_rust_profile": rust_profile}
+        return None, equities, analysis_usd, analysis_btc, {"_rust_profile": rust_profile}
 
     monkeypatch.setattr(bt.pbr, "run_backtest_bundle", fake_run_backtest_bundle)
     payload = BacktestPayload(

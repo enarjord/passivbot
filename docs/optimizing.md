@@ -142,7 +142,8 @@ The main NSGA-III-specific knob is:
   - In that case Passivbot resolves the NSGA-III reference directions first and then uses the
     number of reference directions as the population size.
   - For the default 8-objective setup, that means `population_size = 330`.
-  - For `pymoo` + `nsga2`, set an explicit integer.
+  - For `pymoo` + `nsga2`, `null` means “auto” and currently resolves to `250`.
+  - Set an explicit integer when you want to override either auto behavior.
   - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in
     place.
 
@@ -192,7 +193,9 @@ Recommended defaults for typical Passivbot runs:
   variation much more local or much more aggressive.
 - Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
-- Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for the default Passivbot NSGA-III behavior.
+- Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
+  NSGA-II resolves null population size to `250`, while NSGA-III derives it from reference
+  directions.
 - Keep `pareto_max_size: 1000` unless archived front updates become a measured bottleneck for your
   machine or workflow.
 - If you need more or less exploration pressure, change `n_partitions` or override

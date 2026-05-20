@@ -536,10 +536,18 @@ def _format_available_metric_keys(metrics: dict[str, Any], *, limit: int = 20) -
 
 def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
     name = exc.__class__.__name__
-    if name != "PanicException":
-        return False
     message = str(exc)
-    return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
+    if name == "PanicException":
+        return any(pattern in message for pattern in _RECOVERABLE_BACKTEST_PANIC_PATTERNS)
+    if isinstance(exc, ValueError):
+        return "hard-stop evaluation failed" in message and any(
+            pattern in message
+            for pattern in (
+                "equity must be finite and > 0",
+                "peak_strategy_equity must be finite and > 0",
+            )
+        )
+    return False
 
 
 def _build_invalid_candidate_metrics(

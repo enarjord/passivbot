@@ -2459,6 +2459,156 @@ class TestEvaluator:
         assert metrics["stats"] == {}
         assert build_payload.call_args.kwargs["metrics_only"] is True
 
+    def test_evaluate_converts_recoverable_backtest_value_error_to_penalty(self):
+        from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w", "drawdown_worst_usd"]
+
+        evaluator = Evaluator(
+            hlcvs_specs={"binance": object()},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            config=mock_config,
+            timestamps={"binance": None},
+        )
+        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
+        evaluator.shared_btc_np["binance"] = None
+
+        individual = DummyIndividual(
+            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
+        )
+
+        with patch("optimize.build_backtest_payload", return_value=object()) as build_payload, patch(
+            "optimize.execute_backtest",
+            side_effect=ValueError(
+                "pside hard-stop evaluation failed at k 277412 ts 1765207920000 "
+                "strategy_equity -0.1245573841258647 peak_strategy_equity 0.4814953389800394 "
+                "pside 1: equity must be finite and > 0"
+            ),
+        ):
+            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+
+        assert objectives == (0.0, 0.0)
+        assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert metrics["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "ValueError" in metrics["error"]
+        assert metrics["stats"] == {}
+        assert build_payload.call_args.kwargs["metrics_only"] is True
+
+    def test_evaluate_keeps_unrelated_value_errors_fatal(self):
+        from optimize import Evaluator
+        from config_utils import get_template_config
+
+        class DummyIndividual(list):
+            pass
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w"]
+
+        evaluator = Evaluator(
+            hlcvs_specs={"binance": object()},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            config=mock_config,
+            timestamps={"binance": None},
+        )
+        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
+        evaluator.shared_btc_np["binance"] = None
+
+        individual = DummyIndividual(
+            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits)
+        )
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=ValueError("optimizer scoring metric is missing"),
+        ):
+            with pytest.raises(ValueError, match="optimizer scoring metric is missing"):
+                evaluator.evaluate(individual, [])
+
+    def test_pymoo_async_runner_returns_penalty_for_recoverable_backtest_value_error(self):
+        from optimize import Evaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
+        from config_utils import get_template_config
+        from optimization.problem import PymooAsyncRecordingRunner
+
+        class FakeAsyncResult:
+            def __init__(self, value=None, exc=None):
+                self._value = value
+                self._exc = exc
+
+            def ready(self):
+                return True
+
+            def get(self):
+                if self._exc is not None:
+                    raise self._exc
+                return self._value
+
+        class FakeAsyncPool:
+            def apply_async(self, fn, args=()):
+                try:
+                    return FakeAsyncResult(value=fn(*args))
+                except BaseException as exc:
+                    return FakeAsyncResult(exc=exc)
+
+        mock_config = get_template_config()
+        mock_config["optimize"]["limits"] = []
+        mock_config["optimize"]["scoring"] = ["adg_pnl_w", "drawdown_worst_usd"]
+
+        evaluator = Evaluator(
+            hlcvs_specs={"binance": object()},
+            btc_usd_specs={},
+            msss={"binance": {}},
+            config=mock_config,
+            timestamps={"binance": None},
+        )
+        evaluator.shared_hlcvs_np["binance"] = np.zeros((1, 1, 5))
+        evaluator.shared_btc_np["binance"] = None
+        recorder = MagicMock()
+        runner = PymooAsyncRecordingRunner(
+            evaluator=evaluator,
+            has_constraints=True,
+            n_obj=2,
+            pool=FakeAsyncPool(),
+            recorder=recorder,
+            template={"optimize": {"backend": "pymoo"}},
+            build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
+                "bot": {"long": {"a": float(vector[0])}},
+                "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
+                **template,
+            },
+            overrides_fn=object(),
+        )
+        individual = np.asarray(
+            config_to_individual(mock_config, evaluator.bounds, evaluator.sig_digits),
+            dtype=np.float64,
+        )
+
+        with patch("optimize.build_backtest_payload", return_value=object()), patch(
+            "optimize.execute_backtest",
+            side_effect=ValueError(
+                "pside hard-stop evaluation failed at k 277412 ts 1765207920000 "
+                "strategy_equity -0.1245573841258647 peak_strategy_equity 0.4814953389800394 "
+                "pside 1: equity must be finite and > 0"
+            ),
+        ):
+            results = runner(object(), [individual])
+
+        assert len(results) == 1
+        assert results[0]["F"].tolist() == [0.0, 0.0]
+        assert results[0]["G"].tolist() == [INVALID_BACKTEST_CANDIDATE_PENALTY]
+        assert recorder.record.call_count == 1
+        recorded = recorder.record.call_args.args[0]
+        assert recorded["metrics"]["constraint_violation"] == INVALID_BACKTEST_CANDIDATE_PENALTY
+        assert "ValueError" in recorded["metrics"]["error"]
+
     def test_suite_evaluate_converts_recoverable_backtest_panic_to_penalty(self):
         from optimize import Evaluator, SuiteEvaluator, INVALID_BACKTEST_CANDIDATE_PENALTY
         from config_utils import get_template_config
