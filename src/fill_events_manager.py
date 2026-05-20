@@ -53,6 +53,7 @@ PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED = "authoritative_cycle_reconciled"
 PNL_SOURCE_PENDING = "pending"
 PNL_SOURCE_SYNTHETIC_EXACT = "synthetic_fill_reconstruction_exact"
 PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
+PNL_CONTRACT_GROSS_BEFORE_FEES = "gross_before_fees"
 
 
 class FillEventCacheDiskFullError(RuntimeError):
@@ -618,6 +619,7 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
             aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
             aggregated[key]["pnl_source"] = _payload_pnl_source(ev)
             aggregated[key]["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason") or "")
+            aggregated[key]["pnl_contract"] = str(ev.get("pnl_contract") or "")
             aggregated[key]["fees"] = _merge_fee_lists(ev.get("fees"), None)
             aggregated[key]["raw"] = _normalize_raw_field(ev.get("raw"))
             aggregated[key]["_price_numerator"] = float(ev.get("price", 0.0)) * float(
@@ -641,6 +643,8 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 agg["pnl_source"] = _payload_pnl_source(ev)
                 if ev.get("pnl_synthetic_reason"):
                     agg["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason"))
+            if ev.get("pnl_contract") == PNL_CONTRACT_GROSS_BEFORE_FEES:
+                agg["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
             agg["fees"] = _merge_fee_lists(agg.get("fees"), ev.get("fees"))
             agg["raw"] = _normalize_raw_field(agg.get("raw")) + _normalize_raw_field(ev.get("raw"))
             agg["_price_numerator"] = float(agg.get("_price_numerator", 0.0)) + float(
@@ -816,6 +820,7 @@ class FillEvent:
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
     pnl_source: str = PNL_SOURCE_AUTHORITATIVE
     pnl_synthetic_reason: str = ""
+    pnl_contract: str = PNL_CONTRACT_GROSS_BEFORE_FEES
 
     @property
     def key(self) -> str:
@@ -835,6 +840,7 @@ class FillEvent:
             "pnl_status": self.pnl_status,
             "pnl_source": self.pnl_source,
             "pnl_synthetic_reason": self.pnl_synthetic_reason,
+            "pnl_contract": self.pnl_contract,
             "fees": self.fees,
             "pb_order_type": self.pb_order_type,
             "position_side": self.position_side,
@@ -885,6 +891,7 @@ class FillEvent:
                 )
             ),
             pnl_synthetic_reason=str(data.get("pnl_synthetic_reason") or ""),
+            pnl_contract=str(data.get("pnl_contract") or ""),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -2431,6 +2438,7 @@ class FillEventsManager:
                     ev["pnl_status"] = "complete"
                     ev["pnl_source"] = source
                     ev["pnl_synthetic_reason"] = reason
+                    ev["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
                     synthesized.append(ev)
                     try:
                         days_touched.add(_day_key(int(ev["timestamp"])))
@@ -2494,16 +2502,33 @@ class FillEventsManager:
 
     def _canonicalize_cached_pnl_contract(self, payload: List[Dict[str, object]]) -> set[str]:
         """Repair cached rows that predate the gross-PnL/fee-separated contract."""
-        if self.exchange.lower() != "kucoin" or not payload:
+        if not payload:
             return set()
 
         days_touched: set[str] = set()
         repaired = 0
+        migrated_synthetic_closes = 0
         for ev in payload:
-            if _is_close_payload(ev):
+            fee_cost = _fee_cost(ev.get("fees"))
+            if (
+                _is_close_payload(ev)
+                and _is_synthetic_pnl_source(_payload_pnl_source(ev))
+                and str(ev.get("pnl_contract") or "") != PNL_CONTRACT_GROSS_BEFORE_FEES
+                and fee_cost > 0.0
+            ):
+                ev["pnl"] = float(ev.get("pnl") or 0.0) + fee_cost
+                ev["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
+                repaired += 1
+                migrated_synthetic_closes += 1
+                try:
+                    days_touched.add(_day_key(int(ev["timestamp"])))
+                except Exception:
+                    pass
+                continue
+
+            if self.exchange.lower() != "kucoin" or _is_close_payload(ev):
                 continue
             pnl = float(ev.get("pnl") or 0.0)
-            fee_cost = _fee_cost(ev.get("fees"))
             if fee_cost <= 0.0:
                 continue
             if abs(pnl + fee_cost) > max(1e-12, fee_cost * 1e-9):
@@ -2512,6 +2537,7 @@ class FillEventsManager:
             ev["pnl_status"] = "complete"
             ev["pnl_source"] = PNL_SOURCE_AUTHORITATIVE
             ev["pnl_synthetic_reason"] = ""
+            ev["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
             repaired += 1
             try:
                 days_touched.add(_day_key(int(ev["timestamp"])))
@@ -2520,10 +2546,12 @@ class FillEventsManager:
 
         if repaired:
             logger.warning(
-                "[fills] repaired cached KuCoin entry PnL fee-netting rows | exchange=%s user=%s events=%d",
+                "[fills] repaired cached fill PnL fee-netting rows | exchange=%s user=%s events=%d "
+                "synthetic_closes=%d",
                 self.exchange,
                 self.user,
                 repaired,
+                migrated_synthetic_closes,
             )
         return days_touched
 
@@ -2612,6 +2640,7 @@ class FillEventsManager:
             close["pnl_status"] = "complete"
             close["pnl_source"] = PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
             close["pnl_synthetic_reason"] = ""
+            close["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
             try:
                 days_touched.add(_day_key(int(close["timestamp"])))
             except (KeyError, TypeError, ValueError, OverflowError):
@@ -3089,6 +3118,7 @@ class FillEventsManager:
             days_touched: set[str] = set()
             for raw in batch:
                 raw.setdefault("raw", [])
+                raw.setdefault("pnl_contract", PNL_CONTRACT_GROSS_BEFORE_FEES)
                 try:
                     event = FillEvent.from_dict(raw)
                 except ValueError as exc:
@@ -3119,6 +3149,7 @@ class FillEventsManager:
                     merged["pnl_status"] = prev.pnl_status
                     merged["pnl_source"] = prev.pnl_source
                     merged["pnl_synthetic_reason"] = prev.pnl_synthetic_reason
+                    merged["pnl_contract"] = prev.pnl_contract
                     event = FillEvent.from_dict(merged)
                 updated_map[event.id] = event
                 if source_key:

@@ -85,6 +85,29 @@ def test_market_snapshot_ticker_strategy_defaults_to_symbols_for_kucoin():
     assert bot._market_snapshot_ticker_strategy() == "symbols"
 
 
+def test_fill_event_log_displays_net_pnl():
+    bot = Passivbot.__new__(Passivbot)
+    event = SimpleNamespace(
+        symbol="BTC/USDT:USDT",
+        position_side="long",
+        pb_order_type="close_grid_long",
+        side="sell",
+        qty=-1.0,
+        price=101.0,
+        timestamp=1_800_000_000_000,
+        datetime="",
+        pnl=1.0,
+        pnl_status="complete",
+        fees={"currency": "USDT", "cost": 0.1},
+        client_order_id="",
+        id="fill-1",
+    )
+
+    msg = bot._log_fill_event(event)
+
+    assert "net_pnl=+0.9 USDT" in msg
+
+
 def test_market_snapshot_ticker_strategy_respects_explicit_override():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
@@ -705,6 +728,69 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     assert sorted(
         symbol for symbol, timeframe in cm.calls if timeframe == "1m"
     ) == sorted(bot.c_mults)
+
+
+@pytest.mark.asyncio
+async def test_balance_equity_history_applies_dict_shaped_fees(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = {}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 1
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    symbol = "BTC/USDT:USDT"
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, symbol_, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 60_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": -1.0,
+            "price": 101.0,
+            "pnl": 1.0,
+            "fees": {"currency": "USDT", "cost": 0.1},
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
+
+    assert history["timeline"][-1]["realized_pnl"] == pytest.approx(0.9)
+    assert history["timeline"][-1]["balance"] == pytest.approx(100.0)
 
 
 @pytest.mark.asyncio

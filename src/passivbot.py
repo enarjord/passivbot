@@ -41,6 +41,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
+    fill_event_fee_paid,
     fill_event_net_pnl,
     fill_event_pnl_pending,
 )
@@ -9775,8 +9776,9 @@ class Passivbot:
             if fill_event_pnl_pending(event):
                 msg += ", pnl=pending"
             else:
-                pnl_sign = "+" if event.pnl >= 0 else ""
-                msg += f", pnl={pnl_sign}{round_dynamic(event.pnl, 3)} USDT"
+                net_pnl = fill_event_net_pnl(event)
+                pnl_sign = "+" if net_pnl >= 0 else ""
+                msg += f", net_pnl={pnl_sign}{round_dynamic(net_pnl, 3)} USDT"
 
         # Add client_order_id for unknown orders
         if order_type == "unknown" and event.client_order_id:
@@ -9798,16 +9800,20 @@ class Passivbot:
 
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
-        self._health_pnl += sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+        )
 
         if len(new_events) > 20:
             # Truncate to summary
             pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
-            total_pnl = sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+            total_pnl = sum(
+                fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+            )
             pnl_sign = "+" if total_pnl >= 0 else ""
             pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
             logging.info(
-                "[fill] %d fills, pnl=%s%s USDT%s",
+                "[fill] %d fills, net_pnl=%s%s USDT%s",
                 len(new_events),
                 pnl_sign,
                 round_dynamic(total_pnl, 3),
@@ -9832,10 +9838,12 @@ class Passivbot:
         """Log realized-PnL enrichment for already seen close fills."""
         if not events:
             return
-        self._health_pnl += sum(ev.pnl for ev in events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in events if not fill_event_pnl_pending(ev)
+        )
         for event in sorted(events, key=lambda e: e.timestamp):
             logging.info(
-                "[fill] enriched realized pnl for previously pending fill | %s",
+                "[fill] enriched realized net_pnl for previously pending fill | %s",
                 self._log_fill_event(event),
             )
 
@@ -10368,6 +10376,8 @@ class Passivbot:
                     fee_cost = _safe_float(fee_obj.get("cost", 0.0), 0.0)
                 elif isinstance(fee_obj, (int, float, str)):
                     fee_cost = _safe_float(fee_obj, 0.0)
+                elif isinstance(fill.get("fees"), dict):
+                    fee_cost = -fill_event_fee_paid(fill)
                 elif isinstance(fill.get("fees"), (list, tuple)):
                     fee_cost = sum(
                         _safe_float(x.get("cost", 0.0), 0.0)

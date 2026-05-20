@@ -3874,6 +3874,49 @@ async def test_manager_repairs_cached_kucoin_entry_fee_netted_pnl(tmp_path: Path
     assert reloaded.pnl == pytest.approx(0.0)
 
 
+@pytest.mark.asyncio
+async def test_manager_migrates_cached_synthetic_close_fee_netted_pnl_once(tmp_path: Path):
+    ts = 1_700_000_000_000
+    entry = _kucoin_manager_fill("entry", ts, side="buy", qty=1.0, price=10.0)
+    stale_close = _kucoin_manager_fill(
+        "close-stale",
+        ts + 60_000,
+        side="sell",
+        qty=-1.0,
+        price=11.0,
+        fees={"currency": "USDT", "cost": 0.1},
+    )
+    stale_close["pnl"] = 0.9
+    stale_close["pnl_status"] = "complete"
+    stale_close["pnl_source"] = fem.PNL_SOURCE_SYNTHETIC_EXACT
+
+    cache_path = tmp_path / "synthetic_close_migration"
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    manager.cache.save([FillEvent.from_dict(entry), FillEvent.from_dict(stale_close)])
+
+    await manager.ensure_loaded()
+    close = [event for event in manager.get_events() if event.id == "close-stale"][0]
+    assert close.pnl == pytest.approx(1.0)
+    assert fem.fill_event_net_pnl(close) == pytest.approx(0.9)
+    assert close.pnl_contract == fem.PNL_CONTRACT_GROSS_BEFORE_FEES
+
+    reloaded = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await reloaded.ensure_loaded()
+    close = [event for event in reloaded.get_events() if event.id == "close-stale"][0]
+    assert close.pnl == pytest.approx(1.0)
+    assert fem.fill_event_net_pnl(close) == pytest.approx(0.9)
+
+
 def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():
     fetcher = KucoinFetcher(api=None)
     close_ts = 1_700_000_000_000

@@ -43,6 +43,7 @@ class FillEvent:
     psize: float = 0.0         # Position size after this fill (computed)
     pprice: float = 0.0        # Position VWAP after this fill (computed)
     raw: List[Dict] = None      # Original exchange payloads (multiple sources)
+    pnl_contract: str = ""      # Empty for legacy cache rows; current rows use "gross_before_fees"
 ```
 
 > **Note**: The `raw` field is `List[Dict]` because many exchanges require multiple API calls to construct a single FillEvent. For example:
