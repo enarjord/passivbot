@@ -35,8 +35,8 @@ class FillEvent:
     side: str                  # "buy" or "sell" (lowercase)
     qty: float                 # Signed quantity (buy=+, sell=-)
     price: float               # Execution price
-    pnl: float                 # Realized PnL for this fill
-    fees: Optional[Sequence]   # Fee structure (currency, cost)
+    pnl: float                 # Gross realized price PnL before fees
+    fees: Optional[Sequence]   # Fee structure with positive costs
     pb_order_type: str         # Passivbot order type (e.g., "entry_grid_normal_long")
     position_side: str         # "long" or "short" (lowercase)
     client_order_id: str       # Client order ID (passivbot custom ID)
@@ -57,6 +57,11 @@ class FillEvent:
 All fields except `psize`, `pprice`, `fees`, and `raw` are required when constructing a `FillEvent`. The dataclass will raise `ValueError` if any required field is missing.
 
 ### Sign Conventions
+
+`FillEvent.pnl` follows the Rust/backtest fill contract: it is realized price PnL before
+fees. Entry/add fills therefore have `pnl = 0.0`. Fees are stored separately in `fees`
+as positive costs; the signed Rust-style fee cash flow is derived as
+`fee_paid = -sum(fees.cost)`, and net realized PnL is derived as `pnl + fee_paid`.
 
 | Field | Long Position | Short Position |
 |-------|---------------|----------------|

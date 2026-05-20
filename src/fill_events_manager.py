@@ -300,6 +300,23 @@ def _fee_cost(fees: Optional[Sequence]) -> float:
     return total
 
 
+def fill_event_fee_paid(event: object) -> float:
+    """Return the signed fee cash flow for a fill event.
+
+    FillEvent fees are stored as positive costs; Rust/backtest fills expose the
+    corresponding signed `fee_paid` cash flow as a negative value.
+    """
+    if event is None:
+        return 0.0
+    fees = event.get("fees") if isinstance(event, dict) else getattr(event, "fees", None)
+    return -_fee_cost(fees)
+
+
+def fill_event_net_pnl(event: object) -> float:
+    pnl = event.get("pnl", 0.0) if isinstance(event, dict) else getattr(event, "pnl", 0.0)
+    return float(pnl or 0.0) + fill_event_fee_paid(event)
+
+
 def _payload_pnl_source(payload: Dict[str, object]) -> str:
     source = str(payload.get("pnl_source") or "").strip().lower()
     if source:
@@ -774,7 +791,11 @@ class PnlObservation:
 
 @dataclass(frozen=True)
 class FillEvent:
-    """Canonical representation of a single fill event."""
+    """Canonical representation of a single fill event.
+
+    `pnl` is gross realized price PnL before fees. Fees are stored separately
+    in `fees`; net PnL is `fill_event_net_pnl(event)`.
+    """
 
     id: str
     timestamp: int
@@ -899,7 +920,13 @@ def _is_close_payload(payload: Dict[str, object]) -> bool:
         closed_size = float(payload.get("closed_size") or 0.0)
     except Exception:
         closed_size = 0.0
-    return closed_size > 0.0
+    if closed_size > 0.0:
+        return True
+    side = str(payload.get("side") or "").lower()
+    position_side = str(payload.get("position_side") or payload.get("pside") or "").lower()
+    return (side == "sell" and position_side == "long") or (
+        side == "buy" and position_side == "short"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -2332,10 +2359,12 @@ class FillEventsManager:
                 payload = [ev.to_dict() for ev in self._events]
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
+                canonicalized_days = self._canonicalize_cached_pnl_contract(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
-                if synthesized_days:
-                    self.cache.save_days(self._events_for_days(self._events, synthesized_days))
+                touched_days = canonicalized_days | synthesized_days
+                if touched_days:
+                    self.cache.save_days(self._events_for_days(self._events, touched_days))
                     self.cache.update_metadata_from_events(self._events)
 
             logger.debug(
@@ -2383,7 +2412,7 @@ class FillEventsManager:
                             gross = (pprice - price) * closing_qty
                         else:
                             gross = (price - pprice) * closing_qty
-                        synthetic_pnl = gross - _fee_cost(ev.get("fees"))
+                        synthetic_pnl = gross
                         if not basis_complete:
                             source = PNL_SOURCE_SYNTHETIC_DEGRADED
                             reason = "prior_position_basis_incomplete"
@@ -2463,6 +2492,41 @@ class FillEventsManager:
 
         return days_touched
 
+    def _canonicalize_cached_pnl_contract(self, payload: List[Dict[str, object]]) -> set[str]:
+        """Repair cached rows that predate the gross-PnL/fee-separated contract."""
+        if self.exchange.lower() != "kucoin" or not payload:
+            return set()
+
+        days_touched: set[str] = set()
+        repaired = 0
+        for ev in payload:
+            if _is_close_payload(ev):
+                continue
+            pnl = float(ev.get("pnl") or 0.0)
+            fee_cost = _fee_cost(ev.get("fees"))
+            if fee_cost <= 0.0:
+                continue
+            if abs(pnl + fee_cost) > max(1e-12, fee_cost * 1e-9):
+                continue
+            ev["pnl"] = 0.0
+            ev["pnl_status"] = "complete"
+            ev["pnl_source"] = PNL_SOURCE_AUTHORITATIVE
+            ev["pnl_synthetic_reason"] = ""
+            repaired += 1
+            try:
+                days_touched.add(_day_key(int(ev["timestamp"])))
+            except Exception:
+                pass
+
+        if repaired:
+            logger.warning(
+                "[fills] repaired cached KuCoin entry PnL fee-netting rows | exchange=%s user=%s events=%d",
+                self.exchange,
+                self.user,
+                repaired,
+            )
+        return days_touched
+
     def _closed_position_lifecycles(
         self, payload: List[Dict[str, object]]
     ) -> List[Dict[str, object]]:
@@ -2532,8 +2596,15 @@ class FillEventsManager:
         observation: PnlObservation,
     ) -> Tuple[set[str], float, int]:
         close_fills = list(lifecycle["close_fills"])
+        lifecycle_events = list(lifecycle.get("events") or [])
         synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
-        delta = float(observation.realized_pnl) - synthetic_total
+        # Exchange aggregate realized-PnL rows are net on the supported paths
+        # that use PnlObservation. Convert them back to the canonical gross
+        # price-PnL basis before reconciling close fills.
+        target_gross_total = float(observation.realized_pnl) + sum(
+            _fee_cost(ev.get("fees")) for ev in lifecycle_events
+        )
+        delta = target_gross_total - synthetic_total
         marker = close_fills[-1]
         marker["pnl"] = float(marker.get("pnl") or 0.0) + delta
         days_touched: set[str] = set()
@@ -2874,7 +2945,6 @@ class FillEventsManager:
             total_closed = float(info.get("closedSize") or data.get("contracts") or 0.0)
             if avg_entry <= 0.0 or total_closed <= 0.0:
                 continue
-            total_fees = float(info.get("closeFee") or 0.0) + float(info.get("openFee") or 0.0)
             recomputed = 0.0
             used = False
             for row in mt_rows_unique:
@@ -2890,8 +2960,7 @@ class FillEventsManager:
                     gross = (exit_price - avg_entry) * closed_size
                 else:
                     gross = (avg_entry - exit_price) * closed_size
-                fee_portion = (closed_size / total_closed) * total_fees if total_closed > 0.0 else 0.0
-                recomputed += gross - fee_portion
+                recomputed += gross
                 used = True
             if used:
                 pnl = recomputed
@@ -3119,9 +3188,11 @@ class FillEventsManager:
             payload = [ev.to_dict() for ev in self._events]
             ensure_qty_signage(payload)
             compute_psize_pprice(payload)
+            canonicalized_days = self._canonicalize_cached_pnl_contract(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
             self._events = [FillEvent.from_dict(ev) for ev in payload]
+            all_days_persisted.update(canonicalized_days)
             all_days_persisted.update(synthesized_days)
             all_days_persisted.update(cycle_reconciled_days)
 
@@ -3873,19 +3944,15 @@ class BybitFetcher(BaseFetcher):
                     else:
                         gross_pnl = (avg_entry - exit_price) * closed_size
 
-                    # Distribute fees proportionally if this fill is part of larger close
-                    total_closed = pnl_record["closedSize"]
-                    total_fees = pnl_record["closeFee"] + pnl_record["openFee"]
-                    if total_closed > 0:
-                        fee_portion = (closed_size / total_closed) * total_fees
-                    else:
-                        fee_portion = 0.0
-
-                    event["pnl"] = gross_pnl - fee_portion
+                    event["pnl"] = gross_pnl
                     computed_count += 1
                 else:
-                    # Fallback to closedPnl if avgEntryPrice unavailable
-                    event["pnl"] = pnl_record["closedPnl"]
+                    # Bybit closedPnl is net of open/close fees. Convert back
+                    # to canonical gross price PnL when price-basis fields are
+                    # unavailable.
+                    event["pnl"] = (
+                        pnl_record["closedPnl"] + pnl_record["closeFee"] + pnl_record["openFee"]
+                    )
 
                 matched_count += 1
                 event["pnl_status"] = "complete"
@@ -4523,7 +4590,7 @@ class KucoinFetcher(BaseFetcher):
         if not trades:
             return []
 
-        # Compute local realized PnL from trades (gross), subtract fees when available
+        # Compute local realized price PnL from trades. Fees stay separate.
         local_pnls, _ = compute_realized_pnls_from_trades(trades)
 
         closes = [
@@ -4535,8 +4602,7 @@ class KucoinFetcher(BaseFetcher):
         events: Dict[str, Dict[str, object]] = {}
         for t in trades:
             ev = dict(t)
-            fee_cost = _fee_cost(ev.get("fees"))
-            ev["pnl"] = local_pnls.get(ev["id"], 0.0) - fee_cost
+            ev["pnl"] = local_pnls.get(ev["id"], 0.0)
             ev["pnl_status"] = "pending" if _is_close_payload(ev) else "complete"
             if ev["pnl_status"] == "pending":
                 ev["pnl_source"] = PNL_SOURCE_PENDING

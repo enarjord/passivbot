@@ -1340,8 +1340,8 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
     event = events[0]
     assert event["id"] == "trade-1"
     assert event["pb_order_type"] == "close_grid_long"
-    # PnL = (105 - 100) * 0.1 - fees = 0.5 - 0.0002 = 0.4998
-    assert event["pnl"] == pytest.approx(0.4998, rel=1e-3)
+    # Canonical pnl is gross realized price PnL; fees stay separate.
+    assert event["pnl"] == pytest.approx(0.5, rel=1e-3)
     assert event["pnl_status"] == "complete"
     assert event["client_order_id"] == "0xabc"
     assert event["symbol"] == "BTC/USDT"
@@ -2716,7 +2716,8 @@ async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
     assert close.pnl_status == "complete"
     assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
     assert close.pnl_synthetic_reason == ""
-    assert close.pnl == pytest.approx(0.9)
+    assert close.pnl == pytest.approx(1.0)
+    assert fem.fill_event_net_pnl(close) == pytest.approx(0.9)
     assert not FillEventsManager.pending_pnl_events(manager.get_events())
     assert any(
         "synthesized missing realized PnL from fill events" in record.message
@@ -3708,6 +3709,7 @@ def _kucoin_manager_fill(
     symbol: str = "TON/USDT:USDT",
     position_side: str = "long",
     pb_order_type: Optional[str] = None,
+    fees: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
     is_close = (position_side == "long" and side == "sell") or (
         position_side == "short" and side == "buy"
@@ -3722,10 +3724,12 @@ def _kucoin_manager_fill(
         "price": price,
         "pnl": 0.0,
         "pnl_status": "pending" if is_close else "complete",
+        "fees": fees,
         "pb_order_type": pb_order_type
         or ("close_grid_long" if is_close else "entry_grid_long"),
         "position_side": position_side,
         "client_order_id": f"cid-{fill_id}",
+        "raw": [{"source": "fetch_my_trades", "data": {"id": fill_id}}],
     }
 
 
@@ -3788,13 +3792,21 @@ async def test_kucoin_fetcher_emits_observations_without_mutating_fill_pnl(monke
     fetcher = KucoinFetcher(api=object())
     ts = 1_700_000_000_000
     trades = [
-        _kucoin_manager_fill("entry", ts, side="buy", qty=1.0, price=10.0),
+        _kucoin_manager_fill(
+            "entry",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 0.01},
+        ),
         _kucoin_manager_fill(
             "close",
             ts + 60_000,
             side="sell",
             qty=1.0,
             price=12.0,
+            fees={"currency": "USDT", "cost": 0.02},
         ),
     ]
     positions = [
@@ -3822,12 +3834,44 @@ async def test_kucoin_fetcher_emits_observations_without_mutating_fill_pnl(monke
     out = await fetcher.fetch(ts, ts + 240_000, detail_cache={})
     by_id = {event["id"]: event for event in out}
 
+    assert by_id["entry"]["pnl"] == pytest.approx(0.0)
+    assert fem.fill_event_net_pnl(by_id["entry"]) == pytest.approx(-0.01)
     assert by_id["close"]["pnl_status"] == "pending"
     assert by_id["close"]["pnl_source"] == fem.PNL_SOURCE_PENDING
+    assert by_id["close"]["pnl"] == pytest.approx(2.0)
     assert "pnl_cycle_realized_pnl" not in by_id["close"]
     assert len(fetcher.pnl_observations) == 1
     assert fetcher.pnl_observations[0].realized_pnl == pytest.approx(9.99)
     assert fetcher.pnl_observations[0].close_time == ts + 60_000
+
+
+@pytest.mark.asyncio
+async def test_manager_repairs_cached_kucoin_entry_fee_netted_pnl(tmp_path: Path):
+    ts = 1_700_000_000_000
+    stale_entry = _kucoin_manager_fill(
+        "entry-stale",
+        ts,
+        side="buy",
+        qty=1.0,
+        price=10.0,
+        fees={"currency": "USDT", "cost": 0.01},
+    )
+    stale_entry["pnl"] = -0.01
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path / "kucoin_stale_entry_pnl",
+    )
+    manager.cache.save([FillEvent.from_dict(stale_entry)])
+
+    await manager.ensure_loaded()
+
+    event = manager.get_events()[0]
+    assert event.pnl == pytest.approx(0.0)
+    assert fem.fill_event_net_pnl(event) == pytest.approx(-0.01)
+    reloaded = manager.cache.load()[0]
+    assert reloaded.pnl == pytest.approx(0.0)
 
 
 def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():

@@ -41,6 +41,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
+    fill_event_net_pnl,
     fill_event_pnl_pending,
 )
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
@@ -1230,8 +1231,7 @@ class Passivbot:
             events, context="equity hard stop realized PnL"
         )
         for event in events:
-            realized += float(getattr(event, "pnl", 0.0) or 0.0)
-            realized += self._equity_hard_stop_fee_cost(event)
+            realized += fill_event_net_pnl(event)
         return realized
 
     def _pnls_lookback_start_ms(self) -> Optional[int]:
@@ -10385,7 +10385,7 @@ class Passivbot:
                         "price": price,
                         "action": action,
                         "pnl": pnl_val,
-                        "fee": fee_cost,
+                        "fee_paid": -fee_cost,
                         "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
                         "c_mult": float(self.c_mults.get(symbol, 1.0)),
                     }
@@ -10485,7 +10485,7 @@ class Passivbot:
         )
         balance_now = max(balance_now, 0.0)
         total_realised = sum(
-            evt["pnl"] + evt.get("fee", 0.0)
+            evt["pnl"] + evt.get("fee_paid", 0.0)
             for evt in events
             if evt["timestamp"] <= ts_now
         )
@@ -10662,7 +10662,7 @@ class Passivbot:
             while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
                 evt = events[event_idx]
                 _apply_event(evt)
-                realized_delta = evt["pnl"] + evt.get("fee", 0.0)
+                realized_delta = evt["pnl"] + evt.get("fee_paid", 0.0)
                 balance += realized_delta
                 realized_pnl_pside_running[evt["pside"]] += realized_delta
                 if "panic" in str(evt.get("pb_order_type") or ""):

@@ -5,6 +5,8 @@
 1. Build a deduplicated fill-event stream per exchange/account.
 2. Preserve source data needed for realized PnL reconstruction.
 3. Keep fetch behavior explicit and observable during investigations.
+4. Canonical `pnl` is gross realized price PnL before fees, matching Rust/backtest fills.
+5. Fees stay separate as positive costs in `fees`; signed fee cash flow is derived as `fee_paid = -sum(fees.cost)`, and net PnL is derived as `pnl + fee_paid`.
 
 ## Exchange Endpoint Map (Quick Lookup)
 

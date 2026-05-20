@@ -20,6 +20,7 @@ from config.coerce import (
     normalize_hsl_signal_mode,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from fill_events_manager import fill_event_net_pnl
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
 
@@ -451,8 +452,7 @@ def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> flo
     for event in events:
         if pside is not None and _equity_hard_stop_fill_pside(event) != pside:
             continue
-        realized += float(getattr(event, "pnl", 0.0) or 0.0)
-        realized += _equity_hard_stop_fee_cost(event)
+        realized += fill_event_net_pnl(event)
     return realized
 
 
