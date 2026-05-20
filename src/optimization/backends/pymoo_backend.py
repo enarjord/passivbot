@@ -52,6 +52,7 @@ DEFAULT_PYMOO_REF_DIRS = {
     "n_partitions": "auto",
 }
 DEFAULT_AUTO_REF_DIR_TARGET = 500
+DEFAULT_NSGA2_POPULATION_SIZE = 250
 SUPPORTED_PYMOO_ALGORITHMS = {"auto", "nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
@@ -362,13 +363,12 @@ def _resolve_pymoo_population_plan(
             "resolution": resolution,
         }
 
-    if requested_population_size is None:
-        raise ValueError("optimize.population_size must be set when optimize.pymoo.algorithm=nsga2")
+    actual_population_size = requested_population_size or DEFAULT_NSGA2_POPULATION_SIZE
 
     return {
         "algorithm_name": algorithm_name,
         "requested_population_size": requested_population_size,
-        "actual_population_size": requested_population_size,
+        "actual_population_size": actual_population_size,
         "ref_dirs": None,
         "n_partitions": None,
         "resolution": None,
@@ -441,7 +441,13 @@ def _build_algorithm(
         )
         return algorithm
 
-    logging.info("Using pymoo nsga2")
+    if requested_population_size is None:
+        logging.info(
+            "Using pymoo nsga2 auto population size=%d",
+            population_plan["actual_population_size"],
+        )
+    else:
+        logging.info("Using pymoo nsga2")
     return NSGA2(
         pop_size=population_plan["actual_population_size"],
         sampling=sampling,
