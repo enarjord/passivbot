@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added backtest `entry_interval_hours_mean`, `entry_interval_hours_median`, `entry_interval_hours_p95`, `entry_interval_hours_p99`, and `entry_interval_hours_max` analysis metrics, measuring gaps between normal initial entries per coin and side.
 - Fixed CCXT live startup so malformed metadata on unrelated ineligible exchange markets no longer blocks the bot, while executable symbols still fail loudly when required qty sizing metadata is missing.
 - Fixed Bybit UTA live balance parsing so Passivbot uses account equity minus perpetual UPNL as raw balance instead of double-applying UPNL from collateral `usdValue` fields.
 - Fixed KuCoin aggregate realized-PnL enrichment so positions-history rows are reconciled as cycle observations against reconstructed fill lifecycles only when unambiguous, preventing rapid or delayed position cycles from being assigned to the wrong close fill while ambiguous rows stay synthetic and refreshable.

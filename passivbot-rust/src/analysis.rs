@@ -1,4 +1,4 @@
-use crate::types::{Analysis, Equities, Fill};
+use crate::types::{Analysis, Equities, Fill, OrderType};
 use std::cmp::Ordering;
 use std::collections::HashMap;
 
@@ -573,6 +573,64 @@ fn analyze_backtest_basic(
     let position_held_days_max = position_held_hours_max / 24.0;
     let position_held_days_median = position_held_hours_median / 24.0;
     let position_unchanged_days_max = position_unchanged_hours_max / 24.0;
+    // Entry interval tracking: collect normal initial entry fills per coin+side
+    // and compute gaps between consecutive initial entries for the same coin+side.
+    let mut initial_entry_times: HashMap<String, Vec<u64>> = HashMap::new();
+    for fill in fills {
+        let is_initial_entry = matches!(
+            fill.order_type,
+            OrderType::EntryInitialNormalLong | OrderType::EntryInitialNormalShort
+        );
+        if is_initial_entry {
+            let side = if fill.order_type.is_long() {
+                "long"
+            } else {
+                "short"
+            };
+            let key = format!("{}_{}", fill.coin, side);
+            let ts = if fill.timestamp_ms > 0 {
+                fill.timestamp_ms
+            } else {
+                fallback_timestamp_ms(fill.index)
+            };
+            initial_entry_times
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .push(ts);
+        }
+    }
+    let mut entry_intervals_ms: Vec<u64> = Vec::new();
+    for (_key, mut times) in initial_entry_times {
+        times.sort_unstable();
+        for window in times.windows(2) {
+            entry_intervals_ms.push(window[1].saturating_sub(window[0]));
+        }
+    }
+    let (
+        entry_interval_hours_mean,
+        entry_interval_hours_median,
+        entry_interval_hours_p95,
+        entry_interval_hours_p99,
+        entry_interval_hours_max,
+    ) = if !entry_intervals_ms.is_empty() {
+        let mut sorted = entry_intervals_ms;
+        sorted.sort_unstable();
+        let mid = sorted.len() / 2;
+        let median = if sorted.len() % 2 == 0 {
+            (sorted[mid - 1] as f64 + sorted[mid] as f64) / (2.0 * MS_PER_HOUR as f64)
+        } else {
+            sorted[mid] as f64 / MS_PER_HOUR as f64
+        };
+        (
+            sorted.iter().sum::<u64>() as f64 / (sorted.len() as f64 * MS_PER_HOUR as f64),
+            median,
+            percentile_sorted_u64(&sorted, 95.0) / MS_PER_HOUR as f64,
+            percentile_sorted_u64(&sorted, 99.0) / MS_PER_HOUR as f64,
+            *sorted.last().unwrap() as f64 / MS_PER_HOUR as f64,
+        )
+    } else {
+        (0.0, 0.0, 0.0, 0.0, 0.0)
+    };
     let (win_rate, trade_loss_max, trade_loss_mean, trade_loss_median) =
         if completed_trades.is_empty() {
             (0.0, 0.0, 0.0, 0.0)
@@ -661,6 +719,11 @@ fn analyze_backtest_basic(
     analysis.position_held_days_max = position_held_days_max;
     analysis.position_held_days_median = position_held_days_median;
     analysis.position_unchanged_days_max = position_unchanged_days_max;
+    analysis.entry_interval_hours_mean = entry_interval_hours_mean;
+    analysis.entry_interval_hours_median = entry_interval_hours_median;
+    analysis.entry_interval_hours_p95 = entry_interval_hours_p95;
+    analysis.entry_interval_hours_p99 = entry_interval_hours_p99;
+    analysis.entry_interval_hours_max = entry_interval_hours_max;
     analysis.win_rate = win_rate;
     analysis.trade_loss_max = trade_loss_max;
     analysis.trade_loss_mean = trade_loss_mean;
@@ -1041,6 +1104,25 @@ fn median(values: &[f64]) -> f64 {
         (sorted[mid - 1] + sorted[mid]) / 2.0
     } else {
         sorted[mid]
+    }
+}
+
+fn percentile_sorted_u64(sorted: &[u64], percentile: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    if sorted.len() == 1 {
+        return sorted[0] as f64;
+    }
+    let pct = percentile.clamp(0.0, 100.0);
+    let rank = (pct / 100.0) * (sorted.len() - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted[lower] as f64
+    } else {
+        let weight = rank - lower as f64;
+        sorted[lower] as f64 + (sorted[upper] as f64 - sorted[lower] as f64) * weight
     }
 }
 
@@ -1593,6 +1675,36 @@ mod tests {
 
         assert!((analysis.drawdown_worst - 0.5).abs() < 1e-12);
         assert!((analysis.drawdown_worst_mean_1pct - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_entry_interval_hours_ignore_partial_initial_entries() {
+        let balance = 10000.0;
+        let mut partial_long =
+            make_trade_fill(60, MS_PER_HOUR, "BTC", 0.0, 0.02, 0.12, balance, true);
+        partial_long.order_type = OrderType::EntryInitialPartialLong;
+        let mut partial_long_later =
+            make_trade_fill(660, 11 * MS_PER_HOUR, "BTC", 0.0, 0.02, 0.12, balance, true);
+        partial_long_later.order_type = OrderType::EntryInitialPartialLong;
+
+        let fills = vec![
+            make_trade_fill(0, 0, "BTC", 0.0, 0.1, 0.1, balance, true),
+            partial_long,
+            make_trade_fill(600, 10 * MS_PER_HOUR, "BTC", 0.0, 0.1, 0.1, balance, true),
+            partial_long_later,
+            make_trade_fill(1500, 25 * MS_PER_HOUR, "BTC", 0.0, 0.1, 0.1, balance, true),
+        ];
+        let equities: Vec<f64> = vec![balance; 1600];
+        let timestamps: Vec<u64> = (0..1600).map(|i| (i as u64) * 60_000).collect();
+        let exposures: Vec<f64> = vec![];
+
+        let analysis = analyze_backtest(&fills, &equities, &timestamps, &exposures);
+
+        assert!((analysis.entry_interval_hours_mean - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_median - 12.5).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_p95 - 14.75).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_p99 - 14.95).abs() < 1e-9);
+        assert!((analysis.entry_interval_hours_max - 15.0).abs() < 1e-9);
     }
 
     #[test]

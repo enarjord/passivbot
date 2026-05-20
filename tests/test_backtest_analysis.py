@@ -63,6 +63,8 @@ def _make_analysis_entry(value):
         "high_exposure_days_max_short",
         "entry_initial_balance_pct_long",
         "entry_initial_balance_pct_short",
+        "entry_interval_hours_p95",
+        "entry_interval_hours_p99",
     ]
     analysis = {key: value for key in base_keys}
     analysis.update(
