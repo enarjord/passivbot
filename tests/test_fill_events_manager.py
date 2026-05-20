@@ -3917,6 +3917,72 @@ async def test_manager_migrates_cached_synthetic_close_fee_netted_pnl_once(tmp_p
     assert fem.fill_event_net_pnl(close) == pytest.approx(0.9)
 
 
+@pytest.mark.asyncio
+async def test_manager_migrates_cached_bybit_authoritative_close_fee_netted_pnl_once(
+    tmp_path: Path,
+):
+    ts = 1_700_000_000_000
+    entry = _kucoin_manager_fill(
+        "entry",
+        ts,
+        side="buy",
+        qty=1.0,
+        price=10.0,
+        symbol="BTC/USDT:USDT",
+    )
+    stale_close = _kucoin_manager_fill(
+        "bybit-close-stale",
+        ts + 60_000,
+        side="sell",
+        qty=-1.0,
+        price=10.5,
+        symbol="BTC/USDT:USDT",
+        fees={"currency": "USDT", "cost": 0.0002},
+    )
+    stale_close["pnl"] = 0.4998
+    stale_close["pnl_status"] = "complete"
+    stale_close["pnl_source"] = fem.PNL_SOURCE_AUTHORITATIVE
+    stale_close["closed_size"] = 1.0
+    stale_close["raw"].append(
+        {
+            "source": "positions_history",
+            "data": {
+                "info": {
+                    "closedSize": "1.0",
+                    "closeFee": "0.0002",
+                    "openFee": "0.0",
+                }
+            },
+        }
+    )
+
+    cache_path = tmp_path / "bybit_authoritative_close_migration"
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    manager.cache.save([FillEvent.from_dict(entry), FillEvent.from_dict(stale_close)])
+
+    await manager.ensure_loaded()
+    close = [event for event in manager.get_events() if event.id == "bybit-close-stale"][0]
+    assert close.pnl == pytest.approx(0.5)
+    assert fem.fill_event_net_pnl(close) == pytest.approx(0.4998)
+    assert close.pnl_contract == fem.PNL_CONTRACT_GROSS_BEFORE_FEES
+
+    reloaded = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await reloaded.ensure_loaded()
+    close = [event for event in reloaded.get_events() if event.id == "bybit-close-stale"][0]
+    assert close.pnl == pytest.approx(0.5)
+    assert fem.fill_event_net_pnl(close) == pytest.approx(0.4998)
+
+
 def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():
     fetcher = KucoinFetcher(api=None)
     close_ts = 1_700_000_000_000

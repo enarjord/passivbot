@@ -5,7 +5,7 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Changed pymoo NSGA-II optimization so `optimize.population_size: null` now auto-resolves to `250`, avoiding startup failures when `optimize.pymoo.algorithm: "auto"` selects NSGA-II for small objective sets.
-- Standardized live fill-event PnL canonicalization so `pnl` is gross realized price PnL before fees, fees remain separate, net PnL is derived as `pnl + fee_paid`, and stale KuCoin cached entry fills that netted fees into `pnl` are repaired on load.
+- Standardized live fill-event PnL canonicalization so `pnl` is gross realized price PnL before fees, fees remain separate, net PnL is derived as `pnl + fee_paid`, and stale cached fills that netted fees into `pnl` are repaired on load.
 - Added backtest `entry_interval_hours_mean`, `entry_interval_hours_median`, `entry_interval_hours_p95`, `entry_interval_hours_p99`, and `entry_interval_hours_max` analysis metrics, measuring gaps between normal initial entries per coin and side.
 - Fixed CCXT live startup so malformed metadata on unrelated ineligible exchange markets no longer blocks the bot, while executable symbols still fail loudly when required qty sizing metadata is missing.
 - Fixed Bybit UTA live balance parsing so Passivbot uses account equity minus perpetual UPNL as raw balance instead of double-applying UPNL from collateral `usdValue` fields.

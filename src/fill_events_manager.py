@@ -301,6 +301,42 @@ def _fee_cost(fees: Optional[Sequence]) -> float:
     return total
 
 
+def _float_or_zero(value: object) -> float:
+    try:
+        return float(value or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _bybit_legacy_close_fee_adjustment(payload: Dict[str, object], fallback_fee_cost: float) -> float:
+    """Return the fee amount old Bybit cached close PnL had already subtracted."""
+    event_closed_size = abs(_float_or_zero(payload.get("closed_size")))
+    for raw in _normalize_raw_field(payload.get("raw")):
+        if not isinstance(raw, dict) or str(raw.get("source") or "") != "positions_history":
+            continue
+        data = raw.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        info = info if isinstance(info, dict) else {}
+        close_fee = _float_or_zero(info.get("closeFee") or data.get("closeFee"))
+        open_fee = _float_or_zero(info.get("openFee") or data.get("openFee"))
+        total_fees = close_fee + open_fee
+        if total_fees <= 0.0:
+            continue
+        total_closed = _float_or_zero(
+            info.get("closedSize")
+            or data.get("closedSize")
+            or data.get("contracts")
+            or info.get("closed_size")
+            or data.get("closed_size")
+        )
+        if total_closed > 0.0 and event_closed_size > 0.0:
+            return (event_closed_size / total_closed) * total_fees
+        return total_fees
+    return fallback_fee_cost
+
+
 def fill_event_fee_paid(event: object) -> float:
     """Return the signed fee cash flow for a fill event.
 
@@ -2508,6 +2544,7 @@ class FillEventsManager:
         days_touched: set[str] = set()
         repaired = 0
         migrated_synthetic_closes = 0
+        migrated_bybit_closes = 0
         for ev in payload:
             fee_cost = _fee_cost(ev.get("fees"))
             if (
@@ -2525,6 +2562,25 @@ class FillEventsManager:
                 except Exception:
                     pass
                 continue
+
+            if (
+                self.exchange.lower() == "bybit"
+                and _is_close_payload(ev)
+                and _payload_pnl_status(ev) == "complete"
+                and _payload_pnl_source(ev) == PNL_SOURCE_AUTHORITATIVE
+                and str(ev.get("pnl_contract") or "") != PNL_CONTRACT_GROSS_BEFORE_FEES
+            ):
+                fee_adjustment = _bybit_legacy_close_fee_adjustment(ev, fee_cost)
+                if fee_adjustment > 0.0:
+                    ev["pnl"] = float(ev.get("pnl") or 0.0) + fee_adjustment
+                    ev["pnl_contract"] = PNL_CONTRACT_GROSS_BEFORE_FEES
+                    repaired += 1
+                    migrated_bybit_closes += 1
+                    try:
+                        days_touched.add(_day_key(int(ev["timestamp"])))
+                    except Exception:
+                        pass
+                    continue
 
             if self.exchange.lower() != "kucoin" or _is_close_payload(ev):
                 continue
@@ -2547,11 +2603,12 @@ class FillEventsManager:
         if repaired:
             logger.warning(
                 "[fills] repaired cached fill PnL fee-netting rows | exchange=%s user=%s events=%d "
-                "synthetic_closes=%d",
+                "synthetic_closes=%d bybit_authoritative_closes=%d",
                 self.exchange,
                 self.user,
                 repaired,
                 migrated_synthetic_closes,
+                migrated_bybit_closes,
             )
         return days_touched
 
