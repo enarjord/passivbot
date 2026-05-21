@@ -208,7 +208,8 @@ Main optimizer-facing strategy-equity risk metrics:
 2. `drawdown_worst_ema_strategy_eq`
 3. `drawdown_worst_mean_1pct_strategy_eq`
 4. `drawdown_worst_mean_1pct_ema_strategy_eq`
-5. `peak_recovery_days_strategy_eq`
+5. `strategy_eq_recovery_days_max`
+6. `strategy_eq_recovery_days_mean_worst_1pct`
 
 For the shared EMA-smoothed metrics, long and short each use their own configured
 `hsl_ema_span_minutes`. The shared values are reported conservatively as `max(long, short)`

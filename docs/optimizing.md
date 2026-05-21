@@ -296,7 +296,7 @@ operator-risk settings such as:
 That default override disables terminal no-restart during optimizer evaluations so candidates can
 be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strategy_eq`,
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
-`peak_recovery_days_strategy_eq` instead of being prematurely truncated.
+`strategy_eq_recovery_days_max` instead of being prematurely truncated.
 
 When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
 in flight at once:
@@ -447,7 +447,7 @@ Example:
 
 ```bash
 passivbot tool pareto \
-  -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
+  -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 ```
 
@@ -515,7 +515,7 @@ appends one more canonical entry:
 ```bash
 passivbot optimize \
   --limits '[{"metric":"drawdown_worst","penalize_if":">","value":0.35}]' \
-  --limit 'peak_recovery_days_strategy_eq <= 21'
+  --limit 'strategy_eq_recovery_days_max <= 21'
 ```
 
 Semantics:
@@ -599,7 +599,8 @@ over all exchanges before scoring.
 | `volume_pct_per_day_avg`, `volume_pct_per_day_avg_w` | Average traded volume as % of account per day, with recency bias |
 | `peak_recovery_hours_equity_usd`, `_btc`; `peak_recovery_days_equity_usd`, `_btc` | Longest time the equity curve stayed below its prior peak before recovering, per denomination, in hours and equivalent days. Available for scoring and limit checks (e.g. `{"metric": "peak_recovery_days_equity_usd", "penalize_if": ">", "value": 7}`). |
 | `peak_recovery_hours_pnl`, `peak_recovery_days_pnl` | Longest recovery time of cumulative realised PnL (USD), in hours and equivalent days. Useful for monitoring realised drawdown recovery latency. |
-| `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Longest time below the strategy-equity peak before recovery, including the open tail to backtest end, in hours and equivalent days. Intended for optimizer risk limits. |
+| `strategy_eq_recovery_days_mean`, `strategy_eq_recovery_days_median`, `strategy_eq_recovery_days_p95`, `strategy_eq_recovery_days_p99`, `strategy_eq_recovery_days_mean_worst_5pct`, `strategy_eq_recovery_days_mean_worst_1pct`, `strategy_eq_recovery_days_max` | Per-sample strategy-equity time-to-exceed distribution in days. Each sample measures how long until a later strategy-equity sample strictly exceeds it; unrecovered samples use the open tail to the backtest end. |
+| `peak_recovery_hours_strategy_eq`, `peak_recovery_days_strategy_eq` | Legacy max-recovery metrics. `peak_recovery_days_strategy_eq` is an alias for `strategy_eq_recovery_days_max`; the hours variant remains available for older configs. |
 | `high_exposure_hours_{mean,max}_long`, `high_exposure_days_{mean,max}_long` | Mean / maximum duration of continuous periods where total long wallet exposure exceeded the daily-resampled average long TWE, in hours and equivalent days |
 | `high_exposure_hours_{mean,max}_short`, `high_exposure_days_{mean,max}_short` | Mean / maximum duration of continuous periods where total short wallet exposure exceeded the daily-resampled average short TWE, in hours and equivalent days |
 

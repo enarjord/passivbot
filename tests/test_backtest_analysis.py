@@ -65,6 +65,13 @@ def _make_analysis_entry(value):
         "entry_initial_balance_pct_short",
         "entry_interval_hours_p95",
         "entry_interval_hours_p99",
+        "strategy_eq_recovery_days_mean",
+        "strategy_eq_recovery_days_median",
+        "strategy_eq_recovery_days_p95",
+        "strategy_eq_recovery_days_p99",
+        "strategy_eq_recovery_days_mean_worst_5pct",
+        "strategy_eq_recovery_days_mean_worst_1pct",
+        "strategy_eq_recovery_days_max",
     ]
     analysis = {key: value for key in base_keys}
     analysis.update(

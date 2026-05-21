@@ -67,6 +67,8 @@ Weighted `_w` variants use the same trailing-slice averaging as the rest of the 
 - `peak_recovery_days_equity`: Same equity recovery duration converted to days.
 - `peak_recovery_hours_pnl`: Same calculation on cumulative realized PnL.
 - `peak_recovery_days_pnl`: Same realized-PnL recovery duration converted to days.
+- `strategy_eq_recovery_days_*`: Distribution of per-sample strategy-equity recovery durations. For each strategy-equity sample, recovery is the time until a later sample strictly exceeds that equity; samples not exceeded by the end use the open tail to the final timestamp. Available summaries are `mean`, `median`, `p95`, `p99`, `mean_worst_5pct`, `mean_worst_1pct`, and `max`.
+- `peak_recovery_days_strategy_eq`: Legacy alias for `strategy_eq_recovery_days_max`.
 
 ## Trade-level metrics
 - `win_rate`: Fraction of completed trades with positive net realized PnL.

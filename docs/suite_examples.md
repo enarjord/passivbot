@@ -174,7 +174,7 @@ Good defaults:
     "default": "mean",
     "drawdown_worst_strategy_eq": "max",
     "drawdown_worst_mean_1pct_strategy_eq": "max",
-    "peak_recovery_days_strategy_eq": "max",
+    "strategy_eq_recovery_days_max": "max",
     "position_held_days_max": "max"
   }
 }
