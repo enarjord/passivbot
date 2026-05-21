@@ -308,9 +308,29 @@ def _float_or_zero(value: object) -> float:
         return 0.0
 
 
+def _bybit_payload_event_closed_size(payload: Dict[str, object]) -> float:
+    explicit = abs(_float_or_zero(payload.get("closed_size") or payload.get("close_size")))
+    if explicit > 0.0:
+        return explicit
+    for raw in _normalize_raw_field(payload.get("raw")):
+        if not isinstance(raw, dict) or str(raw.get("source") or "") == "positions_history":
+            continue
+        data = raw.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        info = info if isinstance(info, dict) else {}
+        for source in (info, data):
+            for key in ("closedSize", "closeSize", "closed_size", "close_size"):
+                value = abs(_float_or_zero(source.get(key)))
+                if value > 0.0:
+                    return value
+    return 0.0
+
+
 def _bybit_legacy_close_fee_adjustment(payload: Dict[str, object], fallback_fee_cost: float) -> float:
     """Return the fee amount old Bybit cached close PnL had already subtracted."""
-    event_closed_size = abs(_float_or_zero(payload.get("closed_size")))
+    event_closed_size = _bybit_payload_event_closed_size(payload)
     for raw in _normalize_raw_field(payload.get("raw")):
         if not isinstance(raw, dict) or str(raw.get("source") or "") != "positions_history":
             continue
@@ -333,7 +353,7 @@ def _bybit_legacy_close_fee_adjustment(payload: Dict[str, object], fallback_fee_
         )
         if total_closed > 0.0 and event_closed_size > 0.0:
             return (event_closed_size / total_closed) * total_fees
-        return total_fees
+        return fallback_fee_cost
     return fallback_fee_cost
 
 

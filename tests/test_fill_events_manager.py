@@ -3983,6 +3983,147 @@ async def test_manager_migrates_cached_bybit_authoritative_close_fee_netted_pnl_
     assert fem.fill_event_net_pnl(close) == pytest.approx(0.4998)
 
 
+@pytest.mark.asyncio
+async def test_manager_migrates_cached_bybit_split_close_fees_proportionally(
+    tmp_path: Path,
+):
+    ts = 1_700_000_000_000
+    positions_history_raw = {
+        "source": "positions_history",
+        "data": {
+            "info": {
+                "closedSize": "1.0",
+                "closeFee": "0.0002",
+                "openFee": "0.0",
+            }
+        },
+    }
+    fills = [
+        _kucoin_manager_fill(
+            "entry",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            symbol="BTC/USDT:USDT",
+        )
+    ]
+    for index in range(2):
+        close = _kucoin_manager_fill(
+            f"bybit-close-stale-{index}",
+            ts + 60_000 + index,
+            side="sell",
+            qty=-0.5,
+            price=10.5,
+            symbol="BTC/USDT:USDT",
+            fees={"currency": "USDT", "cost": 0.0001},
+        )
+        close["pnl"] = 0.2499
+        close["pnl_status"] = "complete"
+        close["pnl_source"] = fem.PNL_SOURCE_AUTHORITATIVE
+        close["raw"].append(
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "closedSize": "0.5",
+                    }
+                },
+            }
+        )
+        close["raw"].append(dict(positions_history_raw))
+        fills.append(close)
+
+    cache_path = tmp_path / "bybit_split_close_migration"
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    manager.cache.save([FillEvent.from_dict(fill) for fill in fills])
+
+    await manager.ensure_loaded()
+
+    closes = [event for event in manager.get_events() if event.id.startswith("bybit-close-stale")]
+    assert len(closes) == 2
+    for close in closes:
+        assert close.pnl == pytest.approx(0.25)
+        assert fem.fill_event_net_pnl(close) == pytest.approx(0.2499)
+        assert close.pnl_contract == fem.PNL_CONTRACT_GROSS_BEFORE_FEES
+
+    reloaded = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+    await reloaded.ensure_loaded()
+    closes = [event for event in reloaded.get_events() if event.id.startswith("bybit-close-stale")]
+    for close in closes:
+        assert close.pnl == pytest.approx(0.25)
+        assert fem.fill_event_net_pnl(close) == pytest.approx(0.2499)
+
+
+@pytest.mark.asyncio
+async def test_manager_migrates_cached_bybit_split_close_uses_fill_fee_without_alloc_size(
+    tmp_path: Path,
+):
+    ts = 1_700_000_000_000
+    positions_history_raw = {
+        "source": "positions_history",
+        "data": {
+            "info": {
+                "closedSize": "1.0",
+                "closeFee": "0.0002",
+                "openFee": "0.0",
+            }
+        },
+    }
+    fills = [
+        _kucoin_manager_fill(
+            "entry",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            symbol="BTC/USDT:USDT",
+        )
+    ]
+    for index in range(2):
+        close = _kucoin_manager_fill(
+            f"bybit-close-no-size-{index}",
+            ts + 60_000 + index,
+            side="sell",
+            qty=-0.5,
+            price=10.5,
+            symbol="BTC/USDT:USDT",
+            fees={"currency": "USDT", "cost": 0.0001},
+        )
+        close["pnl"] = 0.2499
+        close["pnl_status"] = "complete"
+        close["pnl_source"] = fem.PNL_SOURCE_AUTHORITATIVE
+        close["raw"].append(dict(positions_history_raw))
+        fills.append(close)
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path / "bybit_split_close_no_alloc_size_migration",
+    )
+    manager.cache.save([FillEvent.from_dict(fill) for fill in fills])
+
+    await manager.ensure_loaded()
+
+    closes = [event for event in manager.get_events() if event.id.startswith("bybit-close-no-size")]
+    assert len(closes) == 2
+    for close in closes:
+        assert close.pnl == pytest.approx(0.25)
+        assert fem.fill_event_net_pnl(close) == pytest.approx(0.2499)
+        assert close.pnl_contract == fem.PNL_CONTRACT_GROSS_BEFORE_FEES
+
+
 def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():
     fetcher = KucoinFetcher(api=None)
     close_ts = 1_700_000_000_000
