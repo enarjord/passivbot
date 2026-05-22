@@ -31,6 +31,7 @@ from src.fill_events_manager import (
     PnlObservation,
     GAP_REASON_FETCH_FAILED,
     KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS,
+    apply_hyperliquid_raw_psize_overrides,
     compute_psize_pprice,
     custom_id_to_snake,
     ensure_qty_signage,
@@ -4804,3 +4805,70 @@ def test_compute_psize_pprice_initial_state():
     # VWAP: (2*100 + 1*120) / 3 = 320/3 ≈ 106.67
     assert abs(events[0]["pprice"] - 106.66666666666667) < 0.01
     assert result[("BTC", "long")] == (3.0, events[0]["pprice"])
+
+
+def test_hyperliquid_raw_start_position_overrides_wrong_reconstructed_psize():
+    events = [
+        {
+            "id": "hl-close",
+            "timestamp": 1779396722362,
+            "symbol": "HYPE/USDC:USDC",
+            "side": "sell",
+            "qty": 496.4,
+            "price": 56.663393493150686,
+            "pnl": -548.82307,
+            "position_side": "long",
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": "5",
+                        "side": "sell",
+                        "amount": 12.45,
+                        "price": 56.64,
+                        "pnl": -13.8,
+                        "info": {
+                            "tid": "5",
+                            "side": "sell",
+                            "sz": "12.45",
+                            "px": "56.64",
+                            "closedPnl": "-13.8",
+                            "startPosition": "12.45",
+                            "dir": "Close Long",
+                        },
+                    },
+                },
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "id": "1",
+                        "side": "sell",
+                        "amount": 119.0,
+                        "price": 56.66,
+                        "pnl": -131.5,
+                        "info": {
+                            "tid": "1",
+                            "side": "sell",
+                            "sz": "119",
+                            "px": "56.66",
+                            "closedPnl": "-131.5",
+                            "startPosition": "496.4",
+                            "dir": "Close Long",
+                        },
+                    },
+                },
+            ],
+        }
+    ]
+    ensure_qty_signage(events)
+    compute_psize_pprice(
+        events,
+        {("HYPE/USDC:USDC", "long"): (739.53, 56.79734)},
+    )
+
+    assert events[0]["psize"] == pytest.approx(243.13)
+
+    apply_hyperliquid_raw_psize_overrides(events)
+
+    assert events[0]["psize"] == 0.0
+    assert events[0]["pprice"] == 0.0

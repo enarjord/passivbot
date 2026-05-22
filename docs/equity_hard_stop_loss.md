@@ -198,6 +198,7 @@ Important backtest details:
 2. `hsl_panic_close_order_type = "market"`
    - panic exits use simulated taker execution on the next bar
    - slippage is controlled by `backtest.market_order_slippage_pct`
+   - live panic market exits use the exchange adapter's order semantics and live exchange/CCXT slippage controls, not `backtest.market_order_slippage_pct`
 3. Backtests export both:
    - operational HSL telemetry under `hard_stop_*`
    - collateral-agnostic strategy-equity risk metrics under `*_strategy_eq`

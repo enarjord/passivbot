@@ -22,6 +22,8 @@ class OrchestrationBot(Passivbot):
         self.min_qtys = {}
         self.min_costs = {}
         self.c_mults = {}
+        self._last_action_summary = {}
+        self.action_str_max_len = len("posting order")
 
     def register_symbol(self, symbol: str) -> None:
         self.active_symbols.append(symbol)
@@ -78,7 +80,80 @@ def _make_order(
         "reduce_only": reduce_only,
         "custom_id": f"order-0x{order_type_id:04x}",
         "type": order_kind,
+        "pb_order_type": order_type,
     }
+
+
+def test_startup_banner_warns_when_market_orders_allowed(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.user = "hyperliquid_pf1"
+    bot.exchange = "hyperliquid"
+    live_values = {
+        "market_orders_allowed": True,
+        "market_order_near_touch_threshold": 0.001,
+    }
+    bot.live_value = lambda key: live_values.get(key)
+    bot.bot_value = lambda pside, key: {
+        ("long", "total_wallet_exposure_limit"): 1.5,
+        ("short", "total_wallet_exposure_limit"): 0.0,
+        ("long", "n_positions"): 3,
+        ("short", "n_positions"): 0,
+    }.get((pside, key), 0.0)
+
+    with caplog.at_level(logging.WARNING):
+        Passivbot._log_startup_banner(bot)
+
+    assert any(
+        "live market order execution is enabled" in rec.message
+        and "market_order_near_touch_threshold=0.001" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_order_summary_marks_market_execution(caplog):
+    bot = OrchestrationBot({})
+    order = _make_order(
+        "HYPE/USDC:USDC",
+        "sell",
+        "long",
+        496.4,
+        58.383,
+        "close_grid_long",
+        reduce_only=True,
+        order_kind="market",
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot._log_order_action_summary({"HYPE/USDC:USDC": [order]}, "post")
+
+    assert any(
+        "[order]" in rec.message
+        and "close_grid_long" in rec.message
+        and "exec=market" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_market_execution_notice_is_not_suppressed(caplog):
+    bot = OrchestrationBot({})
+    order = _make_order(
+        "HYPE/USDC:USDC",
+        "sell",
+        "long",
+        496.4,
+        58.383,
+        "close_grid_long",
+        reduce_only=True,
+        order_kind="market",
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot._log_market_execution_notice(order, context="plan_sync")
+        bot._log_market_execution_notice(order, context="plan_sync")
+
+    records = [rec for rec in caplog.records if "MARKET order submission" in rec.message]
+    assert len(records) == 2
+    assert all("pb_type=close_grid_long" in rec.message for rec in records)
 
 
 @pytest.mark.asyncio

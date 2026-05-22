@@ -482,6 +482,106 @@ def compute_psize_pprice(
     return final_state
 
 
+def apply_hyperliquid_raw_psize_overrides(events: List[Dict[str, object]]) -> None:
+    """
+    Improve Hyperliquid psize/pprice annotations from raw fill startPosition data.
+
+    The generic annotator reconstructs positions from the locally cached event
+    window, which is necessarily best-effort when the cache starts mid-position.
+    Hyperliquid raw fills include the position size before each component fill;
+    when present, use that exchange-provided state for the after-fill size.
+    """
+    for ev in events:
+        candidates: List[Tuple[float, float, float, bool]] = []
+        for item in _normalize_raw_field(ev.get("raw")):
+            if not isinstance(item, dict):
+                continue
+            data = item.get("data")
+            if not isinstance(data, dict):
+                continue
+            info = data.get("info")
+            if not isinstance(info, dict) or "startPosition" not in info:
+                continue
+            try:
+                start_position = abs(float(info.get("startPosition") or 0.0))
+                qty = abs(float(data.get("amount") or info.get("sz") or 0.0))
+                price = float(data.get("price") or info.get("px") or 0.0)
+                pnl = float(data.get("pnl") or info.get("closedPnl") or 0.0)
+            except (TypeError, ValueError):
+                continue
+            if qty <= 0.0:
+                continue
+
+            side = str(
+                data.get("side") or info.get("side") or ev.get("side") or ""
+            ).lower()
+            position_side = str(
+                ev.get("position_side") or ev.get("pside") or ""
+            ).lower()
+            if not position_side:
+                direction = str(info.get("dir") or "").lower()
+                if "short" in direction:
+                    position_side = "short"
+                elif "long" in direction:
+                    position_side = "long"
+            if position_side == "short":
+                reducing = side == "buy"
+            elif position_side == "long":
+                reducing = side == "sell"
+            else:
+                continue
+
+            after_size = (
+                max(0.0, start_position - qty) if reducing else start_position + qty
+            )
+            entry_price = 0.0
+            if reducing and qty > 0.0 and price > 0.0:
+                if position_side == "short":
+                    entry_price = price + (pnl / qty)
+                else:
+                    entry_price = price - (pnl / qty)
+            elif not reducing and start_position <= 1e-12:
+                entry_price = price
+            candidates.append((after_size, qty, entry_price, reducing))
+
+        if not candidates:
+            continue
+
+        reducing_candidates = [item for item in candidates if item[3]]
+        if reducing_candidates:
+            after_size = min(item[0] for item in reducing_candidates)
+            if after_size <= 1e-12:
+                ev["psize"] = 0.0
+                ev["pprice"] = 0.0
+                continue
+            weighted_qty = sum(
+                item[1] for item in reducing_candidates if item[2] > 0.0
+            )
+            if weighted_qty > 0.0:
+                ev["pprice"] = (
+                    sum(
+                        item[1] * item[2]
+                        for item in reducing_candidates
+                        if item[2] > 0.0
+                    )
+                    / weighted_qty
+                )
+            ev["psize"] = round(after_size, 12)
+            continue
+
+        after_size = max(item[0] for item in candidates)
+        ev["psize"] = round(after_size, 12)
+        if after_size <= 1e-12:
+            ev["pprice"] = 0.0
+        elif all(item[0] - item[1] <= 1e-12 for item in candidates):
+            weighted_qty = sum(item[1] for item in candidates if item[2] > 0.0)
+            if weighted_qty > 0.0:
+                ev["pprice"] = (
+                    sum(item[1] * item[2] for item in candidates if item[2] > 0.0)
+                    / weighted_qty
+                )
+
+
 def annotate_positions_inplace(
     events: List[Dict[str, object]],
     state: Optional[Dict[Tuple[str, str], Tuple[float, float]]] = None,
@@ -2332,6 +2432,7 @@ class FillEventsManager:
                 payload = [ev.to_dict() for ev in self._events]
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
+                apply_hyperliquid_raw_psize_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
                 if synthesized_days:
@@ -2974,6 +3075,7 @@ class FillEventsManager:
         payload = [ev.to_dict() for ev in repaired_events]
         ensure_qty_signage(payload)
         compute_psize_pprice(payload)
+        apply_hyperliquid_raw_psize_overrides(payload)
         self._events = [FillEvent.from_dict(ev) for ev in payload]
         self.cache.save(self._events)
         self.cache.update_metadata_from_events(self._events)
@@ -3119,6 +3221,7 @@ class FillEventsManager:
             payload = [ev.to_dict() for ev in self._events]
             ensure_qty_signage(payload)
             compute_psize_pprice(payload)
+            apply_hyperliquid_raw_psize_overrides(payload)
             synthesized_days = self._synthesize_missing_pnls(payload)
             cycle_reconciled_days = self._reconcile_pnl_observations(payload, pnl_observations)
             self._events = [FillEvent.from_dict(ev) for ev in payload]

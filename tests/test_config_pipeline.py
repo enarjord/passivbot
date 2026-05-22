@@ -389,6 +389,11 @@ def test_prepare_config_keeps_live_market_orders_allowed_without_backtest_overri
     assert "market_orders_allowed" not in prepared["backtest"]
 
 
+def test_template_config_defaults_market_orders_disabled():
+    template = get_template_config()
+    assert template["live"]["market_orders_allowed"] is False
+
+
 def test_prepare_config_rejects_cancellations_not_greater_than_creations():
     source = get_template_config()
     source["live"]["max_n_creations_per_batch"] = 3
