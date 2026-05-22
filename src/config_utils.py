@@ -905,7 +905,10 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Allow or disallow market orders.",
+        "help": (
+            "Allow Rust to promote crossing/near-touch orders to live market orders. "
+            "Disabled by default; live exchange slippage controls apply."
+        ),
     },
     "live.market_order_near_touch_threshold": {
         "visible": ["--market-order-near-touch-threshold", "-montt"],
@@ -921,7 +924,10 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "Distance threshold for allowing market orders near touch.",
+        "help": (
+            "Fractional distance threshold for promoting near-touch orders to market "
+            "when market orders are allowed; this is not a live slippage cap."
+        ),
     },
     "live.max_realized_loss_pct": {
         "visible": ["--max-realized-loss-pct", "-mrlp"],

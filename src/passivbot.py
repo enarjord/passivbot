@@ -2433,6 +2433,13 @@ class Passivbot:
         logging.info("╠%s╣", border)
         logging.info("║%s║", line2)
         logging.info("╚%s╝", border)
+        if self._live_market_orders_allowed():
+            logging.warning(
+                "[order] live market order execution is enabled | "
+                "market_order_near_touch_threshold=%s; crossing/near-touch orders may be "
+                "submitted as market orders and live exchange slippage controls apply",
+                self.live_value("market_order_near_touch_threshold"),
+            )
 
     def _format_duration(self, ms: int) -> str:
         """Format milliseconds as human-readable duration (e.g., '2d5h15m')."""
@@ -6544,6 +6551,10 @@ class Passivbot:
                 level=logging.DEBUG,
                 delta=order.get("_delta"),
             )
+            if self._is_market_execution_order(order):
+                self._log_market_execution_notice(
+                    order, context=order.get("_context", "plan_sync")
+                )
             grouped_orders[order["symbol"]].append(order)
         self._log_order_action_summary(grouped_orders, "post")
         res = await self.execute_orders(orders)
@@ -6723,6 +6734,7 @@ class Passivbot:
         price = _fmt(order.get("price", "?"))
         symbol = order.get("symbol", "?")
         coin = symbol_to_coin(symbol, verbose=False) or symbol
+        execution_type = self._order_execution_type(order)
         details = f"{side} {qty} {position_side}@{price}"
         extra_parts = []
         if context:
@@ -6739,10 +6751,51 @@ class Passivbot:
                 parts.append(f"qty {qo} -> {qn} ({delta.get('qty_pct_diff','?')}%)")
             if parts:
                 extra_parts.append("delta=" + "; ".join(parts))
-        msg = f"[order] {action: >{self.action_str_max_len}} {coin} | {details} | type={pb_order_type} | src={source}"
+        msg = (
+            f"[order] {action: >{self.action_str_max_len}} {coin} | {details} | "
+            f"pb_type={pb_order_type} | exec={execution_type} | src={source}"
+        )
         if extra_parts:
             msg += " | " + " ".join(extra_parts)
         logging.log(level, msg)
+
+    def _live_market_orders_allowed(self) -> bool:
+        value = self.live_value("market_orders_allowed")
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "t", "1", "yes", "y", "on"}
+        return bool(value)
+
+    @staticmethod
+    def _order_execution_type(order) -> str:
+        if not isinstance(order, dict):
+            return "unknown"
+        return str(order.get("type") or order.get("execution_type") or "limit").lower()
+
+    @staticmethod
+    def _is_market_execution_order(order) -> bool:
+        return Passivbot._order_execution_type(order) == "market"
+
+    def _log_market_execution_notice(self, order, *, context: str | None = None) -> None:
+        """Emit an unsuppressed INFO log for every live market order submission."""
+
+        def _fmt(val):
+            try:
+                return f"{float(val):g}"
+            except (TypeError, ValueError):
+                return str(val)
+
+        symbol = order.get("symbol", "?") if isinstance(order, dict) else "?"
+        coin = symbol_to_coin(symbol, verbose=False) or symbol
+        msg = (
+            "[order] MARKET order submission | "
+            f"symbol={coin} side={order.get('side', '?')} "
+            f"pside={order.get('position_side', '?')} qty={_fmt(order.get('qty', '?'))} "
+            f"ref_price={_fmt(order.get('price', '?'))} "
+            f"pb_type={self._resolve_pb_order_type(order)}"
+        )
+        if context:
+            msg += f" context={context}"
+        logging.info(msg)
 
     def _log_order_action_summary(
         self, grouped_orders: dict[str, list[dict]], action: str
@@ -6776,6 +6829,9 @@ class Passivbot:
                     extras.append(context)
                 if reason and reason != context:
                     extras.append(f"reason={reason}")
+                execution_type = self._order_execution_type(order)
+                if execution_type == "market":
+                    extras.append("exec=market")
                 delta = order.get("_delta") or {}
                 price_diff = delta.get("price_pct_diff")
                 qty_diff = delta.get("qty_pct_diff")

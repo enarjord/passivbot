@@ -520,6 +520,13 @@ pub struct StrategyEquityMetrics {
     pub drawdown_worst_ema_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
+    pub strategy_eq_recovery_days_mean: f64,
+    pub strategy_eq_recovery_days_median: f64,
+    pub strategy_eq_recovery_days_p95: f64,
+    pub strategy_eq_recovery_days_p99: f64,
+    pub strategy_eq_recovery_days_mean_worst_5pct: f64,
+    pub strategy_eq_recovery_days_mean_worst_1pct: f64,
+    pub strategy_eq_recovery_days_max: f64,
     pub peak_recovery_hours_strategy_eq: f64,
     pub peak_recovery_days_strategy_eq: f64,
     pub adg_strategy_eq_w: f64,
@@ -4594,12 +4601,19 @@ impl<'a> Backtest<'a> {
         };
 
         let full = compute_metrics(series, timestamps, &drawdowns, drawdown_emas);
-        let peak_recovery_hours_strategy_eq =
-            calc_peak_recovery_hours_from_series(series, timestamps);
-        let peak_recovery_days_strategy_eq = peak_recovery_hours_strategy_eq / 24.0;
+        let recovery = calc_strategy_eq_recovery_days(series, timestamps);
+        let peak_recovery_days_strategy_eq = recovery.max;
+        let peak_recovery_hours_strategy_eq = peak_recovery_days_strategy_eq * 24.0;
         let n = sample_count;
         let mut subset_metrics = Vec::with_capacity(10);
         subset_metrics.push(StrategyEquityMetrics {
+            strategy_eq_recovery_days_mean: recovery.mean,
+            strategy_eq_recovery_days_median: recovery.median,
+            strategy_eq_recovery_days_p95: recovery.p95,
+            strategy_eq_recovery_days_p99: recovery.p99,
+            strategy_eq_recovery_days_mean_worst_5pct: recovery.mean_worst_5pct,
+            strategy_eq_recovery_days_mean_worst_1pct: recovery.mean_worst_1pct,
+            strategy_eq_recovery_days_max: recovery.max,
             peak_recovery_hours_strategy_eq,
             peak_recovery_days_strategy_eq,
             ..full
@@ -4620,14 +4634,23 @@ impl<'a> Backtest<'a> {
                 subset_drawdowns,
                 subset_drawdown_emas,
             );
-            subset_metric.peak_recovery_hours_strategy_eq =
-                calc_peak_recovery_hours_from_series(subset_series, subset_timestamps);
             subset_metric.peak_recovery_days_strategy_eq =
-                subset_metric.peak_recovery_hours_strategy_eq / 24.0;
+                calc_strategy_eq_recovery_days(subset_series, subset_timestamps).max;
+            subset_metric.peak_recovery_hours_strategy_eq =
+                subset_metric.peak_recovery_days_strategy_eq * 24.0;
             subset_metrics.push(subset_metric);
         }
 
         StrategyEquityMetrics {
+            strategy_eq_recovery_days_mean: subset_metrics[0].strategy_eq_recovery_days_mean,
+            strategy_eq_recovery_days_median: subset_metrics[0].strategy_eq_recovery_days_median,
+            strategy_eq_recovery_days_p95: subset_metrics[0].strategy_eq_recovery_days_p95,
+            strategy_eq_recovery_days_p99: subset_metrics[0].strategy_eq_recovery_days_p99,
+            strategy_eq_recovery_days_mean_worst_5pct: subset_metrics[0]
+                .strategy_eq_recovery_days_mean_worst_5pct,
+            strategy_eq_recovery_days_mean_worst_1pct: subset_metrics[0]
+                .strategy_eq_recovery_days_mean_worst_1pct,
+            strategy_eq_recovery_days_max: subset_metrics[0].strategy_eq_recovery_days_max,
             peak_recovery_hours_strategy_eq: subset_metrics[0].peak_recovery_hours_strategy_eq,
             peak_recovery_days_strategy_eq: subset_metrics[0].peak_recovery_days_strategy_eq,
             adg_strategy_eq_w: subset_metrics
@@ -4851,28 +4874,98 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         / worst_n as f64
 }
 
-fn calc_peak_recovery_hours_from_series(series: &[f64], timestamps_ms: &[u64]) -> f64 {
+#[derive(Debug, Clone, Copy, Default)]
+struct StrategyEqRecoveryDays {
+    mean: f64,
+    median: f64,
+    p95: f64,
+    p99: f64,
+    mean_worst_5pct: f64,
+    mean_worst_1pct: f64,
+    max: f64,
+}
+
+fn calc_strategy_eq_recovery_days(series: &[f64], timestamps_ms: &[u64]) -> StrategyEqRecoveryDays {
     if series.is_empty() || timestamps_ms.is_empty() {
-        return 0.0;
+        return StrategyEqRecoveryDays::default();
     }
     let n = series.len().min(timestamps_ms.len());
-    if n < 2 {
+    if n == 0 {
+        return StrategyEqRecoveryDays::default();
+    }
+
+    let final_ts = timestamps_ms[n - 1];
+    let mut durations_ms = vec![0_u64; n];
+    let mut pending: Vec<usize> = Vec::with_capacity(n);
+    for i in 0..n {
+        let value = series[i];
+        while let Some(&idx) = pending.last() {
+            if value > series[idx] {
+                durations_ms[idx] = timestamps_ms[i].saturating_sub(timestamps_ms[idx]);
+                pending.pop();
+            } else {
+                break;
+            }
+        }
+        pending.push(i);
+    }
+    for idx in pending {
+        durations_ms[idx] = final_ts.saturating_sub(timestamps_ms[idx]);
+    }
+    summarize_recovery_durations_days(&mut durations_ms)
+}
+
+fn summarize_recovery_durations_days(durations_ms: &mut [u64]) -> StrategyEqRecoveryDays {
+    if durations_ms.is_empty() {
+        return StrategyEqRecoveryDays::default();
+    }
+    durations_ms.sort_unstable();
+    let denom = 86_400_000.0;
+    let mean =
+        durations_ms.iter().map(|x| *x as f64).sum::<f64>() / (durations_ms.len() as f64 * denom);
+    let median = percentile_sorted_u64(durations_ms, 50.0) / denom;
+    StrategyEqRecoveryDays {
+        mean,
+        median,
+        p95: percentile_sorted_u64(durations_ms, 95.0) / denom,
+        p99: percentile_sorted_u64(durations_ms, 99.0) / denom,
+        mean_worst_5pct: mean_worst_pct_sorted_u64(durations_ms, 5.0) / denom,
+        mean_worst_1pct: mean_worst_pct_sorted_u64(durations_ms, 1.0) / denom,
+        max: durations_ms.last().copied().unwrap_or(0) as f64 / denom,
+    }
+}
+
+fn percentile_sorted_u64(sorted: &[u64], percentile: f64) -> f64 {
+    if sorted.is_empty() {
         return 0.0;
     }
-    let mut peak = f64::NEG_INFINITY;
-    let mut peak_ts = timestamps_ms[0];
-    let mut max_duration_ms = 0_u64;
-    for i in 0..n {
-        let ts = timestamps_ms[i];
-        let value = series[i];
-        if value > peak {
-            max_duration_ms = max_duration_ms.max(ts.saturating_sub(peak_ts));
-            peak = value;
-            peak_ts = ts;
-        }
+    if sorted.len() == 1 {
+        return sorted[0] as f64;
     }
-    max_duration_ms = max_duration_ms.max(timestamps_ms[n - 1].saturating_sub(peak_ts));
-    max_duration_ms as f64 / 3_600_000.0
+    let pct = percentile.clamp(0.0, 100.0);
+    let rank = (pct / 100.0) * (sorted.len() - 1) as f64;
+    let lower = rank.floor() as usize;
+    let upper = rank.ceil() as usize;
+    if lower == upper {
+        sorted[lower] as f64
+    } else {
+        let weight = rank - lower as f64;
+        sorted[lower] as f64 + (sorted[upper] as f64 - sorted[lower] as f64) * weight
+    }
+}
+
+fn mean_worst_pct_sorted_u64(sorted: &[u64], pct: f64) -> f64 {
+    if sorted.is_empty() {
+        return 0.0;
+    }
+    let clamped = pct.clamp(0.0, 100.0);
+    let cutoff_index = ((sorted.len() as f64) * clamped / 100.0).max(1.0) as usize;
+    let worst_n = cutoff_index.min(sorted.len());
+    sorted[sorted.len() - worst_n..]
+        .iter()
+        .map(|x| *x as f64)
+        .sum::<f64>()
+        / worst_n as f64
 }
 
 fn calc_strategy_equity_drawdowns(values: &[f64]) -> Vec<f64> {
@@ -6375,6 +6468,36 @@ mod tests {
         assert!((daily_worst[0] - 0.5).abs() < 1e-12);
         assert!((daily_worst[1] - (1.0 / 110.0)).abs() < 1e-12);
         assert!((mean_worst_1pct_abs(&daily_worst) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn strategy_eq_recovery_days_measure_time_to_strictly_exceed_each_sample() {
+        let day = 86_400_000;
+        let series = vec![100.0, 90.0, 95.0, 101.0, 100.0, 102.0];
+        let timestamps: Vec<u64> = (0..series.len()).map(|i| i as u64 * day).collect();
+
+        let recovery = calc_strategy_eq_recovery_days(&series, &timestamps);
+
+        assert!((recovery.mean - (8.0 / 6.0)).abs() < 1e-12);
+        assert!((recovery.median - 1.0).abs() < 1e-12);
+        assert!((recovery.p95 - 2.75).abs() < 1e-12);
+        assert!((recovery.p99 - 2.95).abs() < 1e-12);
+        assert!((recovery.mean_worst_5pct - 3.0).abs() < 1e-12);
+        assert!((recovery.mean_worst_1pct - 3.0).abs() < 1e-12);
+        assert!((recovery.max - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn strategy_eq_recovery_days_keeps_equal_equity_unresolved_until_strictly_higher() {
+        let day = 86_400_000;
+        let series = vec![100.0, 100.0, 101.0];
+        let timestamps: Vec<u64> = (0..series.len()).map(|i| i as u64 * day).collect();
+
+        let recovery = calc_strategy_eq_recovery_days(&series, &timestamps);
+
+        assert!((recovery.mean - 1.0).abs() < 1e-12);
+        assert!((recovery.median - 1.0).abs() < 1e-12);
+        assert!((recovery.max - 2.0).abs() < 1e-12);
     }
 
     #[test]

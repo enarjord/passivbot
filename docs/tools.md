@@ -34,7 +34,7 @@ passivbot tool pareto optimize_results/.../pareto -m reference \
 passivbot tool pareto optimize_results/.../pareto \
   -l 'drawdown_worst_strategy_eq<=0.35' \
   -l 'adg_strategy_eq>0.0'
-passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,peak_recovery_days_strategy_eq \
+passivbot tool pareto -o sharpe_ratio_strategy_eq,adg_strategy_eq,strategy_eq_recovery_days_max \
   -m ideal
 passivbot tool pareto optimize_results/... -m utility \
   --weight adg_strategy_eq=4 \

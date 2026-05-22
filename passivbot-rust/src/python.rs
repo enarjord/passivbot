@@ -1542,6 +1542,17 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.strategy_eq_recovery_days_mean =
+            strategy.overall.strategy_eq_recovery_days_mean;
+        analysis_usd.strategy_eq_recovery_days_median =
+            strategy.overall.strategy_eq_recovery_days_median;
+        analysis_usd.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
+        analysis_usd.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
+        analysis_usd.strategy_eq_recovery_days_mean_worst_5pct =
+            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
+        analysis_usd.strategy_eq_recovery_days_mean_worst_1pct =
+            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
+        analysis_usd.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
         analysis_usd.peak_recovery_hours_strategy_eq =
             strategy.overall.peak_recovery_hours_strategy_eq;
         analysis_usd.peak_recovery_hours_strategy_eq_long =
@@ -1617,6 +1628,17 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.strategy_eq_recovery_days_mean =
+            strategy.overall.strategy_eq_recovery_days_mean;
+        analysis_btc.strategy_eq_recovery_days_median =
+            strategy.overall.strategy_eq_recovery_days_median;
+        analysis_btc.strategy_eq_recovery_days_p95 = strategy.overall.strategy_eq_recovery_days_p95;
+        analysis_btc.strategy_eq_recovery_days_p99 = strategy.overall.strategy_eq_recovery_days_p99;
+        analysis_btc.strategy_eq_recovery_days_mean_worst_5pct =
+            strategy.overall.strategy_eq_recovery_days_mean_worst_5pct;
+        analysis_btc.strategy_eq_recovery_days_mean_worst_1pct =
+            strategy.overall.strategy_eq_recovery_days_mean_worst_1pct;
+        analysis_btc.strategy_eq_recovery_days_max = strategy.overall.strategy_eq_recovery_days_max;
         analysis_btc.peak_recovery_hours_strategy_eq =
             strategy.overall.peak_recovery_hours_strategy_eq;
         analysis_btc.peak_recovery_hours_strategy_eq_long =

@@ -134,7 +134,7 @@ Recommended HSL-focused optimizer study:
 4. Constrain:
    - `drawdown_worst_strategy_eq`
    - `drawdown_worst_mean_1pct_strategy_eq`
-   - `peak_recovery_days_strategy_eq`
+   - `strategy_eq_recovery_days_max`
    - `backtest_completion_ratio`
 
 ## Candidate Starting Defaults To Validate
