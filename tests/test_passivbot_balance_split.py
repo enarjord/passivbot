@@ -1983,10 +1983,19 @@ async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     )
 
 
+def _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot) -> None:
+    bot.coin_overrides = {}
+    bot.config.setdefault("bot", {})
+    bot.config["bot"].setdefault("long", {})["risk_entry_cooldown_minutes"] = 0.0
+    bot.config["bot"].setdefault("short", {})["risk_entry_cooldown_minutes"] = 0.0
+    bot.get_exchange_time = lambda: 1_700_000_000_000
+
+
 @pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "fake"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -2068,6 +2077,7 @@ async def test_refresh_authoritative_state_staged_applies_fake_snapshots():
 async def test_refresh_authoritative_state_staged_applies_bybit_snapshots():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "bybit"
     bot.stop_signal_received = False
     bot.balance_override = None
@@ -2175,6 +2185,7 @@ async def test_fetch_authoritative_state_staged_snapshot_uses_exchange_cohort_ho
 async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_any_exchange():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
     bot.exchange = "binance"
     bot.stop_signal_received = False
     bot._authoritative_refresh_epoch = 0
@@ -2185,6 +2196,7 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
     bot.fetch_balance = AsyncMock(return_value=100.0)
     bot.fetch_positions = AsyncMock(return_value=[])
     bot.fetch_open_orders = AsyncMock(return_value=[])
+    bot.positions = {}
     bot.update_pnls = AsyncMock(return_value=True)
     bot._apply_positions_snapshot = lambda positions: ({}, {})
     bot._apply_balance_snapshot = lambda balance: True
