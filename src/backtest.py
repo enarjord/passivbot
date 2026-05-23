@@ -638,7 +638,8 @@ def build_backtest_payload(
 
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get(
-        "requested_start_ts", require_config_value(config, "backtest.start_date")
+        "effective_requested_start_ts",
+        meta.get("requested_start_ts", require_config_value(config, "backtest.start_date")),
     )
     try:
         if isinstance(candidate_start, str):
@@ -1367,6 +1368,7 @@ def save_coins_hlcvs_to_cache(
     btc_usd_prices,
     timestamps=None,
     warmup_minutes=0,
+    force_overwrite=False,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _get_hlcvs_cache_dir_for_save(
@@ -1380,7 +1382,7 @@ def save_coins_hlcvs_to_cache(
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
     warmup_minutes = int(warmup_minutes)
     meta_path = cache_dir / "cache_meta.json"
-    if meta_path.exists():
+    if meta_path.exists() and not force_overwrite:
         try:
             existing_meta = json.load(open(meta_path))
             existing_warmup = int(existing_meta.get("warmup_minutes", 0))
@@ -1576,7 +1578,11 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         )
     try:
         sts = utc_ms()
-        result = load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+        result = (
+            None
+            if force_refetch_gaps
+            else load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+        )
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = (
@@ -1641,6 +1647,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             btc_usd_prices,
             timestamps,
             warmup_minutes=backtest_warmup_minutes,
+            force_overwrite=force_refetch_gaps,
         )
     except Exception as e:
         logging.error(f"Failed to save hlcvs to cache: {e}")

@@ -1246,6 +1246,7 @@ async def try_prepare_hlcvs_v2_local(
             btc_usd_prices=btc_prices,
             mss={coin: mss[coin] for coin in sorted(coin_symbols)},
             run_id=run_id,
+            fill_edge_gaps=True,
         )
         enriched_mss = handle.mss
         warmup_provided = max(0, int(max(0, requested_start_ts - int(global_start_ts)) // minute_ms))
@@ -1734,25 +1735,26 @@ async def _read_v2_range_repairing_corrupt_chunk(
         if not corrupt_chunks:
             raise
         logging.warning(
-            "[%s] corrupt v2 chunk(s) for %s; refetching %d full month chunk(s): %s",
+            "[%s] corrupt v2 chunk(s) for %s; invalidating %d chunk(s) before targeted repair: %s",
             exchange,
             coin,
             len(corrupt_chunks),
             exc,
         )
         for chunk, chunk_exc in corrupt_chunks:
-            repair_start_ts = int(chunk.start_ts)
-            repair_end_ts = int(chunk.end_ts)
+            repair_start_ts = max(int(start_ts), int(chunk.start_ts))
+            repair_end_ts = min(int(end_ts), int(chunk.end_ts))
             catalog.mark_gap(
                 exchange=exchange,
                 timeframe="1m",
                 symbol=symbol,
-                start_ts=repair_start_ts,
-                end_ts=repair_end_ts,
+                start_ts=int(chunk.start_ts),
+                end_ts=int(chunk.end_ts),
                 reason="local_corrupt_chunk",
                 persistent=False,
                 note=str(chunk_exc),
             )
+            store.invalidate_chunk(chunk)
             repaired = await _fetch_coin_range_into_v2_store(
                 om=om,
                 catalog=catalog,
@@ -1803,7 +1805,7 @@ def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tup
 def _range_has_tolerable_internal_sparse_gaps(rng, gap_tolerance_minutes: float) -> bool:
     if rng.valid.all():
         return True
-    if not rng.valid.any() or not bool(rng.valid[0]) or not bool(rng.valid[-1]):
+    if not rng.valid.any():
         return False
     max_gap_bars = max(0, int(float(gap_tolerance_minutes)))
     for window_start, window_end in _iter_invalid_windows(rng.timestamps, rng.valid):
@@ -1999,7 +2001,25 @@ async def _fetch_coin_range_into_v2_store(
             note="empty_timestamp_array",
         )
         return False
-    if ts[0] != int(start_ts) or ts[-1] != int(end_ts):
+    request_start_ts = int(start_ts)
+    request_end_ts = int(end_ts)
+    gap_tolerance_bars = max(
+        0, int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)))
+    )
+    if np.any(ts % interval_ms != 0):
+        catalog.record_fetch_attempt(
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attempt=attempt,
+            outcome="gaps",
+            latency_ms=latency_ms,
+            note="unaligned_timestamps",
+        )
+        return False
+    if ts[0] < request_start_ts or ts[-1] > request_end_ts:
         catalog.record_fetch_attempt(
             exchange=exchange,
             timeframe="1m",
@@ -2030,7 +2050,41 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(int(ts[-1])),
         )
         return False
-    sparse_missing_bars = 0
+    leading_missing_bars = int((int(ts[0]) - request_start_ts) // interval_ms)
+    trailing_missing_bars = int((request_end_ts - int(ts[-1])) // interval_ms)
+    if max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars:
+        catalog.record_fetch_attempt(
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attempt=attempt,
+            outcome="range_mismatch",
+            latency_ms=latency_ms,
+            note=(
+                f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
+                f"tolerance={gap_tolerance_bars}"
+            ),
+        )
+        _sync_persistent_cm_gaps_to_v2_catalog(
+            catalog=catalog,
+            om=om,
+            symbol=symbol,
+            exchange=exchange,
+            timeframe="1m",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        logging.info(
+            "[%s] v2 fetch edge gaps exceed tolerance for %s (%s -> %s)",
+            exchange,
+            coin,
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        return False
+    sparse_missing_bars = leading_missing_bars + trailing_missing_bars
     if ts.size > 1:
         intervals = np.diff(ts)
         if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
@@ -2063,11 +2117,8 @@ async def _fetch_coin_range_into_v2_store(
             )
             return False
         missing_by_gap = np.maximum((intervals // interval_ms) - 1, 0)
-        sparse_missing_bars = int(missing_by_gap.sum())
+        sparse_missing_bars += int(missing_by_gap.sum())
         max_missing_bars = int(missing_by_gap.max(initial=0))
-        gap_tolerance_bars = max(
-            0, int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)))
-        )
         if max_missing_bars > gap_tolerance_bars:
             catalog.record_fetch_attempt(
                 exchange=exchange,
@@ -3299,17 +3350,8 @@ async def fetch_data_for_coin_and_exchange(
                 time.monotonic() - t0,
             )
             return None
-        df = pd.DataFrame(
-            {
-                "timestamp": rng.timestamps,
-                "high": rng.values[:, 0].astype(np.float64, copy=False),
-                "low": rng.values[:, 1].astype(np.float64, copy=False),
-                "close": rng.values[:, 2].astype(np.float64, copy=False),
-                "volume": rng.values[:, 3].astype(np.float64, copy=False),
-            }
-        )
-        coverage_count = len(df)
-        gap_count = 0
+        df, gap_count = _dense_hlcv_frame_from_sparse_v2_range(rng)
+        coverage_count = int(rng.valid.sum())
         total_volume = float(df["volume"].sum())
         logging.info(
             "%s candles load ok coin=%s rows=%d gaps=%d source=v2_store elapsed_s=%.1f",

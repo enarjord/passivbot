@@ -10,13 +10,17 @@ import numpy as np
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
-def _fill_internal_sparse_hlcv_gaps(values: np.ndarray, valid_mask: np.ndarray) -> int:
+def _fill_sparse_hlcv_gaps(
+    values: np.ndarray, valid_mask: np.ndarray, *, fill_edge_gaps: bool = False
+) -> int:
     valid_indices = np.flatnonzero(valid_mask)
     if valid_indices.size == 0:
         return 0
     first_valid = int(valid_indices[0])
     last_valid = int(valid_indices[-1])
-    missing_indices = np.flatnonzero(~valid_mask[first_valid : last_valid + 1]) + first_valid
+    fill_start = 0 if fill_edge_gaps else first_valid
+    fill_end = len(valid_mask) - 1 if fill_edge_gaps else last_valid
+    missing_indices = np.flatnonzero(~valid_mask[fill_start : fill_end + 1]) + fill_start
     if missing_indices.size == 0:
         return 0
     for idx in missing_indices:
@@ -92,6 +96,7 @@ class BacktestDatasetMaterializer:
         btc_usd_prices: np.ndarray,
         mss: dict,
         run_id: str,
+        fill_edge_gaps: bool = False,
     ) -> SharedBacktestDatasetHandle:
         interval_ms = timeframe_to_interval_ms("1m")
         if end_ts < start_ts:
@@ -129,7 +134,9 @@ class BacktestDatasetMaterializer:
             self.store.copy_range_into(
                 exchange, "1m", store_symbol, start_ts, end_ts, coin_view, valid_buffer
             )
-            synthetic_gap_fill_count = _fill_internal_sparse_hlcv_gaps(coin_view, valid_buffer)
+            synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
+                coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
+            )
             if valid_buffer.any():
                 valid_indices = np.flatnonzero(valid_buffer)
                 first_valid_index = int(valid_indices[0])
@@ -226,7 +233,7 @@ def materialize_frames(
                 f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
             )
         valid_mask = ~np.isnan(aligned[:, 0])
-        synthetic_gap_fill_count = _fill_internal_sparse_hlcv_gaps(aligned, valid_mask)
+        synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
         hlcvs[:, coin_idx, :] = aligned
         if valid_mask.any():
             valid_indices = np.flatnonzero(valid_mask)

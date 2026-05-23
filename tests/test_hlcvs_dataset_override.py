@@ -3,6 +3,8 @@ import json
 import numpy as np
 import pytest
 
+from backtest import build_backtest_payload
+from config_utils import get_template_config
 from hlcvs_manifest import HlcvsManifestError, build_hlcvs_manifest, write_hlcvs_manifest
 from hlcvs_override import load_hlcvs_data_override
 
@@ -117,6 +119,41 @@ def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tm
     assert mss["__meta__"]["warmup_minutes"] == 1440
     assert mss["__meta__"]["requested_data_start_ts"] == int(timestamps[0])
     assert mss["__meta__"]["effective_data_start_ts"] == int(timestamps[0])
+    assert mss["__meta__"]["original_requested_start_ts"] == int(timestamps[1])
+    assert mss["__meta__"]["effective_requested_start_ts"] == int(timestamps[1])
+
+
+def test_backtest_payload_prefers_effective_override_requested_start():
+    config = get_template_config()
+    config["backtest"]["coins"] = {"binance": ["BTC"]}
+    config["backtest"]["start_date"] = "2025-01-02"
+    config["backtest"]["end_date"] = "2025-01-03"
+    mss = {
+        "BTC": {
+            "maker": 0.0001,
+            "taker": 0.0005,
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.001,
+            "min_cost": 10.0,
+            "c_mult": 1.0,
+        },
+        "__meta__": {
+            "requested_start_ts": 1735689600000,
+            "effective_requested_start_ts": 1735776000000,
+        },
+    }
+
+    payload = build_backtest_payload(
+        np.zeros((2, 1, 4), dtype=np.float64),
+        mss,
+        config,
+        "binance",
+        np.ones(2, dtype=np.float64),
+        timestamps=np.array([1735776000000, 1735776060000], dtype=np.int64),
+    )
+
+    assert payload.backtest_params["requested_start_timestamp_ms"] == 1735776000000
 
 
 def test_hlcvs_dataset_override_rejects_manifest_hash_mismatch(tmp_path):

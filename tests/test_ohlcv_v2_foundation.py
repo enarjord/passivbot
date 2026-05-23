@@ -56,6 +56,27 @@ def test_store_detects_chunk_checksum_mismatch(tmp_path):
         store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
 
 
+def test_store_detects_same_process_mutation_after_verified_read(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    vals = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+    first = store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
+    assert first.valid.all()
+
+    chunk = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = 999.0
+    body.flush()
+    del body
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
+
+
 def test_open_month_patch_extends_existing_chunk_and_symbol_bounds(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -227,6 +248,41 @@ def test_materializer_fills_internal_sparse_gaps_without_extending_edges(tmp_pat
     np.testing.assert_allclose(hlcvs[0, 0, :], vals[0].astype(np.float64))
     np.testing.assert_allclose(hlcvs[1, 0, :], np.array([100.0, 100.0, 100.0, 0.0]))
     np.testing.assert_allclose(hlcvs[2, 0, :], vals[1].astype(np.float64))
+    assert handle.mss["ETH/USDT"]["first_valid_index"] == 0
+    assert handle.mss["ETH/USDT"]["last_valid_index"] == 2
+    assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == 1
+
+
+def test_materializer_can_fill_accepted_edge_sparse_gaps(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    end = start + 2 * 60_000
+    ts = np.array([start + 60_000, end], dtype=np.int64)
+    vals = np.array(
+        [
+            [102.0, 100.0, 101.0, 11.0],
+            [103.0, 101.0, 102.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("binance", "1m", "ETH/USDT", ts, vals)
+
+    handle = BacktestDatasetMaterializer(store, tmp_path / "caches" / "ohlcvs" / "materialized").materialize(
+        exchange="binance",
+        coins=["ETH/USDT"],
+        start_ts=int(start),
+        end_ts=int(end),
+        btc_usd_prices=np.array([30_000.0, 30_100.0, 30_200.0]),
+        mss={"ETH/USDT": {}},
+        run_id="edge_sparse_fill",
+        fill_edge_gaps=True,
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[0, 0, :], np.array([101.0, 101.0, 101.0, 0.0]))
+    np.testing.assert_allclose(hlcvs[1:, 0, :], vals.astype(np.float64))
     assert handle.mss["ETH/USDT"]["first_valid_index"] == 0
     assert handle.mss["ETH/USDT"]["last_valid_index"] == 2
     assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == 1

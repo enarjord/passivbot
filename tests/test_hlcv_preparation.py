@@ -1625,6 +1625,64 @@ async def test_fetch_data_for_coin_and_exchange_uses_partial_v2_window_for_persi
 
 
 @pytest.mark.asyncio
+async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_path):
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        def get_symbol(self, coin):
+            return "BTC/USDT:USDT"
+
+        def update_date_range(self, start_ts, end_ts):
+            self.start_ts = start_ts
+            self.end_ts = end_ts
+
+        async def get_ohlcvs(self, coin, *args, **kwargs):
+            raise AssertionError("remote fetch should not be used for sparse v2 local reuse")
+
+    start_ts = month_start_ts(2026, 4)
+    timestamps = np.array([start_ts, start_ts + 120_000], dtype=np.int64)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    store.write_rows(
+        "binance",
+        "1m",
+        "BTC/USDT:USDT",
+        timestamps,
+        np.array(
+            [[50001.0, 49999.0, 50000.0, 100.0], [50021.0, 50019.0, 50020.0, 102.0]],
+            dtype=np.float32,
+        ),
+    )
+
+    result = await hp.fetch_data_for_coin_and_exchange(
+        "BTC",
+        "binanceusdm",
+        FakeManager(),
+        int(start_ts),
+        int(start_ts + 120_000),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        use_v2_local=True,
+    )
+
+    assert result is not None
+    ex, df, coverage_count, gap_count, total_volume = result
+    assert ex == "binanceusdm"
+    np.testing.assert_array_equal(
+        df["timestamp"].to_numpy(dtype=np.int64, copy=False),
+        np.array([start_ts, start_ts + 60_000, start_ts + 120_000], dtype=np.int64),
+    )
+    assert coverage_count == 2
+    assert gap_count == 1
+    assert total_volume == pytest.approx(202.0)
+    np.testing.assert_allclose(df["volume"].to_numpy(), np.array([100.0, 0.0, 102.0]))
+
+
+@pytest.mark.asyncio
 async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap_fill():
     class FakeLock:
         async def __aenter__(self):

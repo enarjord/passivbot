@@ -425,6 +425,45 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
         assert meta["warmup_minutes"] == 5000
 
+    def test_force_overwrite_bypasses_existing_warmup_early_return(self, tmp_path, monkeypatch):
+        """Force refetch callers can replace an otherwise sufficient cache."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        hlcvs = np.zeros((10, 1, 4), dtype=np.float64)
+        mss = {"BTC": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            hlcvs,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=5000,
+        )
+        replacement = np.ones((10, 1, 4), dtype=np.float64) * 7.0
+        save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            replacement,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=1000,
+            force_overwrite=True,
+        )
+
+        loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
+        assert float(loaded[0, 0, 0]) == 7.0
+        meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
+        assert meta["warmup_minutes"] == 1000
+
     def test_save_overwrites_corrupt_manifest_cache_even_when_warmup_sufficient(
         self, tmp_path, monkeypatch
     ):

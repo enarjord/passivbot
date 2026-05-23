@@ -84,7 +84,7 @@ class OhlcvStore:
     def __init__(self, root: str | Path, catalog: OhlcvCatalog):
         self.root = Path(root)
         self.catalog = catalog
-        self._verified_checksums: set[tuple[str, str]] = set()
+        self._verified_checksums: set[tuple] = set()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def month_paths(self, exchange: str, timeframe: str, symbol: str, year: int, month: int) -> MonthChunkPaths:
@@ -141,6 +141,54 @@ class OhlcvStore:
         )
         return paths
 
+    def _checksum_cache_keys_for_paths(self, paths: MonthChunkPaths, checksum: str) -> tuple:
+        body_stat = paths.body_path.stat()
+        valid_stat = paths.valid_path.stat()
+        return (
+            str(paths.body_path),
+            str(checksum),
+            int(body_stat.st_mtime_ns),
+            int(body_stat.st_size),
+            int(valid_stat.st_mtime_ns),
+            int(valid_stat.st_size),
+        )
+
+    def _invalidate_verified_checksum_cache(self, body_path: str | Path) -> None:
+        body_path_str = str(body_path)
+        self._verified_checksums = {
+            key for key in self._verified_checksums if key[0] != body_path_str
+        }
+
+    def invalidate_chunk(self, chunk: ChunkRecord) -> None:
+        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        self._invalidate_verified_checksum_cache(paths.body_path)
+        body = np.load(paths.body_path, mmap_mode="r+")
+        valid = np.load(paths.valid_path, mmap_mode="r+")
+        try:
+            body[:] = np.nan
+            valid[:] = False
+            body.flush()
+            valid.flush()
+        finally:
+            del body
+            del valid
+        checksum = self._compute_chunk_checksum(paths)
+        self.catalog.register_chunk(
+            exchange=chunk.exchange,
+            timeframe=chunk.timeframe,
+            symbol=chunk.symbol,
+            year=chunk.year,
+            month=chunk.month,
+            body_path=chunk.body_path,
+            valid_path=chunk.valid_path,
+            start_ts=chunk.start_ts,
+            end_ts=chunk.end_ts,
+            rows=chunk.rows,
+            status=chunk.status,
+            schema_version=chunk.schema_version,
+            checksum=checksum,
+        )
+
     def write_rows(
         self,
         exchange: str,
@@ -173,6 +221,7 @@ class OhlcvStore:
 
         for (year, month), indices in grouped.items():
             paths = self.ensure_month(exchange, timeframe, symbol, year, month, status=status)
+            self._invalidate_verified_checksum_cache(paths.body_path)
             body = np.load(paths.body_path, mmap_mode="r+")
             valid = np.load(paths.valid_path, mmap_mode="r+")
             for src_idx in indices:
@@ -289,10 +338,10 @@ class OhlcvStore:
     def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
         if not chunk.checksum:
             return
-        cache_key = (str(chunk.body_path), str(chunk.checksum))
+        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        cache_key = self._checksum_cache_keys_for_paths(paths, str(chunk.checksum))
         if cache_key in self._verified_checksums:
             return
-        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
         actual = self._compute_chunk_checksum(paths)
         if actual != chunk.checksum:
             raise ValueError(
