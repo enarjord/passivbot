@@ -100,6 +100,7 @@ from hlcv_preparation import (
     try_prepare_hlcvs_v2_local,
 )
 from hlcvs_manifest import (
+    HlcvsManifestError,
     build_hlcvs_manifest,
     load_numpy_artifact,
     load_hlcvs_manifest,
@@ -1289,9 +1290,16 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             if manifest_has_required_schema(manifest):
                 files = manifest.get("files", {})
                 entry = files.get(name) if isinstance(files, dict) else None
+                if not isinstance(entry, dict):
+                    raise HlcvsManifestError(
+                        f"HLCV manifest missing required file entry {name!r}"
+                    )
                 rel_path = entry.get("path") if isinstance(entry, dict) else None
-                if rel_path:
-                    return cache_dir / str(rel_path)
+                if not rel_path:
+                    raise HlcvsManifestError(
+                        f"HLCV manifest file entry {name!r} is missing path"
+                    )
+                return cache_dir / str(rel_path)
             return cache_dir / default_name
 
         if compress_cache:
@@ -1380,9 +1388,14 @@ def save_coins_hlcvs_to_cache(
             if existing_warmup >= warmup_minutes and manifest_has_required_schema(
                 existing_manifest
             ):
+                verify_hlcvs_manifest(cache_dir, existing_manifest)
                 return cache_dir
-        except Exception:
-            pass
+        except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
+            logging.warning(
+                "[hlcvs] existing cache %s failed validation; overwriting: %s",
+                cache_dir,
+                exc,
+            )
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
     json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))

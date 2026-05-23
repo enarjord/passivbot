@@ -1221,7 +1221,8 @@ async def try_prepare_hlcvs_v2_local(
                 )
                 if btc_rng is None:
                     continue
-                btc_prices = btc_rng.values[:, 2].astype(np.float64, copy=False)
+                btc_df, _btc_gap_count = _dense_hlcv_frame_from_sparse_v2_range(btc_rng)
+                btc_prices = btc_df["close"].to_numpy(dtype=np.float64, copy=False)
                 btc_source_exchange = btc_exchange
                 break
             finally:
@@ -1399,6 +1400,18 @@ async def _resolve_v2_store_range(
         if rng.valid.any()
         else [(int(start_ts), int(end_ts))]
     )
+    if _range_has_tolerable_internal_sparse_gaps(
+        rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+    ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
+        logging.info(
+            "[%s] %s sparse-valid for %s (%s -> %s)",
+            exchange,
+            local_hit_log_label,
+            coin,
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        return rng
     overlapping_persistent_gaps = _persistent_gaps_overlapping_windows(
         plan.persistent_gaps, invalid_windows
     )
@@ -1454,6 +1467,10 @@ async def _resolve_v2_store_range(
                 if rng.valid.any()
                 else [(int(start_ts), int(end_ts))]
             )
+            if _range_has_tolerable_internal_sparse_gaps(
+                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+            ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
+                return rng
         if _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
             partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
             if partial_rng is not None:
@@ -1513,6 +1530,18 @@ async def _resolve_v2_store_range(
         if rng.valid.all():
             logging.info(
                 "[%s] %s for %s after targeted fetch (%s -> %s)",
+                exchange,
+                local_hit_log_label,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return rng
+        if _range_has_tolerable_internal_sparse_gaps(
+            rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+        ):
+            logging.info(
+                "[%s] %s sparse-valid for %s after targeted fetch (%s -> %s)",
                 exchange,
                 local_hit_log_label,
                 coin,
@@ -1604,6 +1633,18 @@ async def _resolve_v2_store_range(
                     ts_to_date(end_ts),
                 )
                 return rng
+            if _range_has_tolerable_internal_sparse_gaps(
+                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+            ):
+                logging.info(
+                    "[%s] %s sparse-valid for %s after post-fetch legacy import (%s -> %s)",
+                    exchange,
+                    local_hit_log_label,
+                    coin,
+                    ts_to_date(start_ts),
+                    ts_to_date(end_ts),
+                )
+                return rng
             if allow_partial_window:
                 partial_rng = _extract_single_valid_window(rng)
                 if partial_rng is not None:
@@ -1631,6 +1672,18 @@ async def _resolve_v2_store_range(
     if rng is None:
         return None
     if not rng.valid.all():
+        if _range_has_tolerable_internal_sparse_gaps(
+            rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+        ):
+            logging.info(
+                "[%s] %s sparse-valid for %s after fetch (%s -> %s)",
+                exchange,
+                local_hit_log_label,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return rng
         if allow_partial_window:
             partial_rng = _extract_single_valid_window(rng)
             if partial_rng is not None:
@@ -1670,36 +1723,48 @@ async def _read_v2_range_repairing_corrupt_chunk(
     except ValueError as exc:
         if "checksum mismatch" not in str(exc) or not allow_remote_fetch:
             raise
-        catalog.mark_gap(
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            reason="local_corrupt_chunk",
-            persistent=False,
-            note=str(exc),
-        )
+        corrupt_chunks = []
+        for chunk in catalog.list_chunks(exchange, "1m", symbol, start_ts, end_ts):
+            try:
+                store.verify_chunk_checksum(chunk)
+            except ValueError as chunk_exc:
+                if "checksum mismatch" not in str(chunk_exc):
+                    raise
+                corrupt_chunks.append((chunk, chunk_exc))
+        if not corrupt_chunks:
+            raise
         logging.warning(
-            "[%s] corrupt v2 chunk for %s; refetching %s -> %s: %s",
+            "[%s] corrupt v2 chunk(s) for %s; refetching %d full month chunk(s): %s",
             exchange,
             coin,
-            ts_to_date(start_ts),
-            ts_to_date(end_ts),
+            len(corrupt_chunks),
             exc,
         )
-        repaired = await _fetch_coin_range_into_v2_store(
-            om=om,
-            catalog=catalog,
-            store=store,
-            exchange=exchange,
-            coin=coin,
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        if not repaired:
-            return None
+        for chunk, chunk_exc in corrupt_chunks:
+            repair_start_ts = int(chunk.start_ts)
+            repair_end_ts = int(chunk.end_ts)
+            catalog.mark_gap(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=repair_start_ts,
+                end_ts=repair_end_ts,
+                reason="local_corrupt_chunk",
+                persistent=False,
+                note=str(chunk_exc),
+            )
+            repaired = await _fetch_coin_range_into_v2_store(
+                om=om,
+                catalog=catalog,
+                store=store,
+                exchange=exchange,
+                coin=coin,
+                symbol=symbol,
+                start_ts=repair_start_ts,
+                end_ts=repair_end_ts,
+            )
+            if not repaired:
+                return None
         return store.read_range(exchange, "1m", symbol, start_ts, end_ts)
 
 
@@ -1733,6 +1798,37 @@ def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tup
         start = prev = ts
     windows.append((start, prev))
     return windows
+
+
+def _range_has_tolerable_internal_sparse_gaps(rng, gap_tolerance_minutes: float) -> bool:
+    if rng.valid.all():
+        return True
+    if not rng.valid.any() or not bool(rng.valid[0]) or not bool(rng.valid[-1]):
+        return False
+    max_gap_bars = max(0, int(float(gap_tolerance_minutes)))
+    for window_start, window_end in _iter_invalid_windows(rng.timestamps, rng.valid):
+        window_bars = int((int(window_end) - int(window_start)) // 60_000) + 1
+        if window_bars > max_gap_bars:
+            return False
+    return True
+
+
+def _dense_hlcv_frame_from_sparse_v2_range(rng) -> tuple[pd.DataFrame, int]:
+    df = pd.DataFrame(
+        {
+            "timestamp": rng.timestamps.astype(np.int64),
+            "high": rng.values[:, 0].astype(np.float64, copy=False),
+            "low": rng.values[:, 1].astype(np.float64, copy=False),
+            "close": rng.values[:, 2].astype(np.float64, copy=False),
+            "volume": rng.values[:, 3].astype(np.float64, copy=False),
+        }
+    )
+    gap_count = int((~rng.valid).sum())
+    if gap_count:
+        for col in ("high", "low", "close"):
+            df[col] = df[col].ffill().bfill()
+        df["volume"] = df["volume"].fillna(0.0)
+    return df.reset_index(drop=True), gap_count
 
 
 def _persistent_gaps_overlap_windows(gaps, windows: list[tuple[int, int]]) -> bool:
@@ -1934,34 +2030,73 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(int(ts[-1])),
         )
         return False
-    if ts.size > 1 and not (np.diff(ts) == interval_ms).all():
-        catalog.record_fetch_attempt(
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            attempt=attempt,
-            outcome="gaps",
-            latency_ms=latency_ms,
+    sparse_missing_bars = 0
+    if ts.size > 1:
+        intervals = np.diff(ts)
+        if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="gaps",
+                latency_ms=latency_ms,
+                note="non_monotonic_or_unaligned_timestamps",
+            )
+            _sync_persistent_cm_gaps_to_v2_catalog(
+                catalog=catalog,
+                om=om,
+                symbol=symbol,
+                exchange=exchange,
+                timeframe="1m",
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            logging.info(
+                "[%s] v2 fetch returned malformed timestamps for %s (%s -> %s)",
+                exchange,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return False
+        missing_by_gap = np.maximum((intervals // interval_ms) - 1, 0)
+        sparse_missing_bars = int(missing_by_gap.sum())
+        max_missing_bars = int(missing_by_gap.max(initial=0))
+        gap_tolerance_bars = max(
+            0, int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)))
         )
-        _sync_persistent_cm_gaps_to_v2_catalog(
-            catalog=catalog,
-            om=om,
-            symbol=symbol,
-            exchange=exchange,
-            timeframe="1m",
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        logging.info(
-            "[%s] v2 fetch returned gaps for %s (%s -> %s)",
-            exchange,
-            coin,
-            ts_to_date(start_ts),
-            ts_to_date(end_ts),
-        )
-        return False
+        if max_missing_bars > gap_tolerance_bars:
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="gaps",
+                latency_ms=latency_ms,
+                note=f"max_missing_bars={max_missing_bars} tolerance={gap_tolerance_bars}",
+            )
+            _sync_persistent_cm_gaps_to_v2_catalog(
+                catalog=catalog,
+                om=om,
+                symbol=symbol,
+                exchange=exchange,
+                timeframe="1m",
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            logging.info(
+                "[%s] v2 fetch returned gaps for %s (%s -> %s)",
+                exchange,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return False
     values = np.column_stack(
         [
             df["high"].astype(np.float32, copy=False).to_numpy(),
@@ -1978,9 +2113,9 @@ async def _fetch_coin_range_into_v2_store(
         start_ts=start_ts,
         end_ts=end_ts,
         attempt=attempt,
-        outcome="ok",
+        outcome="sparse_ok" if sparse_missing_bars else "ok",
         latency_ms=latency_ms,
-        note=f"rows={len(ts)}",
+        note=f"rows={len(ts)} missing_bars={sparse_missing_bars}",
     )
     return True
 

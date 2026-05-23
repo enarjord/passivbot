@@ -84,6 +84,7 @@ class OhlcvStore:
     def __init__(self, root: str | Path, catalog: OhlcvCatalog):
         self.root = Path(root)
         self.catalog = catalog
+        self._verified_checksums: set[tuple[str, str]] = set()
         self.root.mkdir(parents=True, exist_ok=True)
 
     def month_paths(self, exchange: str, timeframe: str, symbol: str, year: int, month: int) -> MonthChunkPaths:
@@ -288,6 +289,9 @@ class OhlcvStore:
     def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
         if not chunk.checksum:
             return
+        cache_key = (str(chunk.body_path), str(chunk.checksum))
+        if cache_key in self._verified_checksums:
+            return
         paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
         actual = self._compute_chunk_checksum(paths)
         if actual != chunk.checksum:
@@ -295,3 +299,4 @@ class OhlcvStore:
                 f"OHLCV chunk checksum mismatch for {chunk.exchange} {chunk.symbol} "
                 f"{chunk.year:04d}-{chunk.month:02d}: expected {chunk.checksum} got {actual}"
             )
+        self._verified_checksums.add(cache_key)

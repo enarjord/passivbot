@@ -425,6 +425,49 @@ class TestSavePersistsWarmupMetadata:
         meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
         assert meta["warmup_minutes"] == 5000
 
+    def test_save_overwrites_corrupt_manifest_cache_even_when_warmup_sufficient(
+        self, tmp_path, monkeypatch
+    ):
+        """A corrupt manifest cache must not take the warmup early-return path."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        hlcvs = np.zeros((10, 1, 4), dtype=np.float64)
+        mss = {"BTC": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            hlcvs,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=5000,
+        )
+        tampered = hlcvs.copy()
+        tampered[0, 0, 0] = 999.0
+        np.save(os.path.join(str(cache_dir), "hlcvs.npy"), tampered)
+
+        repaired_hlcvs = np.ones((10, 1, 4), dtype=np.float64)
+        save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            repaired_hlcvs,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=1000,
+        )
+
+        loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
+        assert float(loaded[0, 0, 0]) == 1.0
+        assert load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=1000) is not None
+
     def test_save_with_compression(self, tmp_path, monkeypatch):
         """cache_meta.json is written even with compressed cache."""
         monkeypatch.chdir(tmp_path)

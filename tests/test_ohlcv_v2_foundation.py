@@ -197,6 +197,41 @@ def test_materializer_supports_distinct_coin_keys_and_store_symbols(tmp_path):
     assert handle.mss["ETH"]["last_valid_index"] == 1
 
 
+def test_materializer_fills_internal_sparse_gaps_without_extending_edges(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    end = start + 2 * 60_000
+    ts = np.array([start, end], dtype=np.int64)
+    vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [103.0, 101.0, 102.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("binance", "1m", "ETH/USDT", ts, vals)
+
+    handle = BacktestDatasetMaterializer(store, tmp_path / "caches" / "ohlcvs" / "materialized").materialize(
+        exchange="binance",
+        coins=["ETH/USDT"],
+        start_ts=int(start),
+        end_ts=int(end),
+        btc_usd_prices=np.array([30_000.0, 30_100.0, 30_200.0]),
+        mss={"ETH/USDT": {}},
+        run_id="sparse_fill",
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[0, 0, :], vals[0].astype(np.float64))
+    np.testing.assert_allclose(hlcvs[1, 0, :], np.array([100.0, 100.0, 100.0, 0.0]))
+    np.testing.assert_allclose(hlcvs[2, 0, :], vals[1].astype(np.float64))
+    assert handle.mss["ETH/USDT"]["first_valid_index"] == 0
+    assert handle.mss["ETH/USDT"]["last_valid_index"] == 2
+    assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == 1
+
+
 def test_materialize_frames_creates_shared_memmap_payload(tmp_path):
     start = month_start_ts(2026, 4)
     timestamps = np.array([start, start + 60_000, start + 120_000], dtype=np.int64)
@@ -238,3 +273,35 @@ def test_materialize_frames_creates_shared_memmap_payload(tmp_path):
     assert handle.mss["BTC"]["last_valid_index"] == 2
     assert handle.mss["ETH"]["first_valid_index"] == 0
     assert handle.mss["ETH"]["last_valid_index"] == 1
+
+
+def test_materialize_frames_fills_internal_sparse_gaps(tmp_path):
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start, start + 60_000, start + 120_000], dtype=np.int64)
+    aligned_values_by_coin = {
+        "ETH": np.array(
+            [
+                [201.0, 199.0, 200.0, 20.0],
+                [np.nan, np.nan, np.nan, np.nan],
+                [203.0, 201.0, 202.0, 22.0],
+            ],
+            dtype=np.float64,
+        ),
+    }
+
+    handle = materialize_frames(
+        output_root=tmp_path / "caches" / "ohlcvs" / "materialized",
+        exchange="combined",
+        coins=["ETH"],
+        timestamps=timestamps,
+        aligned_values_by_coin=aligned_values_by_coin,
+        btc_usd_prices=np.array([30_000.0, 30_100.0, 30_200.0]),
+        mss={"ETH": {}},
+        run_id="combined_sparse_fill",
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[1, 0, :], np.array([200.0, 200.0, 200.0, 0.0]))
+    assert handle.mss["ETH"]["first_valid_index"] == 0
+    assert handle.mss["ETH"]["last_valid_index"] == 2
+    assert handle.mss["ETH"]["synthetic_gap_fill_count"] == 1

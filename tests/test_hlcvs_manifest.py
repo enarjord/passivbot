@@ -133,3 +133,37 @@ def test_verify_hlcvs_manifest_rejects_modified_file(tmp_path):
 
     with pytest.raises(HlcvsManifestError, match="hash mismatch"):
         verify_hlcvs_manifest(cache_dir)
+
+
+def test_verify_hlcvs_manifest_rejects_missing_required_file_entry(tmp_path):
+    cache_dir = tmp_path / "hlcvs"
+    coins = ["BTC"]
+    hlcvs = np.ones((2, 1, 4), dtype=np.float64)
+    timestamps = np.array([1735689600000, 1735689660000], dtype=np.int64)
+    btc_usd_prices = np.array([100.0, 101.0], dtype=np.float64)
+    mss = {"BTC": {"exchange": "binance"}, "__meta__": {"btc_source_exchange": "binanceusdm"}}
+    _write_cache_files(
+        cache_dir,
+        hlcvs=hlcvs,
+        timestamps=timestamps,
+        btc_usd_prices=btc_usd_prices,
+        coins=coins,
+        mss=mss,
+    )
+    manifest = build_hlcvs_manifest(
+        config=_minimal_config(),
+        exchange="binance",
+        cache_hash="abc123",
+        coins=coins,
+        hlcvs=hlcvs,
+        mss=mss,
+        btc_usd_prices=btc_usd_prices,
+        timestamps=timestamps,
+        warmup_minutes=0,
+        compressed=False,
+    )
+    del manifest["files"]["hlcvs"]
+    write_hlcvs_manifest(cache_dir, manifest)
+
+    with pytest.raises(HlcvsManifestError, match="missing required file entries"):
+        verify_hlcvs_manifest(cache_dir)

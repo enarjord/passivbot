@@ -22,6 +22,7 @@ from hlcvs_manifest import (
     verify_hlcvs_manifest,
 )
 from utils import date_to_ts, format_end_date, ts_to_date
+from warmup_utils import compute_backtest_warmup_minutes
 
 
 def _hlcvs_cache_artifact_path(
@@ -30,11 +31,15 @@ def _hlcvs_cache_artifact_path(
     if manifest_has_required_schema(manifest):
         files = manifest.get("files", {})
         entry = files.get(name) if isinstance(files, dict) else None
+        if not isinstance(entry, dict):
+            raise HlcvsManifestError(f"HLCV manifest missing required file entry {name!r}")
         rel_path = entry.get("path") if isinstance(entry, dict) else None
-        if rel_path:
-            path = cache_dir / str(rel_path)
-            if path.exists():
-                return path
+        if not rel_path:
+            raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
+        path = cache_dir / str(rel_path)
+        if not path.exists():
+            raise HlcvsManifestError(f"HLCV manifest file is missing: {path}")
+        return path
     for filename in candidates:
         path = cache_dir / filename
         if path.exists():
@@ -63,11 +68,13 @@ def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
     )
     if hlcvs_path is None or btc_path is None:
         raise FileNotFoundError(f"HLCV dataset missing required arrays in {cache_dir}")
+    if timestamps_path is None:
+        raise FileNotFoundError(
+            f"HLCV dataset missing timestamps.npy/timestamps.npy.gz in {cache_dir}"
+        )
     hlcvs = load_numpy_artifact(hlcvs_path)
     btc_usd_prices = load_numpy_artifact(btc_path)
-    timestamps = load_numpy_artifact(timestamps_path) if timestamps_path is not None else None
-    if timestamps is None:
-        timestamps = np.arange(hlcvs.shape[0], dtype=np.int64)
+    timestamps = load_numpy_artifact(timestamps_path)
     return coins, hlcvs, mss, btc_usd_prices, timestamps
 
 
@@ -155,16 +162,20 @@ def load_hlcvs_data_override(config, exchange):
     dataset_end_ts = int(timestamps[-1])
     requested_start_ts = int(date_to_ts(require_config_value(config, "backtest.start_date")))
     requested_end_ts = int(date_to_ts(format_end_date(require_config_value(config, "backtest.end_date"))))
+    warmup_minutes = compute_backtest_warmup_minutes(config)
+    requested_data_start_ts = max(0, requested_start_ts - int(warmup_minutes) * 60_000)
     if mode == "intersection":
-        effective_start_ts = max(requested_start_ts, dataset_start_ts)
+        effective_start_ts = max(requested_data_start_ts, dataset_start_ts)
         effective_end_ts = min(requested_end_ts, dataset_end_ts)
         if effective_end_ts < effective_start_ts:
             raise ValueError(
                 "HLCV dataset override has no date overlap with requested backtest range"
             )
+        effective_config_start_ts = max(requested_start_ts, dataset_start_ts)
     else:
         effective_start_ts = dataset_start_ts
         effective_end_ts = dataset_end_ts
+        effective_config_start_ts = dataset_start_ts
 
     row_mask = (timestamps >= effective_start_ts) & (timestamps <= effective_end_ts)
     if not row_mask.any():
@@ -191,7 +202,7 @@ def load_hlcvs_data_override(config, exchange):
 
     original_approved = deepcopy(config.get("live", {}).get("approved_coins", {}))
     config.setdefault("live", {})["approved_coins"] = side_membership
-    config.setdefault("backtest", {})["start_date"] = ts_to_date(int(timestamps[0]))
+    config.setdefault("backtest", {})["start_date"] = ts_to_date(int(effective_config_start_ts))
     config["backtest"]["end_date"] = ts_to_date(int(timestamps[-1]))
     config["backtest"].setdefault("cache_dir", {})[exchange] = str(cache_dir)
     config["backtest"].setdefault("coins", {})[exchange] = selected_coins
@@ -204,9 +215,12 @@ def load_hlcvs_data_override(config, exchange):
         "effective_backtested_coins": selected_coins,
         "requested_start_ts": requested_start_ts,
         "requested_end_ts": requested_end_ts,
+        "requested_data_start_ts": requested_data_start_ts,
+        "warmup_minutes": int(warmup_minutes),
         "dataset_start_ts": dataset_start_ts,
         "dataset_end_ts": dataset_end_ts,
-        "effective_start_ts": int(timestamps[0]),
+        "effective_start_ts": int(effective_config_start_ts),
+        "effective_data_start_ts": int(timestamps[0]),
         "effective_end_ts": int(timestamps[-1]),
         "dropped_requested_coins": sorted(set(requested_coins) - set(selected_coins)),
         "added_dataset_only_coins": sorted(set(selected_coins) - set(requested_coins)),

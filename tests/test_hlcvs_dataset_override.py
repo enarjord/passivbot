@@ -27,6 +27,8 @@ def _base_config(cache_dir, *, mode="dataset"):
         "live": {
             "approved_coins": {"long": ["BTC"], "short": []},
             "minimum_coin_age_days": 0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0,
         },
     }
 
@@ -97,6 +99,26 @@ def test_hlcvs_dataset_override_intersection_mode_preserves_input_side_membershi
     assert config["live"]["approved_coins"] == {"long": ["BTC"], "short": []}
 
 
+def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    timestamps, _hlcvs = _write_dataset(cache_dir)
+    config = _base_config(cache_dir, mode="intersection")
+    config["backtest"]["start_date"] = "2025-01-02"
+    config["live"]["warmup_ratio"] = 1.0
+    config["live"]["max_warmup_minutes"] = 1440
+    config["bot"]["long"]["ema_span_0"] = 1440.0
+
+    _cache_dir, _coins, _hlcvs, mss, _results_path, _btc, out_timestamps = (
+        load_hlcvs_data_override(config, "binance")
+    )
+
+    np.testing.assert_array_equal(out_timestamps, timestamps)
+    assert config["backtest"]["start_date"].startswith("2025-01-02")
+    assert mss["__meta__"]["warmup_minutes"] == 1440
+    assert mss["__meta__"]["requested_data_start_ts"] == int(timestamps[0])
+    assert mss["__meta__"]["effective_data_start_ts"] == int(timestamps[0])
+
+
 def test_hlcvs_dataset_override_rejects_manifest_hash_mismatch(tmp_path):
     cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
     _write_dataset(cache_dir)
@@ -104,4 +126,16 @@ def test_hlcvs_dataset_override_rejects_manifest_hash_mismatch(tmp_path):
     np.save(cache_dir / "btc_usd_prices.npy", np.array([999.0, 998.0, 997.0]))
 
     with pytest.raises(HlcvsManifestError, match="hash mismatch"):
+        load_hlcvs_data_override(config, "binance")
+
+
+def test_hlcvs_dataset_override_rejects_legacy_dataset_without_timestamps(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    _write_dataset(cache_dir)
+    (cache_dir / "manifest.json").unlink()
+    (cache_dir / "timestamps.npy").unlink()
+    config = _base_config(cache_dir, mode="dataset")
+    config["backtest"]["hlcvs_cache_permissive"] = True
+
+    with pytest.raises(FileNotFoundError, match="missing timestamps"):
         load_hlcvs_data_override(config, "binance")

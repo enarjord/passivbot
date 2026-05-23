@@ -19,6 +19,13 @@ from utils import date_to_ts, format_end_date, utc_ms
 
 HLCVS_MANIFEST_SCHEMA_VERSION = 1
 HLCVS_MATERIALIZATION_SCHEMA_VERSION = 1
+REQUIRED_HLCVS_MANIFEST_FILES = (
+    "hlcvs",
+    "btc_usd_prices",
+    "timestamps",
+    "coins",
+    "market_specific_settings",
+)
 
 
 class HlcvsManifestError(RuntimeError):
@@ -276,9 +283,13 @@ def verify_hlcvs_manifest(cache_dir: Path, manifest: dict[str, Any] | None = Non
     files = manifest.get("files")
     if not isinstance(files, dict):
         raise HlcvsManifestError(f"HLCV manifest files section is missing in {cache_dir}")
+    missing = [name for name in REQUIRED_HLCVS_MANIFEST_FILES if name not in files]
+    if missing:
+        raise HlcvsManifestError(
+            f"HLCV manifest is missing required file entries in {cache_dir}: {missing}"
+        )
     for name in ("hlcvs", "btc_usd_prices", "timestamps"):
-        if name in files:
-            _verify_array_artifact(cache_dir, name, files[name])
+        _verify_array_artifact(cache_dir, name, files[name])
     for name in ("coins", "market_specific_settings", "candidate_report"):
         if name in files:
             _verify_json_artifact(cache_dir, name, files[name])
