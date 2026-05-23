@@ -73,11 +73,14 @@ or an explicit contract boundary.
 - [x] Keep implementation branches based on `origin/master` or this plan branch,
       depending on whether the plan has already been merged. Completed: implementation
       branch was based on `origin/master`.
-- [x] Use a separate commit for each extraction phase. N/A: phases were validated
-      separately, then committed as one mechanical refactor commit for review.
-- [x] After each commit, run the targeted validation for that phase. N/A: targeted
-      validation was run after each phase before the combined commit.
 - [x] Keep the checklist in this document current as implementation proceeds.
+
+Skipped workflow items:
+
+- Separate commits per extraction phase were not used; phases were validated
+  separately, then committed as one mechanical refactor commit for review.
+- Per-commit validation was not applicable to the combined commit workflow;
+  targeted validation was run after each phase before the combined commit.
 
 Goal mode is useful for the implementation pass if the agent is expected to keep
 working across phases without stopping after the first successful extraction. If
@@ -119,9 +122,8 @@ rg -n "get_optional_(config|live)_value|live_value\\(|setdefault\\(" src/passivb
 rg -n "market_snapshot_ticker_strategy|max_forager_candle|fills_recent_overlap|fills_confirmation_overlap|staged_refresh|forager_score_hysteresis|initial_entry_exec|recv_window" src passivbot-rust tests docs
 ```
 
-- [x] If the audit finds a clear duplicate default that can drift from schema,
-      fix it with focused tests before extraction. N/A: no actionable duplicate
-      default drift was found.
+- N/A: no actionable duplicate default drift was found, so no default cleanup
+      was needed before extraction.
 - [x] If no actionable drift is found, mark the staged-live plan item as audited.
 
 Exit criteria:
@@ -432,17 +434,12 @@ Exit criteria:
 
 Purpose: reduce remaining `src/passivbot.py` size only where the boundary is clear.
 
-Create only if useful:
+Skipped:
 
-- [x] `src/live/runtime.py` N/A: intentionally not created.
-
-Potential candidates:
-
-- [x] shutdown helper wrappers N/A: not extracted.
-- [x] health timing helpers N/A: not extracted.
-- [x] silence watchdog context helpers N/A: not extracted.
-- [x] maintainer lifecycle helpers N/A: not extracted.
-- [x] startup timing utilities N/A: not extracted.
+- `src/live/runtime.py` was intentionally not created.
+- Runtime candidates were not extracted: shutdown helper wrappers, health timing
+  helpers, silence watchdog context helpers, maintainer lifecycle helpers, and
+  startup timing utilities.
 
 Implementation notes:
 
@@ -459,9 +456,8 @@ Validation:
 
 Exit criteria:
 
-- [x] Runtime loop flow remains easier to read than before extraction. N/A: runtime
-      extraction was skipped.
-- [x] Shutdown and health behavior are unchanged. N/A: runtime extraction was skipped.
+- Runtime-loop and shutdown/health exit criteria were not applicable because
+  runtime extraction was skipped.
 
 ## Optional Fake-Live Validation
 
