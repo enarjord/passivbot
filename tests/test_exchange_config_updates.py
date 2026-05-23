@@ -433,6 +433,30 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
         async def _refresh_forager_candidate_candles(self):
             return None
 
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
         _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
@@ -501,6 +525,30 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
 
         async def _refresh_forager_candidate_candles(self):
             return None
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
 
         _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested

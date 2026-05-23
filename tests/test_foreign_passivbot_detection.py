@@ -23,6 +23,9 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
         _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
         _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
         _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
 
         def __init__(self):
             self.monitor_publisher = None
@@ -44,6 +47,9 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
             return None
 
         def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
             return None
 
         async def execute_orders(self, orders):
@@ -109,6 +115,9 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
         _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
         _emitted_order_records = pb_mod.Passivbot._emitted_order_records
         _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
 
         def __init__(self):
             self.monitor_publisher = None
@@ -130,6 +139,9 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
             return None
 
         def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
             return None
 
         async def execute_orders(self, orders):

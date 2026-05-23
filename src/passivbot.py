@@ -43,10 +43,11 @@ from fill_events_manager import (
     compute_psize_pprice,
     fill_event_pnl_pending,
 )
-from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from monitor_publisher import MonitorPublisher
-from market_snapshot import MarketSnapshot, MarketSnapshotProvider
-from planning_snapshot import PlanningSnapshot
+from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
 import passivbot_monitor as pb_monitor
@@ -5267,212 +5268,45 @@ class Passivbot:
 
     def _market_snapshot_ticker_strategy(self) -> str:
         """Choose the cheapest safe ticker endpoint shape for market snapshots."""
-        explicit = get_optional_live_value(
-            self.config, "market_snapshot_ticker_strategy", None
-        )
-        if explicit is not None:
-            mode = str(explicit).lower()
-            if mode == "auto":
-                explicit = None
-            elif mode in {"bulk", "symbols"}:
-                return mode
-            else:
-                logging.warning(
-                    "[market] invalid live.market_snapshot_ticker_strategy=%r; using exchange default",
-                    explicit,
-                )
-        if str(getattr(self, "exchange", "") or "").lower() == "bitget":
-            return "symbols"
-        if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
-            return "symbols"
-        if str(getattr(self, "exchange", "") or "").lower() == "kucoin":
-            return "symbols"
-        return "bulk"
+        return market_data.market_snapshot_ticker_strategy(self)
 
     async def refresh_authoritative_state(self) -> bool:
         """Refresh authoritative account state before planning/execution."""
-        if self.stop_signal_received:
-            return False
-        self._begin_authoritative_refresh_epoch()
-        return await self._refresh_authoritative_state_staged()
+        return await state_refresh.refresh_authoritative_state(self)
 
     async def _refresh_authoritative_state_staged(self) -> bool:
         """Refresh live account state through the staged authoritative cohort."""
-        self._last_authoritative_block_reason = None
-        self._last_authoritative_pending_pnl_count = 0
-        plan = self._authoritative_staged_refresh_plan()
-        snapshot = await self._fetch_authoritative_state_staged_snapshot(plan)
-        fetched_balance = snapshot.get("balance")
-        fetched_positions = snapshot.get("positions")
-        fetched_open_orders = snapshot.get("open_orders")
-        pnls_ok = snapshot.get("pnls_ok", True)
-
-        if "positions" in plan and fetched_positions in [None, False]:
-            return False
-        if "balance" in plan and fetched_balance in [None, False]:
-            return False
-        if "open_orders" in plan and fetched_open_orders in [None, False]:
-            return False
-        if "fills" in plan and not pnls_ok:
-            self._last_authoritative_block_reason = "pending_pnl"
-            self._last_authoritative_pending_pnl_count = int(
-                snapshot.get("pending_pnl_count", 0) or 0
-            )
-            return False
-        prepared_balance_snapshot = None
-        if "balance" in plan:
-            prepared_balance_snapshot = self._prepare_balance_snapshot(fetched_balance)
-            if prepared_balance_snapshot is None:
-                return False
-
-        fetched_positions_old = None
-        fetched_positions_new = None
-        if "open_orders" in plan:
-            open_orders_ok = await self._apply_open_orders_snapshot(
-                fetched_open_orders,
-                allow_followup_positions_refresh=False,
-                reconcile_balance="balance" not in plan,
-            )
-            if not open_orders_ok:
-                return False
-        if "positions" in plan:
-            fetched_positions_old, fetched_positions_new = (
-                self._apply_positions_snapshot(fetched_positions)
-            )
-        if "balance" in plan:
-            self._commit_balance_snapshot(prepared_balance_snapshot)
-        if "positions" in plan:
-            self._record_authoritative_surface(
-                "positions",
-                self._positions_signature(fetched_positions_new),
-            )
-        if "balance" in plan:
-            if "open_orders" in plan:
-                self._reconcile_balance_after_staged_refresh()
-                balance_source = self._staged_balance_update_source()
-            else:
-                self._reconcile_balance_after_positions_and_balance_refresh()
-                balance_source = "REST"
-            self._record_authoritative_surface(
-                "balance", round(float(self.get_hysteresis_snapped_balance()), 12)
-            )
-            try:
-                await self.log_position_changes(
-                    fetched_positions_old, fetched_positions_new
-                )
-            except Exception as e:
-                if not self._log_noncritical_market_snapshot_error(
-                    "position-change diagnostics", e
-                ):
-                    logging.error(f"error logging position changes {e}")
-            await self.handle_balance_update(source=balance_source)
-        self._finalize_authoritative_refresh_consistency(plan)
-        return True
+        return await state_refresh.refresh_authoritative_state_staged(self)
 
     async def _capture_balance_staged_snapshot(self) -> tuple[object, float]:
         """Fetch a single balance payload and its normalized value for staged refresh."""
-        if hasattr(self, "capture_balance_snapshot"):
-            return await self.capture_balance_snapshot()
-        balance = await self.fetch_balance()
-        return None, balance
+        return await state_refresh.capture_balance_staged_snapshot(self)
 
     async def _capture_positions_staged_snapshot(self) -> tuple[object, list[dict]]:
         """Fetch a single positions payload and its normalized value for staged refresh."""
-        if hasattr(self, "capture_positions_snapshot"):
-            return await self.capture_positions_snapshot()
-        positions = await self.fetch_positions()
-        return None, positions
+        return await state_refresh.capture_positions_staged_snapshot(self)
 
     def _authoritative_staged_refresh_plan(self) -> set[str]:
         """Return the minimal staged authoritative surfaces needed this cycle."""
-        pending = set(getattr(self, "_authoritative_pending_confirmations", {}) or {})
-        if pending == {"open_orders"}:
-            plan = {"open_orders"}
-            self._authoritative_refresh_plan_surfaces = set(plan)
-            return plan
-        plan = {"balance", "positions", "open_orders", "fills"}
-        if "fills" not in pending:
-            if not self._staged_fills_refresh_due():
-                plan.discard("fills")
-                logging.debug(
-                    "[state] staged fills refresh deferred until next minute boundary"
-                )
-            elif self._staged_fills_can_prefetch_routine() and (
-                self._schedule_routine_fill_refresh_prefetch(reason="minute_boundary")
-            ):
-                plan.discard("fills")
-                logging.debug(
-                    "[state] staged routine fills refresh scheduled in background"
-                )
-        self._authoritative_refresh_plan_surfaces = set(plan)
-        return plan
+        return state_refresh.authoritative_staged_refresh_plan(self)
 
     def _staged_fills_refresh_due(self) -> bool:
         """Return whether routine staged refresh must fetch fill events this cycle."""
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is None:
-            return True
-        fills_state = getattr(ledger, "surfaces", {}).get("fills")
-        last_updated_ms = int(getattr(fills_state, "updated_ms", 0) or 0)
-        if last_updated_ms <= 0:
-            return True
-        return int(utc_ms()) // 60_000 > last_updated_ms // 60_000
+        return state_refresh.staged_fills_refresh_due(self)
 
     def _staged_fills_can_prefetch_routine(self) -> bool:
         """Return whether routine fills may refresh outside the blocking staged cohort."""
-        ledger = getattr(self, "freshness_ledger", None)
-        if ledger is None or int(ledger.surface_epoch("fills") or 0) < 1:
-            return False
-        last_updated_ms = int(ledger.surface_updated_ms("fills") or 0)
-        if last_updated_ms <= 0:
-            return False
-        max_staleness_ms = 3 * 60 * 1000
-        return int(utc_ms()) - last_updated_ms <= max_staleness_ms
+        return state_refresh.staged_fills_can_prefetch_routine(self)
 
     def _schedule_routine_fill_refresh_prefetch(self, *, reason: str) -> bool:
         """Schedule one routine fills refresh if none is already running."""
-        if Passivbot._shutdown_requested(self):
-            return False
-        if not hasattr(self, "maintainers") or not isinstance(self.maintainers, dict):
-            self.maintainers = {}
-        key = "routine_fill_refresh"
-        existing = self.maintainers.get(key)
-        if existing is not None and not existing.done():
-            return True
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return False
-        self.maintainers[key] = loop.create_task(
-            self._routine_fill_refresh_prefetch_task(reason=reason)
-        )
-        return True
+        return state_refresh.schedule_routine_fill_refresh_prefetch(self, reason=reason)
 
     async def _routine_fill_refresh_prefetch_task(self, *, reason: str) -> None:
         """Refresh routine fills outside the critical account-state refresh path."""
-        try:
-            started_ms = utc_ms()
-            ok = await self.update_pnls(source=f"routine_prefetch:{reason}")
-            elapsed_ms = int(max(0, utc_ms() - started_ms))
-            logging.debug(
-                "[fills] routine prefetch complete | reason=%s ok=%s elapsed=%dms",
-                reason,
-                ok,
-                elapsed_ms,
-            )
-        except asyncio.CancelledError:
-            logging.debug("[shutdown] routine fills prefetch cancelled")
-            raise
-        except Exception as exc:
-            if Passivbot._shutdown_requested(self):
-                logging.debug("[shutdown] routine fills prefetch stopped: %s", exc)
-                return
-            logging.warning(
-                "[fills] routine prefetch failed; blocking/confirmation refresh will retry | reason=%s error_type=%s error=%s",
-                reason,
-                type(exc).__name__,
-                exc,
-            )
+        return await state_refresh.routine_fill_refresh_prefetch_task(
+            self, reason=reason
+        )
 
     async def capture_authoritative_state_staged_snapshot(
         self, plan: set[str], timings_ms: dict[str, int]
@@ -5488,81 +5322,16 @@ class Passivbot:
         self, surface: str, coro, timings_ms: dict[str, int]
     ):
         """Measure one staged authoritative fetch while preserving exceptions."""
-        started = utc_ms()
-        try:
-            return await coro
-        finally:
-            timings_ms[surface] = int(max(0, utc_ms() - started))
+        return await state_refresh.timed_authoritative_fetch(
+            self, surface, coro, timings_ms
+        )
 
     def _log_staged_refresh_timings(
         self, plan: set[str], timings_ms: dict[str, int], wall_ms: int
     ) -> None:
         """Emit a compact timing line for slow staged refresh cohorts."""
-        if not timings_ms:
-            return
-        sum_ms = int(sum(int(v) for v in timings_ms.values()))
-        max_surface_ms = int(max(int(v) for v in timings_ms.values()))
-        residual_ms = int(max(0, wall_ms - max_surface_ms))
-        pending_confirmations = bool(
-            getattr(self, "_authoritative_pending_confirmations", {}) or {}
-        )
-        full_plan = {"balance", "fills", "open_orders", "positions"}
-        routine_without_fills = {"balance", "open_orders", "positions"}
-        plan_set = set(plan)
-        unusual_plan = plan_set not in (full_plan, routine_without_fills)
-        epoch_changed = set(
-            getattr(self, "_authoritative_refresh_epoch_changed", set()) or set()
-        )
-        meaningful_surfaces = epoch_changed - {"balance"}
-        if pending_confirmations and plan_set == {"open_orders"} and wall_ms < 2_000:
-            meaningful_surfaces -= {"open_orders"}
-        meaningful_change = bool(meaningful_surfaces)
-        interesting = (
-            (pending_confirmations and wall_ms >= 2_000)
-            or meaningful_change
-            or (unusual_plan and wall_ms >= 1_000)
-            or wall_ms >= 10_000
-        )
-        if not interesting:
-            if wall_ms < 1_000 and not (len(plan) > 1 and wall_ms >= 500):
-                self._record_staged_refresh_timing_summary(
-                    plan,
-                    timings_ms,
-                    wall_ms,
-                    sum_ms,
-                    max_surface_ms,
-                    residual_ms,
-                )
-                return
-            log_level = logging.DEBUG
-        else:
-            log_level = logging.INFO
-        parts = [
-            f"{surface}={int(timings_ms[surface])}ms" for surface in sorted(timings_ms)
-        ]
-        if residual_ms >= 500:
-            parts.append(f"residual={residual_ms}ms")
-            parts.append("residual_hint=scheduler_or_lock_wait")
-        suffix = " | pending_confirmations=yes" if pending_confirmations else ""
-        if log_level < logging.INFO:
-            self._record_staged_refresh_timing_summary(
-                plan,
-                timings_ms,
-                wall_ms,
-                sum_ms,
-                max_surface_ms,
-                residual_ms,
-            )
-        logging.log(
-            log_level,
-            "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
-            ",".join(sorted(plan)),
-            wall_ms,
-            sum_ms,
-            max_surface_ms,
-            "yes" if len(timings_ms) > 1 else "no",
-            " ".join(parts),
-            suffix,
+        return state_refresh.log_staged_refresh_timings(
+            self, plan, timings_ms, wall_ms
         )
 
     def _record_staged_refresh_timing_summary(
@@ -5575,68 +5344,15 @@ class Passivbot:
         residual_ms: int,
     ) -> None:
         """Aggregate routine staged refresh timings into periodic operator summaries."""
-
-        def update_stats(stats: dict[str, int], value: int) -> None:
-            value = int(value)
-            count = int(stats.get("count", 0))
-            stats["count"] = count + 1
-            stats["sum"] = int(stats.get("sum", 0)) + value
-            stats["min"] = value if count == 0 else min(int(stats.get("min", value)), value)
-            stats["max"] = value if count == 0 else max(int(stats.get("max", value)), value)
-
-        def format_stats(stats: dict[str, int]) -> str:
-            count = max(1, int(stats.get("count", 0)))
-            mean = int(round(int(stats.get("sum", 0)) / count))
-            return f"{int(stats.get('min', 0))}/{mean}/{int(stats.get('max', 0))}ms"
-
-        now = utc_ms()
-        plan_key = ",".join(sorted(plan))
-        summaries = getattr(self, "_staged_refresh_timing_summaries", None)
-        if not isinstance(summaries, dict):
-            summaries = {}
-            self._staged_refresh_timing_summaries = summaries
-        summary = summaries.get(plan_key)
-        if not isinstance(summary, dict):
-            summary = {
-                "first_ms": now,
-                "wall": {},
-                "surface_sum": {},
-                "surface_max": {},
-                "residual": {},
-                "surfaces": {},
-            }
-            summaries[plan_key] = summary
-        update_stats(summary["wall"], wall_ms)
-        update_stats(summary["surface_sum"], sum_ms)
-        update_stats(summary["surface_max"], max_surface_ms)
-        update_stats(summary["residual"], residual_ms)
-        surfaces = summary.get("surfaces")
-        if not isinstance(surfaces, dict):
-            surfaces = {}
-            summary["surfaces"] = surfaces
-        for surface, value in timings_ms.items():
-            stats = surfaces.setdefault(surface, {})
-            update_stats(stats, int(value))
-        count = int(summary["wall"].get("count", 0))
-        first_ms = int(summary.get("first_ms", now))
-        if count < 60 and now - first_ms < 15 * 60 * 1000:
-            return
-        surface_parts = [
-            f"{surface}={format_stats(stats)}"
-            for surface, stats in sorted(surfaces.items())
-        ]
-        logging.info(
-            "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
-            plan_key,
-            count,
-            ts_to_date(first_ms),
-            format_stats(summary["wall"]),
-            format_stats(summary["surface_sum"]),
-            format_stats(summary["surface_max"]),
-            format_stats(summary["residual"]),
-            " ".join(surface_parts),
+        return state_refresh.record_staged_refresh_timing_summary(
+            self,
+            plan,
+            timings_ms,
+            wall_ms,
+            sum_ms,
+            max_surface_ms,
+            residual_ms,
         )
-        summaries.pop(plan_key, None)
 
     async def _log_staged_refresh_progress_until(
         self,
@@ -5646,156 +5362,13 @@ class Passivbot:
         wall_started_ms: int,
     ) -> None:
         """Log visible progress when a required staged refresh surface is still pending."""
-        try:
-            threshold_s = float(
-                get_optional_config_value(
-                    self.config, "logging.staged_refresh_slow_surface_seconds", 10.0
-                )
-            )
-        except Exception:
-            threshold_s = 10.0
-        if threshold_s <= 0.0 or not tasks:
-            return
-        interval_s = max(5.0, threshold_s)
-        logged_pending: set[tuple[str, ...]] = set()
-        try:
-            await Passivbot._sleep_unless_shutdown(
-                self, threshold_s, stage="staged_refresh_progress"
-            )
-            while not Passivbot._shutdown_requested(self):
-                pending = tuple(
-                    sorted(name for name, task in tasks.items() if not task.done())
-                )
-                if not pending:
-                    return
-                elapsed_ms = int(max(0, utc_ms() - wall_started_ms))
-                completed = " ".join(
-                    f"{surface}={int(timings_ms[surface])}ms"
-                    for surface in sorted(timings_ms)
-                    if surface not in pending
-                )
-                key = pending
-                level = logging.INFO if key not in logged_pending else logging.DEBUG
-                logged_pending.add(key)
-                logging.log(
-                    level,
-                    "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s",
-                    ",".join(sorted(plan)),
-                    ",".join(pending),
-                    elapsed_ms,
-                    f" | completed={completed}" if completed else "",
-                )
-                await Passivbot._sleep_unless_shutdown(
-                    self, interval_s, stage="staged_refresh_progress"
-                )
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            logging.debug("[state] staged refresh progress logger stopped: %s", exc)
+        return await state_refresh.log_staged_refresh_progress_until(
+            self, plan, timings_ms, tasks, wall_started_ms
+        )
 
     async def _fetch_authoritative_state_staged_snapshot(self, plan: set[str]) -> dict:
         """Fetch staged authoritative components concurrently without mutating live state."""
-        wall_started = utc_ms()
-        timings_ms = {}
-        exchange_task = asyncio.create_task(
-            self.capture_authoritative_state_staged_snapshot(plan, timings_ms)
-        )
-        progress_task = asyncio.create_task(
-            self._log_staged_refresh_progress_until(
-                plan,
-                timings_ms,
-                {"exchange_staged_capture": exchange_task},
-                wall_started,
-            )
-        )
-        try:
-            exchange_snapshot = await exchange_task
-        except Exception:
-            if not progress_task.done():
-                progress_task.cancel()
-            await asyncio.gather(progress_task, return_exceptions=True)
-            wall_ms = int(max(0, utc_ms() - wall_started))
-            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
-            raise
-        finally:
-            if not progress_task.done():
-                progress_task.cancel()
-                await asyncio.gather(progress_task, return_exceptions=True)
-        if exchange_snapshot is not None:
-            wall_ms = int(max(0, utc_ms() - wall_started))
-            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
-            exchange_snapshot.setdefault("plan", set(plan))
-            exchange_snapshot.setdefault("pnls_ok", True)
-            return exchange_snapshot
-        tasks = {}
-        if "balance" in plan:
-            tasks["balance"] = asyncio.create_task(
-                self._timed_authoritative_fetch(
-                    "balance", self._capture_balance_staged_snapshot(), timings_ms
-                )
-            )
-        if "positions" in plan:
-            tasks["positions"] = asyncio.create_task(
-                self._timed_authoritative_fetch(
-                    "positions", self._capture_positions_staged_snapshot(), timings_ms
-                )
-            )
-        if "open_orders" in plan:
-            tasks["open_orders"] = asyncio.create_task(
-                self._timed_authoritative_fetch(
-                    "open_orders", self.fetch_open_orders(), timings_ms
-                )
-            )
-        if "fills" in plan:
-            tasks["fills"] = asyncio.create_task(
-                self._timed_authoritative_fetch(
-                    "fills", self.update_pnls(source="staged_blocking"), timings_ms
-                )
-            )
-        progress_task = asyncio.create_task(
-            self._log_staged_refresh_progress_until(
-                plan, timings_ms, tasks, wall_started
-            )
-        )
-        try:
-            keys = list(tasks)
-            results = await asyncio.gather(*[tasks[key] for key in keys])
-        except Exception:
-            for task in tasks.values():
-                if not task.done():
-                    task.cancel()
-            await asyncio.gather(
-                *tasks.values(),
-                return_exceptions=True,
-            )
-            if not progress_task.done():
-                progress_task.cancel()
-            await asyncio.gather(progress_task, return_exceptions=True)
-            wall_ms = int(max(0, utc_ms() - wall_started))
-            self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
-            raise
-        finally:
-            if not progress_task.done():
-                progress_task.cancel()
-                await asyncio.gather(progress_task, return_exceptions=True)
-        wall_ms = int(max(0, utc_ms() - wall_started))
-        self._log_staged_refresh_timings(plan, timings_ms, wall_ms)
-        out = {"plan": set(plan), "pnls_ok": True}
-        for key, result in zip(keys, results):
-            if key == "balance":
-                _raw_balance, fetched_balance = result
-                out["balance"] = fetched_balance
-            elif key == "positions":
-                _raw_positions, fetched_positions = result
-                out["positions"] = fetched_positions
-            elif key == "open_orders":
-                out["open_orders"] = result
-            elif key == "fills":
-                out["pnls_ok"] = result
-                out["pending_pnl_count"] = int(
-                    getattr(self, "_last_fill_refresh_pending_pnl_count", 0) or 0
-                )
-        return out
+        return await state_refresh.fetch_authoritative_state_staged_snapshot(self, plan)
 
     def _staged_defer_balance_publication(self) -> bool:
         """Hook: allow exchanges to publish balance only after all staged surfaces are applied."""
@@ -5811,311 +5384,81 @@ class Passivbot:
 
     def add_to_recent_order_cancellations(self, order):
         """Record a recently cancelled order to throttle repeated cancellations."""
-        self.recent_order_cancellations.append(
-            {**order, **{"execution_timestamp": utc_ms()}}
-        )
+        return reconciler.add_to_recent_order_cancellations(self, order)
 
     def order_was_recently_cancelled(self, order, max_age_ms=15_000) -> float:
         """Return remaining throttle delay if the order was cancelled within `max_age_ms`."""
-        age_limit = utc_ms() - max_age_ms
-        self.recent_order_cancellations = [
-            x
-            for x in self.recent_order_cancellations
-            if x["execution_timestamp"] > age_limit
-        ]
-        if matching := order_has_match(
-            order,
-            self.recent_order_cancellations,
-            tolerance_price=0.0,
-            tolerance_qty=0.0,
-        ):
-            return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
-        return 0.0
+        return reconciler.order_was_recently_cancelled(
+            self, order, max_age_ms=max_age_ms
+        )
 
     def order_matches_bot_cancellation(self, order, max_age_ms=180_000) -> bool:
         """Return True when an exact recent bot cancellation strongly explains the disappearance."""
-        age_limit = utc_ms() - max_age_ms
-        self.recent_order_cancellations = [
-            x
-            for x in self.recent_order_cancellations
-            if x["execution_timestamp"] > age_limit
-        ]
-        return bool(
-            order_has_match(
-                order,
-                self.recent_order_cancellations,
-                tolerance_price=0.0,
-                tolerance_qty=0.0,
-            )
+        return reconciler.order_matches_bot_cancellation(
+            self, order, max_age_ms=max_age_ms
         )
 
     def add_to_recent_order_executions(self, order):
         """Track newly created orders to limit duplicate submissions."""
-        self.recent_order_executions.append(
-            {**order, **{"execution_timestamp": utc_ms()}}
-        )
+        return reconciler.add_to_recent_order_executions(self, order)
 
     def order_matches_recent_execution(self, order, max_age_ms=180_000) -> bool:
         """Return True when an exact recent bot creation strongly explains a new open order."""
-        age_limit = utc_ms() - max_age_ms
-        if not hasattr(self, "recent_order_executions"):
-            self.recent_order_executions = []
-        self.recent_order_executions = [
-            x
-            for x in self.recent_order_executions
-            if x["execution_timestamp"] > age_limit
-        ]
-        return bool(
-            order_has_match(
-                order,
-                self.recent_order_executions,
-                tolerance_price=0.0,
-                tolerance_qty=0.0,
-            )
+        return reconciler.order_matches_recent_execution(
+            self, order, max_age_ms=max_age_ms
         )
 
     def _local_order_open_orders_confirmed(self, max_age_ms=15_000) -> bool:
         """Return True when recent local creates/cancels are reflected in the current open-orders view."""
-        age_limit = utc_ms() - max_age_ms
-        if not hasattr(self, "recent_order_cancellations"):
-            self.recent_order_cancellations = []
-        if not hasattr(self, "recent_order_executions"):
-            self.recent_order_executions = []
-        self.recent_order_cancellations = [
-            x
-            for x in self.recent_order_cancellations
-            if x["execution_timestamp"] > age_limit
-        ]
-        self.recent_order_executions = [
-            x
-            for x in self.recent_order_executions
-            if x["execution_timestamp"] > age_limit
-        ]
-        current_open_orders = [
-            elm for sublist in self.open_orders.values() for elm in sublist
-        ]
-        for cancelled in self.recent_order_cancellations:
-            if order_has_match(
-                cancelled, current_open_orders, tolerance_price=0.0, tolerance_qty=0.0
-            ):
-                return False
-        for created in self.recent_order_executions:
-            if order_has_match(
-                created,
-                self.recent_order_cancellations,
-                tolerance_price=0.0,
-                tolerance_qty=0.0,
-            ):
-                continue
-            if not order_has_match(
-                created, current_open_orders, tolerance_price=0.0, tolerance_qty=0.0
-            ):
-                return False
-        return True
+        return reconciler.local_order_open_orders_confirmed(
+            self, max_age_ms=max_age_ms
+        )
 
     def order_was_recently_updated(self, order, max_age_ms=15_000) -> float:
         """Return throttle delay if the order was placed within `max_age_ms`."""
-        age_limit = utc_ms() - max_age_ms
-        self.recent_order_executions = [
-            x
-            for x in self.recent_order_executions
-            if x["execution_timestamp"] > age_limit
-        ]
-        if matching := order_has_match(order, self.recent_order_executions):
-            return max(0.0, (matching["execution_timestamp"] + max_age_ms) - utc_ms())
-        return 0.0
+        return reconciler.order_was_recently_updated(self, order, max_age_ms=max_age_ms)
 
     def _extract_order_custom_id(self, order: dict) -> str:
         """Return the first normalized client/custom order id from unified or raw fields."""
-        if not isinstance(order, dict):
-            return ""
-        candidates = (
-            "custom_id",
-            "customId",
-            "client_order_id",
-            "clientOrderId",
-            "client_oid",
-            "clientOid",
-            "order_link_id",
-            "orderLinkId",
-            "clOrdId",
-            "text",
-        )
-        for source in (order, order.get("info", {})):
-            if not isinstance(source, dict):
-                continue
-            for key in candidates:
-                value = source.get(key)
-                if value not in (None, ""):
-                    return str(value)
-        return ""
+        return reconciler.extract_order_custom_id(order)
 
     def _extract_order_exchange_id(self, order: dict) -> str:
         """Return the exchange-assigned order id from unified or raw fields."""
-        if not isinstance(order, dict):
-            return ""
-        candidates = ("id", "order_id", "orderId", "orderID", "ordId")
-        for source in (order, order.get("info", {})):
-            if not isinstance(source, dict):
-                continue
-            for key in candidates:
-                value = source.get(key)
-                if value not in (None, ""):
-                    return str(value)
-        return ""
+        return reconciler.extract_order_exchange_id(order)
 
     def _canonical_passivbot_custom_id(self, custom_id: str) -> str:
         """Normalize broker/exchange wrappers around Passivbot custom ids."""
-        if not custom_id:
-            return ""
-        custom_id = str(custom_id)
-        marker = _TYPE_MARKER_RE.search(custom_id)
-        if marker:
-            return custom_id[marker.start() :]
-        return custom_id
+        return reconciler.canonical_passivbot_custom_id(custom_id)
 
     def _extract_order_reduce_only(self, order: dict) -> Optional[bool]:
-        if not isinstance(order, dict):
-            return None
-        for source in (order, order.get("info", {})):
-            if not isinstance(source, dict):
-                continue
-            for key in ("reduce_only", "reduceOnly"):
-                if key not in source:
-                    continue
-                value = source[key]
-                if isinstance(value, bool):
-                    return value
-                if isinstance(value, str):
-                    return value.strip().lower() in {"true", "1", "yes", "y"}
-                return bool(value)
-        return None
+        return reconciler.extract_order_reduce_only(order)
 
     def _extract_order_float(
         self, order: dict, candidates: tuple[str, ...]
     ) -> Optional[float]:
-        if not isinstance(order, dict):
-            return None
-        for source in (order, order.get("info", {})):
-            if not isinstance(source, dict):
-                continue
-            for key in candidates:
-                value = source.get(key)
-                if value in (None, ""):
-                    continue
-                try:
-                    return float(value)
-                except (TypeError, ValueError):
-                    continue
-        return None
+        return reconciler.extract_order_float(order, candidates)
 
     def _order_identity_fingerprint(self, order: dict, pb_type: str) -> Optional[dict]:
-        if not isinstance(order, dict) or not pb_type or pb_type == "unknown":
-            return None
-        reduce_only = Passivbot._extract_order_reduce_only(self, order)
-        qty = Passivbot._extract_order_float(self, order, ("qty", "amount", "size"))
-        price = Passivbot._extract_order_float(self, order, ("price",))
-        symbol = order.get("symbol")
-        side = order.get("side")
-        position_side = order.get("position_side") or order.get("positionSide")
-        if any(
-            x in (None, "")
-            for x in (symbol, side, position_side, reduce_only, qty, price)
-        ):
-            return None
-        return {
-            "symbol": str(symbol),
-            "side": str(side).lower(),
-            "position_side": str(position_side).lower(),
-            "reduce_only": bool(reduce_only),
-            "pb_type": str(pb_type),
-            "qty": round(abs(float(qty)), 12),
-            "price": round(float(price), 12),
-        }
+        return reconciler.order_identity_fingerprint(order, pb_type)
 
     def _build_emitted_order_record(
         self, order: dict, emitted_ts: int, *, status: str = "acknowledged"
     ) -> Optional[dict]:
-        custom_id = Passivbot._extract_order_custom_id(self, order)
-        pb_type = (
-            custom_id_to_snake(custom_id)
-            if custom_id
-            else self._resolve_pb_order_type(order)
+        return reconciler.build_emitted_order_record(
+            self, order, emitted_ts, status=status
         )
-        if not pb_type or pb_type == "unknown":
-            pb_type = self._resolve_pb_order_type(order)
-        record = {
-            "timestamp": int(emitted_ts),
-            "exchange_id": Passivbot._extract_order_exchange_id(self, order),
-            "custom_id": custom_id,
-            "canonical_custom_id": Passivbot._canonical_passivbot_custom_id(
-                self, custom_id
-            ),
-            "pb_type": pb_type if pb_type and pb_type != "unknown" else "",
-            "status": str(status or "acknowledged"),
-        }
-        record["fingerprint"] = Passivbot._order_identity_fingerprint(
-            self, order, record["pb_type"]
-        )
-        if not (
-            record["exchange_id"]
-            or record["canonical_custom_id"]
-            or record["fingerprint"]
-        ):
-            return None
-        return record
 
     def _emitted_order_records(self) -> list[dict]:
         """Return recent emitted order records, upgrading legacy custom-id maps if needed."""
-        records = getattr(self, "orders_emitted_to_exchange", [])
-        if isinstance(records, dict):
-            upgraded = []
-            for custom_id, timestamp in records.items():
-                custom_id = str(custom_id)
-                upgraded.append(
-                    {
-                        "timestamp": int(timestamp),
-                        "exchange_id": "",
-                        "custom_id": custom_id,
-                        "canonical_custom_id": Passivbot._canonical_passivbot_custom_id(
-                            self, custom_id
-                        ),
-                        "pb_type": custom_id_to_snake(custom_id),
-                        "status": "legacy",
-                        "fingerprint": None,
-                    }
-                )
-            self.orders_emitted_to_exchange = upgraded
-            return upgraded
-        if not isinstance(records, list):
-            self.orders_emitted_to_exchange = []
-            return []
-        return records
+        return reconciler.emitted_order_records(self)
 
     def _prune_emitted_order_custom_ids(self, now_ts: int) -> None:
         """Drop emitted order records outside the foreign-writer lookback window."""
-        now_ts = int(now_ts)
-        acknowledged_cutoff_ts = now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS
-        ambiguous_cutoff_ts = now_ts - FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS
-        kept = []
-        for record in Passivbot._emitted_order_records(self):
-            cutoff_ts = (
-                ambiguous_cutoff_ts
-                if record.get("status") == "create_error_ambiguous"
-                else acknowledged_cutoff_ts
-            )
-            if int(record.get("timestamp", 0)) >= cutoff_ts:
-                kept.append(record)
-        self.orders_emitted_to_exchange = kept
+        return reconciler.prune_emitted_order_custom_ids(self, now_ts)
 
     def _prune_foreign_passivbot_seen(self, now_ts: int) -> None:
         """Drop old foreign Passivbot detections outside the rolling stop window."""
-        cutoff_ts = int(now_ts) - FOREIGN_PASSIVBOT_WINDOW_MS
-        self.foreign_passivbot_seen = {
-            cid: ts
-            for cid, ts in getattr(self, "foreign_passivbot_seen", {}).items()
-            if int(ts) >= cutoff_ts
-        }
+        return reconciler.prune_foreign_passivbot_seen(self, now_ts)
 
     def _record_emitted_order_custom_id(
         self,
@@ -6125,36 +5468,16 @@ class Passivbot:
         status: str = "acknowledged",
     ) -> None:
         """Remember an acknowledged or ambiguous create so later refreshes can adopt it."""
-        if emitted_ts is None:
-            emitted_ts = (
-                int(self.get_exchange_time())
-                if hasattr(self, "get_exchange_time")
-                else utc_ms()
-            )
-        record = Passivbot._build_emitted_order_record(
-            self, order, emitted_ts, status=status
+        return reconciler.record_emitted_order_custom_id(
+            self, order, emitted_ts=emitted_ts, status=status
         )
-        if record is None:
-            return
-        if not hasattr(self, "orders_emitted_to_exchange"):
-            self.orders_emitted_to_exchange = []
-        Passivbot._emitted_order_records(self).append(record)
 
     def _foreign_passivbot_detection_key(
         self, order: dict, custom_id: str, pb_type: str
     ) -> str:
-        exchange_id = Passivbot._extract_order_exchange_id(self, order)
-        if exchange_id:
-            return f"id:{exchange_id}"
-        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
-        if canonical_custom_id:
-            return f"cid:{canonical_custom_id}"
-        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
-        if fingerprint:
-            return "fp:" + json.dumps(
-                fingerprint, sort_keys=True, separators=(",", ":")
-            )
-        return f"unknown:{custom_id}"
+        return reconciler.foreign_passivbot_detection_key(
+            self, order, custom_id, pb_type
+        )
 
     def _order_matches_recent_emitted_record(
         self,
@@ -6164,528 +5487,39 @@ class Passivbot:
         order_ts: int,
         consumed_record_indices: set[int],
     ) -> bool:
-        exchange_id = Passivbot._extract_order_exchange_id(self, order)
-        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
-        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
-        for idx, record in enumerate(Passivbot._emitted_order_records(self)):
-            if idx in consumed_record_indices:
-                continue
-            record_exchange_id = record.get("exchange_id") or ""
-            if exchange_id and record_exchange_id and exchange_id == record_exchange_id:
-                consumed_record_indices.add(idx)
-                return True
-            record_custom_id = record.get("canonical_custom_id") or ""
-            if (
-                canonical_custom_id
-                and record_custom_id
-                and canonical_custom_id == record_custom_id
-            ):
-                consumed_record_indices.add(idx)
-                return True
-            if exchange_id and record_exchange_id:
-                continue
-            if canonical_custom_id and record_custom_id:
-                continue
-            record_fingerprint = record.get("fingerprint")
-            record_ts = int(record.get("timestamp", 0))
-            if (
-                fingerprint
-                and record_fingerprint
-                and fingerprint == record_fingerprint
-                and abs(int(order_ts) - record_ts)
-                <= FOREIGN_PASSIVBOT_FINGERPRINT_MATCH_MS
-            ):
-                consumed_record_indices.add(idx)
-                return True
-        return False
+        return reconciler.order_matches_recent_emitted_record(
+            self, order, custom_id, pb_type, order_ts, consumed_record_indices
+        )
 
     async def _stop_for_foreign_passivbot_orders(
         self, detections: list[tuple[dict, str, str, int]], unique_count: int
     ) -> None:
         """Stop the bot after repeated evidence of a competing Passivbot writer."""
-        if getattr(self, "_foreign_passivbot_stop_requested", False):
-            return
-        self._foreign_passivbot_stop_requested = True
-        orders_summary = ", ".join(
-            f"{symbol_to_coin(order.get('symbol'), verbose=False) or order.get('symbol')}"
-            f":{pb_type}:{shorten_custom_id(custom_id)}"
-            for order, pb_type, custom_id, _ in detections
+        return await reconciler.stop_for_foreign_passivbot_orders(
+            self, detections, unique_count
         )
-        logging.critical(
-            "[safety] detected %s unique foreign Passivbot orders in the last %.1f minutes; "
-            "stopping bot to avoid competing writers | latest=%s",
-            unique_count,
-            FOREIGN_PASSIVBOT_WINDOW_MS / (60 * 1000),
-            orders_summary,
-        )
-        self.stop_signal_received = True
-        if hasattr(self, "stop_data_maintainers"):
-            try:
-                self.stop_data_maintainers(verbose=False)
-            except Exception as exc:
-                logging.error("[safety] failed to stop data maintainers: %s", exc)
-        raise Exception("foreign Passivbot writer detected; stopping bot")
 
     async def _detect_foreign_passivbot_orders(self, open_orders: list[dict]) -> None:
         """Detect newer Passivbot-managed open orders not emitted by this running bot instance."""
-        if not hasattr(self, "orders_emitted_to_exchange"):
-            self.orders_emitted_to_exchange = []
-        if not hasattr(self, "foreign_passivbot_seen"):
-            self.foreign_passivbot_seen = {}
-        if not hasattr(self, "_foreign_passivbot_stop_requested"):
-            self._foreign_passivbot_stop_requested = False
-        now_ts = int(self.get_exchange_time())
-        bot_start_ts = int(getattr(self, "bot_start_exchange_ts", now_ts))
-        self._prune_emitted_order_custom_ids(now_ts)
-        self._prune_foreign_passivbot_seen(now_ts)
-        if not open_orders:
-            return
-        cutoff_ts = max(
-            bot_start_ts + FOREIGN_PASSIVBOT_GRACE_MS,
-            now_ts - FOREIGN_PASSIVBOT_LOOKBACK_MS,
-        )
-        new_detections: list[tuple[dict, str, str, int]] = []
-        consumed_emitted_records: set[int] = set()
-        for order in open_orders:
-            ts_raw = order.get("timestamp")
-            if ts_raw is None:
-                continue
-            try:
-                order_ts = int(float(ts_raw))
-            except Exception:
-                continue
-            if order_ts < cutoff_ts:
-                continue
-            custom_id = self._extract_order_custom_id(order)
-            if not custom_id:
-                continue
-            if not custom_id_has_explicit_passivbot_marker(custom_id):
-                continue
-            pb_type = custom_id_to_snake(custom_id)
-            if not pb_type or pb_type == "unknown":
-                continue
-            if self._order_matches_recent_emitted_record(
-                order, custom_id, pb_type, order_ts, consumed_emitted_records
-            ):
-                continue
-            detection_key = self._foreign_passivbot_detection_key(
-                order, custom_id, pb_type
-            )
-            if detection_key in self.foreign_passivbot_seen:
-                continue
-            self.foreign_passivbot_seen[detection_key] = order_ts
-            new_detections.append((order, pb_type, custom_id, order_ts))
-        if not new_detections:
-            return
-        for order, pb_type, custom_id, order_ts in new_detections:
-            logging.error(
-                "[safety] detected foreign Passivbot order candidate | symbol=%s type=%s "
-                "custom_id=%s ts=%s",
-                Passivbot._log_symbol(order.get("symbol")),
-                pb_type,
-                shorten_custom_id(custom_id),
-                ts_to_date(order_ts),
-            )
-        if len(self.foreign_passivbot_seen) >= FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW:
-            await self._stop_for_foreign_passivbot_orders(
-                new_detections, unique_count=len(self.foreign_passivbot_seen)
-            )
+        return await reconciler.detect_foreign_passivbot_orders(self, open_orders)
 
     async def execute_to_exchange(self, *, prepare_cycle: bool = True):
         """Run one execution cycle including config sync and order placement/cancellation."""
-        if prepare_cycle:
-            await self.execution_cycle()
-        # await self.update_EMAs()
-        to_cancel, to_create = await self.calc_orders_to_cancel_and_create()
-        order_wave = Passivbot._begin_order_wave(self, to_cancel, to_create)
-
-        # debug duplicates
-        seen = set()
-        for elm in to_cancel:
-            key = str(elm["price"]) + str(elm["qty"])
-            if key in seen:
-                logging.debug("duplicate cancel candidate: %s", elm)
-            seen.add(key)
-
-        seen = set()
-        for elm in to_create:
-            key = str(elm["price"]) + str(elm["qty"])
-            if key in seen:
-                logging.debug("duplicate create candidate: %s", elm)
-            seen.add(key)
-        # format custom_id
-        if self.debug_mode:
-            if to_cancel:
-                print(
-                    f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}"
-                )
-        else:
-            cancel_started_ms = utc_ms()
-            self._order_wave_in_progress = order_wave
-            try:
-                res = await self.execute_cancellations_parent(to_cancel)
-            finally:
-                self._order_wave_in_progress = None
-            if order_wave is not None:
-                order_wave["cancel_ms"] = int(max(0, utc_ms() - cancel_started_ms))
-                order_wave["cancel_posted"] = len(res or [])
-        if self.debug_mode:
-            if to_create:
-                print(
-                    f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}"
-                )
-        elif self.get_raw_balance() < self.balance_threshold:
-            logging.info(
-                "[balance] too low: %.2f %s; not creating orders",
-                self.get_raw_balance(),
-                self.quote,
-            )
-        else:
-            # to_create_mod = [x for x in to_create if not order_has_match(x, to_cancel)]
-            to_create_mod = []
-            for x in to_create:
-                xf_log = (
-                    f"{Passivbot._log_symbol(x['symbol'])} {x['side']} "
-                    f"{x['position_side']} {x['qty']} @ {x['price']}"
-                )
-                if order_has_match(x, to_cancel):
-                    logging.debug(
-                        "matching order cancellation found; will be delayed until next cycle: %s",
-                        xf_log,
-                    )
-                elif delay_time_ms := self.order_was_recently_updated(x):
-                    logging.info(
-                        "[order] recent execution found; delaying for up to %.1f secs: %s",
-                        delay_time_ms / 1000,
-                        xf_log,
-                    )
-                else:
-                    to_create_mod.append(x)
-            if order_wave is not None:
-                order_wave["deferred_create"] += max(
-                    0, len(to_create) - len(to_create_mod)
-                )
-            if self.state_change_detected_by_symbol:
-                logging.info(
-                    "[order] state change detected; skipping order creation for %s until next cycle",
-                    Passivbot._log_symbols(
-                        sorted(self.state_change_detected_by_symbol), limit=12
-                    ),
-                )
-                before_state_filter = len(to_create_mod)
-                to_create_mod = [
-                    x
-                    for x in to_create_mod
-                    if x["symbol"] not in self.state_change_detected_by_symbol
-                ]
-                if order_wave is not None:
-                    order_wave["skipped_create"] += max(
-                        0, before_state_filter - len(to_create_mod)
-                    )
-            if to_create_mod:
-                creation_symbols = sorted({order["symbol"] for order in to_create_mod})
-                configured_symbols = await self.update_exchange_configs(
-                    creation_symbols
-                )
-                if self._shutdown_requested():
-                    self._order_wave_in_progress = None
-                    return None
-                pending_config = sorted(
-                    set(creation_symbols) - set(configured_symbols or set())
-                )
-                if pending_config:
-                    logging.warning(
-                        "[config] skipping order creation for symbols pending exchange config: %s",
-                        Passivbot._log_symbols(pending_config, limit=12),
-                    )
-                    before_config_filter = len(to_create_mod)
-                    to_create_mod = [
-                        order
-                        for order in to_create_mod
-                        if order["symbol"] not in pending_config
-                    ]
-                    if order_wave is not None:
-                        order_wave["skipped_create"] += max(
-                            0, before_config_filter - len(to_create_mod)
-                        )
-            before_market_filter = len(to_create_mod)
-            to_create_mod = await Passivbot._filter_fresh_market_snapshot_creations(
-                self, to_create_mod
-            )
-            if order_wave is not None:
-                order_wave["skipped_create"] += max(
-                    0, before_market_filter - len(to_create_mod)
-                )
-            res = None
-            try:
-                create_started_ms = utc_ms()
-                self._order_wave_in_progress = order_wave
-                try:
-                    res = await self.execute_orders_parent(to_create_mod)
-                finally:
-                    self._order_wave_in_progress = None
-                if order_wave is not None:
-                    order_wave["create_ms"] = int(max(0, utc_ms() - create_started_ms))
-                    order_wave["create_posted"] = len(res or [])
-            except RestartBotException:
-                raise  # Propagate restart without incrementing error count
-            except Exception as e:
-                logging.error(f"error executing orders {to_create_mod} {e}")
-                print_async_exception(res)
-                traceback.print_exc()
-                await self.restart_bot_on_too_many_errors()
-        if to_cancel or to_create:
-            self.execution_scheduled = True
-        if not Passivbot._shutdown_requested(self):
-            schedule_forager_refresh = getattr(
-                self, "_schedule_forager_candidate_candle_refresh", None
-            )
-            if callable(schedule_forager_refresh):
-                schedule_forager_refresh()
-        Passivbot._track_order_wave_confirmation(self, order_wave)
-        Passivbot._log_order_wave_summary(self, order_wave)
-        if self.debug_mode:
-            return to_cancel, to_create
+        return await executor.execute_to_exchange(self, prepare_cycle=prepare_cycle)
 
     async def _filter_fresh_market_snapshot_creations(
         self, orders: list[dict]
     ) -> list[dict]:
         """Block staged order creations unless live market snapshots are still fresh."""
-        if not orders:
-            return orders
-        symbols = sorted(
-            {str(order["symbol"]) for order in orders if order.get("symbol")}
-        )
-        if not symbols:
-            return orders
-        planning_snapshot_invalid = (
-            Passivbot._current_planning_snapshot_invalid_for_creations(self, symbols)
-        )
-        if planning_snapshot_invalid:
-            refreshable_reasons = {
-                ("market_snapshot", "snapshot_too_old"),
-            }
-            if not all(
-                isinstance(item, dict)
-                and (str(item.get("surface")), str(item.get("reason")))
-                in refreshable_reasons
-                for item in planning_snapshot_invalid
-            ):
-                logging.warning(
-                    "[market] skipping order creation; planning snapshot invalid before create | symbols=%s details=%s",
-                    Passivbot._log_symbols(symbols, limit=12),
-                    Passivbot._log_compact_symbol_payload(
-                        planning_snapshot_invalid[:8]
-                    ),
-                )
-                return []
-            logging.info(
-                "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
-                Passivbot._log_symbols(symbols, limit=12),
-                len(planning_snapshot_invalid),
-            )
-        try:
-            snapshots = await Passivbot._get_live_market_snapshots(
-                self,
-                symbols,
-                max_age_ms=Passivbot._live_market_snapshot_max_age_ms(self),
-                context="pre_create",
-                allow_completed_candle_fallback=False,
-            )
-            Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
-            invalid = Passivbot._market_snapshot_signature_invalid(self, symbols)
-        except Exception as exc:
-            logging.warning(
-                "[market] skipping order creation; failed pre-create market snapshot refresh | symbols=%s error_type=%s error=%s",
-                Passivbot._log_symbols(symbols, limit=12),
-                type(exc).__name__,
-                exc,
-            )
-            return []
-        if invalid:
-            logging.warning(
-                "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
-                Passivbot._log_symbols(symbols, limit=12),
-                Passivbot._log_compact_symbol_payload(invalid[:8]),
-            )
-            return []
-        return orders
+        return await market_data.filter_fresh_market_snapshot_creations(self, orders)
 
     async def execute_orders_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of orders after throttling and bookkeeping."""
-        orders = orders[: int(self.live_value("max_n_creations_per_batch"))]
-        grouped_orders: dict[str, list[dict]] = defaultdict(list)
-        emitted_ts = (
-            int(self.get_exchange_time())
-            if hasattr(self, "get_exchange_time")
-            else utc_ms()
-        )
-        for order in orders:
-            self.add_to_recent_order_executions(order)
-            self.log_order_action(
-                order,
-                "posting order",
-                context=order.get("_context", "plan_sync"),
-                level=logging.DEBUG,
-                delta=order.get("_delta"),
-            )
-            if self._is_market_execution_order(order):
-                self._log_market_execution_notice(
-                    order, context=order.get("_context", "plan_sync")
-                )
-            grouped_orders[order["symbol"]].append(order)
-        self._log_order_action_summary(grouped_orders, "post")
-        res = await self.execute_orders(orders)
-        if not res:
-            return
-        if len(orders) != len(res):
-            print(
-                f"debug unequal lengths execute_orders_parent: "
-                f"{len(orders)} orders, {len(res)} executions",
-                res,
-            )
-            return []
-        to_return = []
-        for ex, order in zip(res, orders):
-            if not self.did_create_order(ex):
-                if isinstance(ex, Exception):
-                    Passivbot._record_emitted_order_custom_id(
-                        self,
-                        order,
-                        emitted_ts=emitted_ts,
-                        status="create_error_ambiguous",
-                    )
-                    logging.debug(
-                        "[order] remembered ambiguous create after exchange error | symbol=%s type=%s custom_id=%s error_type=%s",
-                        Passivbot._log_symbol(order.get("symbol")),
-                        self._resolve_pb_order_type(order),
-                        shorten_custom_id(str(order.get("custom_id", ""))),
-                        type(ex).__name__,
-                    )
-                print(f"debug did_create_order false {ex}")
-                continue
-            debug_prints = {}
-            for key in order:
-                if key not in ex:
-                    debug_prints.setdefault("missing", []).append((key, order[key]))
-                    ex[key] = order[key]
-                elif ex[key] is None:
-                    debug_prints.setdefault("is_none", []).append((key, order[key]))
-                    ex[key] = order[key]
-            if debug_prints and self.debug_mode:
-                print("debug create_orders", debug_prints)
-            Passivbot._record_emitted_order_custom_id(self, ex, emitted_ts=emitted_ts)
-            to_return.append(ex)
-        if to_return:
-            for elm in to_return:
-                self.add_new_order(elm, source="POST")
-                self._monitor_record_event(
-                    "order.opened",
-                    ("order", "open"),
-                    self._monitor_order_payload(elm, source="POST"),
-                    symbol=elm.get("symbol"),
-                    pside=elm.get("position_side"),
-                )
-            self._health_orders_placed += len(to_return)
-            if hasattr(self, "_request_authoritative_confirmation"):
-                self._request_authoritative_confirmation({"open_orders"})
-            else:
-                Passivbot._request_authoritative_confirmation(self, {"open_orders"})
-        return to_return
+        return await executor.execute_orders_parent(self, orders)
 
     async def execute_cancellations_parent(self, orders: [dict]) -> [dict]:
         """Submit a batch of cancellations, prioritising reduce-only orders."""
-        max_cancellations = int(self.live_value("max_n_cancellations_per_batch"))
-        if len(orders) > max_cancellations:
-            # prioritize cancelling reduce-only orders
-            try:
-                reduce_only_orders = [
-                    x for x in orders if x.get("reduce_only") or x.get("reduceOnly")
-                ]
-                rest = [x for x in orders if not x["reduce_only"]]
-                orders = (reduce_only_orders + rest)[:max_cancellations]
-            except Exception as e:
-                logging.error(f"debug filter cancellations {e}")
-                orders = orders[:max_cancellations]
-        grouped_orders: dict[str, list[dict]] = defaultdict(list)
-        for order in orders:
-            self.add_to_recent_order_cancellations(order)
-            self.log_order_action(
-                order,
-                "cancelling order",
-                context=order.get("_context", "plan_sync"),
-                level=logging.DEBUG,
-                delta=order.get("_delta"),
-            )
-            grouped_orders[order["symbol"]].append(order)
-        self._log_order_action_summary(grouped_orders, "cancel")
-        res = await self.execute_cancellations(orders)
-        to_return = []
-        if len(orders) != len(res):
-            self.execution_scheduled = True
-            for od in orders:
-                self.state_change_detected_by_symbol.add(od["symbol"])
-            print(
-                f"debug unequal lengths execute_cancellations_parent: "
-                f"{len(orders)} orders, {len(res)} executions",
-                res,
-            )
-            return []
-        for ex, od in zip(res, orders):
-            if not self.did_cancel_order(ex, od):
-                self.state_change_detected_by_symbol.add(od["symbol"])
-                print(f"debug did_cancel_order false {ex} {od}")
-                continue
-            ambiguous_terminal_state = (
-                self._cancel_result_requires_full_authoritative_confirmation(ex)
-            )
-            if ambiguous_terminal_state:
-                self.state_change_detected_by_symbol.add(od["symbol"])
-            debug_prints = {}
-            for key in od:
-                if key not in ex:
-                    debug_prints.setdefault("missing", []).append((key, od[key]))
-                    ex[key] = od[key]
-                elif ex[key] is None:
-                    debug_prints.setdefault("is_none", []).append((key, od[key]))
-                    ex[key] = od[key]
-            if debug_prints and self.debug_mode:
-                print("debug cancel_orders", debug_prints)
-            to_return.append(ex)
-        if to_return:
-            for elm in to_return:
-                self.remove_order(elm, source="POST")
-                self._monitor_record_event(
-                    "order.canceled",
-                    ("order", "cancel"),
-                    self._monitor_order_payload(elm, source="POST"),
-                    symbol=elm.get("symbol"),
-                    pside=elm.get("position_side"),
-                )
-            self._health_orders_cancelled += len(to_return)
-            confirmation_surfaces = {"open_orders"}
-            ambiguous_symbols = sorted(
-                {
-                    elm.get("symbol")
-                    for elm in to_return
-                    if self._cancel_result_requires_full_authoritative_confirmation(elm)
-                    and elm.get("symbol")
-                }
-            )
-            if ambiguous_symbols:
-                confirmation_surfaces = self._authoritative_full_confirmation_surfaces()
-                logging.info(
-                    "[order] ambiguous cancel terminal state; forcing full account confirmation "
-                    "before next cycle | symbols=%s",
-                    Passivbot._log_symbols(ambiguous_symbols, limit=12),
-                )
-            if hasattr(self, "_request_authoritative_confirmation"):
-                self._request_authoritative_confirmation(confirmation_surfaces)
-            else:
-                Passivbot._request_authoritative_confirmation(
-                    self, confirmation_surfaces
-                )
-        return to_return
+        return await executor.execute_cancellations_parent(self, orders)
 
     def log_order_action(
         self,
@@ -8296,91 +7130,13 @@ class Passivbot:
         self, order: dict, max_age_ms=FOREIGN_PASSIVBOT_LOOKBACK_MS
     ) -> bool:
         """Return True when an open order is known to have been emitted by this process."""
-        if not isinstance(order, dict):
-            return False
-        if self.order_matches_recent_execution(order, max_age_ms=max_age_ms):
-            return True
-        now_ts = (
-            int(self.get_exchange_time())
-            if hasattr(self, "get_exchange_time")
-            else utc_ms()
+        return reconciler.order_matches_known_self_emission(
+            self, order, max_age_ms=max_age_ms
         )
-        cutoff = now_ts - int(max_age_ms)
-        exchange_id = Passivbot._extract_order_exchange_id(self, order)
-        custom_id = Passivbot._extract_order_custom_id(self, order)
-        canonical_custom_id = Passivbot._canonical_passivbot_custom_id(self, custom_id)
-        pb_type = (
-            custom_id_to_snake(custom_id)
-            if custom_id
-            else self._resolve_pb_order_type(order)
-        )
-        fingerprint = Passivbot._order_identity_fingerprint(self, order, pb_type)
-        for record in Passivbot._emitted_order_records(self):
-            record_ts_raw = record.get("timestamp")
-            if record_ts_raw is None:
-                continue
-            try:
-                record_ts = int(record_ts_raw)
-            except (TypeError, ValueError):
-                continue
-            if record_ts < cutoff:
-                continue
-            record_exchange_id = str(record.get("exchange_id") or "")
-            if (
-                exchange_id
-                and record_exchange_id
-                and str(exchange_id) == record_exchange_id
-            ):
-                return True
-            record_custom_id = str(record.get("canonical_custom_id") or "")
-            if (
-                canonical_custom_id
-                and record_custom_id
-                and canonical_custom_id == record_custom_id
-            ):
-                return True
-            if (
-                fingerprint
-                and record.get("fingerprint")
-                and record.get("fingerprint") == fingerprint
-            ):
-                return True
-        return False
 
     def _flag_disappeared_self_order_guardrail(self, order: dict) -> None:
         """Block creates for a symbol until account surfaces refresh after a self order vanishes."""
-        symbol = str(order.get("symbol") or "")
-        if not symbol:
-            return
-        ledger = self._ensure_freshness_ledger()
-        min_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
-        details = {
-            "order_id": str(order.get("id") or ""),
-            "side": str(order.get("side") or ""),
-            "position_side": str(order.get("position_side") or ""),
-            "price": order.get("price"),
-            "qty": order.get("qty", order.get("amount")),
-        }
-        ledger.flag_symbol_block(
-            symbol,
-            reason="self_order_disappeared_position_may_be_stale",
-            required_surfaces=ACCOUNT_SURFACES,
-            min_epoch=min_epoch,
-            detected_ms=utc_ms(),
-            details=details,
-        )
-        self.execution_scheduled = True
-        if not hasattr(self, "state_change_detected_by_symbol"):
-            self.state_change_detected_by_symbol = set()
-        self.state_change_detected_by_symbol.add(symbol)
-        self._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
-        logging.debug(
-            "[state] freshness guardrail armed | symbol=%s | reason=self_order_disappeared_position_may_be_stale | required=%s | min_epoch=%s | order_id=%s",
-            Passivbot._log_symbol(symbol),
-            ",".join(sorted(ACCOUNT_SURFACES)),
-            min_epoch,
-            details["order_id"],
-        )
+        return reconciler.flag_disappeared_self_order_guardrail(self, order)
 
     def _mark_account_critical_state_dirty(
         self,
@@ -8391,43 +7147,8 @@ class Passivbot:
         level: int = logging.DEBUG,
     ) -> None:
         """Force a coherent account-state refresh before the next execution cycle."""
-        min_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0) + 1
-        self._request_authoritative_confirmation(ACCOUNT_SURFACES, min_epoch=min_epoch)
-        self.execution_scheduled = True
-        normalized_symbols = sorted(
-            {str(symbol) for symbol in (symbols or []) if symbol}
-        )
-        if normalized_symbols:
-            if not hasattr(self, "state_change_detected_by_symbol"):
-                self.state_change_detected_by_symbol = set()
-            self.state_change_detected_by_symbol.update(normalized_symbols)
-        log_key = (
-            str(source),
-            str(reason),
-            tuple(normalized_symbols[:8]),
-            len(normalized_symbols),
-            min_epoch,
-        )
-        now_ms = utc_ms()
-        last_key = getattr(self, "_account_dirty_last_log_key", None)
-        last_ms = int(getattr(self, "_account_dirty_last_log_ms", 0) or 0)
-        if log_key == last_key and now_ms - last_ms < 5_000:
-            return
-        self._account_dirty_last_log_key = log_key
-        self._account_dirty_last_log_ms = now_ms
-        symbol_preview = (
-            Passivbot._log_symbols(normalized_symbols, limit=6)
-            if normalized_symbols
-            else "unknown"
-        )
-        logging.log(
-            level,
-            "[state] account-critical refresh requested | source=%s | reason=%s | symbols=%s | required=%s | min_epoch=%s",
-            source,
-            reason,
-            symbol_preview,
-            ",".join(sorted(ACCOUNT_SURFACES)),
-            min_epoch,
+        return reconciler.mark_account_critical_state_dirty(
+            self, reason=reason, symbols=symbols, source=source, level=level
         )
 
     def _freshness_creation_blocked_symbols(self) -> dict[str, object]:
@@ -8440,26 +7161,15 @@ class Passivbot:
         self, *, include_market_snapshot: bool = True
     ) -> frozenset[str]:
         """Return live input surfaces required before staged order planning may proceed."""
-        surfaces = set(LIVE_STATE_SURFACES)
-        if not include_market_snapshot:
-            surfaces.discard("market_snapshot")
-        return frozenset(surfaces)
+        return planning_gates.staged_planner_required_surfaces(
+            self, include_market_snapshot=include_market_snapshot
+        )
 
     def _staged_planner_surface_min_epochs(
         self, required: set[str] | frozenset[str]
     ) -> dict[str, int]:
         """Return minimum acceptable ledger epoch per staged planner input surface."""
-        current_epoch = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
-        pending = dict(getattr(self, "_authoritative_pending_confirmations", {}) or {})
-        min_epochs: dict[str, int] = {}
-        for surface in required:
-            if surface in ACCOUNT_SURFACES:
-                min_epochs[surface] = max(1, int(pending.get(surface, 0) or 0))
-            elif surface in {"completed_candles", "market_snapshot"}:
-                min_epochs[surface] = current_epoch
-            else:
-                min_epochs[surface] = current_epoch
-        return min_epochs
+        return planning_gates.staged_planner_surface_min_epochs(self, required)
 
     def _completed_candle_freshness_signature(
         self, symbols: Iterable[str], *, now_ms: int | None = None
@@ -8857,60 +7567,11 @@ class Passivbot:
         symbols: Iterable[str] | None = None,
     ) -> tuple[bool, dict]:
         """Return staged planner input-completeness state for the current planning pass."""
-        ledger = self._ensure_freshness_ledger()
-        required = self._staged_planner_required_surfaces(
-            include_market_snapshot=include_market_snapshot
+        return planning_gates.staged_planner_precondition_state(
+            self,
+            include_market_snapshot=include_market_snapshot,
+            symbols=symbols,
         )
-        min_epochs = self._staged_planner_surface_min_epochs(required)
-        missing = sorted(
-            surface
-            for surface in required
-            if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
-        )
-        invalid: dict[str, list] = {}
-        if "completed_candles" in required and "completed_candles" not in missing:
-            expected_symbols = tuple(Passivbot._urgent_active_candle_symbols(self))
-            candle_check_ms = ledger.surface_updated_ms(
-                "completed_candles"
-            ) or Passivbot._completed_candle_health_now_ms(self)
-            signature, candle_missing = Passivbot._completed_candle_freshness_signature(
-                self, expected_symbols, now_ms=candle_check_ms
-            )
-            stamped_signature = ledger.surface_signature("completed_candles")
-            if candle_missing or stamped_signature != signature:
-                missing.append("completed_candles")
-                invalid["completed_candles"] = candle_missing or (
-                    Passivbot._completed_candle_signature_mismatch_details(
-                        self,
-                        expected_symbols=expected_symbols,
-                        expected_signature=signature,
-                        stamped_signature=stamped_signature,
-                    )
-                )
-        if (
-            include_market_snapshot
-            and "market_snapshot" in required
-            and "market_snapshot" not in missing
-        ):
-            expected_market_symbols = tuple(
-                sorted(
-                    dict.fromkeys(str(symbol) for symbol in (symbols or []) if symbol)
-                )
-            )
-            if expected_market_symbols:
-                snapshot_invalid = Passivbot._market_snapshot_signature_invalid(
-                    self, expected_market_symbols
-                )
-                if snapshot_invalid:
-                    missing.append("market_snapshot")
-                    invalid["market_snapshot"] = snapshot_invalid
-        return not missing, {
-            "missing": sorted(set(missing)),
-            "required": sorted(required),
-            "epoch": int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
-            "min_epochs": min_epochs,
-            "invalid": invalid,
-        }
 
     def _assert_staged_planner_preconditions(
         self,
@@ -8920,18 +7581,11 @@ class Passivbot:
         symbols: Iterable[str] | None = None,
     ) -> None:
         """Hard-fail before Rust planning if staged live inputs are incomplete."""
-        ok, details = self._staged_planner_precondition_state(
+        return planning_gates.assert_staged_planner_preconditions(
+            self,
             include_market_snapshot=include_market_snapshot,
+            context=context,
             symbols=symbols,
-        )
-        if ok:
-            return
-        missing = ",".join(details["missing"])
-        required = ",".join(details["required"])
-        raise RuntimeError(
-            f"staged planner precondition failed before {context}: "
-            f"missing current-epoch surfaces={missing} epoch={details['epoch']} "
-            f"required={required}"
         )
 
     def _staged_execution_ready_state(
@@ -8942,92 +7596,16 @@ class Passivbot:
         symbols: Iterable[str] | None = None,
     ) -> tuple[bool, dict]:
         """Return whether live execution may proceed without raising on transient staleness."""
-        ok, details = self._staged_planner_precondition_state(
+        return planning_gates.staged_execution_ready_state(
+            self,
             include_market_snapshot=include_market_snapshot,
+            context=context,
             symbols=symbols,
         )
-        details = dict(details)
-        details["context"] = context
-        details["defer_reason"] = "staged_planner_inputs_not_fresh"
-        return ok, details
 
     def _format_staged_execution_defer_message(self, details: dict) -> str:
         """Return an operator-facing staged-defer summary."""
-        missing = tuple(details.get("missing", ()))
-        invalid = details.get("invalid") or {}
-        context = str(details.get("context") or "planning")
-        retry_note = "will_retry=automatic"
-        scope_note = "scope=planner_cycle"
-        headline = "staged planning deferred"
-        dependency = ",".join(missing) if missing else "unknown"
-        extra_parts = []
-        if "completed_candles" in missing:
-            headline = "staged planning deferred: completed candle target changed or missing"
-            dependency = "completed_candles"
-            extra_parts.append("action=refresh_candles_then_retry")
-        elif missing:
-            extra_parts.append("action=refresh_required_surfaces_then_retry")
-        parts = [
-            headline,
-            f"context={context}",
-            f"dependency={dependency}",
-            scope_note,
-            retry_note,
-            f"epoch={int(details.get('epoch', 0) or 0)}",
-        ]
-        parts.extend(extra_parts)
-        if invalid:
-            summaries = []
-            for surface, items in invalid.items():
-                if not isinstance(items, list) or not items:
-                    summaries.append(str(surface))
-                    continue
-                first = items[0]
-                if not isinstance(first, dict):
-                    summaries.append(f"{surface}:{type(first).__name__}")
-                    continue
-                reason = first.get("reason") or "invalid"
-                if reason == "signature_mismatch":
-                    mismatch_type = str(first.get("mismatch_type") or "unknown")
-                    changed_symbols = list(first.get("changed_symbols") or [])
-                    missing_symbols = list(first.get("missing_symbols") or [])
-                    extra_symbols = list(first.get("extra_symbols") or [])
-                    symbol_bits = []
-                    if changed_symbols:
-                        symbol_bits.append(
-                            "changed="
-                            + "|".join(
-                                Passivbot._log_symbol(sym) for sym in changed_symbols[:4]
-                            )
-                        )
-                    if missing_symbols:
-                        symbol_bits.append(
-                            "missing="
-                            + "|".join(
-                                Passivbot._log_symbol(sym) for sym in missing_symbols[:4]
-                            )
-                        )
-                    if extra_symbols:
-                        symbol_bits.append(
-                            "extra="
-                            + "|".join(
-                                Passivbot._log_symbol(sym) for sym in extra_symbols[:4]
-                            )
-                        )
-                    summaries.append(
-                        f"{surface}:{mismatch_type}"
-                        f" expected={int(first.get('expected_count') or 0)}"
-                        f" stamped={int(first.get('stamped_count') or 0)}"
-                        f" changed={int(first.get('changed_count') or 0)}"
-                        + (f" {' '.join(symbol_bits)}" if symbol_bits else "")
-                    )
-                else:
-                    symbol = first.get("symbol")
-                    suffix = f":{Passivbot._log_symbol(symbol)}" if symbol else ""
-                    summaries.append(f"{surface}:{reason}{suffix}")
-            if summaries:
-                parts.append("details=" + ",".join(summaries[:4]))
-        return " | ".join(parts)
+        return planning_gates.format_staged_execution_defer_message(self, details)
 
     def _handle_staged_execution_precondition_error(
         self, exc: RuntimeError
@@ -9037,203 +7615,43 @@ class Passivbot:
         Direct planner calls still fail loudly. The live execution loop can safely defer instead
         of consuming restart budget because no Rust planning result is executed from stale inputs.
         """
-        message = str(exc)
-        transient_prefixes = (
-            "staged planner precondition failed",
-            "planning snapshot invalid before capture",
-        )
-        if not message.startswith(transient_prefixes):
-            return False, {}
-        ok, details = self._staged_execution_ready_state(
-            include_market_snapshot=True,
-            context="rust order calculation",
-        )
-        if ok:
-            details["missing"] = []
-        details["exception"] = message
-        return True, details
+        return planning_gates.handle_staged_execution_precondition_error(self, exc)
 
     def _log_staged_execution_defer(self, details: dict) -> None:
         """Log a throttled non-trading defer while staged inputs settle."""
-        missing = tuple(details.get("missing", ()))
-        required = tuple(details.get("required", ()))
-        context = str(details.get("context") or "planning")
-        invalid = details.get("invalid") or {}
-        routine_candle_target = self._is_routine_completed_candle_target_defer(details)
-        if routine_candle_target:
-            self._record_routine_completed_candle_defer(details)
-        log_key = (context, missing, required, tuple(sorted(invalid)))
-        now_ms = utc_ms()
-        last_log_ms = int(getattr(self, "_staged_execution_defer_last_log_ms", 0) or 0)
-        throttle_ms = 60_000 if routine_candle_target else 15_000
-        if (
-            log_key == getattr(self, "_staged_execution_defer_last_log_key", None)
-            and now_ms - last_log_ms < throttle_ms
-        ):
-            return
-        self._staged_execution_defer_last_log_key = log_key
-        self._staged_execution_defer_last_log_ms = now_ms
-        logging.log(
-            logging.DEBUG if routine_candle_target else logging.INFO,
-            "[state] %s",
-            Passivbot._format_staged_execution_defer_message(self, details),
-        )
-        if invalid:
-            logging.debug(
-                "[state] staged execution deferred details | invalid=%s", invalid
-            )
+        return planning_gates.log_staged_execution_defer(self, details)
 
     def _is_routine_completed_candle_target_defer(self, details: dict) -> bool:
         """Return true for self-recovering minute-boundary candle target changes."""
-        missing = set(details.get("missing") or ())
-        if missing != {"completed_candles"}:
-            return False
-        invalid = details.get("invalid") or {}
-        items = invalid.get("completed_candles") if isinstance(invalid, dict) else None
-        if not isinstance(items, list) or not items:
-            return False
-        first = items[0]
-        return (
-            isinstance(first, dict)
-            and first.get("reason") == "signature_mismatch"
-            and first.get("mismatch_type") == "completed_candle_target_changed"
-        )
+        return planning_gates.is_routine_completed_candle_target_defer(self, details)
 
     def _record_routine_completed_candle_defer(self, details: dict) -> None:
         """Aggregate routine completed-candle target defers into periodic INFO summaries."""
-        try:
-            now_ms = utc_ms()
-            state = getattr(self, "_routine_completed_candle_defer_summary", None)
-            if not isinstance(state, dict):
-                state = {
-                    "window_start_ms": now_ms,
-                    "last_log_ms": 0,
-                    "count": 0,
-                    "symbols": set(),
-                }
-            invalid = details.get("invalid") or {}
-            items = invalid.get("completed_candles") if isinstance(invalid, dict) else []
-            symbols: set[str] = set()
-            if isinstance(items, list) and items and isinstance(items[0], dict):
-                first = items[0]
-                for key in ("changed_symbols", "missing_symbols", "extra_symbols"):
-                    for symbol in first.get(key) or []:
-                        if symbol:
-                            symbols.add(str(symbol))
-            state["count"] = int(state.get("count", 0) or 0) + 1
-            state_symbols = state.get("symbols")
-            if not isinstance(state_symbols, set):
-                state_symbols = set(state_symbols or [])
-            state_symbols.update(symbols)
-            state["symbols"] = state_symbols
-            state["last_seen_ms"] = now_ms
-            window_start_raw = state.get("window_start_ms", now_ms)
-            window_start_ms = (
-                int(window_start_raw) if window_start_raw is not None else now_ms
-            )
-            last_log_ms = int(state.get("last_log_ms", 0) or 0)
-            should_log = (
-                int(state["count"]) >= 20 and now_ms - last_log_ms >= 30 * 60_000
-            ) or now_ms - window_start_ms >= 30 * 60_000
-            self._routine_completed_candle_defer_summary = state
-            if not should_log:
-                return
-            window_s = max(1, int((now_ms - window_start_ms) / 1000))
-            logging.info(
-                "[state] staged planning deferred summary | reason=completed_candle_target_changed count=%d window=%ds symbols=%s will_retry=automatic action=refresh_candles_then_retry",
-                int(state.get("count", 0) or 0),
-                window_s,
-                Passivbot._log_symbols(tuple(sorted(state_symbols)), limit=8),
-            )
-            self._routine_completed_candle_defer_summary = {
-                "window_start_ms": now_ms,
-                "last_log_ms": now_ms,
-                "count": 0,
-                "symbols": set(),
-            }
-        except Exception as exc:
-            logging.debug(
-                "[state] staged defer summary log failed | error_type=%s error=%s",
-                type(exc).__name__,
-                exc,
-            )
+        return planning_gates.record_routine_completed_candle_defer(self, details)
 
     async def _defer_staged_execution_cycle(
         self, details: dict, loop_start_ms: int
     ) -> None:
         """Skip trading for this loop while staged planner inputs settle."""
-        self._log_staged_execution_defer(details)
-        self._last_loop_duration_ms = utc_ms() - loop_start_ms
-        self._maybe_log_health_summary()
-        self._maybe_log_unstuck_status()
-        self._set_log_silence_watchdog_context(phase="runtime", stage="flush_snapshot")
-        await self._monitor_flush_snapshot()
-        self._set_log_silence_watchdog_context(
-            phase="runtime", stage="staged_precondition_delay"
-        )
-        await asyncio.sleep(
-            self._authoritative_confirmation_retry_delay_seconds(details=details)
+        return await planning_gates.defer_staged_execution_cycle(
+            self, details, loop_start_ms
         )
 
     def _build_staged_planning_snapshot(
         self, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
     ) -> PlanningSnapshot:
         """Capture and validate the exact staged data set handed to Rust."""
-        ordered_symbols = tuple(
-            sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+        return planning_gates.build_staged_planning_snapshot(
+            self, symbols, market_snapshots
         )
-        ok, details = Passivbot._staged_planner_precondition_state(
-            self, include_market_snapshot=True, symbols=ordered_symbols
-        )
-        if not ok:
-            raise RuntimeError(f"planning snapshot invalid before capture: {details}")
-        ledger = self._ensure_freshness_ledger()
-        required = self._staged_planner_required_surfaces(include_market_snapshot=True)
-        min_epochs = self._staged_planner_surface_min_epochs(required)
-        snapshot = PlanningSnapshot.capture(
-            ts_ms=utc_ms(),
-            exchange=str(getattr(self, "exchange", "")),
-            user=str(self.config_get(["live", "user"]) or ""),
-            ledger=ledger,
-            required_surfaces=required,
-            min_epochs=min_epochs,
-            symbols=ordered_symbols,
-            market_snapshots=market_snapshots,
-            market_snapshot_max_age_ms=Passivbot._live_market_snapshot_max_age_ms(self),
-        )
-        snapshot.raise_if_invalid(now_ms=utc_ms(), context="rust order calculation")
-        return snapshot
 
     def _current_planning_snapshot_invalid_for_creations(
         self, symbols: Iterable[str]
     ) -> list[dict]:
         """Return reasons the current staged planning snapshot is unsafe for creations."""
-        snapshot = getattr(self, "_current_planning_snapshot", None)
-        ordered_symbols = tuple(
-            sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+        return planning_gates.current_planning_snapshot_invalid_for_creations(
+            self, symbols
         )
-        if snapshot is None:
-            return [
-                {
-                    "surface": "planning_snapshot",
-                    "reason": "missing_current_snapshot",
-                    "symbols": list(ordered_symbols),
-                }
-            ]
-        invalid = list(snapshot.invalid_details(now_ms=utc_ms()))
-        snapshot_symbols = set(snapshot.symbols)
-        missing_order_symbols = [
-            symbol for symbol in ordered_symbols if symbol not in snapshot_symbols
-        ]
-        if missing_order_symbols:
-            invalid.append(
-                {
-                    "surface": "planning_snapshot",
-                    "reason": "creation_symbols_not_in_snapshot",
-                    "symbols": missing_order_symbols,
-                }
-            )
-        return invalid
 
     def _apply_freshness_creation_guardrails(
         self, orders: list[dict]
@@ -12990,151 +11408,13 @@ class Passivbot:
         candle fallback is explicit and should only be used for non-critical
         display/sorting paths.
         """
-        ordered_symbols = list(dict.fromkeys(str(s) for s in symbols if s))
-        if not ordered_symbols:
-            return {}
-        provider = getattr(self, "market_snapshot_provider", None)
-        snapshots: dict[str, MarketSnapshot] = {}
-        if provider is not None:
-            try:
-                snapshots = await provider.get_snapshots(
-                    ordered_symbols, max_age_ms=max_age_ms
-                )
-            except RuntimeError as exc:
-                if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
-                    raise
-                logging.debug(
-                    "[market] hyperliquid primary ticker snapshot path failed; trying explicit fallback | context=%s symbols=%s error=%s",
-                    context,
-                    len(ordered_symbols),
-                    exc,
-                )
-                snapshots = {}
-
-        missing = [
-            symbol
-            for symbol in ordered_symbols
-            if symbol not in snapshots or not snapshots[symbol].is_valid()
-        ]
-        if (
-            missing
-            and str(getattr(self, "exchange", "") or "").lower() == "hyperliquid"
-        ):
-            try:
-                fetched = await self.cca.fetch(
-                    self._hl_info_url(),
-                    method="POST",
-                    headers={"Content-Type": "application/json"},
-                    body=json.dumps({"type": "allMids"}),
-                )
-                coin_to_sym = (
-                    {v: k for k, v in self.symbol_ids.items()}
-                    if self.symbol_ids
-                    else {}
-                )
-                fetched_ms = utc_ms()
-                for coin, mid_str in fetched.items():
-                    sym = coin_to_sym.get(coin)
-                    if sym not in missing:
-                        continue
-                    price = float(mid_str)
-                    snap = MarketSnapshot(
-                        symbol=sym,
-                        bid=price,
-                        ask=price,
-                        last=price,
-                        fetched_ms=fetched_ms,
-                        source="hyperliquid_all_mids",
-                    )
-                    if snap.is_valid():
-                        snapshots[sym] = snap
-            except Exception as exc:
-                logging.debug(
-                    "[market] hyperliquid allMids snapshot failed | context=%s symbols=%s error_type=%s error=%s",
-                    context,
-                    len(missing),
-                    type(exc).__name__,
-                    exc,
-                )
-            missing = [
-                symbol
-                for symbol in ordered_symbols
-                if symbol not in snapshots or not snapshots[symbol].is_valid()
-            ]
-            if missing and hasattr(self, "fetch_tickers_for_symbols"):
-                try:
-                    fetched_symbol_tickers = await self.fetch_tickers_for_symbols(
-                        missing
-                    )
-                    fetched_ms = utc_ms()
-                    for symbol, ticker in fetched_symbol_tickers.items():
-                        if symbol not in missing or not isinstance(ticker, dict):
-                            continue
-                        try:
-                            last = float(ticker.get("last") or ticker.get("close"))
-                            bid = float(ticker.get("bid"))
-                            ask = float(ticker.get("ask"))
-                        except (TypeError, ValueError):
-                            continue
-                        source = ticker.get("source")
-                        if not (last > 0.0 and bid > 0.0 and ask > 0.0):
-                            continue
-                        snap = MarketSnapshot(
-                            symbol=symbol,
-                            bid=bid,
-                            ask=ask,
-                            last=last,
-                            fetched_ms=fetched_ms,
-                            source=str(source or "hyperliquid_symbol_tickers"),
-                        )
-                        if snap.is_valid():
-                            snapshots[symbol] = snap
-                except Exception as exc:
-                    logging.debug(
-                        "[market] hyperliquid symbol ticker snapshot failed | context=%s symbols=%s error_type=%s error=%s",
-                        context,
-                        len(missing),
-                        type(exc).__name__,
-                        exc,
-                    )
-                missing = [
-                    symbol
-                    for symbol in ordered_symbols
-                    if symbol not in snapshots or not snapshots[symbol].is_valid()
-                ]
-
-        if missing and allow_completed_candle_fallback:
-            completed_prices = await self.cm.get_last_prices(
-                missing, max_age_ms=max_age_ms
-            )
-            now_ms = utc_ms()
-            for symbol in missing:
-                raw = completed_prices.get(symbol)
-                try:
-                    price = float(raw)
-                except (TypeError, ValueError):
-                    continue
-                snap = MarketSnapshot(
-                    symbol=symbol,
-                    bid=price,
-                    ask=price,
-                    last=price,
-                    fetched_ms=now_ms,
-                    source="completed_candle_fallback",
-                )
-                if snap.is_valid():
-                    snapshots[symbol] = snap
-
-        missing = [
-            symbol
-            for symbol in ordered_symbols
-            if symbol not in snapshots or not snapshots[symbol].is_valid()
-        ]
-        if missing:
-            raise RuntimeError(
-                f"missing live market snapshots for {context}: {Passivbot._log_symbols(missing, limit=12)}"
-            )
-        return {symbol: snapshots[symbol] for symbol in ordered_symbols}
+        return await market_data.get_live_market_snapshots(
+            self,
+            symbols,
+            max_age_ms=max_age_ms,
+            context=context,
+            allow_completed_candle_fallback=allow_completed_candle_fallback,
+        )
 
     async def _get_live_last_prices(
         self,
@@ -13156,91 +11436,14 @@ class Passivbot:
         self, symbols: list[str]
     ) -> dict[str, MarketSnapshot]:
         """Return current bid/ask/last snapshots for orchestrator planning."""
-        fetch_ttl_ms = Passivbot._live_market_snapshot_fetch_max_age_ms(self)
-        provider = getattr(self, "market_snapshot_provider", None)
-        snapshots: dict[str, MarketSnapshot] = {}
-        if provider is not None:
-            logging.debug(
-                "[state] staged orchestrator requesting market snapshots | symbols=%s | fetch_ttl=%sms",
-                len(symbols),
-                fetch_ttl_ms,
-            )
-            try:
-                snapshots = await provider.get_snapshots(
-                    symbols, max_age_ms=fetch_ttl_ms
-                )
-            except RuntimeError as exc:
-                if str(getattr(self, "exchange", "") or "").lower() != "hyperliquid":
-                    raise
-                logging.debug(
-                    "[state] staged hyperliquid primary market snapshots failed; trying explicit fallback | symbols=%s error=%s",
-                    len(symbols),
-                    exc,
-                )
-                snapshots = {}
-        invalid = [
-            symbol
-            for symbol in symbols
-            if symbol not in snapshots or not snapshots[symbol].is_valid()
-        ]
-        if invalid:
-            suffix = (
-                " | attempting hyperliquid fallback"
-                if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid"
-                else ""
-            )
-            logging.debug(
-                "[state] staged bulk market snapshots incomplete | symbols=%s | missing=%s%s",
-                len(symbols),
-                Passivbot._log_symbols(invalid, limit=12),
-                suffix,
-            )
-            if str(getattr(self, "exchange", "") or "").lower() == "hyperliquid":
-                try:
-                    snapshots = await self._get_live_market_snapshots(
-                        symbols,
-                        max_age_ms=fetch_ttl_ms,
-                        context="orchestrator",
-                        allow_completed_candle_fallback=False,
-                    )
-                    Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
-                    sources = Counter(snap.source for snap in snapshots.values())
-                    logging.debug(
-                        "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
-                        len(symbols),
-                        len(symbols),
-                        ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
-                    )
-                    return snapshots
-                except RuntimeError as exc:
-                    raise RuntimeError(
-                        "staged market snapshots incomplete after hyperliquid fallback "
-                        f"| missing={Passivbot._log_symbols(invalid, limit=12)} "
-                        f"| fallback_error={type(exc).__name__}: {exc}"
-                    ) from exc
-            raise RuntimeError(
-                "staged market snapshots incomplete "
-                f"| exchange={getattr(self, 'exchange', '')} "
-                f"| symbols={len(symbols)} "
-                f"| missing={Passivbot._log_symbols(invalid, limit=12)}"
-            )
-        sources = Counter(snap.source for snap in snapshots.values())
-        logging.debug(
-            "[state] staged market snapshots ready | symbols=%s | ok=%s | invalid=0 | sources=%s",
-            len(symbols),
-            len(symbols),
-            ",".join(f"{k}:{v}" for k, v in sorted(sources.items())),
-        )
-        Passivbot._record_market_snapshot_surface(self, symbols, snapshots)
-        return snapshots
+        return await market_data.get_orchestrator_market_snapshots(self, symbols)
 
     def _live_market_snapshot_max_age_ms(self) -> int:
-        return 10_000
+        return market_data.live_market_snapshot_max_age_ms(self)
 
     def _live_market_snapshot_fetch_max_age_ms(self) -> int:
         """Use a stricter fetch TTL than the hard safety TTL to leave planning headroom."""
-        max_age_ms = int(Passivbot._live_market_snapshot_max_age_ms(self))
-        return max(1_000, min(max_age_ms, int(max_age_ms * 0.5)))
+        return market_data.live_market_snapshot_fetch_max_age_ms(self)
 
     def _close_ema_fallback_max_age_ms(self) -> int:
         """Maximum age for required close-EMA carry-forward fallback."""
@@ -13263,341 +11466,37 @@ class Passivbot:
     def _market_snapshot_signature(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
     ) -> tuple:
-        expected = tuple(
-            sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
-        )
-        return tuple(
-            sorted(
-                (
-                    symbol,
-                    round(float(snapshots[symbol].bid), 12),
-                    round(float(snapshots[symbol].ask), 12),
-                    round(float(snapshots[symbol].last), 12),
-                    int(snapshots[symbol].fetched_ms),
-                    snapshots[symbol].source,
-                )
-                for symbol in expected
-                if symbol in snapshots and snapshots[symbol].is_valid()
-            )
-        )
+        return market_data.market_snapshot_signature(self, symbols, snapshots)
 
     def _record_market_snapshot_surface(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
     ) -> None:
-        self._ensure_freshness_ledger().stamp(
-            "market_snapshot",
-            Passivbot._market_snapshot_signature(self, symbols, snapshots),
-            now_ms=utc_ms(),
-            epoch=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
-        )
+        return market_data.record_market_snapshot_surface(self, symbols, snapshots)
 
     def _market_snapshot_signature_invalid(self, symbols: Iterable[str]) -> list[dict]:
-        expected = tuple(
-            sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
-        )
-        if not expected:
-            return []
-        ledger = self._ensure_freshness_ledger()
-        signature = ledger.surface_signature("market_snapshot")
-        if not isinstance(signature, tuple):
-            return [{"reason": "missing_signature", "symbols": list(expected)}]
-        by_symbol = {}
-        for item in signature:
-            if not isinstance(item, (list, tuple)) or len(item) < 6:
-                continue
-            by_symbol[str(item[0])] = item
-        now = utc_ms()
-        max_age_ms = Passivbot._live_market_snapshot_max_age_ms(self)
-        invalid = []
-        for symbol in expected:
-            item = by_symbol.get(symbol)
-            if item is None:
-                invalid.append({"symbol": symbol, "reason": "missing"})
-                continue
-            fetched_ms = int(item[4])
-            age_ms = int(now - fetched_ms)
-            if age_ms > max_age_ms:
-                invalid.append(
-                    {
-                        "symbol": symbol,
-                        "reason": "stale",
-                        "age_ms": age_ms,
-                        "max_age_ms": max_age_ms,
-                    }
-                )
-        return invalid
+        return market_data.market_snapshot_signature_invalid(self, symbols)
 
     def _to_executable_orders(
         self, ideal_orders: dict, last_prices: Dict[str, float]
     ) -> tuple[Dict[str, list], set[str]]:
         """Convert raw order tuples into api-ready dicts and find WEL-restricted symbols."""
-        ideal_orders_f: Dict[str, list] = {}
-        wel_blocked_symbols: set[str] = set()
-
-        for symbol, orders in ideal_orders.items():
-            ideal_orders_f[symbol] = []
-            last_mprice = last_prices[symbol]
-            seen = set()
-            with_mprice_diff = []
-            for order in orders:
-                side = determine_side_from_order_tuple(order)
-                diff = order_market_diff(side, order[1], last_mprice)
-                with_mprice_diff.append((diff, order, side))
-                if (
-                    isinstance(order, tuple)
-                    and isinstance(order[2], str)
-                    and "close_auto_reduce_wel" in order[2]
-                ):
-                    wel_blocked_symbols.add(symbol)
-            for mprice_diff, order, order_side in sorted(
-                with_mprice_diff, key=lambda item: item[0]
-            ):
-                position_side = "long" if "long" in order[2] else "short"
-                if order[0] == 0.0:
-                    continue
-                seen_key = str(abs(order[0])) + str(order[1]) + order[2]
-                if seen_key in seen:
-                    logging.debug(
-                        "duplicate ideal order for %s skipped: %s", symbol, order
-                    )
-                    continue
-                pb_order_type = snake_of(order[3])
-                if len(order) >= 5:
-                    execution_type = str(order[4]).lower()
-                else:
-                    execution_type = "limit"
-                    panic_close_pref = self._equity_hard_stop_panic_close_order_type(
-                        position_side
-                    )
-                    if "panic" in pb_order_type:
-                        execution_type = (
-                            "market" if panic_close_pref == "market" else "limit"
-                        )
-                if execution_type not in {"limit", "market"}:
-                    execution_type = "limit"
-                ideal_orders_f[symbol].append(
-                    {
-                        "symbol": symbol,
-                        "side": order_side,
-                        "position_side": position_side,
-                        "qty": abs(order[0]),
-                        "price": order[1],
-                        "reduce_only": "close" in order[2],
-                        "custom_id": self.format_custom_id_single(order[3]),
-                        "type": execution_type,
-                        "pb_order_type": pb_order_type,
-                    }
-                )
-                seen.add(seen_key)
-        return (
-            self._finalize_reduce_only_orders(ideal_orders_f, last_prices),
-            wel_blocked_symbols,
-        )
+        return reconciler.to_executable_orders(self, ideal_orders, last_prices)
 
     def _finalize_reduce_only_orders(
         self, orders_by_symbol: Dict[str, list], last_prices: Dict[str, float]
     ) -> Dict[str, list]:
         """Bound reduce-only quantities so they never exceed the current position size (per order and in sum)."""
-        for symbol, orders in orders_by_symbol.items():
-            market_price = float(last_prices.get(symbol, 0.0))
-
-            # 1) clamp each reduce-only order to position size
-            for order in orders:
-                if not order.get("reduce_only"):
-                    continue
-                pos = self.positions.get(order["symbol"], {}).get(
-                    order["position_side"], {}
-                )
-                pos_size_abs = abs(float(pos.get("size", 0.0)))
-                if abs(order["qty"]) > pos_size_abs:
-                    logging.warning(
-                        "trimmed reduce-only qty to position size | order=%s | position=%s",
-                        order,
-                        pos,
-                    )
-                    order["qty"] = pos_size_abs
-
-            # 2) cap sum(reduce_only qty) <= pos size by reducing furthest-from-market closes first
-            for pside in ("long", "short"):
-                pos_size_abs = abs(
-                    float(
-                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)
-                    )
-                )
-                if pos_size_abs <= 0.0:
-                    continue
-                ro = [
-                    o
-                    for o in orders
-                    if o.get("reduce_only") and o.get("position_side") == pside
-                ]
-                if not ro:
-                    continue
-                total = sum(float(o.get("qty", 0.0)) for o in ro)
-                if total <= pos_size_abs + 1e-12:
-                    continue
-                excess = total - pos_size_abs
-                # furthest first: larger order_market_diff
-                ro_sorted = sorted(
-                    ro,
-                    key=lambda o: order_market_diff(
-                        o.get("side", ""), float(o.get("price", 0.0)), market_price
-                    ),
-                    reverse=True,
-                )
-                for o in ro_sorted:
-                    if excess <= 0.0:
-                        break
-                    q = float(o.get("qty", 0.0))
-                    if q <= 0.0:
-                        continue
-                    reduce_by = min(q, excess)
-                    new_q = q - reduce_by
-                    o["qty"] = float(round(new_q, 12))
-                    excess -= reduce_by
-                # drop any zeroed reduce-only orders
-                orders_by_symbol[symbol] = [
-                    o
-                    for o in orders_by_symbol[symbol]
-                    if not (o.get("reduce_only") and float(o.get("qty", 0.0)) <= 0.0)
-                ]
-
-        return orders_by_symbol
+        return reconciler.finalize_reduce_only_orders(
+            self, orders_by_symbol, last_prices
+        )
 
     async def calc_orders_to_cancel_and_create(self):
         """Determine which existing orders to cancel and which new ones to place."""
-        if not hasattr(self, "_last_plan_detail"):
-            self._last_plan_detail = {}
-        ideal_orders = await self.calc_ideal_orders()
-
-        actual_orders = self._snapshot_actual_orders()
-        keys = ("symbol", "side", "position_side", "qty", "price")
-        to_cancel, to_create = [], []
-        plan_summaries = []
-        for symbol, symbol_orders in actual_orders.items():
-            ideal_list = (
-                ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
-            )
-            cancel_, create_ = self._reconcile_symbol_orders(
-                symbol, symbol_orders, ideal_list, keys
-            )
-            cancel_, create_ = self._annotate_order_deltas(cancel_, create_)
-            pre_cancel = len(cancel_)
-            pre_create = len(create_)
-            cancel_, create_, skipped = self._apply_order_match_tolerance(
-                cancel_, create_
-            )
-            plan_summaries.append(
-                (symbol, pre_cancel, len(cancel_), pre_create, len(create_), skipped)
-            )
-            to_cancel += cancel_
-            to_create += create_
-
-        to_create, initial_entry_gate_skipped = (
-            await self._apply_initial_entry_distance_gate(to_create)
-        )
-        to_cancel = await self._sort_orders_by_market_diff(to_cancel, "to_cancel")
-        to_create = await self._sort_orders_by_market_diff(to_create, "to_create")
-        to_create, freshness_skipped = self._apply_freshness_creation_guardrails(
-            to_create
-        )
-        if plan_summaries:
-            total_pre_cancel = sum(p[1] for p in plan_summaries)
-            total_cancel = sum(p[2] for p in plan_summaries)
-            total_pre_create = sum(p[3] for p in plan_summaries)
-            total_create = len(to_create)
-            total_skipped = (
-                sum(p[5] for p in plan_summaries)
-                + freshness_skipped
-                + initial_entry_gate_skipped
-            )
-            detail_parts = []
-            untouched_cancel = total_pre_cancel - total_cancel
-            untouched_create = total_pre_create - total_create
-            for symbol, pre_c, c, pre_cr, cr, skipped in plan_summaries:
-                prev = self._last_plan_detail.get(symbol)
-                current = (c, cr, skipped)
-                self._last_plan_detail[symbol] = current
-                if c or cr or skipped:
-                    if prev != current:
-                        detail_parts.append(
-                            f"{Passivbot._log_symbol(symbol)}:c{pre_c}->{c} cr{pre_cr}->{cr} skip{skipped}"
-                        )
-            detail = " | ".join(detail_parts[:6])
-            summary_key = (
-                total_pre_cancel,
-                total_cancel,
-                total_pre_create,
-                total_create,
-                total_skipped,
-                untouched_cancel,
-                untouched_create,
-                detail,
-            )
-            if summary_key != getattr(self, "_last_order_plan_summary", None):
-                self._last_order_plan_summary = summary_key
-                if total_cancel or total_create or total_skipped:
-                    extra = []
-                    if untouched_cancel:
-                        extra.append(f"unchanged_cancel={untouched_cancel}")
-                    if untouched_create:
-                        extra.append(f"unchanged_create={untouched_create}")
-                    log_level = (
-                        logging.INFO
-                        if self._order_plan_summary_is_interesting(
-                            total_pre_cancel=total_pre_cancel,
-                            total_cancel=total_cancel,
-                            total_pre_create=total_pre_create,
-                            total_create=total_create,
-                            total_skipped=total_skipped,
-                        )
-                        else logging.DEBUG
-                    )
-                    logging.log(
-                        log_level,
-                        "[order] order plan summary | cancel %d->%d | create %d->%d | skipped=%d%s%s",
-                        total_pre_cancel,
-                        total_cancel,
-                        total_pre_create,
-                        total_create,
-                        total_skipped,
-                        f" | {' '.join(extra)}" if extra else "",
-                        f" | details: {detail}" if detail else "",
-                    )
-        return to_cancel, to_create
+        return await reconciler.calc_orders_to_cancel_and_create(self)
 
     def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
-        actual_orders: dict[str, list[dict]] = {}
-        for symbol in self.active_symbols:
-            symbol_orders = []
-            for order in self.open_orders.get(symbol, []):
-                try:
-                    symbol_orders.append(
-                        {
-                            "symbol": order["symbol"],
-                            "side": order["side"],
-                            "position_side": order["position_side"],
-                            "qty": abs(order["qty"]),
-                            "price": order["price"],
-                            "reduce_only": (
-                                order["position_side"] == "long"
-                                and order["side"] == "sell"
-                            )
-                            or (
-                                order["position_side"] == "short"
-                                and order["side"] == "buy"
-                            ),
-                            "id": order.get("id"),
-                            "custom_id": order.get("custom_id"),
-                        }
-                    )
-                except Exception as exc:
-                    logging.error(f"error in calc_orders_to_cancel_and_create {exc}")
-                    traceback.print_exc()
-                    print(order)
-            actual_orders[symbol] = symbol_orders
-        return actual_orders
+        return reconciler.snapshot_actual_orders(self)
 
     def _reconcile_symbol_orders(
         self,
@@ -13607,9 +11506,9 @@ class Passivbot:
         keys: tuple[str, ...],
     ) -> tuple[list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
-        to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
-        to_cancel, to_create = self._apply_mode_filters(symbol, to_cancel, to_create)
-        return to_cancel, to_create
+        return reconciler.reconcile_symbol_orders(
+            self, symbol, actual_orders, ideal_orders, keys
+        )
 
     def _annotate_order_deltas(
         self, to_cancel: list[dict], to_create: list[dict]
@@ -13619,88 +11518,7 @@ class Passivbot:
 
         Matches orders by symbol/side/position_side and closest price distance.
         """
-        remaining_create = list(to_create)
-        for order in to_create:
-            order.setdefault("_context", "new")
-            order.setdefault("_reason", "new")
-        for cancel_order in to_cancel:
-            cancel_order.setdefault("_context", "retire")
-            cancel_order.setdefault("_reason", "retire")
-
-        def pct(a: float, b: float) -> float:
-            if a == 0 and b == 0:
-                return 0.0
-            if a == 0:
-                return float("inf")
-            return abs(b - a) / abs(a) * 100.0
-
-        # annotate cancellations
-        for cancel_order in to_cancel:
-            candidates = [
-                (idx, co)
-                for idx, co in enumerate(remaining_create)
-                if co.get("symbol") == cancel_order.get("symbol")
-                and co.get("side") == cancel_order.get("side")
-                and co.get("position_side") == cancel_order.get("position_side")
-            ]
-            if not candidates:
-                continue
-            # choose closest by price difference
-            best_idx, best_order = min(
-                candidates,
-                key=lambda c: abs(
-                    float(c[1].get("price", 0.0))
-                    - float(cancel_order.get("price", 0.0))
-                ),
-            )
-            raw_price_diff = pct(
-                float(cancel_order.get("price", 0.0)),
-                float(best_order.get("price", 0.0)),
-            )
-            raw_qty_diff = pct(
-                float(cancel_order.get("qty", 0.0)), float(best_order.get("qty", 0.0))
-            )
-            price_diff = (
-                round(raw_price_diff, 4)
-                if math.isfinite(raw_price_diff)
-                else raw_price_diff
-            )
-            qty_diff = (
-                round(raw_qty_diff, 4) if math.isfinite(raw_qty_diff) else raw_qty_diff
-            )
-            reason_parts = []
-            if price_diff > 0:
-                reason_parts.append("price")
-            if qty_diff > 0:
-                reason_parts.append("qty")
-            reason = "+".join(reason_parts) if reason_parts else "adjustment"
-            cancel_order["_delta"] = {
-                "price_old": cancel_order.get("price"),
-                "price_new": best_order.get("price"),
-                "price_pct_diff": price_diff,
-                "qty_old": cancel_order.get("qty"),
-                "qty_new": best_order.get("qty"),
-                "qty_pct_diff": qty_diff,
-            }
-            cancel_order["_context"] = "replace"
-            cancel_order["_reason"] = reason
-            # also annotate the matched create order
-            best_order["_delta"] = {
-                "price_old": cancel_order.get("price"),
-                "price_new": best_order.get("price"),
-                "price_pct_diff": price_diff,
-                "qty_old": cancel_order.get("qty"),
-                "qty_new": best_order.get("qty"),
-                "qty_pct_diff": qty_diff,
-            }
-            best_order["_context"] = "replace"
-            best_order["_reason"] = reason
-            remaining_create.pop(best_idx)
-
-        for ord in remaining_create:
-            ord.setdefault("_context", "new")
-            ord.setdefault("_reason", "fresh")
-        return to_cancel, to_create
+        return reconciler.annotate_order_deltas(self, to_cancel, to_create)
 
     def _apply_order_match_tolerance(
         self, to_cancel: list[dict], to_create: list[dict]
@@ -13709,63 +11527,7 @@ class Passivbot:
 
         Returns (remaining_cancel, remaining_create, skipped_pairs)
         """
-        tolerance = float(self.live_value("order_match_tolerance_pct"))
-        if tolerance <= 0.0:
-            return to_cancel, to_create, 0
-
-        used_cancel: set[int] = set()
-        kept_create: list[dict] = []
-        skipped = 0
-
-        def pct_diff(a: float, b: float) -> float:
-            if b == 0:
-                return 0.0 if a == 0 else float("inf")
-            return abs(a - b) / abs(b) * 100.0
-
-        for order in to_create:
-            match_idx = None
-            for idx, existing in enumerate(to_cancel):
-                if idx in used_cancel:
-                    continue
-                try:
-                    if orders_matching(
-                        order,
-                        existing,
-                        tolerance_qty=tolerance,
-                        tolerance_price=tolerance,
-                    ):
-                        match_idx = idx
-                        break
-                except Exception:
-                    continue
-            if match_idx is None:
-                kept_create.append(order)
-            else:
-                used_cancel.add(match_idx)
-                skipped += 1
-                try:
-                    price_diff = pct_diff(
-                        float(order["price"]), float(to_cancel[match_idx]["price"])
-                    )
-                    qty_diff = pct_diff(
-                        float(order["qty"]), float(to_cancel[match_idx]["qty"])
-                    )
-                    logging.debug(
-                        "skipped_recreate | %s | tolerance=%.4f%% price_diff=%.4f%% qty_diff=%.4f%%",
-                        order.get("symbol", "?"),
-                        tolerance * 100.0,
-                        price_diff,
-                        qty_diff,
-                    )
-                except Exception:
-                    logging.debug(
-                        "skipped_recreate | %s | tolerance=%.4f%%",
-                        order.get("symbol", "?"),
-                        tolerance * 100.0,
-                    )
-
-        remaining_cancel = [o for i, o in enumerate(to_cancel) if i not in used_cancel]
-        return remaining_cancel, kept_create, skipped
+        return reconciler.apply_order_match_tolerance(self, to_cancel, to_create)
 
     async def _apply_initial_entry_distance_gate(
         self, to_create: list[dict]
@@ -13941,40 +11703,7 @@ class Passivbot:
         to_create: list[dict],
     ) -> tuple[list[dict], list[dict]]:
         """Apply mode-specific cancel/create filtering rules."""
-        for pside in ["long", "short"]:
-            mode = self.PB_modes[pside].get(symbol)
-            if mode == "manual":
-                to_cancel = [x for x in to_cancel if x["position_side"] != pside]
-                to_create = [x for x in to_create if x["position_side"] != pside]
-            elif mode == "tp_only":
-                to_cancel = [
-                    x
-                    for x in to_cancel
-                    if (
-                        x["position_side"] != pside
-                        or (x["position_side"] == pside and x["reduce_only"])
-                    )
-                ]
-                to_create = [
-                    x
-                    for x in to_create
-                    if (
-                        x["position_side"] != pside
-                        or (x["position_side"] == pside and x["reduce_only"])
-                    )
-                ]
-            elif mode == "tp_only_with_active_entry_cancellation":
-                # Keep active close-order management and entry-order cancellation.
-                # Entries are never created, but existing entry orders are allowed in to_cancel.
-                to_create = [
-                    x
-                    for x in to_create
-                    if (
-                        x["position_side"] != pside
-                        or (x["position_side"] == pside and x["reduce_only"])
-                    )
-                ]
-        return to_cancel, to_create
+        return reconciler.apply_mode_filters(self, symbol, to_cancel, to_create)
 
     async def _sort_orders_by_market_diff(
         self, orders: list[dict], log_label: str
