@@ -406,4 +406,3 @@ def market_snapshot_signature_invalid(bot, symbols: Iterable[str]) -> list[dict]
                 }
             )
     return invalid
-

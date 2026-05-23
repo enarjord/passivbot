@@ -423,4 +423,3 @@ def current_planning_snapshot_invalid_for_creations(
             }
         )
     return invalid
-

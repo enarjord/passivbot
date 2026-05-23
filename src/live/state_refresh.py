@@ -514,4 +514,3 @@ async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict
                 getattr(bot, "_last_fill_refresh_pending_pnl_count", 0) or 0
             )
     return out
-

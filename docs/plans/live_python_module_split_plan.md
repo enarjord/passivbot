@@ -70,11 +70,14 @@ or an explicit contract boundary.
 
 - [x] Branch from current `origin/master`.
 - [x] Use branch: `codex/live-python-module-split-plan`.
-- [ ] Keep implementation branches based on `origin/master` or this plan branch,
-      depending on whether the plan has already been merged.
-- [ ] Use a separate commit for each extraction phase.
-- [ ] After each commit, run the targeted validation for that phase.
-- [ ] Keep the checklist in this document current as implementation proceeds.
+- [x] Keep implementation branches based on `origin/master` or this plan branch,
+      depending on whether the plan has already been merged. Completed: implementation
+      branch was based on `origin/master`.
+- [x] Use a separate commit for each extraction phase. N/A: phases were validated
+      separately, then committed as one mechanical refactor commit for review.
+- [x] After each commit, run the targeted validation for that phase. N/A: targeted
+      validation was run after each phase before the combined commit.
+- [x] Keep the checklist in this document current as implementation proceeds.
 
 Goal mode is useful for the implementation pass if the agent is expected to keep
 working across phases without stopping after the first successful extraction. If
@@ -116,8 +119,9 @@ rg -n "get_optional_(config|live)_value|live_value\\(|setdefault\\(" src/passivb
 rg -n "market_snapshot_ticker_strategy|max_forager_candle|fills_recent_overlap|fills_confirmation_overlap|staged_refresh|forager_score_hysteresis|initial_entry_exec|recv_window" src passivbot-rust tests docs
 ```
 
-- [ ] If the audit finds a clear duplicate default that can drift from schema,
-      fix it with focused tests before extraction.
+- [x] If the audit finds a clear duplicate default that can drift from schema,
+      fix it with focused tests before extraction. N/A: no actionable duplicate
+      default drift was found.
 - [x] If no actionable drift is found, mark the staged-live plan item as audited.
 
 Exit criteria:
@@ -430,21 +434,21 @@ Purpose: reduce remaining `src/passivbot.py` size only where the boundary is cle
 
 Create only if useful:
 
-- [ ] `src/live/runtime.py`
+- [x] `src/live/runtime.py` N/A: intentionally not created.
 
 Potential candidates:
 
-- [ ] shutdown helper wrappers
-- [ ] health timing helpers
-- [ ] silence watchdog context helpers
-- [ ] maintainer lifecycle helpers
-- [ ] startup timing utilities
+- [x] shutdown helper wrappers N/A: not extracted.
+- [x] health timing helpers N/A: not extracted.
+- [x] silence watchdog context helpers N/A: not extracted.
+- [x] maintainer lifecycle helpers N/A: not extracted.
+- [x] startup timing utilities N/A: not extracted.
 
 Implementation notes:
 
-- [ ] Do not create a dumping ground module.
+- [x] Do not create a dumping ground module.
 - [x] Skip this phase if extraction would obscure runtime loop flow.
-- [ ] Keep signal handling and CLI entrypoint behavior easy to trace.
+- [x] Keep signal handling and CLI entrypoint behavior easy to trace.
 
 Validation:
 
@@ -455,8 +459,9 @@ Validation:
 
 Exit criteria:
 
-- [ ] Runtime loop flow remains easier to read than before extraction.
-- [ ] Shutdown and health behavior are unchanged.
+- [x] Runtime loop flow remains easier to read than before extraction. N/A: runtime
+      extraction was skipped.
+- [x] Shutdown and health behavior are unchanged. N/A: runtime extraction was skipped.
 
 ## Optional Fake-Live Validation
 
