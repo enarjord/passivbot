@@ -2,48 +2,41 @@ import argparse
 import asyncio
 import logging
 
+from backtest import prepare_hlcvs_mss
 from cli_utils import get_cli_prog
 from config import load_input_config, prepare_config
 from config.access import require_config_value, require_live_value
 from config_utils import comma_separated_values, update_config_with_args
-from hlcv_preparation import HLCVManager
+from pure_funcs import str2bool
 from utils import format_approved_ignored_coins
 
 
 async def warm_ohlcv_caches(config: dict, *, force_refetch_gaps: bool = False) -> None:
     exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, exchanges)
-
-    managers = {}
-    try:
-        for exchange in exchanges:
-            managers[exchange] = HLCVManager(
-                exchange,
-                require_config_value(config, "backtest.start_date"),
-                require_config_value(config, "backtest.end_date"),
-                gap_tolerance_ohlcvs_minutes=require_config_value(
-                    config, "backtest.gap_tolerance_ohlcvs_minutes"
-                ),
-                cm_debug_level=int(config.get("backtest", {}).get("cm_debug_level", 0) or 0),
-                cm_progress_log_interval_seconds=float(
-                    config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
-                ),
-                force_refetch_gaps=force_refetch_gaps,
-                ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
-            )
-        logging.info("loading markets for %s", exchanges)
-        await asyncio.gather(*[managers[exchange].load_markets() for exchange in managers])
-
-        approved = require_live_value(config, "approved_coins")
-        coins = sorted({coin for side_coins in approved.values() for coin in side_coins})
-        for coin in coins:
-            tasks = [asyncio.create_task(managers[exchange].get_ohlcvs(coin)) for exchange in managers]
-            await asyncio.gather(*tasks)
-    finally:
-        for manager in managers.values():
-            await manager.aclose()
-            if manager.cc:
-                await manager.cc.close()
+    config.setdefault("backtest", {})
+    config["backtest"]["cache_dir"] = {}
+    config["backtest"]["coins"] = {}
+    if len(exchanges) > 1:
+        exchange = "combined"
+        coins, _hlcvs, _mss, _results_path, cache_dir, _btc, _timestamps = await prepare_hlcvs_mss(
+            config,
+            exchange,
+            force_refetch_gaps=force_refetch_gaps,
+        )
+        config["backtest"]["coins"][exchange] = coins
+        config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        logging.info("download materialized %s HLCV dataset at %s", exchange, cache_dir)
+        return
+    for exchange in exchanges:
+        coins, _hlcvs, _mss, _results_path, cache_dir, _btc, _timestamps = await prepare_hlcvs_mss(
+            config,
+            exchange,
+            force_refetch_gaps=force_refetch_gaps,
+        )
+        config["backtest"]["coins"][exchange] = coins
+        config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        logging.info("download materialized %s HLCV dataset at %s", exchange, cache_dir)
 
 
 async def main() -> None:
@@ -111,6 +104,14 @@ async def main() -> None:
         metavar="DATE",
         help='Backtest end date. Use "-ed now" for the latest available candles.',
     )
+    parser.add_argument(
+        "--hlcvs-cache-permissive",
+        dest="backtest.hlcvs_cache_permissive",
+        type=str2bool,
+        default=None,
+        metavar="Y/N",
+        help="Allow legacy final HLCV caches without manifests to load with warning-only compatibility behavior.",
+    )
     args = parser.parse_args()
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(
@@ -123,6 +124,7 @@ async def main() -> None:
             "backtest.exchanges",
             "backtest.start_date",
             "backtest.end_date",
+            "backtest.hlcvs_cache_permissive",
         },
     )
     config = prepare_config(

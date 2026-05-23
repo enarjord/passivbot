@@ -1018,6 +1018,43 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Backtest candle interval in minutes.",
     },
+    "backtest.hlcvs_cache_permissive": {
+        "visible": ["--hlcvs-cache-permissive"],
+        "hidden": [
+            "--backtest.hlcvs_cache_permissive",
+            "--backtest_hlcvs_cache_permissive",
+        ],
+        "type": str2bool,
+        "metavar": "Y/N",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "Allow legacy HLCV final caches without manifests to load with warning-only compatibility behavior.",
+    },
+    "backtest.hlcvs_data_dir": {
+        "visible": ["--hlcvs-data-dir"],
+        "hidden": ["--backtest.hlcvs_data_dir", "--backtest_hlcvs_data_dir"],
+        "type": str,
+        "metavar": "PATH",
+        "commands": {"backtest"},
+        "group": {"backtest": "Backtest Runtime"},
+        "help": "Use a specific final HLCV dataset directory instead of resolving by config hash.",
+    },
+    "backtest.hlcvs_data_override_mode": {
+        "visible": ["--hlcvs-data-override-mode"],
+        "hidden": [
+            "--backtest.hlcvs_data_override_mode",
+            "--backtest_hlcvs_data_override_mode",
+        ],
+        "type": str,
+        "metavar": "MODE",
+        "commands": {"backtest"},
+        "group": {"backtest": "Backtest Runtime"},
+        "choices": ("intersection", "dataset"),
+        "help": "How --hlcvs-data-dir chooses coins/range: intersection or dataset.",
+    },
     "backtest.starting_balance": {
         "visible": ["--starting-balance", "-sb"],
         "hidden": ["--backtest.starting_balance", "--backtest_starting_balance"],

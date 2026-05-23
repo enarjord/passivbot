@@ -326,7 +326,7 @@ async def test_resolve_v2_store_range_ignores_persistent_gap_after_local_repair(
 
 
 @pytest.mark.asyncio
-async def test_resolve_v2_store_range_blocks_unrepaired_persistent_gap(monkeypatch, tmp_path):
+async def test_resolve_v2_store_range_retries_unrepaired_persistent_gap(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
@@ -352,10 +352,13 @@ async def test_resolve_v2_store_range_blocks_unrepaired_persistent_gap(monkeypat
         persistent=True,
     )
 
-    async def fail_remote_fetch(*args, **kwargs):
-        raise AssertionError("persistent gap should block remote fetch")
+    calls = []
 
-    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", fail_remote_fetch)
+    async def remote_fetch_miss(*args, **kwargs):
+        calls.append((kwargs["start_ts"], kwargs["end_ts"]))
+        return False
+
+    monkeypatch.setattr("hlcv_preparation._fetch_coin_range_into_v2_store", remote_fetch_miss)
 
     rng = await _resolve_v2_store_range(
         om=object(),
@@ -373,6 +376,7 @@ async def test_resolve_v2_store_range_blocks_unrepaired_persistent_gap(monkeypat
     )
 
     assert rng is None
+    assert calls == [(int(timestamps[0]), int(timestamps[-1]))]
 
 
 @pytest.mark.asyncio
@@ -484,6 +488,7 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
+            "hlcvs_cache_permissive": True,
         },
         "live": {
             "approved_coins": {"long": ["ETH"], "short": []},
@@ -752,6 +757,14 @@ async def test_try_prepare_hlcvs_v2_local_persists_persistent_cm_gap_after_empty
                 "contractSize": 1.0,
                 "limits": {"cost": {"min": 0.01}, "amount": {"min": 0.001}},
                 "precision": {"price": 0.1, "amount": 0.001},
+            },
+            "BTC/USDT:USDT": {
+                "base": "BTC",
+                "maker": 0.0002,
+                "taker": 0.00055,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 0.01}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.1, "amount": 0.001},
             }
         }
 
@@ -813,12 +826,78 @@ async def test_try_prepare_hlcvs_v2_local_persists_persistent_cm_gap_after_empty
     assert len(attempts) == 1
     assert attempts[0].outcome == "empty"
 
-    async def fail_fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
-        raise AssertionError("persistent v2 gap should block a second remote fetch attempt")
+    async def repaired_fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+        close = 50_000.0 if coin == "BTC" else 100.0
+        return pd.DataFrame(
+            {
+                "timestamp": ts,
+                "open": np.array([close]),
+                "high": np.array([close + 1.0]),
+                "low": np.array([close - 1.0]),
+                "close": np.array([close]),
+                "volume": np.array([10.0]),
+            }
+        )
 
     monkeypatch.setattr(
         "hlcv_preparation.HLCVManager.fetch_ohlcvs_for_v2_store",
-        fail_fetch_ohlcvs_for_v2_store,
+        repaired_fetch_ohlcvs_for_v2_store,
     )
     second = await try_prepare_hlcvs_v2_local(config, "binance")
-    assert second is None
+    assert second is not None
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    repaired = np.array([[201.0, 199.0, 200.0, 20.0], [202.0, 200.0, 201.0, 21.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", ts, initial)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(ts[0]), int(ts[-1]))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = 999.0
+    body.flush()
+    del body
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "open": repaired[:, 2],
+                    "high": repaired[:, 0],
+                    "low": repaired[:, 1],
+                    "close": repaired[:, 2],
+                    "volume": repaired[:, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(ts[0]),
+        end_ts=int(ts[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert rng is not None
+    np.testing.assert_allclose(rng.values, repaired)
+    gaps = catalog.get_gaps("binance", "1m", "ETH/USDT:USDT", int(ts[0]), int(ts[-1]))
+    assert any(gap.reason == "local_corrupt_chunk" for gap in gaps)

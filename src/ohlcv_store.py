@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -181,6 +182,21 @@ class OhlcvStore:
             valid.flush()
             del body
             del valid
+            checksum = self._compute_chunk_checksum(paths)
+            self.catalog.register_chunk(
+                exchange=exchange,
+                timeframe=timeframe,
+                symbol=symbol,
+                year=year,
+                month=month,
+                body_path=str(paths.body_path.resolve()),
+                valid_path=str(paths.valid_path.resolve()),
+                start_ts=month_start_ts(year, month),
+                end_ts=month_end_ts(year, month, timeframe),
+                rows=rows_in_month(year, month, timeframe),
+                status=status,
+                checksum=checksum,
+            )
 
         self.catalog.upsert_symbol_bounds(exchange, timeframe, symbol, int(ts_arr.min()), int(ts_arr.max()))
 
@@ -235,6 +251,7 @@ class OhlcvStore:
         overlap_end = min(int(chunk.end_ts), int(end_ts))
         if overlap_end < overlap_start:
             return
+        self.verify_chunk_checksum(chunk)
         year = int(chunk.year)
         month = int(chunk.month)
         src_start = month_offset(overlap_start, year, month, timeframe)
@@ -249,3 +266,32 @@ class OhlcvStore:
         out_valid[dest_start:dest_end] = valid[src_start:src_end]
         del body
         del valid
+
+    def _compute_chunk_checksum(self, paths: MonthChunkPaths) -> str:
+        hasher = hashlib.sha256()
+        body = np.load(paths.body_path, mmap_mode="r")
+        valid = np.load(paths.valid_path, mmap_mode="r")
+        try:
+            body_arr = np.ascontiguousarray(body)
+            valid_arr = np.ascontiguousarray(valid)
+            hasher.update(str(body_arr.dtype).encode("utf-8"))
+            hasher.update(str(body_arr.shape).encode("utf-8"))
+            hasher.update(body_arr.tobytes(order="C"))
+            hasher.update(str(valid_arr.dtype).encode("utf-8"))
+            hasher.update(str(valid_arr.shape).encode("utf-8"))
+            hasher.update(valid_arr.tobytes(order="C"))
+        finally:
+            del body
+            del valid
+        return hasher.hexdigest()
+
+    def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
+        if not chunk.checksum:
+            return
+        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        actual = self._compute_chunk_checksum(paths)
+        if actual != chunk.checksum:
+            raise ValueError(
+                f"OHLCV chunk checksum mismatch for {chunk.exchange} {chunk.symbol} "
+                f"{chunk.year:04d}-{chunk.month:02d}: expected {chunk.checksum} got {actual}"
+            )

@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Sequence
 
 from config.access import get_optional_config_value
+from hlcvs_manifest import manifest_has_required_schema
 
 HLCVS_CACHE_DIR_SEP = "__"
 
@@ -36,6 +37,12 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
     hlcvs_file = None
     timestamps_file = None
     btc_usd_prices_file = None
+    manifest_file = None
+    manifest_schema_version = None
+    materialization_schema_version = None
+    content_hashes = {}
+    side_membership = None
+    manifest_missing = None
     coins_order = list(coins_from_config)
 
     if cache_dir and cache_dir.exists():
@@ -51,6 +58,26 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         btc_usd_prices_file = _resolve_cache_artifact_path(
             cache_dir, ("btc_usd_prices.npy.gz", "btc_usd_prices.npy")
         )
+        manifest_file = _resolve_cache_artifact_path(cache_dir, ("manifest.json",))
+        manifest_missing = manifest_file is None
+        if manifest_file:
+            with open(manifest_file) as f:
+                manifest = json.load(f)
+            if not isinstance(manifest, dict):
+                raise TypeError(f"cache manifest must contain an object, got {type(manifest)}")
+            manifest_schema_version = manifest.get("schema_version")
+            materialization_schema_version = manifest.get("materialization_schema_version")
+            if manifest_has_required_schema(manifest):
+                files = manifest.get("files", {})
+                if isinstance(files, dict):
+                    content_hashes = {
+                        name: entry.get("sha256")
+                        for name, entry in files.items()
+                        if isinstance(entry, dict) and entry.get("sha256") is not None
+                    }
+                effective = manifest.get("effective", {})
+                if isinstance(effective, dict):
+                    side_membership = effective.get("side_membership")
         if coins_file:
             with open(coins_file) as f:
                 loaded_coins = json.load(f)
@@ -62,6 +89,13 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
 
     return {
         "exchange": exchange,
+        "dataset_override": bool(get_optional_config_value(config, "backtest.hlcvs_data_dir")),
+        "dataset_override_mode": get_optional_config_value(
+            config, "backtest.hlcvs_data_override_mode"
+        ),
+        "dataset_override_meta": get_optional_config_value(
+            config, "_hlcvs_dataset_override_meta", {}
+        ),
         "hlcv_cache_dir": cache_dir_str,
         "cache_hash": _extract_cache_hash_from_dir(cache_dir),
         "cache_dir_label": cache_dir.name if cache_dir else None,
@@ -71,6 +105,15 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         "coins_file": coins_file,
         "market_specific_settings_file": market_specific_settings_file,
         "cache_meta_file": cache_meta_file,
+        "manifest_file": manifest_file,
+        "manifest_missing": manifest_missing,
+        "manifest_schema_version": manifest_schema_version,
+        "materialization_schema_version": materialization_schema_version,
+        "content_hashes": content_hashes,
+        "hlcvs_cache_permissive": get_optional_config_value(
+            config, "backtest.hlcvs_cache_permissive", False
+        ),
+        "side_membership": side_membership,
         "coins": coins_order,
         "coin_index": {coin: idx for idx, coin in enumerate(coins_order)},
         "requested_start_date": get_optional_config_value(config, "backtest.start_date"),
