@@ -1735,15 +1735,15 @@ async def _read_v2_range_repairing_corrupt_chunk(
         if not corrupt_chunks:
             raise
         logging.warning(
-            "[%s] corrupt v2 chunk(s) for %s; invalidating %d chunk(s) before targeted repair: %s",
+            "[%s] corrupt v2 chunk(s) for %s; invalidating %d chunk(s) before full-chunk repair: %s",
             exchange,
             coin,
             len(corrupt_chunks),
             exc,
         )
         for chunk, chunk_exc in corrupt_chunks:
-            repair_start_ts = max(int(start_ts), int(chunk.start_ts))
-            repair_end_ts = min(int(end_ts), int(chunk.end_ts))
+            repair_start_ts = int(chunk.start_ts)
+            repair_end_ts = int(chunk.end_ts)
             catalog.mark_gap(
                 exchange=exchange,
                 timeframe="1m",
@@ -1764,6 +1764,7 @@ async def _read_v2_range_repairing_corrupt_chunk(
                 symbol=symbol,
                 start_ts=repair_start_ts,
                 end_ts=repair_end_ts,
+                allow_unbounded_edge_gaps=True,
             )
             if not repaired:
                 return None
@@ -1921,6 +1922,7 @@ async def _fetch_coin_range_into_v2_store(
     symbol: str,
     start_ts: int,
     end_ts: int,
+    allow_unbounded_edge_gaps: bool = False,
 ) -> bool:
     interval_ms = 60_000
     if hasattr(om, "update_timestamp_range"):
@@ -2052,7 +2054,10 @@ async def _fetch_coin_range_into_v2_store(
         return False
     leading_missing_bars = int((int(ts[0]) - request_start_ts) // interval_ms)
     trailing_missing_bars = int((request_end_ts - int(ts[-1])) // interval_ms)
-    if max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars:
+    if (
+        not allow_unbounded_edge_gaps
+        and max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars
+    ):
         catalog.record_fetch_attempt(
             exchange=exchange,
             timeframe="1m",

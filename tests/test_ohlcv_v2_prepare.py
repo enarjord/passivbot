@@ -1007,7 +1007,7 @@ async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
 
         async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
             assert int(start_ts) == int(start)
-            assert int(end_ts) == int(ts[-1])
+            assert int(end_ts) == int(month_end)
             return pd.DataFrame(
                 {
                     "timestamp": repair_ts,
@@ -1038,3 +1038,69 @@ async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
     np.testing.assert_allclose(rng.values, repaired)
     gaps = catalog.get_gaps("binance", "1m", "ETH/USDT:USDT", int(start), int(month_end))
     assert any(gap.reason == "local_corrupt_chunk" for gap in gaps)
+
+
+@pytest.mark.asyncio
+async def test_corrupt_chunk_repair_rebuilds_full_chunk_not_only_requested_slice(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    month_end = month_end_ts(2026, 4, "1m")
+    requested_ts = np.array([start], dtype=np.int64)
+    preserved_ts = np.array([start + 60_000], dtype=np.int64)
+    seed_ts = np.array([requested_ts[0], preserved_ts[0]], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    repair = np.array([[3.0, 3.0, 3.0, 3.0], [4.0, 4.0, 4.0, 4.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", seed_ts, initial)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(start), int(start))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = 999.0
+    body.flush()
+    del body
+    repair_calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            repair_calls.append((int(start_ts), int(end_ts)))
+            return pd.DataFrame(
+                {
+                    "timestamp": seed_ts,
+                    "open": repair[:, 2],
+                    "high": repair[:, 0],
+                    "low": repair[:, 1],
+                    "close": repair[:, 2],
+                    "volume": repair[:, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(requested_ts[0]),
+        end_ts=int(requested_ts[0]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert repair_calls == [(int(start), int(month_end))]
+    assert rng is not None
+    np.testing.assert_array_equal(rng.valid, np.array([True]))
+    np.testing.assert_allclose(rng.values, repair[:1])
+    preserved = store.read_range(
+        "binance", "1m", "ETH/USDT:USDT", int(preserved_ts[0]), int(preserved_ts[0])
+    )
+    np.testing.assert_array_equal(preserved.valid, np.array([True]))
+    np.testing.assert_allclose(preserved.values, repair[1:])
