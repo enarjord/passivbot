@@ -741,6 +741,176 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "HYPE/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    first = start + 630 * 60_000
+    end = first + 9 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(10)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 111.0, dtype=np.float32),
+            np.arange(99.0, 109.0, dtype=np.float32),
+            np.arange(100.0, 110.0, dtype=np.float32),
+            np.arange(10.0, 20.0, dtype=np.float32),
+        ]
+    )
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(start) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(start)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            idx = (timestamps >= int(start_ts)) & (timestamps <= int(end_ts))
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps[idx],
+                    "high": values[idx, 0],
+                    "low": values[idx, 1],
+                    "close": values[idx, 2],
+                    "volume": values[idx, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="HYPE",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is not None
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    assert rng.valid.all()
+    attempts = catalog.list_fetch_attempts("binance", "1m", symbol, int(start), int(end))
+    assert attempts[-1].outcome == "pre_inception_boundary"
+    assert "edge_missing_bars=630,0" in attempts[-1].note
+    prefix_gaps = catalog.get_persistent_gaps("binance", "1m", symbol, int(start), int(first - 60_000))
+    assert len(prefix_gaps) == 1
+    assert prefix_gaps[0].reason == "pre_inception"
+    assert prefix_gaps[0].note == "discovered_first_candle_during_stale_repair"
+    repaired_gaps = catalog.get_persistent_gaps("binance", "1m", symbol, int(first), int(end))
+    assert repaired_gaps == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_keeps_internal_gap_failure_during_boundary_repair(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "HYPE/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    first = start + 630 * 60_000
+    end = first + 4 * 60_000
+    returned_ts = np.array([first, first + 2 * 60_000, first + 3 * 60_000, end], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 105.0, dtype=np.float32),
+            np.arange(99.0, 103.0, dtype=np.float32),
+            np.arange(100.0, 104.0, dtype=np.float32),
+            np.arange(10.0, 14.0, dtype=np.float32),
+        ]
+    )
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(start) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(start)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": returned_ts,
+                    "high": values[:, 0],
+                    "low": values[:, 1],
+                    "close": values[:, 2],
+                    "volume": values[:, 3],
+                }
+            )
+
+    with pytest.raises(ValueError) as exc_info:
+        await _resolve_v2_store_range(
+            om=FakeManager(),
+            catalog=catalog,
+            store=store,
+            legacy_root=None,
+            exchange="binance",
+            coin="HYPE",
+            symbol=symbol,
+            start_ts=int(start),
+            end_ts=int(end),
+            allow_remote_fetch=True,
+            local_hit_log_label="v2 local hit",
+            remote_fetch_log_label="v2 fetching missing range",
+        )
+
+    assert "strict v2 HLCV repair failed for stale pre-inception gap" in str(exc_info.value)
+    attempts = catalog.list_fetch_attempts("binance", "1m", symbol, int(start), int(end))
+    assert attempts[-1].outcome == "gaps"
+    assert "max_missing_bars=1" in attempts[-1].note
+
+
+@pytest.mark.asyncio
 async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     legacy_root = tmp_path / "caches" / "ohlcv"
@@ -914,6 +1084,7 @@ async def test_prepare_hlcvs_mss_skips_inner_v2_after_outer_v2_miss(monkeypatch,
             "start_date": "2026-04-01",
             "end_date": "2026-04-01",
             "gap_tolerance_ohlcvs_minutes": 120.0,
+            "hlcvs_cache_permissive": True,
         },
         "live": {
             "approved_coins": {"long": ["ETH"], "short": []},
@@ -961,6 +1132,168 @@ async def test_prepare_hlcvs_mss_skips_inner_v2_after_outer_v2_miss(monkeypatch,
     np.testing.assert_array_equal(timestamps, prepared[1])
     assert mss["ETH"]["first_valid_index"] == 0
     assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_strict_reraises_outer_v2_exception(monkeypatch, tmp_path):
+    import rust_utils
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+            "hlcvs_cache_permissive": False,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+
+    async def fail_try_prepare(*args, **kwargs):
+        raise RuntimeError("v2 failed with useful details")
+
+    async def fail_prepare_hlcvs(*args, **kwargs):
+        raise AssertionError("strict mode must not call legacy prepare_hlcvs")
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fail_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fail_prepare_hlcvs)
+
+    with pytest.raises(ValueError) as exc_info:
+        await backtest.prepare_hlcvs_mss(config, "binance")
+
+    message = str(exc_info.value)
+    assert "deterministic HLCV materialization failed before legacy fallback was allowed" in message
+    assert "v2 failed with useful details" in message
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_permissive_falls_back_after_outer_v2_exception(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    prepared = (
+        {
+            "ETH": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "binance"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64),
+        np.array([50_000.0], dtype=np.float64),
+    )
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+            "hlcvs_cache_permissive": True,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    calls = {"legacy_prepare": 0}
+
+    async def fail_try_prepare(*args, **kwargs):
+        raise RuntimeError("v2 failed")
+
+    async def fake_prepare_hlcvs(*args, **kwargs):
+        calls["legacy_prepare"] += 1
+        assert kwargs.get("skip_v2_local") is True
+        return prepared
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fail_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fake_prepare_hlcvs)
+    monkeypatch.setattr(backtest, "save_coins_hlcvs_to_cache", lambda *args, **kwargs: None)
+
+    coins, hlcvs, mss, _results_path, cache_dir, btc_usd_prices, timestamps = (
+        await backtest.prepare_hlcvs_mss(config, "binance")
+    )
+
+    assert calls == {"legacy_prepare": 1}
+    assert coins == ["ETH"]
+    assert cache_dir is None
+    np.testing.assert_allclose(hlcvs, prepared[2])
+    np.testing.assert_allclose(btc_usd_prices, prepared[3])
+    np.testing.assert_array_equal(timestamps, prepared[1])
+    assert mss["ETH"]["first_valid_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_path):
+    import rust_utils
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+            "hlcvs_cache_permissive": False,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+
+    async def miss_try_prepare(*args, **kwargs):
+        return None
+
+    async def fail_prepare_hlcvs(*args, **kwargs):
+        raise AssertionError("strict mode must not call legacy prepare_hlcvs")
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", miss_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fail_prepare_hlcvs)
+
+    with pytest.raises(ValueError) as exc_info:
+        await backtest.prepare_hlcvs_mss(config, "binance")
+
+    assert "deterministic HLCV materialization could not build the requested range" in str(exc_info.value)
 
 
 @pytest.mark.asyncio

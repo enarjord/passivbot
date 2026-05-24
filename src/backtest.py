@@ -1604,12 +1604,20 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     local_v2 = None
+    allow_legacy_fallback = bool(
+        config.get("backtest", {}).get("hlcvs_cache_permissive", False)
+    )
     if exchange != "combined":
         try:
             local_v2 = await try_prepare_hlcvs_v2_local(
                 config, exchange, force_refetch_gaps=force_refetch_gaps
             )
         except Exception as e:
+            if not allow_legacy_fallback:
+                raise ValueError(
+                    f"{exchange} deterministic HLCV materialization failed before legacy "
+                    f"fallback was allowed: {e}"
+                ) from e
             logging.info(
                 f"Unable to prepare hlcvs from local v2 store: {e}. Falling back."
             )
@@ -1627,6 +1635,12 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             force_refetch_gaps=force_refetch_gaps,
         )
     elif local_v2 is None:
+        if not allow_legacy_fallback:
+            raise ValueError(
+                f"{exchange} deterministic HLCV materialization could not build the requested "
+                "range in the v2 store; set backtest.hlcvs_cache_permissive=true only for "
+                "legacy CandlestickManager fallback compatibility"
+            )
         mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
             config,
             exchange,

@@ -339,6 +339,7 @@ class OhlcvCatalog:
         end_ts = int(end_ts)
         if end_ts < start_ts:
             return 0
+        interval_ms = 60_000 if str(timeframe) == "1m" else 1
         gaps = self.get_gaps(exchange, timeframe, symbol, start_ts, end_ts)
         changed = 0
         with self._connect() as conn:
@@ -360,9 +361,9 @@ class OhlcvCatalog:
                 changed += 1
                 remainders = []
                 if gap_start < start_ts:
-                    remainders.append((gap_start, start_ts - 1))
+                    remainders.append((gap_start, start_ts - interval_ms))
                 if gap_end > end_ts:
-                    remainders.append((end_ts + 1, gap_end))
+                    remainders.append((end_ts + interval_ms, gap_end))
                 for rem_start, rem_end in remainders:
                     if rem_start > rem_end:
                         continue
