@@ -324,6 +324,71 @@ class OhlcvCatalog:
             if gap.persistent
         ]
 
+    def clear_gap_range(
+        self,
+        *,
+        exchange: str,
+        timeframe: str,
+        symbol: str,
+        start_ts: int,
+        end_ts: int,
+        reason: str | None = None,
+    ) -> int:
+        """Remove an interval from matching gap records, preserving outside ranges."""
+        start_ts = int(start_ts)
+        end_ts = int(end_ts)
+        if end_ts < start_ts:
+            return 0
+        gaps = self.get_gaps(exchange, timeframe, symbol, start_ts, end_ts)
+        changed = 0
+        with self._connect() as conn:
+            for gap in gaps:
+                if reason is not None and str(gap.reason) != str(reason):
+                    continue
+                gap_start = int(gap.start_ts)
+                gap_end = int(gap.end_ts)
+                if gap_end < start_ts or gap_start > end_ts:
+                    continue
+                conn.execute(
+                    """
+                    DELETE FROM gaps
+                    WHERE exchange = ? AND timeframe = ? AND symbol = ?
+                      AND start_ts = ? AND end_ts = ?
+                    """,
+                    (exchange, timeframe, symbol, gap_start, gap_end),
+                )
+                changed += 1
+                remainders = []
+                if gap_start < start_ts:
+                    remainders.append((gap_start, start_ts - 1))
+                if gap_end > end_ts:
+                    remainders.append((end_ts + 1, gap_end))
+                for rem_start, rem_end in remainders:
+                    if rem_start > rem_end:
+                        continue
+                    conn.execute(
+                        """
+                        INSERT INTO gaps(
+                            exchange, timeframe, symbol, start_ts, end_ts, reason, persistent,
+                            retry_count, last_attempt_at, next_retry_at, note
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            gap.exchange,
+                            gap.timeframe,
+                            gap.symbol,
+                            int(rem_start),
+                            int(rem_end),
+                            gap.reason,
+                            int(bool(gap.persistent)),
+                            int(gap.retry_count),
+                            gap.last_attempt_at,
+                            gap.next_retry_at,
+                            gap.note,
+                        ),
+                    )
+        return changed
+
     def record_fetch_attempt(
         self,
         *,

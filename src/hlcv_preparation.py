@@ -925,6 +925,11 @@ async def prepare_hlcvs(
                 config, exchange, force_refetch_gaps=force_refetch_gaps
             )
         except Exception as e:
+            if not allow_legacy_fallback:
+                raise ValueError(
+                    f"{exchange} deterministic HLCV materialization failed before legacy "
+                    f"fallback was allowed: {e}"
+                ) from e
             logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
             local_v2 = None
         if local_v2 is not None:
@@ -1428,6 +1433,100 @@ async def _resolve_v2_store_range(
                     ts_to_date(int(partial_rng.timestamps[-1])),
                 )
                 return partial_rng
+            first_ts_evidence = await _collect_first_timestamp_evidence(
+                om=om, exchange=exchange, coin=coin, symbol=symbol
+            )
+            if allow_remote_fetch and _pre_inception_gaps_are_stale(
+                overlapping_persistent_gaps, first_ts_evidence
+            ):
+                logging.info(
+                    "[%s] retrying stale pre-inception v2 gap(s) for %s (%s -> %s); evidence=%s",
+                    exchange,
+                    coin,
+                    ts_to_date(start_ts),
+                    ts_to_date(end_ts),
+                    _format_first_timestamp_evidence(first_ts_evidence),
+                )
+                fetched_any = await _fetch_invalid_windows_into_v2_store(
+                    om=om,
+                    catalog=catalog,
+                    store=store,
+                    exchange=exchange,
+                    coin=coin,
+                    symbol=symbol,
+                    timestamps=rng.timestamps,
+                    valid=rng.valid,
+                )
+                if fetched_any:
+                    for window_start_ts, window_end_ts in invalid_windows:
+                        catalog.clear_gap_range(
+                            exchange=exchange,
+                            timeframe="1m",
+                            symbol=symbol,
+                            start_ts=window_start_ts,
+                            end_ts=window_end_ts,
+                            reason="pre_inception",
+                        )
+                    rng = await _read_v2_range_repairing_corrupt_chunk(
+                        om=om,
+                        catalog=catalog,
+                        store=store,
+                        exchange=exchange,
+                        coin=coin,
+                        symbol=symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        allow_remote_fetch=allow_remote_fetch,
+                    )
+                    if rng is None:
+                        return None
+                    if rng.valid.all():
+                        logging.info(
+                            "[%s] %s for %s after stale pre-inception repair (%s -> %s)",
+                            exchange,
+                            local_hit_log_label,
+                            coin,
+                            ts_to_date(start_ts),
+                            ts_to_date(end_ts),
+                        )
+                        return rng
+                    invalid_windows = (
+                        _iter_invalid_windows(rng.timestamps, rng.valid)
+                        if rng.valid.any()
+                        else [(int(start_ts), int(end_ts))]
+                    )
+                    remaining_persistent_gaps = _persistent_gaps_overlapping_windows(
+                        catalog.get_persistent_gaps(
+                            exchange, "1m", symbol, int(start_ts), int(end_ts)
+                        ),
+                        invalid_windows,
+                    )
+                    if _range_has_tolerable_internal_sparse_gaps(
+                        rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+                    ) and not remaining_persistent_gaps:
+                        logging.info(
+                            "[%s] %s sparse-valid for %s after stale pre-inception repair (%s -> %s)",
+                            exchange,
+                            local_hit_log_label,
+                            coin,
+                            ts_to_date(start_ts),
+                            ts_to_date(end_ts),
+                        )
+                        return rng
+                    overlapping_persistent_gaps = remaining_persistent_gaps
+                raise ValueError(
+                    _format_stale_pre_inception_failure(
+                        catalog=catalog,
+                        exchange=exchange,
+                        coin=coin,
+                        symbol=symbol,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        invalid_windows=invalid_windows,
+                        gaps=overlapping_persistent_gaps,
+                        first_ts_evidence=first_ts_evidence,
+                    )
+                )
             return None
         if allow_remote_fetch:
             logging.info(
@@ -1852,6 +1951,161 @@ def _persistent_gaps_overlapping_windows(gaps, windows: list[tuple[int, int]]) -
     return overlaps
 
 
+async def _maybe_await(value):
+    if hasattr(value, "__await__"):
+        return await value
+    return value
+
+
+def _coerce_positive_ts(value) -> int | None:
+    if value is None:
+        return None
+    try:
+        ts = int(float(value))
+    except (TypeError, ValueError):
+        return None
+    return ts if ts > 0 else None
+
+
+async def _collect_first_timestamp_evidence(
+    *,
+    om: HLCVManager,
+    exchange: str,
+    coin: str,
+    symbol: str,
+) -> dict[str, int]:
+    evidence: dict[str, int] = {}
+    loader = getattr(om, "load_first_timestamp", None)
+    if callable(loader):
+        try:
+            ts = _coerce_positive_ts(await _maybe_await(loader(coin)))
+            if ts is not None:
+                evidence["local_first_timestamp"] = ts
+        except Exception as exc:
+            logging.debug("[%s] failed loading local first timestamp for %s: %s", exchange, coin, exc)
+
+    cm = getattr(om, "cm", None)
+    cm_loader = getattr(cm, "_get_authoritative_start_ts", None)
+    if callable(cm_loader):
+        try:
+            ts = _coerce_positive_ts(await _maybe_await(cm_loader(symbol)))
+            if ts is not None:
+                evidence["cm_authoritative_start_ts"] = ts
+        except Exception as exc:
+            logging.debug(
+                "[%s] failed loading CandlestickManager authoritative start for %s: %s",
+                exchange,
+                symbol,
+                exc,
+            )
+
+    for key, exchange_arg in (
+        ("unified_exchange_first_timestamp", to_ccxt_exchange_id(exchange)),
+        ("unified_global_first_timestamp", None),
+    ):
+        try:
+            first_timestamps = await get_first_timestamps_unified([coin], exchange=exchange_arg)
+            ts = _coerce_positive_ts(first_timestamps.get(coin) if first_timestamps else None)
+            if ts is not None:
+                evidence[key] = ts
+        except Exception as exc:
+            logging.debug(
+                "[%s] failed loading %s for %s: %s",
+                exchange,
+                key,
+                coin,
+                exc,
+            )
+    return evidence
+
+
+def _pre_inception_gaps_are_stale(gaps, first_ts_evidence: dict[str, int]) -> bool:
+    authoritative_keys = (
+        "local_first_timestamp",
+        "cm_authoritative_start_ts",
+        "unified_exchange_first_timestamp",
+    )
+    authoritative_ts = [
+        int(first_ts_evidence[key])
+        for key in authoritative_keys
+        if key in first_ts_evidence
+    ]
+    if not authoritative_ts:
+        return False
+    earliest_authoritative_ts = min(authoritative_ts)
+    return any(earliest_authoritative_ts <= int(gap.end_ts) for gap in gaps)
+
+
+def _format_first_timestamp_evidence(first_ts_evidence: dict[str, int]) -> str:
+    if not first_ts_evidence:
+        return "{}"
+    parts = [
+        f"{key}={ts_to_date(int(value))}"
+        for key, value in sorted(first_ts_evidence.items())
+    ]
+    return "{" + ", ".join(parts) + "}"
+
+
+def _format_gap_ranges(gaps) -> str:
+    if not gaps:
+        return "[]"
+    return "[" + ", ".join(
+        (
+            f"{gap.reason}:{ts_to_date(int(gap.start_ts))}"
+            f"->{ts_to_date(int(gap.end_ts))}"
+            f":persistent={bool(gap.persistent)}"
+            f":retry_count={int(gap.retry_count or 0)}"
+        )
+        for gap in gaps
+    ) + "]"
+
+
+def _format_windows(windows: list[tuple[int, int]]) -> str:
+    if not windows:
+        return "[]"
+    return "[" + ", ".join(
+        f"{ts_to_date(int(start_ts))}->{ts_to_date(int(end_ts))}"
+        for start_ts, end_ts in windows
+    ) + "]"
+
+
+def _format_fetch_attempts(attempts) -> str:
+    if not attempts:
+        return "[]"
+    return "[" + ", ".join(
+        (
+            f"{attempt.outcome}:{ts_to_date(int(attempt.start_ts))}"
+            f"->{ts_to_date(int(attempt.end_ts))}"
+            f":note={attempt.note or ''}"
+        )
+        for attempt in attempts[-5:]
+    ) + "]"
+
+
+def _format_stale_pre_inception_failure(
+    *,
+    catalog: OhlcvCatalog,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    start_ts: int,
+    end_ts: int,
+    invalid_windows: list[tuple[int, int]],
+    gaps,
+    first_ts_evidence: dict[str, int],
+) -> str:
+    attempts = catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)
+    return (
+        f"{exchange} strict v2 HLCV repair failed for stale pre-inception gap "
+        f"coin={coin} symbol={symbol} "
+        f"requested={ts_to_date(int(start_ts))}->{ts_to_date(int(end_ts))} "
+        f"invalid_windows={_format_windows(invalid_windows)} "
+        f"persistent_gaps={_format_gap_ranges(gaps)} "
+        f"first_timestamp_evidence={_format_first_timestamp_evidence(first_ts_evidence)} "
+        f"recent_fetch_attempts={_format_fetch_attempts(attempts)}"
+    )
+
+
 def _import_legacy_invalid_windows(
     *,
     store: OhlcvStore,
@@ -1989,7 +2243,24 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(end_ts),
         )
         return False
-    ts = df["timestamp"].astype(np.int64, copy=False).to_numpy()
+    ts_raw = pd.to_numeric(df["timestamp"], errors="coerce").to_numpy()
+    if ts_raw.size == 0:
+        ts = np.array([], dtype=np.int64)
+    elif not np.all(np.isfinite(ts_raw)):
+        catalog.record_fetch_attempt(
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attempt=attempt,
+            outcome="gaps",
+            latency_ms=latency_ms,
+            note="invalid_timestamp_values",
+        )
+        return False
+    else:
+        ts = ts_raw.astype(np.int64, copy=False)
     if ts.size == 0:
         catalog.record_fetch_attempt(
             exchange=exchange,
@@ -2009,6 +2280,7 @@ async def _fetch_coin_range_into_v2_store(
         0, int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)))
     )
     if np.any(ts % interval_ms != 0):
+        unaligned_count = int(np.count_nonzero(ts % interval_ms != 0))
         catalog.record_fetch_attempt(
             exchange=exchange,
             timeframe="1m",
@@ -2018,9 +2290,48 @@ async def _fetch_coin_range_into_v2_store(
             attempt=attempt,
             outcome="gaps",
             latency_ms=latency_ms,
-            note="unaligned_timestamps",
+            note=f"unaligned_timestamps count={unaligned_count} first={ts[:10].tolist()} last={ts[-10:].tolist()}",
         )
         return False
+
+    raw_intervals = np.diff(ts) if ts.size > 1 else np.array([], dtype=np.int64)
+    raw_duplicate_count = int(pd.Series(ts).duplicated().sum()) if ts.size else 0
+    raw_descending_count = int(np.count_nonzero(raw_intervals < 0))
+    clipped_count = int(np.count_nonzero((ts < request_start_ts) | (ts > request_end_ts)))
+    if raw_duplicate_count or raw_descending_count or clipped_count:
+        df = df.copy()
+        df["timestamp"] = ts
+        df["_fetch_order"] = np.arange(len(df), dtype=np.int64)
+        df = df[(df["timestamp"] >= request_start_ts) & (df["timestamp"] <= request_end_ts)]
+        df = df.sort_values(["timestamp", "_fetch_order"], kind="mergesort")
+        df = df.drop_duplicates(subset=["timestamp"], keep="last")
+        df = df.drop(columns=["_fetch_order"]).reset_index(drop=True)
+        ts = df["timestamp"].astype(np.int64, copy=False).to_numpy()
+        if ts.size == 0:
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="empty",
+                latency_ms=latency_ms,
+                note=(
+                    "empty_after_timestamp_normalization "
+                    f"duplicates={raw_duplicate_count} descending={raw_descending_count} clipped={clipped_count}"
+                ),
+            )
+            return False
+        logging.info(
+            "[%s] normalized v2 fetch timestamps for %s: duplicates=%d descending=%d clipped=%d rows=%d",
+            exchange,
+            coin,
+            raw_duplicate_count,
+            raw_descending_count,
+            clipped_count,
+            len(ts),
+        )
     if ts[0] < request_start_ts or ts[-1] > request_end_ts:
         catalog.record_fetch_attempt(
             exchange=exchange,
@@ -2093,6 +2404,13 @@ async def _fetch_coin_range_into_v2_store(
     if ts.size > 1:
         intervals = np.diff(ts)
         if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
+            duplicate_count = int(np.count_nonzero(intervals == 0))
+            descending_count = int(np.count_nonzero(intervals < 0))
+            unaligned_step_count = int(np.count_nonzero(intervals % interval_ms != 0))
+            largest_steps = sorted(
+                (int(step) for step in intervals if step > interval_ms),
+                reverse=True,
+            )[:20]
             catalog.record_fetch_attempt(
                 exchange=exchange,
                 timeframe="1m",
@@ -2102,7 +2420,12 @@ async def _fetch_coin_range_into_v2_store(
                 attempt=attempt,
                 outcome="gaps",
                 latency_ms=latency_ms,
-                note="non_monotonic_or_unaligned_timestamps",
+                note=(
+                    "non_monotonic_or_unaligned_timestamps "
+                    f"duplicates={duplicate_count} descending={descending_count} "
+                    f"unaligned_steps={unaligned_step_count} "
+                    f"first={ts[:20].tolist()} last={ts[-20:].tolist()} largest_steps={largest_steps}"
+                ),
             )
             _sync_persistent_cm_gaps_to_v2_catalog(
                 catalog=catalog,
@@ -2171,7 +2494,11 @@ async def _fetch_coin_range_into_v2_store(
         attempt=attempt,
         outcome="sparse_ok" if sparse_missing_bars else "ok",
         latency_ms=latency_ms,
-        note=f"rows={len(ts)} missing_bars={sparse_missing_bars}",
+        note=(
+            f"rows={len(ts)} missing_bars={sparse_missing_bars} "
+            f"normalized_duplicates={raw_duplicate_count} "
+            f"normalized_descending={raw_descending_count} clipped_rows={clipped_count}"
+        ),
     )
     return True
 

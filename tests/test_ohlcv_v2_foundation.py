@@ -77,6 +77,34 @@ def test_store_detects_same_process_mutation_after_verified_read(tmp_path):
         store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
 
 
+def test_store_backfills_missing_chunk_checksum_on_read(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 4)
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    vals = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+    with catalog._connect() as conn:
+        conn.execute("UPDATE chunks SET checksum = NULL")
+
+    chunk_before = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+    assert chunk_before.checksum is None
+
+    out = store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
+    assert out.valid.all()
+    chunk_after = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+    assert chunk_after.checksum
+
+    body = np.load(chunk_after.body_path, mmap_mode="r+")
+    body[0, 0] = 999.0
+    body.flush()
+    del body
+
+    with pytest.raises(ValueError, match="checksum mismatch"):
+        store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
+
+
 def test_open_month_patch_extends_existing_chunk_and_symbol_bounds(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
