@@ -991,6 +991,121 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
 
 
 @pytest.mark.asyncio
+async def test_discovered_pre_inception_boundary_replaces_overlapping_stale_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "HYPE/USDT:USDT"
+    requested_start = month_start_ts(2026, 4)
+    stale_gap_start = requested_start - 30 * 24 * 60 * 60_000
+    first = requested_start + 630 * 60_000
+    end = first + 9 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(10)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 111.0, dtype=np.float32),
+            np.arange(99.0, 109.0, dtype=np.float32),
+            np.arange(100.0, 110.0, dtype=np.float32),
+            np.arange(10.0, 20.0, dtype=np.float32),
+        ]
+    )
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(stale_gap_start),
+        end_ts=int(first - 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(requested_start) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(requested_start)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            calls.append((int(start_ts), int(end_ts)))
+            idx = (timestamps >= int(start_ts)) & (timestamps <= int(end_ts))
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps[idx],
+                    "high": values[idx, 0],
+                    "low": values[idx, 1],
+                    "close": values[idx, 2],
+                    "volume": values[idx, 3],
+                }
+            )
+
+    first_rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="HYPE",
+        symbol=symbol,
+        start_ts=int(requested_start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert first_rng is not None
+    np.testing.assert_array_equal(first_rng.timestamps, timestamps)
+    assert len(calls) == 1
+    prefix_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(requested_start), int(first - 60_000)
+    )
+    assert len(prefix_gaps) == 1
+    assert prefix_gaps[0].start_ts == int(requested_start)
+    assert prefix_gaps[0].end_ts == int(first - 60_000)
+    assert prefix_gaps[0].note == "discovered_first_candle_during_stale_repair"
+    prior_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(stale_gap_start), int(requested_start - 60_000)
+    )
+    assert len(prior_gaps) == 1
+    assert prior_gaps[0].note == "mirrored_from_candlestick_manager"
+
+    second_rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="HYPE",
+        symbol=symbol,
+        start_ts=int(requested_start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert second_rng is not None
+    np.testing.assert_array_equal(second_rng.timestamps, timestamps)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_keeps_internal_gap_failure_during_boundary_repair(
     monkeypatch, tmp_path
 ):

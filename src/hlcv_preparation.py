@@ -1508,12 +1508,17 @@ async def _resolve_v2_store_range(
                     for result in fetch_results:
                         if not result.ok or result.first_ts is None or result.last_ts is None:
                             continue
+                        clear_start_ts = (
+                            start_ts
+                            if result.reason == "pre_inception_boundary"
+                            else int(result.first_ts)
+                        )
                         catalog.clear_gap_range(
                             exchange=exchange,
                             timeframe="1m",
                             symbol=symbol,
-                            start_ts=result.first_ts,
-                            end_ts=result.last_ts,
+                            start_ts=clear_start_ts,
+                            end_ts=int(result.last_ts),
                             reason="pre_inception",
                         )
                         if result.reason == "pre_inception_boundary":
