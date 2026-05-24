@@ -337,25 +337,10 @@ class OhlcvStore:
 
     def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
         if not chunk.checksum:
-            paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
-            checksum = self._compute_chunk_checksum(paths)
-            self.catalog.register_chunk(
-                exchange=chunk.exchange,
-                timeframe=chunk.timeframe,
-                symbol=chunk.symbol,
-                year=chunk.year,
-                month=chunk.month,
-                body_path=chunk.body_path,
-                valid_path=chunk.valid_path,
-                start_ts=chunk.start_ts,
-                end_ts=chunk.end_ts,
-                rows=chunk.rows,
-                status=chunk.status,
-                schema_version=chunk.schema_version,
-                checksum=checksum,
+            raise ValueError(
+                f"OHLCV chunk checksum missing for {chunk.exchange} {chunk.symbol} "
+                f"{chunk.year:04d}-{chunk.month:02d}; rebuild/refetch required"
             )
-            self._verified_checksums.add(self._checksum_cache_keys_for_paths(paths, checksum))
-            return
         paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
         cache_key = self._checksum_cache_keys_for_paths(paths, str(chunk.checksum))
         if cache_key in self._verified_checksums:

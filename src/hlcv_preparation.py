@@ -139,6 +139,38 @@ class CombinedCandidateSummary:
 
 
 @dataclass(frozen=True)
+class V2FetchResult:
+    ok: bool
+    reason: str
+    wrote_rows: int = 0
+    first_ts: Optional[int] = None
+    last_ts: Optional[int] = None
+    leading_missing_bars: int = 0
+    trailing_missing_bars: int = 0
+    max_internal_missing_bars: int = 0
+
+    def __bool__(self) -> bool:
+        return bool(self.ok)
+
+
+def _conflicting_duplicate_ohlcv_timestamps(df: pd.DataFrame) -> tuple[int, list[int]]:
+    duplicate_mask = df["timestamp"].duplicated(keep=False)
+    if not bool(duplicate_mask.any()):
+        return 0, []
+    value_cols = ["high", "low", "close", "volume"]
+    conflicts: list[int] = []
+    for timestamp, group in df.loc[duplicate_mask, ["timestamp", *value_cols]].groupby(
+        "timestamp", sort=True
+    ):
+        values = group[value_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float64)
+        if values.size == 0:
+            continue
+        if not np.all(values == values[0]):
+            conflicts.append(int(timestamp))
+    return len(conflicts), conflicts[:20]
+
+
+@dataclass(frozen=True)
 class CombinedExchangeCandidate:
     exchange: str
     df: pd.DataFrame
@@ -1433,6 +1465,20 @@ async def _resolve_v2_store_range(
                     ts_to_date(int(partial_rng.timestamps[-1])),
                 )
                 return partial_rng
+            partial_rng = (
+                _extract_single_valid_window(rng)
+                if _pre_inception_gaps_confirm_discovered_boundary(overlapping_persistent_gaps)
+                else None
+            )
+            if partial_rng is not None:
+                logging.info(
+                    "[%s] using discovered v2 pre-inception boundary for %s (%s -> %s)",
+                    exchange,
+                    coin,
+                    ts_to_date(int(partial_rng.timestamps[0])),
+                    ts_to_date(int(partial_rng.timestamps[-1])),
+                )
+                return partial_rng
             first_ts_evidence = await _collect_first_timestamp_evidence(
                 om=om, exchange=exchange, coin=coin, symbol=symbol
             )
@@ -1447,7 +1493,7 @@ async def _resolve_v2_store_range(
                     ts_to_date(end_ts),
                     _format_first_timestamp_evidence(first_ts_evidence),
                 )
-                fetched_any = await _fetch_invalid_windows_into_v2_store(
+                fetch_results = await _fetch_invalid_windows_into_v2_store_results(
                     om=om,
                     catalog=catalog,
                     store=store,
@@ -1456,17 +1502,32 @@ async def _resolve_v2_store_range(
                     symbol=symbol,
                     timestamps=rng.timestamps,
                     valid=rng.valid,
+                    allow_pre_inception_prefix=True,
                 )
-                if fetched_any:
-                    for window_start_ts, window_end_ts in invalid_windows:
+                if any(result.ok for result in fetch_results):
+                    for result in fetch_results:
+                        if not result.ok or result.first_ts is None or result.last_ts is None:
+                            continue
                         catalog.clear_gap_range(
                             exchange=exchange,
                             timeframe="1m",
                             symbol=symbol,
-                            start_ts=window_start_ts,
-                            end_ts=window_end_ts,
+                            start_ts=result.first_ts,
+                            end_ts=result.last_ts,
                             reason="pre_inception",
                         )
+                        if result.reason == "pre_inception_boundary":
+                            catalog.mark_gap(
+                                exchange=exchange,
+                                timeframe="1m",
+                                symbol=symbol,
+                                start_ts=start_ts,
+                                end_ts=int(result.first_ts) - 60_000,
+                                reason="pre_inception",
+                                persistent=True,
+                                retry_count=0,
+                                note="discovered_first_candle_during_stale_repair",
+                            )
                     rng = await _read_v2_range_repairing_corrupt_chunk(
                         om=om,
                         catalog=catalog,
@@ -1513,6 +1574,17 @@ async def _resolve_v2_store_range(
                             ts_to_date(end_ts),
                         )
                         return rng
+                    if any(result.reason == "pre_inception_boundary" for result in fetch_results):
+                        partial_rng = _extract_single_valid_window(rng)
+                        if partial_rng is not None:
+                            logging.info(
+                                "[%s] using discovered v2 pre-inception boundary for %s (%s -> %s)",
+                                exchange,
+                                coin,
+                                ts_to_date(int(partial_rng.timestamps[0])),
+                                ts_to_date(int(partial_rng.timestamps[-1])),
+                            )
+                            return partial_rng
                     overlapping_persistent_gaps = remaining_persistent_gaps
                 raise ValueError(
                     _format_stale_pre_inception_failure(
@@ -1821,14 +1893,14 @@ async def _read_v2_range_repairing_corrupt_chunk(
     try:
         return store.read_range(exchange, "1m", symbol, start_ts, end_ts)
     except ValueError as exc:
-        if "checksum mismatch" not in str(exc) or not allow_remote_fetch:
+        if not _is_repairable_chunk_integrity_error(exc) or not allow_remote_fetch:
             raise
         corrupt_chunks = []
         for chunk in catalog.list_chunks(exchange, "1m", symbol, start_ts, end_ts):
             try:
                 store.verify_chunk_checksum(chunk)
             except ValueError as chunk_exc:
-                if "checksum mismatch" not in str(chunk_exc):
+                if not _is_repairable_chunk_integrity_error(chunk_exc):
                     raise
                 corrupt_chunks.append((chunk, chunk_exc))
         if not corrupt_chunks:
@@ -2033,7 +2105,19 @@ def _pre_inception_gaps_are_stale(gaps, first_ts_evidence: dict[str, int]) -> bo
     if not authoritative_ts:
         return False
     earliest_authoritative_ts = min(authoritative_ts)
-    return any(earliest_authoritative_ts <= int(gap.end_ts) for gap in gaps)
+    return any(
+        earliest_authoritative_ts <= int(gap.end_ts)
+        and not _pre_inception_gap_confirms_discovered_boundary(gap)
+        for gap in gaps
+    )
+
+
+def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
+    return str(getattr(gap, "note", "") or "") == "discovered_first_candle_during_stale_repair"
+
+
+def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
+    return bool(gaps) and all(_pre_inception_gap_confirms_discovered_boundary(gap) for gap in gaps)
 
 
 def _format_first_timestamp_evidence(first_ts_evidence: dict[str, int]) -> str:
@@ -2106,6 +2190,11 @@ def _format_stale_pre_inception_failure(
     )
 
 
+def _is_repairable_chunk_integrity_error(exc: ValueError) -> bool:
+    message = str(exc)
+    return "checksum mismatch" in message or "checksum missing" in message
+
+
 def _import_legacy_invalid_windows(
     *,
     store: OhlcvStore,
@@ -2141,7 +2230,32 @@ async def _fetch_invalid_windows_into_v2_store(
     timestamps: np.ndarray,
     valid: np.ndarray,
 ) -> bool:
-    fetched_any = False
+    results = await _fetch_invalid_windows_into_v2_store_results(
+        om=om,
+        catalog=catalog,
+        store=store,
+        exchange=exchange,
+        coin=coin,
+        symbol=symbol,
+        timestamps=timestamps,
+        valid=valid,
+    )
+    return any(result.ok for result in results)
+
+
+async def _fetch_invalid_windows_into_v2_store_results(
+    *,
+    om: HLCVManager,
+    catalog: OhlcvCatalog,
+    store: OhlcvStore,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    timestamps: np.ndarray,
+    valid: np.ndarray,
+    allow_pre_inception_prefix: bool = False,
+) -> list[V2FetchResult]:
+    results: list[V2FetchResult] = []
     full_start_ts = int(timestamps[0])
     full_end_ts = int(timestamps[-1])
     context_ms = max(
@@ -2151,7 +2265,7 @@ async def _fetch_invalid_windows_into_v2_store(
     for window_start_ts, window_end_ts in _iter_invalid_windows(timestamps, valid):
         fetch_start_ts = max(full_start_ts, int(window_start_ts) - context_ms)
         fetch_end_ts = min(full_end_ts, int(window_end_ts) + context_ms)
-        if not await _fetch_coin_range_into_v2_store(
+        raw_result = await _fetch_coin_range_into_v2_store(
             om=om,
             catalog=catalog,
             store=store,
@@ -2160,10 +2274,17 @@ async def _fetch_invalid_windows_into_v2_store(
             symbol=symbol,
             start_ts=fetch_start_ts,
             end_ts=fetch_end_ts,
-        ):
-            return fetched_any
-        fetched_any = True
-    return fetched_any
+            allow_pre_inception_prefix=allow_pre_inception_prefix,
+        )
+        result = (
+            raw_result
+            if isinstance(raw_result, V2FetchResult)
+            else V2FetchResult(bool(raw_result), "ok" if raw_result else "failed")
+        )
+        results.append(result)
+        if not result:
+            break
+    return results
 
 
 async def _fetch_coin_range_into_v2_store(
@@ -2177,7 +2298,8 @@ async def _fetch_coin_range_into_v2_store(
     start_ts: int,
     end_ts: int,
     allow_unbounded_edge_gaps: bool = False,
-) -> bool:
+    allow_pre_inception_prefix: bool = False,
+) -> V2FetchResult:
     interval_ms = 60_000
     if hasattr(om, "update_timestamp_range"):
         om.update_timestamp_range(start_ts, end_ts)
@@ -2242,7 +2364,7 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(start_ts),
             ts_to_date(end_ts),
         )
-        return False
+        return V2FetchResult(False, "empty")
     ts_raw = pd.to_numeric(df["timestamp"], errors="coerce").to_numpy()
     if ts_raw.size == 0:
         ts = np.array([], dtype=np.int64)
@@ -2258,7 +2380,7 @@ async def _fetch_coin_range_into_v2_store(
             latency_ms=latency_ms,
             note="invalid_timestamp_values",
         )
-        return False
+        return V2FetchResult(False, "invalid_timestamp_values")
     else:
         ts = ts_raw.astype(np.int64, copy=False)
     if ts.size == 0:
@@ -2273,7 +2395,7 @@ async def _fetch_coin_range_into_v2_store(
             latency_ms=latency_ms,
             note="empty_timestamp_array",
         )
-        return False
+        return V2FetchResult(False, "empty_timestamp_array")
     request_start_ts = int(start_ts)
     request_end_ts = int(end_ts)
     gap_tolerance_bars = max(
@@ -2292,7 +2414,7 @@ async def _fetch_coin_range_into_v2_store(
             latency_ms=latency_ms,
             note=f"unaligned_timestamps count={unaligned_count} first={ts[:10].tolist()} last={ts[-10:].tolist()}",
         )
-        return False
+        return V2FetchResult(False, "unaligned_timestamps")
 
     raw_intervals = np.diff(ts) if ts.size > 1 else np.array([], dtype=np.int64)
     raw_duplicate_count = int(pd.Series(ts).duplicated().sum()) if ts.size else 0
@@ -2303,6 +2425,46 @@ async def _fetch_coin_range_into_v2_store(
         df["timestamp"] = ts
         df["_fetch_order"] = np.arange(len(df), dtype=np.int64)
         df = df[(df["timestamp"] >= request_start_ts) & (df["timestamp"] <= request_end_ts)]
+        conflicting_duplicate_count, conflicting_duplicate_samples = (
+            _conflicting_duplicate_ohlcv_timestamps(df)
+        )
+        if conflicting_duplicate_count:
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="gaps",
+                latency_ms=latency_ms,
+                note=(
+                    "conflicting_duplicate_timestamps "
+                    f"count={conflicting_duplicate_count} samples={conflicting_duplicate_samples}"
+                ),
+            )
+            _sync_persistent_cm_gaps_to_v2_catalog(
+                catalog=catalog,
+                om=om,
+                symbol=symbol,
+                exchange=exchange,
+                timeframe="1m",
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            logging.info(
+                "[%s] v2 fetch returned conflicting duplicate timestamps for %s (%s -> %s)",
+                exchange,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return V2FetchResult(
+                False,
+                "conflicting_duplicate_timestamps",
+                first_ts=int(df["timestamp"].min()) if not df.empty else None,
+                last_ts=int(df["timestamp"].max()) if not df.empty else None,
+            )
         df = df.sort_values(["timestamp", "_fetch_order"], kind="mergesort")
         df = df.drop_duplicates(subset=["timestamp"], keep="last")
         df = df.drop(columns=["_fetch_order"]).reset_index(drop=True)
@@ -2322,7 +2484,7 @@ async def _fetch_coin_range_into_v2_store(
                     f"duplicates={raw_duplicate_count} descending={raw_descending_count} clipped={clipped_count}"
                 ),
             )
-            return False
+            return V2FetchResult(False, "empty_after_timestamp_normalization")
         logging.info(
             "[%s] normalized v2 fetch timestamps for %s: duplicates=%d descending=%d clipped=%d rows=%d",
             exchange,
@@ -2362,45 +2524,16 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(int(ts[0])),
             ts_to_date(int(ts[-1])),
         )
-        return False
+        return V2FetchResult(
+            False,
+            "range_mismatch",
+            first_ts=int(ts[0]),
+            last_ts=int(ts[-1]),
+        )
     leading_missing_bars = int((int(ts[0]) - request_start_ts) // interval_ms)
     trailing_missing_bars = int((request_end_ts - int(ts[-1])) // interval_ms)
-    if (
-        not allow_unbounded_edge_gaps
-        and max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars
-    ):
-        catalog.record_fetch_attempt(
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            attempt=attempt,
-            outcome="range_mismatch",
-            latency_ms=latency_ms,
-            note=(
-                f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
-                f"tolerance={gap_tolerance_bars}"
-            ),
-        )
-        _sync_persistent_cm_gaps_to_v2_catalog(
-            catalog=catalog,
-            om=om,
-            symbol=symbol,
-            exchange=exchange,
-            timeframe="1m",
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
-        logging.info(
-            "[%s] v2 fetch edge gaps exceed tolerance for %s (%s -> %s)",
-            exchange,
-            coin,
-            ts_to_date(start_ts),
-            ts_to_date(end_ts),
-        )
-        return False
     sparse_missing_bars = leading_missing_bars + trailing_missing_bars
+    max_missing_bars = 0
     if ts.size > 1:
         intervals = np.diff(ts)
         if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
@@ -2443,7 +2576,14 @@ async def _fetch_coin_range_into_v2_store(
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
             )
-            return False
+            return V2FetchResult(
+                False,
+                "non_monotonic_or_unaligned_timestamps",
+                first_ts=int(ts[0]),
+                last_ts=int(ts[-1]),
+                leading_missing_bars=leading_missing_bars,
+                trailing_missing_bars=trailing_missing_bars,
+            )
         missing_by_gap = np.maximum((intervals // interval_ms) - 1, 0)
         sparse_missing_bars += int(missing_by_gap.sum())
         max_missing_bars = int(missing_by_gap.max(initial=0))
@@ -2475,7 +2615,66 @@ async def _fetch_coin_range_into_v2_store(
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
             )
-            return False
+            return V2FetchResult(
+                False,
+                "internal_gaps",
+                first_ts=int(ts[0]),
+                last_ts=int(ts[-1]),
+                leading_missing_bars=leading_missing_bars,
+                trailing_missing_bars=trailing_missing_bars,
+                max_internal_missing_bars=max_missing_bars,
+            )
+
+    edge_gaps_exceed_tolerance = (
+        not allow_unbounded_edge_gaps
+        and max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars
+    )
+    pre_inception_prefix_boundary = (
+        allow_pre_inception_prefix
+        and leading_missing_bars > gap_tolerance_bars
+        and trailing_missing_bars == 0
+        and max_missing_bars == 0
+    )
+    if edge_gaps_exceed_tolerance and not pre_inception_prefix_boundary:
+        catalog.record_fetch_attempt(
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attempt=attempt,
+            outcome="range_mismatch",
+            latency_ms=latency_ms,
+            note=(
+                f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
+                f"tolerance={gap_tolerance_bars}"
+            ),
+        )
+        _sync_persistent_cm_gaps_to_v2_catalog(
+            catalog=catalog,
+            om=om,
+            symbol=symbol,
+            exchange=exchange,
+            timeframe="1m",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+        logging.info(
+            "[%s] v2 fetch edge gaps exceed tolerance for %s (%s -> %s)",
+            exchange,
+            coin,
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        return V2FetchResult(
+            False,
+            "edge_gaps_exceed_tolerance",
+            first_ts=int(ts[0]),
+            last_ts=int(ts[-1]),
+            leading_missing_bars=leading_missing_bars,
+            trailing_missing_bars=trailing_missing_bars,
+            max_internal_missing_bars=max_missing_bars,
+        )
     values = np.column_stack(
         [
             df["high"].astype(np.float32, copy=False).to_numpy(),
@@ -2485,6 +2684,11 @@ async def _fetch_coin_range_into_v2_store(
         ]
     )
     store.write_rows(exchange, "1m", symbol, ts, values)
+    outcome = "sparse_ok" if sparse_missing_bars else "ok"
+    reason = "ok"
+    if pre_inception_prefix_boundary:
+        outcome = "pre_inception_boundary"
+        reason = "pre_inception_boundary"
     catalog.record_fetch_attempt(
         exchange=exchange,
         timeframe="1m",
@@ -2492,15 +2696,25 @@ async def _fetch_coin_range_into_v2_store(
         start_ts=start_ts,
         end_ts=end_ts,
         attempt=attempt,
-        outcome="sparse_ok" if sparse_missing_bars else "ok",
+        outcome=outcome,
         latency_ms=latency_ms,
         note=(
             f"rows={len(ts)} missing_bars={sparse_missing_bars} "
+            f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
             f"normalized_duplicates={raw_duplicate_count} "
             f"normalized_descending={raw_descending_count} clipped_rows={clipped_count}"
         ),
     )
-    return True
+    return V2FetchResult(
+        True,
+        reason,
+        wrote_rows=int(len(ts)),
+        first_ts=int(ts[0]),
+        last_ts=int(ts[-1]),
+        leading_missing_bars=leading_missing_bars,
+        trailing_missing_bars=trailing_missing_bars,
+        max_internal_missing_bars=max_missing_bars,
+    )
 
 
 def _sync_persistent_cm_gaps_to_v2_catalog(
