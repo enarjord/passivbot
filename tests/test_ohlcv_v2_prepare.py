@@ -300,10 +300,10 @@ async def test_fetch_coin_range_into_v2_store_normalizes_real_pagination_overlap
                         ],
                         dtype=np.int64,
                     ),
-                    "high": np.array([90.0, 102.0, 101.0, 202.0, 104.0, 999.0]),
-                    "low": np.array([89.0, 100.0, 99.0, 200.0, 102.0, 998.0]),
-                    "close": np.array([89.5, 101.0, 100.0, 201.0, 103.0, 998.5]),
-                    "volume": np.array([9.0, 11.0, 10.0, 21.0, 13.0, 99.0]),
+                    "high": np.array([90.0, 102.0, 101.0, 102.0, 104.0, 999.0]),
+                    "low": np.array([89.0, 100.0, 99.0, 100.0, 102.0, 998.0]),
+                    "close": np.array([89.5, 101.0, 100.0, 101.0, 103.0, 998.5]),
+                    "volume": np.array([9.0, 11.0, 10.0, 11.0, 13.0, 99.0]),
                 }
             )
 
@@ -326,7 +326,56 @@ async def test_fetch_coin_range_into_v2_store_normalizes_real_pagination_overlap
 
     rng = store.read_range("bitget", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     np.testing.assert_array_equal(rng.valid, np.array([True, True, False, True]))
-    assert float(rng.values[1, 0]) == 202.0
+    assert float(rng.values[1, 0]) == 102.0
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_into_v2_store_rejects_conflicting_pagination_duplicates(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 1.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array(
+                        [start_ts, start_ts + 60_000, start_ts + 60_000, end_ts],
+                        dtype=np.int64,
+                    ),
+                    "high": np.array([101.0, 102.0, 202.0, 103.0]),
+                    "low": np.array([99.0, 100.0, 200.0, 101.0]),
+                    "close": np.array([100.0, 101.0, 201.0, 102.0]),
+                    "volume": np.array([10.0, 11.0, 21.0, 12.0]),
+                }
+            )
+
+    result = await _fetch_coin_range_into_v2_store(
+        om=FakeOhlcvManager(),
+        catalog=catalog,
+        store=store,
+        exchange="bitget",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert not result
+    assert result.reason == "conflicting_duplicate_timestamps"
+    attempts = catalog.list_fetch_attempts("bitget", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[0].outcome == "gaps"
+    assert "conflicting_duplicate_timestamps" in attempts[0].note
+    rng = store.read_range("bitget", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert not rng.valid.any()
 
 
 @pytest.mark.asyncio
@@ -738,6 +787,118 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
     )
     assert len(remaining_gaps) == 1
     assert remaining_gaps[0].reason == "pre_inception"
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_keeps_unrepaired_stale_pre_inception_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "CC/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(7)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 108.0, dtype=np.float32),
+            np.arange(99.0, 106.0, dtype=np.float32),
+            np.arange(100.0, 107.0, dtype=np.float32),
+            np.arange(10.0, 17.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[0, 2, 4, 5, 6]], values[[0, 2, 4, 5, 6]])
+    first_gap_start = int(timestamps[1])
+    first_gap_end = int(timestamps[1])
+    second_gap_start = int(timestamps[3])
+    second_gap_end = int(timestamps[3])
+    for gap_start, gap_end in (
+        (first_gap_start, first_gap_end),
+        (second_gap_start, second_gap_end),
+    ):
+        catalog.mark_gap(
+            exchange="binance",
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=gap_start,
+            end_ts=gap_end,
+            reason="pre_inception",
+            persistent=True,
+            retry_count=3,
+            note="mirrored_from_candlestick_manager",
+        )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(timestamps[0] - 30 * 24 * 60 * 60_000) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 1.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(timestamps[0] - 30 * 24 * 60 * 60_000)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            if int(start_ts) <= first_gap_start <= int(end_ts) and not (
+                int(start_ts) <= second_gap_start <= int(end_ts)
+            ):
+                idx = np.array([1], dtype=np.int64)
+                return pd.DataFrame(
+                    {
+                        "timestamp": timestamps[idx],
+                        "high": values[idx, 0],
+                        "low": values[idx, 1],
+                        "close": values[idx, 2],
+                        "volume": values[idx, 3],
+                    }
+                )
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([], dtype=np.int64),
+                    "high": np.array([], dtype=np.float32),
+                    "low": np.array([], dtype=np.float32),
+                    "close": np.array([], dtype=np.float32),
+                    "volume": np.array([], dtype=np.float32),
+                }
+            )
+
+    with pytest.raises(ValueError) as exc_info:
+        await _resolve_v2_store_range(
+            om=FakeManager(),
+            catalog=catalog,
+            store=store,
+            legacy_root=None,
+            exchange="binance",
+            coin="CC",
+            symbol=symbol,
+            start_ts=int(timestamps[0]),
+            end_ts=int(timestamps[-1]),
+            allow_remote_fetch=True,
+            local_hit_log_label="v2 local hit",
+            remote_fetch_log_label="v2 fetching missing range",
+        )
+
+    assert "strict v2 HLCV repair failed for stale pre-inception gap" in str(exc_info.value)
+    first_remaining = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, first_gap_start, first_gap_end
+    )
+    second_remaining = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, second_gap_start, second_gap_end
+    )
+    assert first_remaining == []
+    assert len(second_remaining) == 1
+    assert second_remaining[0].reason == "pre_inception"
+    rng = store.read_range("binance", "1m", symbol, int(timestamps[0]), int(timestamps[-1]))
+    np.testing.assert_array_equal(
+        rng.valid,
+        np.array([True, True, True, False, True, True, True]),
+    )
 
 
 @pytest.mark.asyncio
@@ -1600,6 +1761,67 @@ async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
 
     assert rng is not None
     np.testing.assert_allclose(rng.values, repaired)
+    gaps = catalog.get_gaps("binance", "1m", "ETH/USDT:USDT", int(start), int(month_end))
+    assert any(gap.reason == "local_corrupt_chunk" for gap in gaps)
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_refetches_missing_checksum_chunk(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    month_end = month_end_ts(2026, 4, "1m")
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    repair_close = 200.0 + np.arange(ts.size, dtype=np.float32)
+    repaired = np.column_stack(
+        [repair_close + 1.0, repair_close - 1.0, repair_close, repair_close * 0.1]
+    ).astype(np.float32)
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", ts, initial)
+    with catalog._connect() as conn:
+        conn.execute("UPDATE chunks SET checksum = NULL")
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            assert int(start_ts) == int(start)
+            assert int(end_ts) == int(month_end)
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "open": repaired[:, 2],
+                    "high": repaired[:, 0],
+                    "low": repaired[:, 1],
+                    "close": repaired[:, 2],
+                    "volume": repaired[:, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(ts[0]),
+        end_ts=int(ts[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert rng is not None
+    np.testing.assert_allclose(rng.values, repaired)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(ts[0]), int(ts[-1]))[0]
+    assert chunk.checksum
     gaps = catalog.get_gaps("binance", "1m", "ETH/USDT:USDT", int(start), int(month_end))
     assert any(gap.reason == "local_corrupt_chunk" for gap in gaps)
 

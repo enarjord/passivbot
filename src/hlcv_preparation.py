@@ -153,6 +153,23 @@ class V2FetchResult:
         return bool(self.ok)
 
 
+def _conflicting_duplicate_ohlcv_timestamps(df: pd.DataFrame) -> tuple[int, list[int]]:
+    duplicate_mask = df["timestamp"].duplicated(keep=False)
+    if not bool(duplicate_mask.any()):
+        return 0, []
+    value_cols = ["high", "low", "close", "volume"]
+    conflicts: list[int] = []
+    for timestamp, group in df.loc[duplicate_mask, ["timestamp", *value_cols]].groupby(
+        "timestamp", sort=True
+    ):
+        values = group[value_cols].apply(pd.to_numeric, errors="coerce").to_numpy(dtype=np.float64)
+        if values.size == 0:
+            continue
+        if not np.all(values == values[0]):
+            conflicts.append(int(timestamp))
+    return len(conflicts), conflicts[:20]
+
+
 @dataclass(frozen=True)
 class CombinedExchangeCandidate:
     exchange: str
@@ -1876,14 +1893,14 @@ async def _read_v2_range_repairing_corrupt_chunk(
     try:
         return store.read_range(exchange, "1m", symbol, start_ts, end_ts)
     except ValueError as exc:
-        if "checksum mismatch" not in str(exc) or not allow_remote_fetch:
+        if not _is_repairable_chunk_integrity_error(exc) or not allow_remote_fetch:
             raise
         corrupt_chunks = []
         for chunk in catalog.list_chunks(exchange, "1m", symbol, start_ts, end_ts):
             try:
                 store.verify_chunk_checksum(chunk)
             except ValueError as chunk_exc:
-                if "checksum mismatch" not in str(chunk_exc):
+                if not _is_repairable_chunk_integrity_error(chunk_exc):
                     raise
                 corrupt_chunks.append((chunk, chunk_exc))
         if not corrupt_chunks:
@@ -2173,6 +2190,11 @@ def _format_stale_pre_inception_failure(
     )
 
 
+def _is_repairable_chunk_integrity_error(exc: ValueError) -> bool:
+    message = str(exc)
+    return "checksum mismatch" in message or "checksum missing" in message
+
+
 def _import_legacy_invalid_windows(
     *,
     store: OhlcvStore,
@@ -2403,6 +2425,46 @@ async def _fetch_coin_range_into_v2_store(
         df["timestamp"] = ts
         df["_fetch_order"] = np.arange(len(df), dtype=np.int64)
         df = df[(df["timestamp"] >= request_start_ts) & (df["timestamp"] <= request_end_ts)]
+        conflicting_duplicate_count, conflicting_duplicate_samples = (
+            _conflicting_duplicate_ohlcv_timestamps(df)
+        )
+        if conflicting_duplicate_count:
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="gaps",
+                latency_ms=latency_ms,
+                note=(
+                    "conflicting_duplicate_timestamps "
+                    f"count={conflicting_duplicate_count} samples={conflicting_duplicate_samples}"
+                ),
+            )
+            _sync_persistent_cm_gaps_to_v2_catalog(
+                catalog=catalog,
+                om=om,
+                symbol=symbol,
+                exchange=exchange,
+                timeframe="1m",
+                start_ts=start_ts,
+                end_ts=end_ts,
+            )
+            logging.info(
+                "[%s] v2 fetch returned conflicting duplicate timestamps for %s (%s -> %s)",
+                exchange,
+                coin,
+                ts_to_date(start_ts),
+                ts_to_date(end_ts),
+            )
+            return V2FetchResult(
+                False,
+                "conflicting_duplicate_timestamps",
+                first_ts=int(df["timestamp"].min()) if not df.empty else None,
+                last_ts=int(df["timestamp"].max()) if not df.empty else None,
+            )
         df = df.sort_values(["timestamp", "_fetch_order"], kind="mergesort")
         df = df.drop_duplicates(subset=["timestamp"], keep="last")
         df = df.drop(columns=["_fetch_order"]).reset_index(drop=True)
