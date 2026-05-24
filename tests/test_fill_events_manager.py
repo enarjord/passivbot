@@ -2426,8 +2426,8 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
 
     events = manager.get_events(symbol="TON/USDT:USDT")
     by_id = {ev.id: ev for ev in events}
-    assert by_id["partial-close"].pnl == pytest.approx(-8.0)
-    assert by_id["final-close"].pnl == pytest.approx(13.0)
+    assert by_id["partial-close"].pnl == pytest.approx(-7.6)
+    assert by_id["final-close"].pnl == pytest.approx(12.6)
     assert sum(ev.pnl for ev in events if "close" in ev.pb_order_type) == pytest.approx(5.0)
     assert by_id["partial-close"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
     assert by_id["final-close"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
@@ -3782,6 +3782,48 @@ def test_kucoin_position_history_observation_preserves_cycle_scope():
     assert obs.close_time == 1_700_000_060_000
     assert obs.update_time == 1_700_000_240_000
     assert obs.close_size == pytest.approx(3.5)
+
+
+def test_kucoin_trade_reconstruction_uses_raw_contract_multiplier():
+    ts = 1_700_000_000_000
+    trades = [
+        {
+            "id": "entry",
+            "timestamp": ts,
+            "symbol": "ZEC/USDT:USDT",
+            "side": "buy",
+            "qty": 100.0,
+            "price": 600.0,
+            "position_side": "long",
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {"info": {"value": "600.0"}},
+                }
+            ],
+        },
+        {
+            "id": "close",
+            "timestamp": ts + 60_000,
+            "symbol": "ZEC/USDT:USDT",
+            "side": "sell",
+            "qty": 100.0,
+            "price": 610.0,
+            "position_side": "long",
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {"info": {"value": "610.0"}},
+                }
+            ],
+        },
+    ]
+
+    pnls, final_positions = fem.compute_realized_pnls_from_trades(trades)
+
+    assert pnls["entry"] == pytest.approx(0.0)
+    assert pnls["close"] == pytest.approx(10.0)
+    assert final_positions[("ZEC/USDT:USDT", "long")] == pytest.approx((0.0, 0.0))
 
 
 @pytest.mark.asyncio

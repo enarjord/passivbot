@@ -623,7 +623,9 @@ def compute_realized_pnls_from_trades(
         symbol = str(trade.get("symbol") or "")
         side = str(trade.get("side") or "").lower()
         pos_side = str(trade.get("position_side") or trade.get("pside") or "long").lower()
-        qty = abs(float(trade.get("qty") or trade.get("amount") or 0.0))
+        qty = abs(float(trade.get("qty") or trade.get("amount") or 0.0)) * (
+            _payload_contract_multiplier(trade)
+        )
         price = float(trade.get("price") or 0.0)
         if qty <= 0 or price <= 0 or not symbol:
             per_trade[trade_id] = 0.0
@@ -2635,8 +2637,20 @@ class FillEventsManager:
         close_fills = list(lifecycle["close_fills"])
         synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
         delta = float(observation.realized_pnl) - synthetic_total
-        marker = close_fills[-1]
-        marker["pnl"] = float(marker.get("pnl") or 0.0) + delta
+        weights = []
+        for close in close_fills:
+            signed_qty = _payload_signed_effective_qty(close)
+            _add_amt, reduce_amt = _compute_add_reduce(
+                str(lifecycle.get("position_side") or "long").lower(),
+                signed_qty,
+            )
+            weights.append(max(reduce_amt, 0.0))
+        total_weight = sum(weights)
+        if total_weight <= 0.0:
+            weights = [1.0 for _ in close_fills]
+            total_weight = float(len(close_fills))
+        for close, weight in zip(close_fills, weights):
+            close["pnl"] = float(close.get("pnl") or 0.0) + delta * (weight / total_weight)
         days_touched: set[str] = set()
         for close in close_fills:
             close["pnl_status"] = "complete"
