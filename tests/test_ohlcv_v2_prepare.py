@@ -568,6 +568,179 @@ async def test_resolve_v2_store_range_retries_unrepaired_persistent_gap(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_repairs_stale_pre_inception_gap(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "CC/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(5)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 106.0, dtype=np.float32),
+            np.arange(99.0, 104.0, dtype=np.float32),
+            np.arange(100.0, 105.0, dtype=np.float32),
+            np.arange(10.0, 15.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[3, 4]], values[[3, 4]])
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[2]),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(timestamps[0] - 30 * 24 * 60 * 60_000) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(timestamps[0] - 30 * 24 * 60 * 60_000)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            calls.append((int(start_ts), int(end_ts)))
+            idx = (timestamps >= int(start_ts)) & (timestamps <= int(end_ts))
+            return pd.DataFrame(
+                {
+                    "timestamp": timestamps[idx],
+                    "high": values[idx, 0],
+                    "low": values[idx, 1],
+                    "close": values[idx, 2],
+                    "volume": values[idx, 3],
+                }
+            )
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="CC",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert calls == [(int(timestamps[0]), int(timestamps[3]))]
+    assert rng is not None
+    assert rng.valid.all()
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    repaired_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(timestamps[0]), int(timestamps[2])
+    )
+    assert repaired_gaps == []
+
+
+@pytest.mark.asyncio
+async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_inception_gap(
+    monkeypatch, tmp_path
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "CC/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    timestamps = np.array([start + i * 60_000 for i in range(5)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 106.0, dtype=np.float32),
+            np.arange(99.0, 104.0, dtype=np.float32),
+            np.arange(100.0, 105.0, dtype=np.float32),
+            np.arange(10.0, 15.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("binance", "1m", symbol, timestamps[[3, 4]], values[[3, 4]])
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(timestamps[0]),
+        end_ts=int(timestamps[2]),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(timestamps[0] - 30 * 24 * 60 * 60_000) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def load_first_timestamp(self, coin):
+            return int(timestamps[0] - 30 * 24 * 60 * 60_000)
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([], dtype=np.int64),
+                    "high": np.array([], dtype=np.float32),
+                    "low": np.array([], dtype=np.float32),
+                    "close": np.array([], dtype=np.float32),
+                    "volume": np.array([], dtype=np.float32),
+                }
+            )
+
+    with pytest.raises(ValueError) as exc_info:
+        await _resolve_v2_store_range(
+            om=FakeManager(),
+            catalog=catalog,
+            store=store,
+            legacy_root=None,
+            exchange="binance",
+            coin="CC",
+            symbol=symbol,
+            start_ts=int(timestamps[0]),
+            end_ts=int(timestamps[-1]),
+            allow_remote_fetch=True,
+            local_hit_log_label="v2 local hit",
+            remote_fetch_log_label="v2 fetching missing range",
+        )
+
+    message = str(exc_info.value)
+    assert "strict v2 HLCV repair failed for stale pre-inception gap" in message
+    assert "coin=CC" in message
+    assert "requested=" in message
+    assert "persistent_gaps=" in message
+    assert "local_first_timestamp=" in message
+    assert "recent_fetch_attempts=" in message
+    remaining_gaps = catalog.get_persistent_gaps(
+        "binance", "1m", symbol, int(timestamps[0]), int(timestamps[2])
+    )
+    assert len(remaining_gaps) == 1
+    assert remaining_gaps[0].reason == "pre_inception"
+
+
+@pytest.mark.asyncio
 async def test_try_prepare_hlcvs_v2_local_uses_local_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
     legacy_root = tmp_path / "caches" / "ohlcv"
