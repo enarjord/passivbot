@@ -1989,7 +1989,24 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(end_ts),
         )
         return False
-    ts = df["timestamp"].astype(np.int64, copy=False).to_numpy()
+    ts_raw = pd.to_numeric(df["timestamp"], errors="coerce").to_numpy()
+    if ts_raw.size == 0:
+        ts = np.array([], dtype=np.int64)
+    elif not np.all(np.isfinite(ts_raw)):
+        catalog.record_fetch_attempt(
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            attempt=attempt,
+            outcome="gaps",
+            latency_ms=latency_ms,
+            note="invalid_timestamp_values",
+        )
+        return False
+    else:
+        ts = ts_raw.astype(np.int64, copy=False)
     if ts.size == 0:
         catalog.record_fetch_attempt(
             exchange=exchange,
@@ -2009,6 +2026,7 @@ async def _fetch_coin_range_into_v2_store(
         0, int(float(getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)))
     )
     if np.any(ts % interval_ms != 0):
+        unaligned_count = int(np.count_nonzero(ts % interval_ms != 0))
         catalog.record_fetch_attempt(
             exchange=exchange,
             timeframe="1m",
@@ -2018,9 +2036,48 @@ async def _fetch_coin_range_into_v2_store(
             attempt=attempt,
             outcome="gaps",
             latency_ms=latency_ms,
-            note="unaligned_timestamps",
+            note=f"unaligned_timestamps count={unaligned_count} first={ts[:10].tolist()} last={ts[-10:].tolist()}",
         )
         return False
+
+    raw_intervals = np.diff(ts) if ts.size > 1 else np.array([], dtype=np.int64)
+    raw_duplicate_count = int(pd.Series(ts).duplicated().sum()) if ts.size else 0
+    raw_descending_count = int(np.count_nonzero(raw_intervals < 0))
+    clipped_count = int(np.count_nonzero((ts < request_start_ts) | (ts > request_end_ts)))
+    if raw_duplicate_count or raw_descending_count or clipped_count:
+        df = df.copy()
+        df["timestamp"] = ts
+        df["_fetch_order"] = np.arange(len(df), dtype=np.int64)
+        df = df[(df["timestamp"] >= request_start_ts) & (df["timestamp"] <= request_end_ts)]
+        df = df.sort_values(["timestamp", "_fetch_order"], kind="mergesort")
+        df = df.drop_duplicates(subset=["timestamp"], keep="last")
+        df = df.drop(columns=["_fetch_order"]).reset_index(drop=True)
+        ts = df["timestamp"].astype(np.int64, copy=False).to_numpy()
+        if ts.size == 0:
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="empty",
+                latency_ms=latency_ms,
+                note=(
+                    "empty_after_timestamp_normalization "
+                    f"duplicates={raw_duplicate_count} descending={raw_descending_count} clipped={clipped_count}"
+                ),
+            )
+            return False
+        logging.info(
+            "[%s] normalized v2 fetch timestamps for %s: duplicates=%d descending=%d clipped=%d rows=%d",
+            exchange,
+            coin,
+            raw_duplicate_count,
+            raw_descending_count,
+            clipped_count,
+            len(ts),
+        )
     if ts[0] < request_start_ts or ts[-1] > request_end_ts:
         catalog.record_fetch_attempt(
             exchange=exchange,
@@ -2093,6 +2150,13 @@ async def _fetch_coin_range_into_v2_store(
     if ts.size > 1:
         intervals = np.diff(ts)
         if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
+            duplicate_count = int(np.count_nonzero(intervals == 0))
+            descending_count = int(np.count_nonzero(intervals < 0))
+            unaligned_step_count = int(np.count_nonzero(intervals % interval_ms != 0))
+            largest_steps = sorted(
+                (int(step) for step in intervals if step > interval_ms),
+                reverse=True,
+            )[:20]
             catalog.record_fetch_attempt(
                 exchange=exchange,
                 timeframe="1m",
@@ -2102,7 +2166,12 @@ async def _fetch_coin_range_into_v2_store(
                 attempt=attempt,
                 outcome="gaps",
                 latency_ms=latency_ms,
-                note="non_monotonic_or_unaligned_timestamps",
+                note=(
+                    "non_monotonic_or_unaligned_timestamps "
+                    f"duplicates={duplicate_count} descending={descending_count} "
+                    f"unaligned_steps={unaligned_step_count} "
+                    f"first={ts[:20].tolist()} last={ts[-20:].tolist()} largest_steps={largest_steps}"
+                ),
             )
             _sync_persistent_cm_gaps_to_v2_catalog(
                 catalog=catalog,
@@ -2171,7 +2240,11 @@ async def _fetch_coin_range_into_v2_store(
         attempt=attempt,
         outcome="sparse_ok" if sparse_missing_bars else "ok",
         latency_ms=latency_ms,
-        note=f"rows={len(ts)} missing_bars={sparse_missing_bars}",
+        note=(
+            f"rows={len(ts)} missing_bars={sparse_missing_bars} "
+            f"normalized_duplicates={raw_duplicate_count} "
+            f"normalized_descending={raw_descending_count} clipped_rows={clipped_count}"
+        ),
     )
     return True
 

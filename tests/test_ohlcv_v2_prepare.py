@@ -272,6 +272,64 @@ async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_toleran
 
 
 @pytest.mark.asyncio
+async def test_fetch_coin_range_into_v2_store_normalizes_real_pagination_overlap(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 3 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 1.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array(
+                        [
+                            start_ts - 60_000,
+                            start_ts + 60_000,
+                            start_ts,
+                            start_ts + 60_000,
+                            end_ts,
+                            end_ts + 60_000,
+                        ],
+                        dtype=np.int64,
+                    ),
+                    "high": np.array([90.0, 102.0, 101.0, 202.0, 104.0, 999.0]),
+                    "low": np.array([89.0, 100.0, 99.0, 200.0, 102.0, 998.0]),
+                    "close": np.array([89.5, 101.0, 100.0, 201.0, 103.0, 998.5]),
+                    "volume": np.array([9.0, 11.0, 10.0, 21.0, 13.0, 99.0]),
+                }
+            )
+
+    ok = await _fetch_coin_range_into_v2_store(
+        om=FakeOhlcvManager(),
+        catalog=catalog,
+        store=store,
+        exchange="bitget",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert ok
+    attempts = catalog.list_fetch_attempts("bitget", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[0].outcome == "sparse_ok"
+    assert "normalized_duplicates=1" in attempts[0].note
+    assert "clipped_rows=2" in attempts[0].note
+
+    rng = store.read_range("bitget", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    np.testing.assert_array_equal(rng.valid, np.array([True, True, False, True]))
+    assert float(rng.values[1, 0]) == 202.0
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legacy(
     monkeypatch, tmp_path
 ):
