@@ -403,6 +403,8 @@ async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legac
     # legacy inspection is intentionally partial even though the missing v2
     # minute is repairable from the 2026-04-01 legacy shard.
     store.write_rows("binance", "1m", symbol, timestamps[[0, 2]], values[[0, 2]])
+    with catalog._connect() as conn:
+        conn.execute("UPDATE chunks SET checksum = NULL")
     _write_day(
         legacy_root,
         "binance",
@@ -435,6 +437,8 @@ async def test_resolve_v2_store_range_repairs_invalid_windows_from_partial_legac
     assert rng.valid.all()
     np.testing.assert_array_equal(rng.timestamps, timestamps)
     assert float(rng.values[1, 2]) == 202.0
+    attempts = catalog.list_fetch_attempts("binance", "1m", symbol, int(timestamps[0]), int(timestamps[-1]))
+    assert attempts == []
 
 
 @pytest.mark.asyncio
@@ -1881,17 +1885,13 @@ async def test_resolve_v2_store_range_refetches_corrupt_chunk(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_resolve_v2_store_range_refetches_missing_checksum_chunk(tmp_path):
+async def test_resolve_v2_store_range_uses_missing_checksum_chunk_without_remote_fetch(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
     start = month_start_ts(2026, 4)
     month_end = month_end_ts(2026, 4, "1m")
     ts = np.array([start, start + 60_000], dtype=np.int64)
     initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
-    repair_close = 200.0 + np.arange(ts.size, dtype=np.float32)
-    repaired = np.column_stack(
-        [repair_close + 1.0, repair_close - 1.0, repair_close, repair_close * 0.1]
-    ).astype(np.float32)
     store.write_rows("binance", "1m", "ETH/USDT:USDT", ts, initial)
     with catalog._connect() as conn:
         conn.execute("UPDATE chunks SET checksum = NULL")
@@ -1905,18 +1905,7 @@ async def test_resolve_v2_store_range_refetches_missing_checksum_chunk(tmp_path)
             self.end_ts = int(end_ts)
 
         async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
-            assert int(start_ts) == int(start)
-            assert int(end_ts) == int(month_end)
-            return pd.DataFrame(
-                {
-                    "timestamp": ts,
-                    "open": repaired[:, 2],
-                    "high": repaired[:, 0],
-                    "low": repaired[:, 1],
-                    "close": repaired[:, 2],
-                    "volume": repaired[:, 3],
-                }
-            )
+            raise AssertionError("missing checksum must not trigger remote fetch")
 
     rng = await _resolve_v2_store_range(
         om=FakeManager(),
@@ -1934,11 +1923,11 @@ async def test_resolve_v2_store_range_refetches_missing_checksum_chunk(tmp_path)
     )
 
     assert rng is not None
-    np.testing.assert_allclose(rng.values, repaired)
+    np.testing.assert_allclose(rng.values, initial)
     chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(ts[0]), int(ts[-1]))[0]
     assert chunk.checksum
     gaps = catalog.get_gaps("binance", "1m", "ETH/USDT:USDT", int(start), int(month_end))
-    assert any(gap.reason == "local_corrupt_chunk" for gap in gaps)
+    assert not any(gap.reason == "local_corrupt_chunk" for gap in gaps)
 
 
 @pytest.mark.asyncio

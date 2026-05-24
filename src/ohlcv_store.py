@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import calendar
 import hashlib
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -335,13 +336,65 @@ class OhlcvStore:
             del valid
         return hasher.hexdigest()
 
+    def _validate_chunk_files(self, chunk: ChunkRecord, paths: MonthChunkPaths) -> None:
+        body = np.load(paths.body_path, mmap_mode="r")
+        valid = np.load(paths.valid_path, mmap_mode="r")
+        try:
+            expected_rows = int(chunk.rows)
+            expected_body_shape = (expected_rows, len(BACKTEST_OHLCV_FIELDS))
+            expected_valid_shape = (expected_rows,)
+            if tuple(body.shape) != expected_body_shape:
+                raise ValueError(
+                    f"body shape {tuple(body.shape)} != expected {expected_body_shape}"
+                )
+            if tuple(valid.shape) != expected_valid_shape:
+                raise ValueError(
+                    f"valid shape {tuple(valid.shape)} != expected {expected_valid_shape}"
+                )
+            if body.dtype != BACKTEST_OHLCV_DTYPE:
+                raise ValueError(f"body dtype {body.dtype} != expected {BACKTEST_OHLCV_DTYPE}")
+            if valid.dtype != np.bool_:
+                raise ValueError(f"valid dtype {valid.dtype} != expected bool")
+        finally:
+            del body
+            del valid
+
     def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
-        if not chunk.checksum:
-            raise ValueError(
-                f"OHLCV chunk checksum missing for {chunk.exchange} {chunk.symbol} "
-                f"{chunk.year:04d}-{chunk.month:02d}; rebuild/refetch required"
-            )
         paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        if not chunk.checksum:
+            try:
+                self._validate_chunk_files(chunk, paths)
+                checksum = self._compute_chunk_checksum(paths)
+            except Exception as exc:
+                raise ValueError(
+                    f"OHLCV chunk checksum backfill failed for {chunk.exchange} {chunk.symbol} "
+                    f"{chunk.year:04d}-{chunk.month:02d}: {type(exc).__name__}: {exc}"
+                ) from exc
+            self.catalog.register_chunk(
+                exchange=chunk.exchange,
+                timeframe=chunk.timeframe,
+                symbol=chunk.symbol,
+                year=chunk.year,
+                month=chunk.month,
+                body_path=chunk.body_path,
+                valid_path=chunk.valid_path,
+                start_ts=chunk.start_ts,
+                end_ts=chunk.end_ts,
+                rows=chunk.rows,
+                status=chunk.status,
+                schema_version=chunk.schema_version,
+                checksum=checksum,
+            )
+            self._verified_checksums.add(self._checksum_cache_keys_for_paths(paths, checksum))
+            logging.info(
+                "[ohlcv_store] checksum_backfilled exchange=%s symbol=%s timeframe=%s month=%04d-%02d",
+                chunk.exchange,
+                chunk.symbol,
+                chunk.timeframe,
+                chunk.year,
+                chunk.month,
+            )
+            return
         cache_key = self._checksum_cache_keys_for_paths(paths, str(chunk.checksum))
         if cache_key in self._verified_checksums:
             return

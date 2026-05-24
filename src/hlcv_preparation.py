@@ -2197,7 +2197,7 @@ def _format_stale_pre_inception_failure(
 
 def _is_repairable_chunk_integrity_error(exc: ValueError) -> bool:
     message = str(exc)
-    return "checksum mismatch" in message or "checksum missing" in message
+    return "checksum mismatch" in message or "checksum backfill failed" in message
 
 
 def _import_legacy_invalid_windows(
