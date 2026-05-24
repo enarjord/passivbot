@@ -106,6 +106,16 @@ from hlcv_preparation import (
     prepare_hlcvs_combined,
     try_prepare_hlcvs_v2_local,
 )
+from hlcvs_manifest import (
+    HlcvsManifestError,
+    build_hlcvs_manifest,
+    load_numpy_artifact,
+    load_hlcvs_manifest,
+    manifest_has_required_schema,
+    verify_hlcvs_manifest,
+    write_hlcvs_manifest,
+)
+from hlcvs_override import load_hlcvs_data_override
 from ohlcv_utils import aggregate_hlcvs, align_and_aggregate_hlcvs
 from warmup_utils import (
     compute_backtest_warmup_minutes,
@@ -644,7 +654,8 @@ def build_backtest_payload(
 
     meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
     candidate_start = meta.get(
-        "requested_start_ts", require_config_value(config, "backtest.start_date")
+        "effective_requested_start_ts",
+        meta.get("requested_start_ts", require_config_value(config, "backtest.start_date")),
     )
     try:
         if isinstance(candidate_start, str):
@@ -1255,6 +1266,34 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
     if cache_dir and os.path.exists(cache_dir):
+        cache_permissive = bool(
+            get_optional_config_value(config, "backtest.hlcvs_cache_permissive", False)
+        )
+        manifest = load_hlcvs_manifest(cache_dir)
+        if manifest is None:
+            if not cache_permissive:
+                logging.info(
+                    "[hlcvs] cache %s missing manifest; rebuilding because hlcvs_cache_permissive=false",
+                    cache_dir,
+                )
+                return None
+            logging.warning(
+                "[hlcvs] cache %s missing manifest; loading because hlcvs_cache_permissive=true",
+                cache_dir,
+            )
+        elif not manifest_has_required_schema(manifest):
+            if not cache_permissive:
+                logging.info(
+                    "[hlcvs] cache %s has unsupported manifest schema; rebuilding because hlcvs_cache_permissive=false",
+                    cache_dir,
+                )
+                return None
+            logging.warning(
+                "[hlcvs] cache %s has unsupported manifest schema; loading because hlcvs_cache_permissive=true",
+                cache_dir,
+            )
+        else:
+            verify_hlcvs_manifest(cache_dir, manifest)
         # Check warmup sufficiency: cached data must cover at least the needed warmup
         meta_path = cache_dir / "cache_meta.json"
         if meta_path.exists():
@@ -1273,53 +1312,66 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             return None
         coins = json.load(open(cache_dir / "coins.json"))
         mss = json.load(open(cache_dir / "market_specific_settings.json"))
+        def cache_artifact_path(name: str, default_name: str) -> Path:
+            if manifest_has_required_schema(manifest):
+                files = manifest.get("files", {})
+                entry = files.get(name) if isinstance(files, dict) else None
+                if not isinstance(entry, dict):
+                    raise HlcvsManifestError(
+                        f"HLCV manifest missing required file entry {name!r}"
+                    )
+                rel_path = entry.get("path") if isinstance(entry, dict) else None
+                if not rel_path:
+                    raise HlcvsManifestError(
+                        f"HLCV manifest file entry {name!r} is missing path"
+                    )
+                return cache_dir / str(rel_path)
+            return cache_dir / default_name
+
         if compress_cache:
-            fname = cache_dir / "hlcvs.npy.gz"
+            fname = cache_artifact_path("hlcvs", "hlcvs.npy.gz")
             logging.info(
                 f"{exchange} Attempting to load hlcvs data from cache {fname}..."
             )
-            with gzip.open(fname, "rb") as f:
-                hlcvs = np.load(f)
+            hlcvs = load_numpy_artifact(fname)
             # Load optional timestamps if present
-            ts_fname = cache_dir / "timestamps.npy.gz"
+            ts_fname = cache_artifact_path("timestamps", "timestamps.npy.gz")
             timestamps = None
             if os.path.exists(ts_fname):
                 try:
-                    with gzip.open(ts_fname, "rb") as f:
-                        timestamps = np.load(f)
+                    timestamps = load_numpy_artifact(ts_fname)
                 except Exception:
                     timestamps = None
-            btc_fname = cache_dir / "btc_usd_prices.npy.gz"
+            btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy.gz")
             if os.path.exists(btc_fname):
                 logging.info(
                     f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
                 )
-                with gzip.open(btc_fname, "rb") as f:
-                    btc_usd_prices = np.load(f)
+                btc_usd_prices = load_numpy_artifact(btc_fname)
             else:
                 logging.info(
                     f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
                 )
                 return None
         else:
-            fname = cache_dir / "hlcvs.npy"
+            fname = cache_artifact_path("hlcvs", "hlcvs.npy")
             logging.info(
                 f"{exchange} Attempting to load hlcvs data from cache {fname}..."
             )
-            hlcvs = np.load(fname)
-            ts_fname = cache_dir / "timestamps.npy"
+            hlcvs = load_numpy_artifact(fname)
+            ts_fname = cache_artifact_path("timestamps", "timestamps.npy")
             timestamps = None
             if os.path.exists(ts_fname):
                 try:
-                    timestamps = np.load(ts_fname)
+                    timestamps = load_numpy_artifact(ts_fname)
                 except Exception:
                     timestamps = None
-            btc_fname = cache_dir / "btc_usd_prices.npy"
+            btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy")
             if os.path.exists(btc_fname):
                 logging.info(
                     f"{exchange} Attempting to load BTC/USD prices from cache {btc_fname}..."
                 )
-                btc_usd_prices = np.load(btc_fname)
+                btc_usd_prices = load_numpy_artifact(btc_fname)
             else:
                 logging.info(
                     f"{exchange} No BTC/USD prices in cache; cache invalid for fractional collateral"
@@ -1341,6 +1393,7 @@ def save_coins_hlcvs_to_cache(
     btc_usd_prices,
     timestamps=None,
     warmup_minutes=0,
+    force_overwrite=False,
 ):
     cache_hash = get_cache_hash(config, exchange)
     cache_dir = _get_hlcvs_cache_dir_for_save(
@@ -1354,14 +1407,22 @@ def save_coins_hlcvs_to_cache(
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
     warmup_minutes = int(warmup_minutes)
     meta_path = cache_dir / "cache_meta.json"
-    if meta_path.exists():
+    if meta_path.exists() and not force_overwrite:
         try:
             existing_meta = json.load(open(meta_path))
             existing_warmup = int(existing_meta.get("warmup_minutes", 0))
-            if existing_warmup >= warmup_minutes:
+            existing_manifest = load_hlcvs_manifest(cache_dir)
+            if existing_warmup >= warmup_minutes and manifest_has_required_schema(
+                existing_manifest
+            ):
+                verify_hlcvs_manifest(cache_dir, existing_manifest)
                 return cache_dir
-        except Exception:
-            pass
+        except (HlcvsManifestError, OSError, TypeError, ValueError) as exc:
+            logging.warning(
+                "[hlcvs] existing cache %s failed validation; overwriting: %s",
+                cache_dir,
+                exc,
+            )
     logging.info(f"Dumping cache...")
     json.dump(coins, open(cache_dir / "coins.json", "w"))
     json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
@@ -1406,7 +1467,35 @@ def save_coins_hlcvs_to_cache(
         f"{line}"
     )
     logging.info(f"Seconds to dump cache: {(utc_ms() - sts) / 1000:.4f}")
-    json.dump({"warmup_minutes": warmup_minutes}, open(meta_path, "w"))
+    candidate_report = (mss.get("__meta__", {}) or {}).get("candidate_report")
+    if candidate_report is not None:
+        json.dump(
+            candidate_report,
+            open(cache_dir / "candidate_report.json", "w"),
+            indent=2,
+            sort_keys=True,
+        )
+    manifest = build_hlcvs_manifest(
+        config=config,
+        exchange=exchange,
+        cache_hash=cache_hash,
+        coins=list(coins),
+        hlcvs=hlcvs,
+        mss=mss,
+        btc_usd_prices=btc_usd_prices,
+        timestamps=timestamps,
+        warmup_minutes=warmup_minutes,
+        compressed=is_compressed,
+    )
+    write_hlcvs_manifest(cache_dir, manifest)
+    json.dump(
+        {
+            "warmup_minutes": warmup_minutes,
+            "materialization_schema_version": manifest["materialization_schema_version"],
+            "manifest_schema_version": manifest["schema_version"],
+        },
+        open(meta_path, "w"),
+    )
     return cache_dir
 
 
@@ -1498,9 +1587,27 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
     backtest_warmup_minutes = compute_backtest_warmup_minutes(config)
+    override_result = load_hlcvs_data_override(config, exchange)
+    if override_result is not None:
+        cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
+        ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+        warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
+        return (
+            coins,
+            hlcvs,
+            mss,
+            results_path,
+            cache_dir,
+            btc_usd_prices,
+            timestamps,
+        )
     try:
         sts = utc_ms()
-        result = load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+        result = (
+            None
+            if force_refetch_gaps
+            else load_coins_hlcvs_from_cache(config, exchange, backtest_warmup_minutes)
+        )
         if result:
             logging.info(f"Seconds to load cache: {(utc_ms() - sts) / 1000:.4f}")
             cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = (
@@ -1565,11 +1672,12 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             btc_usd_prices,
             timestamps,
             warmup_minutes=backtest_warmup_minutes,
+            force_overwrite=force_refetch_gaps,
         )
     except Exception as e:
         logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
-        cache_dir = ""
+        raise
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
 
@@ -2045,7 +2153,26 @@ def post_process(
     json.dump(
         analysis, open(f"{results_path}analysis.json", "w"), indent=4, sort_keys=True
     )
-    sanitized_config = sanitize_prepared_config_for_dump(config)
+    original_config = config.get("_original_backtest_config")
+    if original_config is not None:
+        dump_config(
+            strip_config_metadata(original_config),
+            f"{results_path}config.original.json",
+        )
+    if get_optional_config_value(config, "backtest.hlcvs_data_dir"):
+        sanitized_config = strip_config_metadata(
+            config,
+            keys=(
+                "_raw",
+                "_raw_effective",
+                "_transform_log",
+                "_coins_sources",
+                "_original_backtest_config",
+                "analysis",
+            ),
+        )
+    else:
+        sanitized_config = sanitize_prepared_config_for_dump(config)
     dump_config(sanitized_config, f"{results_path}config.json")
     dump_backtest_dataset_metadata(config, exchange, results_path)
     fdf.to_csv(f"{results_path}fills.csv")
@@ -2360,6 +2487,8 @@ async def main():
     )
     config["backtest"]["cache_dir"] = {}
     config["backtest"]["coins"] = {}
+    if get_optional_config_value(config, "backtest.hlcvs_data_dir"):
+        config["_original_backtest_config"] = deepcopy(config)
     force_refetch_gaps = getattr(args, "force_refetch_gaps", False)
 
     # New behavior: derive data strategy from exchange count

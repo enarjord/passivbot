@@ -10,6 +10,38 @@ import numpy as np
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
+def _fill_sparse_hlcv_gaps(
+    values: np.ndarray, valid_mask: np.ndarray, *, fill_edge_gaps: bool = False
+) -> int:
+    valid_indices = np.flatnonzero(valid_mask)
+    if valid_indices.size == 0:
+        return 0
+    first_valid = int(valid_indices[0])
+    last_valid = int(valid_indices[-1])
+    fill_start = 0 if fill_edge_gaps else first_valid
+    fill_end = len(valid_mask) - 1 if fill_edge_gaps else last_valid
+    missing_indices = np.flatnonzero(~valid_mask[fill_start : fill_end + 1]) + fill_start
+    if missing_indices.size == 0:
+        return 0
+    for idx in missing_indices:
+        prev_idx = int(idx) - 1
+        while prev_idx >= first_valid and not bool(valid_mask[prev_idx]):
+            prev_idx -= 1
+        next_idx = int(idx) + 1
+        while next_idx <= last_valid and not bool(valid_mask[next_idx]):
+            next_idx += 1
+        if prev_idx >= first_valid:
+            anchor_close = float(values[prev_idx, 2])
+        elif next_idx <= last_valid:
+            anchor_close = float(values[next_idx, 2])
+        else:
+            continue
+        values[idx, :3] = anchor_close
+        values[idx, 3] = 0.0
+        valid_mask[idx] = True
+    return int(missing_indices.size)
+
+
 @dataclass(frozen=True)
 class SharedBacktestDatasetHandle:
     root: str
@@ -64,6 +96,7 @@ class BacktestDatasetMaterializer:
         btc_usd_prices: np.ndarray,
         mss: dict,
         run_id: str,
+        fill_edge_gaps: bool = False,
     ) -> SharedBacktestDatasetHandle:
         interval_ms = timeframe_to_interval_ms("1m")
         if end_ts < start_ts:
@@ -101,6 +134,9 @@ class BacktestDatasetMaterializer:
             self.store.copy_range_into(
                 exchange, "1m", store_symbol, start_ts, end_ts, coin_view, valid_buffer
             )
+            synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
+                coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
+            )
             if valid_buffer.any():
                 valid_indices = np.flatnonzero(valid_buffer)
                 first_valid_index = int(valid_indices[0])
@@ -111,6 +147,8 @@ class BacktestDatasetMaterializer:
             meta = enriched_mss.setdefault(coin, {})
             meta["first_valid_index"] = first_valid_index
             meta["last_valid_index"] = last_valid_index
+            if synthetic_gap_fill_count:
+                meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
 
         hlcvs.flush()
         timestamps.flush()
@@ -189,13 +227,14 @@ def materialize_frames(
 
     enriched_mss = deepcopy(mss)
     for coin_idx, coin in enumerate(coins):
-        aligned = np.asarray(aligned_values_by_coin[coin], dtype=np.float64)
+        aligned = np.array(aligned_values_by_coin[coin], dtype=np.float64, copy=True)
         if aligned.shape != (n_steps, 4):
             raise ValueError(
                 f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
             )
-        hlcvs[:, coin_idx, :] = aligned
         valid_mask = ~np.isnan(aligned[:, 0])
+        synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
+        hlcvs[:, coin_idx, :] = aligned
         if valid_mask.any():
             valid_indices = np.flatnonzero(valid_mask)
             first_valid_index = int(valid_indices[0])
@@ -206,6 +245,8 @@ def materialize_frames(
         meta = enriched_mss.setdefault(coin, {})
         meta["first_valid_index"] = first_valid_index
         meta["last_valid_index"] = last_valid_index
+        if synthetic_gap_fill_count:
+            meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
 
     hlcvs.flush()
     timestamps_mm.flush()

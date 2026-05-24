@@ -13,6 +13,16 @@ def test_build_backtest_dataset_metadata_prefers_cache_coin_order_and_absolute_p
     (cache_dir / "cache_meta.json").write_text("{}")
     (cache_dir / "market_specific_settings.json").write_text("{}")
     (cache_dir / "coins.json").write_text(json.dumps(["ETH", "BTC", "XMR"]))
+    (cache_dir / "manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "materialization_schema_version": 1,
+                "files": {"hlcvs": {"sha256": "abc"}},
+                "effective": {"side_membership": {"long": ["BTC"], "short": ["ETH"]}},
+            }
+        )
+    )
 
     config = {
         "backtest": {
@@ -38,6 +48,12 @@ def test_build_backtest_dataset_metadata_prefers_cache_coin_order_and_absolute_p
     assert metadata["market_specific_settings_file"] == str(
         (cache_dir / "market_specific_settings.json").resolve()
     )
+    assert metadata["manifest_file"] == str((cache_dir / "manifest.json").resolve())
+    assert metadata["manifest_missing"] is False
+    assert metadata["manifest_schema_version"] == 1
+    assert metadata["materialization_schema_version"] == 1
+    assert metadata["content_hashes"] == {"hlcvs": "abc"}
+    assert metadata["side_membership"] == {"long": ["BTC"], "short": ["ETH"]}
 
 
 def test_dump_backtest_dataset_metadata_writes_dataset_json(tmp_path):

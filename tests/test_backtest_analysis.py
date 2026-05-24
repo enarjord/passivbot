@@ -690,6 +690,60 @@ def test_post_process_disable_plotting_skips_all_figure_generation(tmp_path, mon
     assert calls == {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
 
+def test_post_process_writes_original_config_for_dataset_override(tmp_path, monkeypatch):
+    dumped = []
+
+    def _fake_process_forager_fills(*args, **kwargs):
+        fdf = pd.DataFrame(columns=["coin", "pnl"])
+        bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
+        return fdf, {}, bal_eq
+
+    def _fake_dump_config(config, path):
+        dumped.append((config, path))
+        open(path, "w", encoding="utf-8").write("{}")
+
+    monkeypatch.setattr(bt, "process_forager_fills", _fake_process_forager_fills)
+    monkeypatch.setattr(bt, "format_config", lambda config, verbose=False: config)
+    monkeypatch.setattr(bt, "dump_config", _fake_dump_config)
+    monkeypatch.setattr(bt, "create_forager_balance_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_twe_figure", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_pnl_figure", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "save_figures", lambda *args, **kwargs: {})
+    monkeypatch.setattr(bt, "create_forager_coin_figures", lambda *args, **kwargs: {})
+
+    original_config = {
+        "backtest": {"start_date": "2025-01-01", "coins": {"binance": ["ETH"]}},
+        "live": {"approved_coins": {"long": ["ETH"], "short": []}},
+    }
+    config = {
+        "disable_plotting": True,
+        "backtest": {
+            "balance_sample_divider": 60,
+            "coins": {"binance": ["BTC"]},
+            "hlcvs_data_dir": "caches/hlcvs_data/custom__abc",
+        },
+        "bot": {"long": {"total_wallet_exposure_limit": 1.0}, "short": {"total_wallet_exposure_limit": 0.0}},
+        "live": {"approved_coins": {"long": ["BTC"], "short": []}},
+        "_original_backtest_config": original_config,
+    }
+
+    bt.post_process(
+        config=config,
+        hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
+        fills=[],
+        equities_array=np.array([[1704067200000, 1000.0, 1000.0]], dtype=np.float64),
+        btc_usd_prices=np.array([]),
+        analysis={"gain_usd": 1.0},
+        results_path=str(tmp_path),
+        exchange="binance",
+    )
+
+    dumped_by_name = {path.split("/")[-1]: cfg for cfg, path in dumped}
+    assert dumped_by_name["config.original.json"]["backtest"]["coins"]["binance"] == ["ETH"]
+    assert dumped_by_name["config.original.json"]["live"]["approved_coins"]["long"] == ["ETH"]
+    assert dumped_by_name["config.json"]["backtest"]["coins"]["binance"] == ["BTC"]
+
+
 def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     calls = {"balance": 0, "twe": 0, "pnl": 0, "save": 0, "coin": 0}
 
