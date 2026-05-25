@@ -1026,6 +1026,17 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
         retry_count=3,
         note="mirrored_from_candlestick_manager",
     )
+    catalog.mark_gap(
+        exchange="bybit",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(first),
+        end_ts=int(end),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="stale_suffix_gap",
+    )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
         return {coin: int(start) for coin in coins}
@@ -1072,6 +1083,8 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
     assert prefix_gaps[0].end_ts == int(first - 60_000)
     assert prefix_gaps[0].reason == "pre_inception"
     assert prefix_gaps[0].note == "authoritative_first_candle_boundary"
+    suffix_gaps = catalog.get_persistent_gaps("bybit", "1m", symbol, int(first), int(end))
+    assert suffix_gaps == []
     assert any(
         "[bybit] using authoritative pre-inception boundary for OKB" in rec.message
         for rec in caplog.records

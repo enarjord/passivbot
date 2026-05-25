@@ -373,6 +373,28 @@ class OhlcvCatalog:
                             exchange, timeframe, symbol, start_ts, end_ts, reason, persistent,
                             retry_count, last_attempt_at, next_retry_at, note
                         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(exchange, timeframe, symbol, start_ts, end_ts) DO UPDATE SET
+                            reason = excluded.reason,
+                            persistent = CASE
+                                WHEN gaps.persistent OR excluded.persistent THEN 1 ELSE 0
+                            END,
+                            retry_count = CASE
+                                WHEN excluded.retry_count > gaps.retry_count
+                                THEN excluded.retry_count ELSE gaps.retry_count
+                            END,
+                            last_attempt_at = CASE
+                                WHEN gaps.last_attempt_at IS NULL THEN excluded.last_attempt_at
+                                WHEN excluded.last_attempt_at IS NULL THEN gaps.last_attempt_at
+                                WHEN excluded.last_attempt_at > gaps.last_attempt_at
+                                THEN excluded.last_attempt_at ELSE gaps.last_attempt_at
+                            END,
+                            next_retry_at = CASE
+                                WHEN gaps.next_retry_at IS NULL THEN excluded.next_retry_at
+                                WHEN excluded.next_retry_at IS NULL THEN gaps.next_retry_at
+                                WHEN excluded.next_retry_at < gaps.next_retry_at
+                                THEN excluded.next_retry_at ELSE gaps.next_retry_at
+                            END,
+                            note = COALESCE(gaps.note, excluded.note)
                         """,
                         (
                             gap.exchange,
