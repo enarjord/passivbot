@@ -4,8 +4,10 @@
 
 1. Prefer existing local data before remote calls.
 2. For backtest preparation, use v2 OHLCV chunks first, legacy raw shards second, and targeted remote fetches last.
-3. Treat exchange-side late starts, early ends, and verified internal gaps as coverage metadata, not local corruption.
-4. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.
+3. Treat exchange-side late starts and early ends as coverage metadata, not local corruption.
+4. Fill only internal gaps within the configured tolerance. Larger internal gaps must be repaired,
+   excluded from the returned tradable window, or fail; do not make them tradable via synthetic rows.
+5. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.
 
 ## Non-Obvious Details
 

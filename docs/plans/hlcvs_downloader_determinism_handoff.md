@@ -18,7 +18,9 @@ Current implementation guidance:
   fetches for the remaining missing windows.
 - Market availability gaps are coverage metadata, not automatic process
   failures. This includes leading pre-listing or unavailable prefixes, trailing
-  unavailable suffixes, and verified internal exchange-side gaps.
+  unavailable suffixes, and small verified internal exchange-side gaps within
+  the configured tolerance. Larger internal gaps must be repaired or excluded
+  from the returned tradable window.
 - Hard failures are reserved for cases where the backtest cannot proceed
   meaningfully or safely: malformed/corrupt local data that cannot be repaired,
   no data inside the requested range, no tradable candles after warmup, or no

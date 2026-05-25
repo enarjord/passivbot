@@ -73,11 +73,13 @@ Backtest and optimize data preparation follows one deterministic order:
 3. fetch only the remaining missing or invalid windows from the exchange
 
 Missing exchange history is recorded as coverage metadata rather than treated as cache
-corruption. Newly listed coins may start after the requested start date, delisted or
-migrated coins may end before the requested end date, and verified source-side internal
-gaps are carried in the dataset metadata after repair attempts. Backtests still fail
-when there is no usable data inside the requested range, no BTC benchmark data, no
-tradable candles after warmup, checksum mismatches, conflicting duplicate candles, or
+corruption. Newly listed coins may start after the requested start date, and delisted
+or migrated coins may end before the requested end date. Small verified source-side
+internal gaps may be filled within `backtest.gap_tolerance_ohlcvs_minutes`; larger
+internal gaps are repaired or excluded from the returned tradable window rather than
+materialized as one continuous tradable span. Backtests still fail when there is no
+usable data inside the requested range, no BTC benchmark data, no tradable candles
+after warmup, missing/mismatched chunk checksums, conflicting duplicate candles, or
 malformed timestamps/OHLCV rows that cannot be normalized.
 
 Prepared final caches under `caches/hlcvs_data/` require a valid manifest. Old

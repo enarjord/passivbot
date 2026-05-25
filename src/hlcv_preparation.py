@@ -14,7 +14,6 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
-import time
 
 from candlestick_manager import CandlestickManager
 from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
@@ -914,21 +913,6 @@ class HLCVManager:
             )
             return empty_df
 
-        ts = real["ts"].astype(np.int64, copy=False)
-        if ts.size > 1:
-            gap_tolerance_ms = int(self.gap_tolerance_ohlcvs_minutes * 60_000)
-            intervals = np.diff(ts)
-            greatest_gap_ms = int(intervals.max(initial=60_000))
-            if greatest_gap_ms > gap_tolerance_ms:
-                if self.verbose:
-                    logging.warning(
-                        "[%s] gaps detected in %s v2 OHLCV fetch; greatest gap: %.1f minutes. Returning empty.",
-                        self.exchange,
-                        coin,
-                        greatest_gap_ms / 60_000.0,
-                    )
-                return empty_df
-
         return pd.DataFrame(
             {
                 "timestamp": real["ts"].astype(np.int64),
@@ -1095,8 +1079,6 @@ async def try_prepare_hlcvs_v2_local(
 ) -> Optional[tuple[dict, np.ndarray, np.memmap, np.memmap]]:
     if exchange == "combined":
         return None
-    if force_refetch_gaps:
-        return None
 
     legacy_root_cfg = Path(
         config.get("backtest", {}).get("ohlcv_source_dir") or Path("caches") / "ohlcv"
@@ -1140,7 +1122,7 @@ async def try_prepare_hlcvs_v2_local(
         cm_progress_log_interval_seconds=float(
             config.get("backtest", {}).get("cm_progress_log_interval_seconds", 10.0) or 10.0
         ),
-        force_refetch_gaps=False,
+        force_refetch_gaps=force_refetch_gaps,
         ohlcv_source_dir=config.get("backtest", {}).get("ohlcv_source_dir"),
     )
 
@@ -1500,8 +1482,15 @@ async def _resolve_v2_store_range(
             first_ts_evidence = await _collect_first_timestamp_evidence(
                 om=om, exchange=exchange, coin=coin, symbol=symbol
             )
-            if allow_remote_fetch and _pre_inception_gaps_are_stale(
-                overlapping_persistent_gaps, first_ts_evidence
+            retryable_pre_inception_gaps = [
+                gap for gap in overlapping_persistent_gaps if _gap_retry_due(gap, om)
+            ]
+            if (
+                allow_remote_fetch
+                and retryable_pre_inception_gaps
+                and _pre_inception_gaps_are_stale(
+                    overlapping_persistent_gaps, first_ts_evidence
+                )
             ):
                 logging.info(
                     "[%s] retrying stale pre-inception v2 gap(s) for %s (%s -> %s); evidence=%s",
@@ -1618,7 +1607,10 @@ async def _resolve_v2_store_range(
                     )
                 )
             return None
-        if allow_remote_fetch:
+        retryable_persistent_gaps = [
+            gap for gap in overlapping_persistent_gaps if _gap_retry_due(gap, om)
+        ]
+        if allow_remote_fetch and retryable_persistent_gaps:
             logging.info(
                 "[%s] retrying %d persistent v2 gap window(s) for %s (%s -> %s)",
                 exchange,
@@ -1662,16 +1654,19 @@ async def _resolve_v2_store_range(
             ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
                 return rng
         if _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
-            if _has_usable_partial_coverage(rng):
-                valid_idx = np.flatnonzero(rng.valid)
+            partial_rng = _usable_partial_coverage_window(
+                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+            )
+            if partial_rng is not None:
+                valid_idx = np.flatnonzero(partial_rng.valid)
                 logging.info(
                     "[%s] using verified partial v2 coverage for %s despite known gap(s) (%s -> %s)",
                     exchange,
                     coin,
-                    ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
-                    ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[0])])),
+                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[-1])])),
                 )
-                return rng
+                return partial_rng
             partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
             if partial_rng is not None:
                 logging.info(
@@ -1749,17 +1744,20 @@ async def _resolve_v2_store_range(
                 ts_to_date(end_ts),
             )
             return rng
-        if _has_usable_partial_coverage(rng):
-            valid_idx = np.flatnonzero(rng.valid)
+        partial_rng = _usable_partial_coverage_window(
+            rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+        )
+        if partial_rng is not None:
+            valid_idx = np.flatnonzero(partial_rng.valid)
             logging.info(
                 "[%s] %s partial coverage for %s after targeted fetch (%s -> %s)",
                 exchange,
                 local_hit_log_label,
                 coin,
-                ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
-                ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                ts_to_date(int(partial_rng.timestamps[int(valid_idx[0])])),
+                ts_to_date(int(partial_rng.timestamps[int(valid_idx[-1])])),
             )
-            return rng
+            return partial_rng
         if allow_partial_window:
             partial_rng = _extract_single_valid_window(rng)
             if partial_rng is not None:
@@ -1856,17 +1854,20 @@ async def _resolve_v2_store_range(
                     ts_to_date(end_ts),
                 )
                 return rng
-            if _has_usable_partial_coverage(rng):
-                valid_idx = np.flatnonzero(rng.valid)
+            partial_rng = _usable_partial_coverage_window(
+                rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+            )
+            if partial_rng is not None:
+                valid_idx = np.flatnonzero(partial_rng.valid)
                 logging.info(
                     "[%s] %s partial coverage for %s after post-fetch legacy import (%s -> %s)",
                     exchange,
                     local_hit_log_label,
                     coin,
-                    ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
-                    ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[0])])),
+                    ts_to_date(int(partial_rng.timestamps[int(valid_idx[-1])])),
                 )
-                return rng
+                return partial_rng
             if allow_partial_window:
                 partial_rng = _extract_single_valid_window(rng)
                 if partial_rng is not None:
@@ -1906,17 +1907,20 @@ async def _resolve_v2_store_range(
                 ts_to_date(end_ts),
             )
             return rng
-        if _has_usable_partial_coverage(rng):
-            valid_idx = np.flatnonzero(rng.valid)
+        partial_rng = _usable_partial_coverage_window(
+            rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
+        )
+        if partial_rng is not None:
+            valid_idx = np.flatnonzero(partial_rng.valid)
             logging.info(
                 "[%s] %s partial coverage for %s after fetch (%s -> %s)",
                 exchange,
                 local_hit_log_label,
                 coin,
-                ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
-                ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                ts_to_date(int(partial_rng.timestamps[int(valid_idx[0])])),
+                ts_to_date(int(partial_rng.timestamps[int(valid_idx[-1])])),
             )
-            return rng
+            return partial_rng
         if allow_partial_window:
             partial_rng = _extract_single_valid_window(rng)
             if partial_rng is not None:
@@ -2070,14 +2074,50 @@ def _has_single_leading_invalid_prefix(rng) -> bool:
     return int(valid_idx[-1]) == len(rng.valid) - 1 and bool(rng.valid[first_valid_idx:].all())
 
 
-def _has_usable_partial_coverage(rng) -> bool:
+def _usable_partial_coverage_window(rng, gap_tolerance_minutes: float):
+    valid_idx = np.flatnonzero(rng.valid)
+    if valid_idx.size == 0:
+        return None
+    if not _has_large_internal_sparse_gap(rng, gap_tolerance_minutes):
+        return rng
+    return _extract_longest_contiguous_valid_window(rng)
+
+
+def _has_large_internal_sparse_gap(rng, gap_tolerance_minutes: float) -> bool:
     valid_idx = np.flatnonzero(rng.valid)
     if valid_idx.size == 0:
         return False
-    # After v2, legacy, and targeted remote repair have had a chance to fill the
-    # range, remaining missing rows are coverage metadata. The later tradable
-    # coverage guard decides whether enough real data remains after warmup.
-    return True
+    first_valid_ts = int(rng.timestamps[int(valid_idx[0])])
+    last_valid_ts = int(rng.timestamps[int(valid_idx[-1])])
+    max_gap_bars = max(0, int(float(gap_tolerance_minutes)))
+    for window_start, window_end in _iter_invalid_windows(rng.timestamps, rng.valid):
+        if int(window_end) < first_valid_ts or int(window_start) > last_valid_ts:
+            continue
+        window_bars = int((int(window_end) - int(window_start)) // 60_000) + 1
+        if window_bars > max_gap_bars:
+            return True
+    return False
+
+
+def _extract_longest_contiguous_valid_window(rng):
+    valid = np.asarray(rng.valid, dtype=bool)
+    if not valid.any():
+        return None
+    padded = np.concatenate(([False], valid, [False]))
+    changes = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(changes == 1)
+    ends = np.flatnonzero(changes == -1)
+    if starts.size == 0:
+        return None
+    lengths = ends - starts
+    best = int(np.argmax(lengths))
+    start_idx = int(starts[best])
+    end_idx = int(ends[best])
+    return type(rng)(
+        timestamps=rng.timestamps[start_idx:end_idx].copy(),
+        values=rng.values[start_idx:end_idx].copy(),
+        valid=np.ones(end_idx - start_idx, dtype=np.bool_),
+    )
 
 
 def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tuple[int, int]]:
@@ -2111,6 +2151,7 @@ def _range_has_tolerable_internal_sparse_gaps(rng, gap_tolerance_minutes: float)
 
 
 def _dense_hlcv_frame_from_sparse_v2_range(rng) -> tuple[pd.DataFrame, int]:
+    valid = np.asarray(rng.valid, dtype=bool)
     df = pd.DataFrame(
         {
             "timestamp": rng.timestamps.astype(np.int64),
@@ -2118,13 +2159,12 @@ def _dense_hlcv_frame_from_sparse_v2_range(rng) -> tuple[pd.DataFrame, int]:
             "low": rng.values[:, 1].astype(np.float64, copy=False),
             "close": rng.values[:, 2].astype(np.float64, copy=False),
             "volume": rng.values[:, 3].astype(np.float64, copy=False),
+            "valid": valid,
         }
     )
-    gap_count = int((~rng.valid).sum())
+    gap_count = int((~valid).sum())
     if gap_count:
-        for col in ("high", "low", "close"):
-            df[col] = df[col].ffill().bfill()
-        df["volume"] = df["volume"].fillna(0.0)
+        df.loc[~valid, ["high", "low", "close", "volume"]] = np.nan
     return df.reset_index(drop=True), gap_count
 
 
@@ -2243,6 +2283,19 @@ def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
     return bool(gaps) and all(_pre_inception_gap_confirms_discovered_boundary(gap) for gap in gaps)
 
 
+def _gap_retry_due(gap, om=None) -> bool:
+    if bool(getattr(om, "force_refetch_gaps", False)):
+        return True
+    next_retry_at = getattr(gap, "next_retry_at", None)
+    if next_retry_at is None:
+        return True
+    try:
+        retry_ts = int(next_retry_at)
+    except (TypeError, ValueError):
+        return True
+    return retry_ts <= int(time.time() * 1000)
+
+
 def _format_first_timestamp_evidence(first_ts_evidence: dict[str, int]) -> str:
     if not first_ts_evidence:
         return "{}"
@@ -2315,7 +2368,10 @@ def _format_stale_pre_inception_failure(
 
 def _is_repairable_chunk_integrity_error(exc: ValueError) -> bool:
     message = str(exc)
-    return "checksum mismatch" in message or "checksum backfill failed" in message
+    return (
+        "checksum mismatch" in message
+        or "checksum missing" in message
+    )
 
 
 def _import_legacy_invalid_windows(
@@ -3460,10 +3516,15 @@ async def _prepare_hlcvs_combined_impl(
 
         coin_data = df[["high", "low", "close", "volume"]].values
         aligned_values_by_coin[coin] = np.asarray(coin_data, dtype=np.float64)
-        start_idx = int(
-            (chosen_data_per_coin[coin].timestamp.iloc[0] - global_start_time) / interval_ms
-        )
-        end_idx = start_idx + len(chosen_data_per_coin[coin]) - 1
+        if "valid" in df.columns:
+            valid_mask = df["valid"].fillna(False).to_numpy(dtype=bool)
+        else:
+            valid_mask = ~np.isnan(coin_data[:, 0])
+        valid_idx = np.flatnonzero(valid_mask)
+        if valid_idx.size == 0:
+            raise ValueError(f"combined selected {coin} with no valid HLCV rows")
+        start_idx = int(valid_idx[0])
+        end_idx = int(valid_idx[-1])
         chosen_mss_per_coin[coin]["first_valid_index"] = start_idx
         chosen_mss_per_coin[coin]["last_valid_index"] = end_idx
         first_idx = int(start_idx)

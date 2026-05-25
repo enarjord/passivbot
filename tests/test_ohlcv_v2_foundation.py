@@ -37,7 +37,7 @@ def test_store_writes_and_reads_partial_month_range(tmp_path):
     np.testing.assert_allclose(out.values, vals)
 
 
-def test_expired_persistent_gap_stops_blocking_planner(tmp_path):
+def test_due_persistent_gap_remains_visible_to_planner(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     start = month_start_ts(2026, 4)
     catalog.mark_gap(
@@ -69,8 +69,8 @@ def test_expired_persistent_gap_stops_blocking_planner(tmp_path):
     )
 
     assert len(all_gaps) == 1
-    assert active_gaps == []
-    assert not plan.blocked_by_persistent_gap
+    assert len(active_gaps) == 1
+    assert plan.blocked_by_persistent_gap
 
 
 def test_store_detects_chunk_checksum_mismatch(tmp_path):
@@ -114,7 +114,7 @@ def test_store_detects_same_process_mutation_after_verified_read(tmp_path):
         store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
 
 
-def test_store_backfills_missing_chunk_checksum_on_read(tmp_path):
+def test_store_rejects_missing_chunk_checksum_on_read(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
 
@@ -128,19 +128,10 @@ def test_store_backfills_missing_chunk_checksum_on_read(tmp_path):
     chunk_before = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
     assert chunk_before.checksum is None
 
-    out = store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
-    assert out.valid.all()
-    np.testing.assert_allclose(out.values, vals)
-    chunk_after = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
-    assert chunk_after.checksum
-
-    body = np.load(chunk_after.body_path, mmap_mode="r+")
-    body[0, 0] = 999.0
-    body.flush()
-    del body
-
-    with pytest.raises(ValueError, match="checksum mismatch"):
+    with pytest.raises(ValueError, match="checksum missing"):
         store.read_range("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))
+    chunk_after = catalog.list_chunks("binance", "1m", "BTC/USDT", int(ts[0]), int(ts[-1]))[0]
+    assert chunk_after.checksum is None
 
 
 def test_open_month_patch_extends_existing_chunk_and_symbol_bounds(tmp_path):

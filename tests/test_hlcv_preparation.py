@@ -529,7 +529,9 @@ class TestPrepareHLCVSBtcFallback:
 
         with patch("hlcv_preparation.prepare_hlcvs_internal", new=mock_prepare_internal):
             with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
-                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(config, "hyperliquid")
+                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(
+                    config, "hyperliquid", skip_v2_local=True
+                )
 
         assert calls[0] == "hyperliquid"
         assert calls[-1] == "binanceusdm"
@@ -1663,7 +1665,8 @@ async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_
     assert coverage_count == 2
     assert gap_count == 1
     assert total_volume == pytest.approx(202.0)
-    np.testing.assert_allclose(df["volume"].to_numpy(), np.array([100.0, 0.0, 102.0]))
+    assert df["valid"].tolist() == [True, False, True]
+    assert np.isnan(df["volume"].to_numpy()[1])
 
 
 @pytest.mark.asyncio
@@ -1683,7 +1686,7 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
             rows = np.array(
                 [
                     (since_ms, 100.0, 101.0, 99.0, 100.0, 10.0),
-                    (since_ms + 120_000, 101.0, 102.0, 100.0, 101.0, 11.0),
+                    (since_ms + 600_000, 101.0, 102.0, 100.0, 101.0, 11.0),
                 ],
                 dtype=CANDLE_DTYPE,
             )
@@ -1699,7 +1702,7 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
         "binance",
         "2026-04-01",
         "2026-04-01",
-        gap_tolerance_ohlcvs_minutes=10,
+        gap_tolerance_ohlcvs_minutes=1,
     )
     manager.markets = {"BTC/USDT:USDT": {"base": "BTC"}}
     manager.cm = FakeCandlestickManager()
@@ -1709,12 +1712,12 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
     df = await manager.fetch_ohlcvs_for_v2_store(
         "BTC",
         start_ts=start_ts,
-        end_ts=start_ts + 120_000,
+        end_ts=start_ts + 600_000,
     )
 
     np.testing.assert_array_equal(
         df["timestamp"].to_numpy(dtype=np.int64, copy=False),
-        np.array([start_ts, start_ts + 120_000], dtype=np.int64),
+        np.array([start_ts, start_ts + 600_000], dtype=np.int64),
     )
 
 

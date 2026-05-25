@@ -326,11 +326,10 @@ class OhlcvCatalog:
     def get_persistent_gaps(
         self, exchange: str, timeframe: str, symbol: str, start_ts: int, end_ts: int
     ) -> list[GapRecord]:
-        now = _utc_ms()
         return [
             gap
             for gap in self.get_gaps(exchange, timeframe, symbol, start_ts, end_ts)
-            if gap.persistent and (gap.next_retry_at is None or int(gap.next_retry_at) > now)
+            if gap.persistent
         ]
 
     def clear_gap_range(
