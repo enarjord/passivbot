@@ -1438,6 +1438,43 @@ async def _resolve_v2_store_range(
         if rng.valid.any()
         else [(int(start_ts), int(end_ts))]
     )
+    if _has_single_leading_invalid_prefix(rng):
+        first_ts_evidence = await _collect_first_timestamp_evidence(
+            om=om, exchange=exchange, coin=coin, symbol=symbol
+        )
+        authoritative_rng = _extract_authoritative_pre_inception_window(
+            rng, first_ts_evidence
+        )
+        if authoritative_rng is not None:
+            prefix_end_ts = int(authoritative_rng.timestamps[0]) - 60_000
+            if prefix_end_ts >= int(start_ts):
+                catalog.clear_gap_range(
+                    exchange=exchange,
+                    timeframe="1m",
+                    symbol=symbol,
+                    start_ts=int(start_ts),
+                    end_ts=prefix_end_ts,
+                    reason="pre_inception",
+                )
+                catalog.mark_gap(
+                    exchange=exchange,
+                    timeframe="1m",
+                    symbol=symbol,
+                    start_ts=int(start_ts),
+                    end_ts=prefix_end_ts,
+                    reason="pre_inception",
+                    persistent=True,
+                    retry_count=0,
+                    note="authoritative_first_candle_boundary",
+                )
+            logging.info(
+                "[%s] using authoritative pre-inception boundary for %s (%s -> %s)",
+                exchange,
+                coin,
+                ts_to_date(int(authoritative_rng.timestamps[0])),
+                ts_to_date(int(authoritative_rng.timestamps[-1])),
+            )
+            return authoritative_rng
     if _range_has_tolerable_internal_sparse_gaps(
         rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
     ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
@@ -1955,6 +1992,43 @@ def _extract_single_valid_window(rng):
         values=rng.values[start_idx : end_idx + 1].copy(),
         valid=np.ones(end_idx - start_idx + 1, dtype=np.bool_),
     )
+
+
+def _extract_authoritative_pre_inception_window(rng, first_ts_evidence: dict[str, int]):
+    valid_idx = np.flatnonzero(rng.valid)
+    if valid_idx.size == 0:
+        return None
+    first_valid_idx = int(valid_idx[0])
+    last_valid_idx = int(valid_idx[-1])
+    if first_valid_idx == 0 or last_valid_idx != len(rng.valid) - 1:
+        return None
+    if not rng.valid[first_valid_idx:].all():
+        return None
+    first_valid_ts = int(rng.timestamps[first_valid_idx])
+    authoritative_keys = (
+        "cm_authoritative_start_ts",
+        "local_first_timestamp",
+        "unified_exchange_first_timestamp",
+    )
+    matching_authoritative_ts = [
+        int(first_ts_evidence[key])
+        for key in authoritative_keys
+        if key in first_ts_evidence
+        and abs(first_valid_ts - int(first_ts_evidence[key])) <= 60_000
+    ]
+    if not matching_authoritative_ts:
+        return None
+    return _extract_single_valid_window(rng)
+
+
+def _has_single_leading_invalid_prefix(rng) -> bool:
+    valid_idx = np.flatnonzero(rng.valid)
+    if valid_idx.size == 0:
+        return False
+    first_valid_idx = int(valid_idx[0])
+    if first_valid_idx == 0:
+        return False
+    return int(valid_idx[-1]) == len(rng.valid) - 1 and bool(rng.valid[first_valid_idx:].all())
 
 
 def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tuple[int, int]]:

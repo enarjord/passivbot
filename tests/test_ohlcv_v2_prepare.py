@@ -995,6 +995,90 @@ async def test_resolve_v2_store_range_accepts_discovered_pre_inception_boundary(
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_with_partial_gap(
+    monkeypatch, tmp_path, caplog
+):
+    monkeypatch.chdir(tmp_path)
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "OKB/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    first = start + 5 * 60_000
+    end = start + 9 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(5)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 106.0, dtype=np.float32),
+            np.arange(99.0, 104.0, dtype=np.float32),
+            np.arange(100.0, 105.0, dtype=np.float32),
+            np.arange(10.0, 15.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("bybit", "1m", symbol, timestamps, values)
+    catalog.mark_gap(
+        exchange="bybit",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start + 2 * 60_000),
+        end_ts=int(first - 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {coin: int(start) for coin in coins}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeCandlestickManager:
+        def _get_authoritative_start_ts(self, symbol_arg):
+            assert symbol_arg == symbol
+            return int(first)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = FakeCandlestickManager()
+
+        def load_first_timestamp(self, coin):
+            return int(start)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            raise AssertionError("authoritative local boundary should not fetch remote data")
+
+    caplog.set_level("INFO")
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="OKB",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is not None
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    assert rng.valid.all()
+    prefix_gaps = catalog.get_persistent_gaps("bybit", "1m", symbol, int(start), int(first - 60_000))
+    assert len(prefix_gaps) == 1
+    assert prefix_gaps[0].start_ts == int(start)
+    assert prefix_gaps[0].end_ts == int(first - 60_000)
+    assert prefix_gaps[0].reason == "pre_inception"
+    assert prefix_gaps[0].note == "authoritative_first_candle_boundary"
+    assert any(
+        "[bybit] using authoritative pre-inception boundary for OKB" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_keeps_internal_gap_failure_during_boundary_repair(
     monkeypatch, tmp_path
 ):
