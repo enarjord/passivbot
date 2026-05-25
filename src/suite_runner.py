@@ -15,7 +15,7 @@ import logging
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from config import load_prepared_config
@@ -71,6 +71,13 @@ class SuiteSummary:
     aggregate: Dict[str, Any]
     output_dir: Path
     suite_metrics: Optional[Dict[str, Any]] = None
+
+
+@dataclass(frozen=True)
+class DatasetWindow:
+    start_date: str
+    end_date: str
+    scenario_labels: Tuple[str, ...]
 
 
 # --------------------------------------------------------------------------- #
@@ -254,6 +261,115 @@ def _collect_date_window(
         if scenario.end_date:
             end_dates.append(scenario.end_date)
     return min(start_dates), max(end_dates)
+
+
+def _scenario_date_window(
+    base_start: str,
+    base_end: str,
+    scenario: SuiteScenario,
+) -> Tuple[str, str]:
+    return scenario.start_date or base_start, scenario.end_date or base_end
+
+
+def _merge_scenario_windows(
+    base_start: str,
+    base_end: str,
+    scenarios: Sequence[SuiteScenario],
+) -> DatasetWindow:
+    if not scenarios:
+        return DatasetWindow(str(base_start), str(base_end), ("<base>",))
+    starts: List[str] = []
+    ends: List[str] = []
+    labels: List[str] = []
+    for scenario in scenarios:
+        start, end = _scenario_date_window(base_start, base_end, scenario)
+        starts.append(str(start))
+        ends.append(str(end))
+        labels.append(scenario.label)
+    return DatasetWindow(min(starts), max(ends), tuple(labels))
+
+
+def _derive_dataset_windows(
+    base_config: Dict[str, Any],
+    exchanges: Sequence[str],
+    scenarios: Optional[Sequence[SuiteScenario]],
+    *,
+    needed_individual_exchanges: Optional[set[str]] = None,
+) -> Dict[str, DatasetWindow]:
+    base_start = str(require_config_value(base_config, "backtest.start_date"))
+    base_end = str(require_config_value(base_config, "backtest.end_date"))
+    scenario_list = list(scenarios or [])
+    if not scenario_list:
+        base_window = DatasetWindow(base_start, base_end, ("<base>",))
+        windows = {"combined": base_window} if len(exchanges) > 1 else {}
+        for exchange in exchanges:
+            windows.setdefault(str(exchange), base_window)
+        return windows
+
+    exchange_set = {str(exchange) for exchange in exchanges}
+    use_combined = len(exchange_set) > 1
+    windows: Dict[str, DatasetWindow] = {}
+
+    if use_combined:
+        combined_scenarios: List[SuiteScenario] = []
+        individual_scenarios: Dict[str, List[SuiteScenario]] = {
+            str(exchange): [] for exchange in (needed_individual_exchanges or set())
+        }
+        for scenario in scenario_list:
+            scenario_exchanges = set(scenario.exchanges or exchanges)
+            if scenario_exchanges == exchange_set:
+                combined_scenarios.append(scenario)
+                continue
+            for exchange in scenario_exchanges:
+                exchange_name = str(exchange)
+                if exchange_name in individual_scenarios:
+                    individual_scenarios[exchange_name].append(scenario)
+        windows["combined"] = _merge_scenario_windows(
+            base_start,
+            base_end,
+            combined_scenarios or scenario_list,
+        )
+        for exchange, exchange_scenarios in individual_scenarios.items():
+            windows[exchange] = _merge_scenario_windows(
+                base_start,
+                base_end,
+                exchange_scenarios or scenario_list,
+            )
+    else:
+        for exchange in exchanges:
+            exchange_name = str(exchange)
+            exchange_scenarios = [
+                scenario
+                for scenario in scenario_list
+                if exchange_name in set(scenario.exchanges or exchanges)
+            ]
+            windows[exchange_name] = _merge_scenario_windows(
+                base_start,
+                base_end,
+                exchange_scenarios or scenario_list,
+            )
+    return windows
+
+
+def _config_for_dataset_window(
+    base_config: Dict[str, Any],
+    window: DatasetWindow,
+) -> Dict[str, Any]:
+    cfg = deepcopy(base_config)
+    cfg.setdefault("backtest", {})
+    cfg["backtest"]["start_date"] = window.start_date
+    cfg["backtest"]["end_date"] = window.end_date
+    return cfg
+
+
+def _log_dataset_window(dataset_label: str, window: DatasetWindow) -> None:
+    logging.info(
+        "[suite] dataset window %s start=%s end=%s scenarios=%s",
+        dataset_label,
+        window.start_date,
+        window.end_date,
+        ",".join(window.scenario_labels),
+    )
 
 
 def build_scenarios(
@@ -455,10 +571,17 @@ async def prepare_master_datasets(
     *,
     needed_individual_exchanges: Optional[Set[str]] = None,
     candle_interval_minutes: int = 1,
+    scenarios: Optional[Sequence[SuiteScenario]] = None,
 ) -> Dict[str, ExchangeDataset]:
     from backtest import prepare_hlcvs_mss
 
     datasets: Dict[str, ExchangeDataset] = {}
+    dataset_windows = _derive_dataset_windows(
+        base_config,
+        exchanges,
+        scenarios,
+        needed_individual_exchanges=needed_individual_exchanges,
+    )
 
     def _build_dataset(
         exchange_label: str,
@@ -511,6 +634,9 @@ async def prepare_master_datasets(
 
     if use_combined:
         # Prepare combined (best-per-coin) dataset
+        combined_window = dataset_windows["combined"]
+        _log_dataset_window("combined", combined_window)
+        combined_config = _config_for_dataset_window(base_config, combined_window)
         (
             coins,
             hlcvs,
@@ -519,7 +645,7 @@ async def prepare_master_datasets(
             cache_dir,
             btc_usd_prices,
             timestamps,
-        ) = await prepare_hlcvs_mss(base_config, "combined")
+        ) = await prepare_hlcvs_mss(combined_config, "combined")
         if candle_interval_minutes > 1:
             hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
                 hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
@@ -546,6 +672,15 @@ async def prepare_master_datasets(
                     "Preparing individual %s dataset for single-exchange scenarios",
                     exchange,
                 )
+                exchange_window = dataset_windows.get(exchange)
+                if exchange_window is None:
+                    exchange_window = DatasetWindow(
+                        str(require_config_value(base_config, "backtest.start_date")),
+                        str(require_config_value(base_config, "backtest.end_date")),
+                        ("<base>",),
+                    )
+                _log_dataset_window(exchange, exchange_window)
+                exchange_config = _config_for_dataset_window(base_config, exchange_window)
                 (
                     ex_coins,
                     ex_hlcvs,
@@ -554,7 +689,7 @@ async def prepare_master_datasets(
                     ex_cache_dir,
                     ex_btc_usd_prices,
                     ex_timestamps,
-                ) = await prepare_hlcvs_mss(base_config, exchange)
+                ) = await prepare_hlcvs_mss(exchange_config, exchange)
                 if candle_interval_minutes > 1:
                     ex_hlcvs, ex_timestamps, ex_btc_usd_prices = _apply_candle_aggregation(
                         ex_hlcvs, ex_timestamps, ex_btc_usd_prices, ex_mss, candle_interval_minutes
@@ -573,6 +708,15 @@ async def prepare_master_datasets(
                 del ex_hlcvs, ex_btc_usd_prices
     else:
         for exchange in exchanges:
+            exchange_window = dataset_windows.get(exchange)
+            if exchange_window is None:
+                exchange_window = DatasetWindow(
+                    str(require_config_value(base_config, "backtest.start_date")),
+                    str(require_config_value(base_config, "backtest.end_date")),
+                    ("<base>",),
+                )
+            _log_dataset_window(exchange, exchange_window)
+            exchange_config = _config_for_dataset_window(base_config, exchange_window)
             (
                 coins,
                 hlcvs,
@@ -581,7 +725,7 @@ async def prepare_master_datasets(
                 cache_dir,
                 btc_usd_prices,
                 timestamps,
-            ) = await prepare_hlcvs_mss(base_config, exchange)
+            ) = await prepare_hlcvs_mss(exchange_config, exchange)
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
                     hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
@@ -1405,8 +1549,6 @@ async def run_backtest_suite_async(
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
 
-    base_start = require_config_value(config, "backtest.start_date")
-    base_end = require_config_value(config, "backtest.end_date")
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))
 
@@ -1436,11 +1578,8 @@ async def run_backtest_suite_async(
     if suite_coin_sources:
         master_coins = sorted(dict.fromkeys([*master_coins, *suite_coin_sources.keys()]))
     master_ignored = _collect_union((s.ignored_coins for s in scenarios), base_ignored)
-    global_start, global_end = _collect_date_window(base_start, base_end, scenarios)
 
     base_config = deepcopy(config)
-    base_config["backtest"]["start_date"] = global_start
-    base_config["backtest"]["end_date"] = global_end
     base_config.setdefault("backtest", {})
     base_config["backtest"]["coin_sources"] = suite_coin_sources
     if isinstance(base_config["live"]["approved_coins"], dict):
@@ -1460,6 +1599,7 @@ async def run_backtest_suite_async(
         exchanges_list,
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
+        scenarios=scenarios,
     )
     available_coins: set[str] = set()
     for dataset in datasets.values():
