@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import logging
+import time
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -18,28 +20,48 @@ def _fill_sparse_hlcv_gaps(
         return 0
     first_valid = int(valid_indices[0])
     last_valid = int(valid_indices[-1])
-    fill_start = 0 if fill_edge_gaps else first_valid
-    fill_end = len(valid_mask) - 1 if fill_edge_gaps else last_valid
-    missing_indices = np.flatnonzero(~valid_mask[fill_start : fill_end + 1]) + fill_start
-    if missing_indices.size == 0:
-        return 0
-    for idx in missing_indices:
-        prev_idx = int(idx) - 1
-        while prev_idx >= first_valid and not bool(valid_mask[prev_idx]):
-            prev_idx -= 1
-        next_idx = int(idx) + 1
-        while next_idx <= last_valid and not bool(valid_mask[next_idx]):
-            next_idx += 1
-        if prev_idx >= first_valid:
-            anchor_close = float(values[prev_idx, 2])
-        elif next_idx <= last_valid:
-            anchor_close = float(values[next_idx, 2])
-        else:
-            continue
-        values[idx, :3] = anchor_close
-        values[idx, 3] = 0.0
-        valid_mask[idx] = True
-    return int(missing_indices.size)
+    filled = 0
+
+    if fill_edge_gaps and first_valid > 0:
+        anchor_close = float(values[first_valid, 2])
+        values[:first_valid, :3] = anchor_close
+        values[:first_valid, 3] = 0.0
+        valid_mask[:first_valid] = True
+        filled += first_valid
+
+    interior_start = first_valid + 1
+    interior_end = last_valid - 1
+    if interior_start <= interior_end:
+        missing = np.flatnonzero(~valid_mask[interior_start : interior_end + 1]) + interior_start
+        if missing.size:
+            span_breaks = np.flatnonzero(np.diff(missing) > 1) + 1
+            span_starts = np.r_[missing[0], missing[span_breaks]]
+            span_ends = np.r_[missing[span_breaks - 1], missing[-1]]
+            for span_start, span_end in zip(span_starts, span_ends):
+                start_idx = int(span_start)
+                end_idx = int(span_end)
+                anchor_close = float(values[start_idx - 1, 2])
+                values[start_idx : end_idx + 1, :3] = anchor_close
+                values[start_idx : end_idx + 1, 3] = 0.0
+                valid_mask[start_idx : end_idx + 1] = True
+                filled += end_idx - start_idx + 1
+
+    if fill_edge_gaps and last_valid < len(valid_mask) - 1:
+        anchor_close = float(values[last_valid, 2])
+        trailing_start = last_valid + 1
+        values[trailing_start:, :3] = anchor_close
+        values[trailing_start:, 3] = 0.0
+        valid_mask[trailing_start:] = True
+        filled += len(valid_mask) - trailing_start
+
+    return int(filled)
+
+
+def _valid_span(valid_mask: np.ndarray) -> tuple[int, int, int]:
+    valid_indices = np.flatnonzero(valid_mask)
+    if valid_indices.size == 0:
+        return int(len(valid_mask)), int(len(valid_mask)), 0
+    return int(valid_indices[0]), int(valid_indices[-1]), int(valid_indices.size)
 
 
 @dataclass(frozen=True)
@@ -128,27 +150,46 @@ class BacktestDatasetMaterializer:
         valid_buffer = np.zeros(n_steps, dtype=np.bool_)
         symbols_by_coin = symbols_by_coin or {}
         for coin_idx, coin in enumerate(coins):
+            coin_t0 = time.monotonic()
+            logging.info(
+                "[materializer] coin start %d/%d exchange=%s coin=%s",
+                coin_idx + 1,
+                len(coins),
+                exchange,
+                coin,
+            )
             valid_buffer[:] = False
             coin_view = hlcvs[:, coin_idx, :]
             store_symbol = symbols_by_coin.get(coin, coin)
             self.store.copy_range_into(
                 exchange, "1m", store_symbol, start_ts, end_ts, coin_view, valid_buffer
             )
+            source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
+                valid_buffer
+            )
+            invalid_rows = int(n_steps - source_valid_count)
             synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
                 coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
             )
-            if valid_buffer.any():
-                valid_indices = np.flatnonzero(valid_buffer)
-                first_valid_index = int(valid_indices[0])
-                last_valid_index = int(valid_indices[-1])
-            else:
-                first_valid_index = int(n_steps)
-                last_valid_index = int(n_steps)
+            first_valid_index, last_valid_index, _valid_count = _valid_span(valid_buffer)
             meta = enriched_mss.setdefault(coin, {})
             meta["first_valid_index"] = first_valid_index
             meta["last_valid_index"] = last_valid_index
             if synthetic_gap_fill_count:
                 meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+            logging.info(
+                "[materializer] coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
+                "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
+                coin_idx + 1,
+                len(coins),
+                exchange,
+                coin,
+                source_first_valid_index,
+                source_last_valid_index,
+                invalid_rows,
+                synthetic_gap_fill_count,
+                time.monotonic() - coin_t0,
+            )
 
         hlcvs.flush()
         timestamps.flush()
@@ -227,26 +268,45 @@ def materialize_frames(
 
     enriched_mss = deepcopy(mss)
     for coin_idx, coin in enumerate(coins):
+        coin_t0 = time.monotonic()
+        logging.info(
+            "[materializer] frame coin start %d/%d exchange=%s coin=%s",
+            coin_idx + 1,
+            len(coins),
+            exchange,
+            coin,
+        )
         aligned = np.array(aligned_values_by_coin[coin], dtype=np.float64, copy=True)
         if aligned.shape != (n_steps, 4):
             raise ValueError(
                 f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
             )
         valid_mask = ~np.isnan(aligned[:, 0])
+        source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
+            valid_mask
+        )
+        invalid_rows = int(n_steps - source_valid_count)
         synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
         hlcvs[:, coin_idx, :] = aligned
-        if valid_mask.any():
-            valid_indices = np.flatnonzero(valid_mask)
-            first_valid_index = int(valid_indices[0])
-            last_valid_index = int(valid_indices[-1])
-        else:
-            first_valid_index = int(n_steps)
-            last_valid_index = int(n_steps)
+        first_valid_index, last_valid_index, _valid_count = _valid_span(valid_mask)
         meta = enriched_mss.setdefault(coin, {})
         meta["first_valid_index"] = first_valid_index
         meta["last_valid_index"] = last_valid_index
         if synthetic_gap_fill_count:
             meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+        logging.info(
+            "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
+            "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
+            coin_idx + 1,
+            len(coins),
+            exchange,
+            coin,
+            source_first_valid_index,
+            source_last_valid_index,
+            invalid_rows,
+            synthetic_gap_fill_count,
+            time.monotonic() - coin_t0,
+        )
 
     hlcvs.flush()
     timestamps_mm.flush()
