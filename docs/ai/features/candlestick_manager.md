@@ -2,9 +2,10 @@
 
 ## Contract
 
-1. Return contiguous minute-series needed for indicator calculations.
-2. Prefer cached data, then fetch missing ranges.
-3. Synthesize zero-candles for verified no-trade gaps where required.
+1. Prefer existing local data before remote calls.
+2. For backtest preparation, use v2 OHLCV chunks first, legacy raw shards second, and targeted remote fetches last.
+3. Treat exchange-side late starts, early ends, and verified internal gaps as coverage metadata, not local corruption.
+4. Synthesize zero-candles only for verified gaps where the downstream consumer requires a dense array.
 
 ## Non-Obvious Details
 
@@ -23,7 +24,8 @@
 1. Cache path mismatch by exchange naming.
 2. Pagination edge behavior causing boundary gaps.
 3. Persistent lock or stale data artifacts.
-4. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
+4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
+5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
    late real candles arrive.
 
 ## Test Focus

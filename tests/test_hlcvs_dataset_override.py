@@ -17,7 +17,6 @@ def _base_config(cache_dir, *, mode="dataset"):
             "end_date": "2025-01-03",
             "exchanges": ["binance"],
             "gap_tolerance_ohlcvs_minutes": 120,
-            "hlcvs_cache_permissive": False,
             "hlcvs_data_dir": str(cache_dir),
             "hlcvs_data_override_mode": mode,
             "start_date": "2025-01-01",
@@ -172,7 +171,6 @@ def test_hlcvs_dataset_override_rejects_legacy_dataset_without_timestamps(tmp_pa
     (cache_dir / "manifest.json").unlink()
     (cache_dir / "timestamps.npy").unlink()
     config = _base_config(cache_dir, mode="dataset")
-    config["backtest"]["hlcvs_cache_permissive"] = True
 
-    with pytest.raises(FileNotFoundError, match="missing timestamps"):
+    with pytest.raises(HlcvsManifestError, match="missing manifest"):
         load_hlcvs_data_override(config, "binance")

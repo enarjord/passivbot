@@ -86,11 +86,11 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 
 ## Historical data helpers
 
-- `passivbot download` – Pre-warm OHLCV caches using the same config/date/exchange selection as backtesting.
+- `passivbot download` – Pre-warm the v2 OHLCV store using the same config/date/exchange selection as backtesting.
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
-- `passivbot tool verify-hlcvs-data` – Validates cached OHLCV data (gaps, duplicates) before long optimizations/backtests.
+- `passivbot tool verify-hlcvs-data` – Validates prepared HLCV datasets and coverage metadata before long optimizations/backtests.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json`).
-- `passivbot tool candle-doctor` – Audits `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs.
+- `passivbot tool candle-doctor` – Audits legacy `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs before importing into the v2 store.
 - `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
 
 ## Fill Events Tooling

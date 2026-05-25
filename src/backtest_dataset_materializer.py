@@ -64,6 +64,52 @@ def _valid_span(valid_mask: np.ndarray) -> tuple[int, int, int]:
     return int(valid_indices[0]), int(valid_indices[-1]), int(valid_indices.size)
 
 
+def _coverage_metadata(valid_mask: np.ndarray, *, start_ts: int, interval_ms: int) -> dict:
+    first_idx, last_idx, valid_count = _valid_span(valid_mask)
+    total = int(len(valid_mask))
+    invalid_count = int(total - valid_count)
+    meta = {
+        "coverage_requested_start_ts": int(start_ts),
+        "coverage_requested_end_ts": int(start_ts + (total - 1) * interval_ms) if total else int(start_ts),
+        "coverage_valid_rows": int(valid_count),
+        "coverage_invalid_rows": int(invalid_count),
+        "coverage_internal_gap_count": 0,
+        "coverage_internal_gap_minutes": 0,
+        "coverage_trailing_missing_minutes": 0,
+        "coverage_leading_missing_minutes": 0,
+    }
+    if valid_count <= 0:
+        return meta
+    meta["coverage_valid_start_ts"] = int(start_ts + first_idx * interval_ms)
+    meta["coverage_valid_end_ts"] = int(start_ts + last_idx * interval_ms)
+    meta["coverage_leading_missing_minutes"] = int(first_idx * interval_ms // 60_000)
+    meta["coverage_trailing_missing_minutes"] = int((total - last_idx - 1) * interval_ms // 60_000)
+    if first_idx + 1 <= last_idx - 1:
+        interior_invalid = np.flatnonzero(~valid_mask[first_idx + 1 : last_idx]) + first_idx + 1
+        if interior_invalid.size:
+            breaks = np.flatnonzero(np.diff(interior_invalid) > 1) + 1
+            starts = np.r_[interior_invalid[0], interior_invalid[breaks]]
+            ends = np.r_[interior_invalid[breaks - 1], interior_invalid[-1]]
+            windows = []
+            minutes = 0
+            for raw_start, raw_end in zip(starts, ends):
+                gap_start = int(raw_start)
+                gap_end = int(raw_end)
+                gap_minutes = int((gap_end - gap_start + 1) * interval_ms // 60_000)
+                minutes += gap_minutes
+                if len(windows) < 20:
+                    windows.append(
+                        [
+                            int(start_ts + gap_start * interval_ms),
+                            int(start_ts + gap_end * interval_ms),
+                        ]
+                    )
+            meta["coverage_internal_gap_count"] = int(len(starts))
+            meta["coverage_internal_gap_minutes"] = int(minutes)
+            meta["coverage_internal_gap_windows"] = windows
+    return meta
+
+
 @dataclass(frozen=True)
 class SharedBacktestDatasetHandle:
     root: str
@@ -168,15 +214,19 @@ class BacktestDatasetMaterializer:
                 valid_buffer
             )
             invalid_rows = int(n_steps - source_valid_count)
+            coverage_meta = _coverage_metadata(
+                valid_buffer.copy(), start_ts=int(start_ts), interval_ms=int(interval_ms)
+            )
             synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
                 coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
             )
-            first_valid_index, last_valid_index, _valid_count = _valid_span(valid_buffer)
             meta = enriched_mss.setdefault(coin, {})
-            meta["first_valid_index"] = first_valid_index
-            meta["last_valid_index"] = last_valid_index
+            meta["first_valid_index"] = source_first_valid_index
+            meta["last_valid_index"] = source_last_valid_index
+            meta.update(coverage_meta)
             if synthetic_gap_fill_count:
                 meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+                meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
             logging.info(
                 "[materializer] coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
                 "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
@@ -286,14 +336,20 @@ def materialize_frames(
             valid_mask
         )
         invalid_rows = int(n_steps - source_valid_count)
+        coverage_meta = _coverage_metadata(
+            valid_mask.copy(),
+            start_ts=int(ts_arr[0]) if n_steps else 0,
+            interval_ms=60_000 if n_steps < 2 else int(ts_arr[1] - ts_arr[0]),
+        )
         synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
         hlcvs[:, coin_idx, :] = aligned
-        first_valid_index, last_valid_index, _valid_count = _valid_span(valid_mask)
         meta = enriched_mss.setdefault(coin, {})
-        meta["first_valid_index"] = first_valid_index
-        meta["last_valid_index"] = last_valid_index
+        meta["first_valid_index"] = source_first_valid_index
+        meta["last_valid_index"] = source_last_valid_index
+        meta.update(coverage_meta)
         if synthetic_gap_fill_count:
             meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+            meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
         logging.info(
             "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
             "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",

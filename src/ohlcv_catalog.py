@@ -11,6 +11,9 @@ def _utc_ms() -> int:
     return int(time.time() * 1000)
 
 
+KNOWN_GAP_RETRY_MS = 7 * 24 * 60 * 60 * 1000
+
+
 @dataclass(frozen=True)
 class ChunkRecord:
     exchange: str
@@ -254,6 +257,11 @@ class OhlcvCatalog:
         next_retry_at: int | None = None,
         note: str | None = None,
     ) -> None:
+        now = _utc_ms()
+        if persistent and last_attempt_at is None:
+            last_attempt_at = now
+        if persistent and next_retry_at is None:
+            next_retry_at = now + KNOWN_GAP_RETRY_MS
         with self._connect() as conn:
             conn.execute(
                 """
@@ -318,10 +326,11 @@ class OhlcvCatalog:
     def get_persistent_gaps(
         self, exchange: str, timeframe: str, symbol: str, start_ts: int, end_ts: int
     ) -> list[GapRecord]:
+        now = _utc_ms()
         return [
             gap
             for gap in self.get_gaps(exchange, timeframe, symbol, start_ts, end_ts)
-            if gap.persistent
+            if gap.persistent and (gap.next_retry_at is None or int(gap.next_retry_at) > now)
         ]
 
     def clear_gap_range(

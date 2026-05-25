@@ -1018,21 +1018,6 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Backtest candle interval in minutes.",
     },
-    "backtest.hlcvs_cache_permissive": {
-        "visible": ["--hlcvs-cache-permissive"],
-        "hidden": [
-            "--backtest.hlcvs_cache_permissive",
-            "--backtest_hlcvs_cache_permissive",
-        ],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"backtest", "optimize"},
-        "group": {
-            "backtest": "Backtest Runtime",
-            "optimize": "Backtest Runtime",
-        },
-        "help": "Allow legacy HLCV final caches without manifests to load with warning-only compatibility behavior.",
-    },
     "backtest.hlcvs_data_dir": {
         "visible": ["--hlcvs-data-dir"],
         "hidden": ["--backtest.hlcvs_data_dir", "--backtest_hlcvs_data_dir"],

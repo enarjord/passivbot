@@ -28,7 +28,6 @@ def get_template_config():
                 "exchanges": ["binance", "bybit"],
                 "filter_by_min_effective_cost": False,
                 "gap_tolerance_ohlcvs_minutes": 120,
-                "hlcvs_cache_permissive": False,
                 "hlcvs_data_dir": None,
                 "hlcvs_data_override_mode": "intersection",
                 "liquidation_threshold": 0.05,

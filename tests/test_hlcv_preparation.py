@@ -526,7 +526,6 @@ class TestPrepareHLCVSBtcFallback:
         config = dict(sample_config)
         config["backtest"] = dict(sample_config["backtest"])
         config["backtest"]["exchanges"] = ["hyperliquid"]
-        config["backtest"]["hlcvs_cache_permissive"] = True
 
         with patch("hlcv_preparation.prepare_hlcvs_internal", new=mock_prepare_internal):
             with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
@@ -586,7 +585,6 @@ class TestPrepareHLCVSBtcFallback:
                 with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
                     config = dict(sample_config)
                     config["backtest"] = dict(sample_config["backtest"])
-                    config["backtest"]["hlcvs_cache_permissive"] = True
                     mss, out_timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
                         config, "binanceusdm"
                     )
@@ -600,20 +598,6 @@ class TestPrepareHLCVSBtcFallback:
         np.testing.assert_allclose(btc_usd_prices, np.array([50000.0, 50010.0]))
         assert mss["BTC"]["first_valid_index"] == 0
         assert mss["BTC"]["last_valid_index"] == 1
-
-    @pytest.mark.asyncio
-    async def test_prepare_hlcvs_rejects_legacy_fallback_by_default(self, sample_config):
-        async def mock_try_prepare_local(*args, **kwargs):
-            return None
-
-        async def fail_prepare_internal(*args, **kwargs):
-            raise AssertionError("legacy prepare_hlcvs_internal should not run by default")
-
-        with patch("hlcv_preparation.try_prepare_hlcvs_v2_local", new=mock_try_prepare_local):
-            with patch("hlcv_preparation.prepare_hlcvs_internal", new=fail_prepare_internal):
-                with pytest.raises(ValueError, match="deterministic HLCV materialization"):
-                    await prepare_hlcvs(sample_config, "binanceusdm")
-
 
 # ============================================================================
 # Test Class: Error Handling

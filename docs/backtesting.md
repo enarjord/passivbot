@@ -1,6 +1,9 @@
 # Backtesting
 
-Passivbot ships with a backtester that replays historical 1 minute candles. When a coin isn't cached locally, the backtester fetches data from the exchange archives and caches it under `caches/ohlcv/` for reuse.
+Passivbot ships with a backtester that replays historical 1 minute candles. The
+backtester prepares data from the canonical v2 OHLCV store under `caches/ohlcvs/`.
+When data is missing there, it imports any matching legacy daily shards before making
+targeted remote exchange requests.
 
 Backtesting requires the full install profile:
 
@@ -8,7 +11,9 @@ Backtesting requires the full install profile:
 python3 -m pip install -e ".[full]"
 ```
 
-> **GateIO cache note:** If you have existing GateIO OHLCV data in `caches/ohlcv/gateio`, delete the folder after upgrading to the new data strategy so fresh data (normalized to base volume) is fetched.
+> **GateIO cache note:** If you have existing legacy GateIO OHLCV data in
+> `caches/ohlcv/gateio`, delete the folder before a fresh run so Passivbot rebuilds the
+> v2 store with base-volume-normalized data.
 
 > **GateIO history note:** GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles. Older GateIO backtests need `backtest.ohlcv_source_dir` data or candles sourced from another exchange; Passivbot marks older GateIO 1m spans unavailable instead of repeatedly retrying rejected requests.
 
@@ -58,6 +63,26 @@ fig = plot_fills_for_coin("BTC", start_date="2026-04-01T00:00:00")
 The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlcvs`,
 `timestamps`, `btc_usd_prices`, `coins`, `market_settings`, `candles_for_coin`, and
 `plot_fills_for_coin`.
+
+## HLCV Data Contract
+
+Backtest and optimize data preparation follows one deterministic order:
+
+1. read existing v2 chunks in `caches/ohlcvs/`
+2. import matching legacy raw OHLCV shards when they are present
+3. fetch only the remaining missing or invalid windows from the exchange
+
+Missing exchange history is recorded as coverage metadata rather than treated as cache
+corruption. Newly listed coins may start after the requested start date, delisted or
+migrated coins may end before the requested end date, and verified source-side internal
+gaps are carried in the dataset metadata after repair attempts. Backtests still fail
+when there is no usable data inside the requested range, no BTC benchmark data, no
+tradable candles after warmup, checksum mismatches, conflicting duplicate candles, or
+malformed timestamps/OHLCV rows that cannot be normalized.
+
+Prepared final caches under `caches/hlcvs_data/` require a valid manifest. Old
+manifest-less final caches are rebuilt. Explicit `backtest.hlcvs_data_dir` override
+datasets also require valid manifests and checksums.
 
 ## Backtest CLI args
 
@@ -118,7 +143,10 @@ Top-level suite keys (directly under `backtest`):
 - `scenarios`: list of scenario dictionaries
 - `aggregate`: how to combine per-scenario metrics (default: `{"default": "mean"}`)
 
-During a suite run Passivbot prepares one master OHLCV dataset that spans the union of all scenario date ranges and coins, then slices it per scenario so repeated downloads are avoided. Results are written to:
+During a suite run Passivbot prepares master OHLCV datasets only for the scenario
+windows that consume them. The combined dataset uses the union of combined scenarios;
+single-exchange datasets use the union of scenarios restricted to that exchange. Results
+are written to:
 
 ```
 backtests/suite_runs/<timestamp>/<scenario_label>/

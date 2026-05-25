@@ -104,14 +104,6 @@ async def main() -> None:
         metavar="DATE",
         help='Backtest end date. Use "-ed now" for the latest available candles.',
     )
-    parser.add_argument(
-        "--hlcvs-cache-permissive",
-        dest="backtest.hlcvs_cache_permissive",
-        type=str2bool,
-        default=None,
-        metavar="Y/N",
-        help="Allow legacy final HLCV caches without manifests to load with warning-only compatibility behavior.",
-    )
     args = parser.parse_args()
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
     update_config_with_args(
@@ -124,7 +116,6 @@ async def main() -> None:
             "backtest.exchanges",
             "backtest.start_date",
             "backtest.end_date",
-            "backtest.hlcvs_cache_permissive",
         },
     )
     config = prepare_config(

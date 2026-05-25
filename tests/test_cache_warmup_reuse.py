@@ -19,6 +19,7 @@ import copy
 import gzip
 import json
 import os
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -30,11 +31,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from backtest import (
     _build_hlcvs_cache_dir_name,
     _resolve_hlcvs_cache_dir,
+    assert_hlcv_has_tradable_coverage,
     ensure_valid_index_metadata,
     get_cache_hash,
     load_coins_hlcvs_from_cache,
     save_coins_hlcvs_to_cache,
 )
+from hlcvs_manifest import build_hlcvs_manifest, write_hlcvs_manifest
 
 # ============================================================================
 # Fixtures
@@ -89,12 +92,12 @@ def _base_config(**overrides):
 
 
 def _allow_legacy_cache(cfg):
-    cfg["backtest"]["hlcvs_cache_permissive"] = True
     return cfg
 
 
-def _write_fake_cache(cache_dir, *, compress=False, warmup_minutes=None):
+def _write_fake_cache(cache_dir, *, compress=False, warmup_minutes=None, write_manifest=True):
     """Write minimal valid cache files so load_coins_hlcvs_from_cache succeeds."""
+    cache_dir_path = Path(cache_dir)
     os.makedirs(cache_dir, exist_ok=True)
 
     coins = ["BTC"]
@@ -124,6 +127,22 @@ def _write_fake_cache(cache_dir, *, compress=False, warmup_minutes=None):
             {"warmup_minutes": int(warmup_minutes)},
             open(os.path.join(cache_dir, "cache_meta.json"), "w"),
         )
+    if write_manifest:
+        config = _base_config()
+        cache_hash = get_cache_hash(config, "binance")
+        manifest = build_hlcvs_manifest(
+            config=config,
+            exchange="binance",
+            cache_hash=cache_hash,
+            coins=coins,
+            hlcvs=hlcvs,
+            mss=mss,
+            btc_usd_prices=btc_usd,
+            timestamps=timestamps,
+            warmup_minutes=int(warmup_minutes or 0),
+            compressed=compress,
+        )
+        write_hlcvs_manifest(cache_dir_path, manifest)
 
 
 # ============================================================================
@@ -257,11 +276,11 @@ class TestLegacyCacheCompatibility:
     """Verify behavior with pre-existing caches that lack cache_meta.json."""
 
     def test_manifest_missing_cache_rejected_by_default(self, tmp_path, monkeypatch):
-        """Manifest-missing final caches are rebuilt/rejected unless permissive mode is enabled."""
+        """Manifest-missing final caches are rebuilt."""
         cfg = _base_config()
         cache_hash = get_cache_hash(cfg, "binance")
         cache_dir = tmp_path / "caches" / "hlcvs_data" / cache_hash[:16]
-        _write_fake_cache(str(cache_dir), warmup_minutes=5000)
+        _write_fake_cache(str(cache_dir), warmup_minutes=5000, write_manifest=False)
 
         monkeypatch.chdir(tmp_path)
 
@@ -308,6 +327,22 @@ class TestLegacyCacheCompatibility:
         monkeypatch.chdir(tmp_path)
         result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=100)
         assert result is None
+
+
+class TestTradableCoverageGuard:
+    def test_rejects_when_warmup_consumes_all_valid_rows(self):
+        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 10, "warmup_minutes": 11}}
+
+        with pytest.raises(ValueError, match="no tradable candles"):
+            assert_hlcv_has_tradable_coverage(["BTC"], mss)
+
+    def test_accepts_when_any_coin_has_tradable_rows_after_warmup(self):
+        mss = {
+            "BTC": {"first_valid_index": 0, "last_valid_index": 10, "warmup_minutes": 11},
+            "ETH": {"first_valid_index": 5, "last_valid_index": 20, "warmup_minutes": 10},
+        }
+
+        assert_hlcv_has_tradable_coverage(["BTC", "ETH"], mss)
 
 
 # ============================================================================

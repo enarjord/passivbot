@@ -21,7 +21,7 @@ from backtest_dataset_materializer import BacktestDatasetMaterializer, materiali
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_legacy_import import import_legacy_range_into_store
 from ohlcv_planner import plan_local_symbol_range
-from ohlcv_store import OhlcvStore
+from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
 def _pct_log(level: str, pct: int, msg: str, *args, **kwargs) -> None:
@@ -948,35 +948,16 @@ async def prepare_hlcvs(
     force_refetch_gaps: bool = False,
     skip_v2_local: bool = False,
 ):
-    allow_legacy_fallback = bool(
-        config.get("backtest", {}).get("hlcvs_cache_permissive", False)
-    )
     if not skip_v2_local:
         try:
             local_v2 = await try_prepare_hlcvs_v2_local(
                 config, exchange, force_refetch_gaps=force_refetch_gaps
             )
         except Exception as e:
-            if not allow_legacy_fallback:
-                raise ValueError(
-                    f"{exchange} deterministic HLCV materialization failed before legacy "
-                    f"fallback was allowed: {e}"
-                ) from e
-            logging.info(f"Unable to prepare hlcvs from local v2 store: {e}. Falling back.")
-            local_v2 = None
+            raise ValueError(f"{exchange} deterministic HLCV materialization failed: {e}") from e
         if local_v2 is not None:
             return local_v2
-        if not allow_legacy_fallback:
-            raise ValueError(
-                f"{exchange} deterministic HLCV materialization could not build the requested "
-                "range in the v2 store; set backtest.hlcvs_cache_permissive=true only for "
-                "legacy CandlestickManager fallback compatibility"
-            )
-    elif not allow_legacy_fallback:
-        raise ValueError(
-            f"{exchange} legacy HLCV preparation requested while "
-            "backtest.hlcvs_cache_permissive=false"
-        )
+        logging.info("[%s] local v2 HLCV preparation unavailable; using direct fetch path", exchange)
 
     coins = effective_backtest_data_coins(config)
     orig_coins = list(coins)
@@ -1612,7 +1593,7 @@ async def _resolve_v2_store_range(
                         )
                         return rng
                     if any(result.reason == "pre_inception_boundary" for result in fetch_results):
-                        partial_rng = _extract_single_valid_window(rng)
+                        partial_rng = _extract_valid_suffix_window(rng)
                         if partial_rng is not None:
                             logging.info(
                                 "[%s] using discovered v2 pre-inception boundary for %s (%s -> %s)",
@@ -1681,6 +1662,16 @@ async def _resolve_v2_store_range(
             ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
                 return rng
         if _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
+            if _has_usable_partial_coverage(rng):
+                valid_idx = np.flatnonzero(rng.valid)
+                logging.info(
+                    "[%s] using verified partial v2 coverage for %s despite known gap(s) (%s -> %s)",
+                    exchange,
+                    coin,
+                    ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
+                    ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                )
+                return rng
             partial_rng = _extract_single_valid_window(rng) if allow_partial_window else None
             if partial_rng is not None:
                 logging.info(
@@ -1756,6 +1747,17 @@ async def _resolve_v2_store_range(
                 coin,
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
+            )
+            return rng
+        if _has_usable_partial_coverage(rng):
+            valid_idx = np.flatnonzero(rng.valid)
+            logging.info(
+                "[%s] %s partial coverage for %s after targeted fetch (%s -> %s)",
+                exchange,
+                local_hit_log_label,
+                coin,
+                ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
+                ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
             )
             return rng
         if allow_partial_window:
@@ -1854,6 +1856,17 @@ async def _resolve_v2_store_range(
                     ts_to_date(end_ts),
                 )
                 return rng
+            if _has_usable_partial_coverage(rng):
+                valid_idx = np.flatnonzero(rng.valid)
+                logging.info(
+                    "[%s] %s partial coverage for %s after post-fetch legacy import (%s -> %s)",
+                    exchange,
+                    local_hit_log_label,
+                    coin,
+                    ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
+                    ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
+                )
+                return rng
             if allow_partial_window:
                 partial_rng = _extract_single_valid_window(rng)
                 if partial_rng is not None:
@@ -1891,6 +1904,17 @@ async def _resolve_v2_store_range(
                 coin,
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
+            )
+            return rng
+        if _has_usable_partial_coverage(rng):
+            valid_idx = np.flatnonzero(rng.valid)
+            logging.info(
+                "[%s] %s partial coverage for %s after fetch (%s -> %s)",
+                exchange,
+                local_hit_log_label,
+                coin,
+                ts_to_date(int(rng.timestamps[int(valid_idx[0])])),
+                ts_to_date(int(rng.timestamps[int(valid_idx[-1])])),
             )
             return rng
         if allow_partial_window:
@@ -1994,6 +2018,21 @@ def _extract_single_valid_window(rng):
     )
 
 
+def _extract_valid_suffix_window(rng):
+    valid_idx = np.flatnonzero(rng.valid)
+    if valid_idx.size == 0:
+        return None
+    start_idx = int(valid_idx[0])
+    end_idx = int(valid_idx[-1])
+    if end_idx != len(rng.valid) - 1:
+        return None
+    return type(rng)(
+        timestamps=rng.timestamps[start_idx:].copy(),
+        values=rng.values[start_idx:].copy(),
+        valid=rng.valid[start_idx:].copy(),
+    )
+
+
 def _extract_authoritative_pre_inception_window(rng, first_ts_evidence: dict[str, int]):
     valid_idx = np.flatnonzero(rng.valid)
     if valid_idx.size == 0:
@@ -2029,6 +2068,16 @@ def _has_single_leading_invalid_prefix(rng) -> bool:
     if first_valid_idx == 0:
         return False
     return int(valid_idx[-1]) == len(rng.valid) - 1 and bool(rng.valid[first_valid_idx:].all())
+
+
+def _has_usable_partial_coverage(rng) -> bool:
+    valid_idx = np.flatnonzero(rng.valid)
+    if valid_idx.size == 0:
+        return False
+    # After v2, legacy, and targeted remote repair have had a chance to fill the
+    # range, remaining missing rows are coverage metadata. The later tradable
+    # coverage guard decides whether enough real data remains after warmup.
+    return True
 
 
 def _iter_invalid_windows(timestamps: np.ndarray, valid: np.ndarray) -> list[tuple[int, int]]:
@@ -2608,6 +2657,7 @@ async def _fetch_coin_range_into_v2_store(
     trailing_missing_bars = int((request_end_ts - int(ts[-1])) // interval_ms)
     sparse_missing_bars = leading_missing_bars + trailing_missing_bars
     max_missing_bars = 0
+    has_internal_gaps = False
     if ts.size > 1:
         intervals = np.diff(ts)
         if np.any(intervals <= 0) or np.any(intervals % interval_ms != 0):
@@ -2661,6 +2711,7 @@ async def _fetch_coin_range_into_v2_store(
         missing_by_gap = np.maximum((intervals // interval_ms) - 1, 0)
         sparse_missing_bars += int(missing_by_gap.sum())
         max_missing_bars = int(missing_by_gap.max(initial=0))
+        has_internal_gaps = bool(max_missing_bars > 0)
         if max_missing_bars > gap_tolerance_bars:
             catalog.record_fetch_attempt(
                 exchange=exchange,
@@ -2683,71 +2734,26 @@ async def _fetch_coin_range_into_v2_store(
                 end_ts=end_ts,
             )
             logging.info(
-                "[%s] v2 fetch returned gaps for %s (%s -> %s)",
+                "[%s] v2 fetch returned internal gaps for %s (%s -> %s); writing available rows",
                 exchange,
                 coin,
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
             )
-            return V2FetchResult(
-                False,
-                "internal_gaps",
-                first_ts=int(ts[0]),
-                last_ts=int(ts[-1]),
-                leading_missing_bars=leading_missing_bars,
-                trailing_missing_bars=trailing_missing_bars,
-                max_internal_missing_bars=max_missing_bars,
-            )
 
-    edge_gaps_exceed_tolerance = (
-        not allow_unbounded_edge_gaps
-        and max(leading_missing_bars, trailing_missing_bars) > gap_tolerance_bars
-    )
     pre_inception_prefix_boundary = (
         allow_pre_inception_prefix
         and leading_missing_bars > gap_tolerance_bars
         and trailing_missing_bars == 0
-        and max_missing_bars == 0
     )
-    if edge_gaps_exceed_tolerance and not pre_inception_prefix_boundary:
-        catalog.record_fetch_attempt(
-            exchange=exchange,
-            timeframe="1m",
-            symbol=symbol,
-            start_ts=start_ts,
-            end_ts=end_ts,
-            attempt=attempt,
-            outcome="range_mismatch",
-            latency_ms=latency_ms,
-            note=(
-                f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
-                f"tolerance={gap_tolerance_bars}"
-            ),
-        )
-        _sync_persistent_cm_gaps_to_v2_catalog(
-            catalog=catalog,
-            om=om,
-            symbol=symbol,
-            exchange=exchange,
-            timeframe="1m",
-            start_ts=start_ts,
-            end_ts=end_ts,
-        )
+    leading_unavailable = leading_missing_bars > gap_tolerance_bars and not pre_inception_prefix_boundary
+    if leading_unavailable:
         logging.info(
-            "[%s] v2 fetch edge gaps exceed tolerance for %s (%s -> %s)",
+            "[%s] v2 fetch has leading unavailable rows for %s (%s -> %s); writing available rows",
             exchange,
             coin,
             ts_to_date(start_ts),
             ts_to_date(end_ts),
-        )
-        return V2FetchResult(
-            False,
-            "edge_gaps_exceed_tolerance",
-            first_ts=int(ts[0]),
-            last_ts=int(ts[-1]),
-            leading_missing_bars=leading_missing_bars,
-            trailing_missing_bars=trailing_missing_bars,
-            max_internal_missing_bars=max_missing_bars,
         )
     values = np.column_stack(
         [
@@ -2758,11 +2764,32 @@ async def _fetch_coin_range_into_v2_store(
         ]
     )
     store.write_rows(exchange, "1m", symbol, ts, values)
+    if sparse_missing_bars:
+        _mark_sparse_fetch_gaps(
+            catalog=catalog,
+            exchange=exchange,
+            timeframe="1m",
+            symbol=symbol,
+            request_start_ts=request_start_ts,
+            request_end_ts=request_end_ts,
+            ts=ts,
+            attempt=attempt,
+            leading_reason="pre_inception" if pre_inception_prefix_boundary else "leading_unavailable",
+            mark_leading_unavailable=leading_missing_bars > gap_tolerance_bars,
+        )
     outcome = "sparse_ok" if sparse_missing_bars else "ok"
     reason = "ok"
     if pre_inception_prefix_boundary:
         outcome = "pre_inception_boundary"
         reason = "pre_inception_boundary"
+    elif leading_unavailable:
+        outcome = "leading_unavailable"
+        reason = "leading_unavailable"
+    elif trailing_missing_bars > gap_tolerance_bars and not has_internal_gaps:
+        outcome = "trailing_unavailable"
+        reason = "trailing_unavailable"
+    elif has_internal_gaps:
+        reason = "internal_gaps"
     catalog.record_fetch_attempt(
         exchange=exchange,
         timeframe="1m",
@@ -2789,6 +2816,56 @@ async def _fetch_coin_range_into_v2_store(
         trailing_missing_bars=trailing_missing_bars,
         max_internal_missing_bars=max_missing_bars,
     )
+
+
+def _mark_sparse_fetch_gaps(
+    *,
+    catalog: OhlcvCatalog,
+    exchange: str,
+    timeframe: str,
+    symbol: str,
+    request_start_ts: int,
+    request_end_ts: int,
+    ts: np.ndarray,
+    attempt: int,
+    leading_reason: str,
+    mark_leading_unavailable: bool = True,
+) -> None:
+    interval_ms = 60_000 if str(timeframe) == "1m" else timeframe_to_interval_ms(timeframe)
+    sorted_ts = np.asarray(ts, dtype=np.int64)
+    if sorted_ts.size == 0:
+        return
+    gaps: list[tuple[int, int, str]] = []
+    first_ts = int(sorted_ts[0])
+    last_ts = int(sorted_ts[-1])
+    if first_ts > int(request_start_ts) and (
+        str(leading_reason) == "pre_inception" or bool(mark_leading_unavailable)
+    ):
+        gaps.append((int(request_start_ts), first_ts - interval_ms, leading_reason))
+    if sorted_ts.size > 1:
+        intervals = np.diff(sorted_ts)
+        gap_indices = np.flatnonzero(intervals > interval_ms)
+        for idx in gap_indices:
+            gap_start = int(sorted_ts[int(idx)] + interval_ms)
+            gap_end = int(sorted_ts[int(idx) + 1] - interval_ms)
+            if gap_end >= gap_start:
+                gaps.append((gap_start, gap_end, "internal_gap"))
+    if last_ts < int(request_end_ts):
+        gaps.append((last_ts + interval_ms, int(request_end_ts), "trailing_unavailable"))
+    for gap_start, gap_end, reason in gaps:
+        if gap_end < gap_start:
+            continue
+        catalog.mark_gap(
+            exchange=exchange,
+            timeframe=timeframe,
+            symbol=symbol,
+            start_ts=gap_start,
+            end_ts=gap_end,
+            reason=reason,
+            persistent=True,
+            retry_count=int(attempt),
+            note="confirmed_by_v2_fetch",
+        )
 
 
 def _sync_persistent_cm_gaps_to_v2_catalog(

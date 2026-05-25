@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed backtest/optimizer HLCV preparation to treat normal market availability limits as coverage metadata: late coin starts, unavailable tails, and verified exchange-side internal gaps are logged and persisted in artifacts instead of aborting the whole run, while corruption, malformed candles, missing BTC benchmark data, and no tradable candles still fail loudly.
+- Final `caches/hlcvs_data/` caches now require valid manifests and old manifest-less final caches rebuild by default; explicit override datasets require valid manifests/checksums.
+- Added per-coin HLCV coverage metadata to materialized datasets, including requested range, valid start/end, leading/trailing missing minutes, internal gap counts/windows, and synthetic fill count/source.
 - Fixed strict v2 HLCV materialization so a leading invalid prefix is accepted as pre-inception when the first valid candle matches authoritative first-timestamp metadata, even if an older persistent gap starts inside that prefix.
 - Fixed strict v2 HLCV gap cleanup so overlapping persistent pre-inception records no longer crash materialization with a SQLite unique-constraint error while normalizing authoritative first-candle boundaries.
 - Fixed suite HLCV preparation so individual exchange datasets use the date windows of the scenarios that consume them instead of inheriting the global combined-suite window.
