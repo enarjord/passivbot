@@ -2155,12 +2155,13 @@ def post_process(
     label_prefix = f"[{label}] " if label else ""
     visible_analysis = filter_analysis_for_visibility(analysis, config)
     if visible_analysis.shown_count < visible_analysis.total_count:
-        print(
-            f"{label_prefix}Showing {visible_analysis.shown_count} of "
-            f"{visible_analysis.total_count} metrics "
-            "(set backtest.visible_metrics=[] to show all)."
+        logging.info(
+            "%sShowing %d of %d metrics (set backtest.visible_metrics=[] to show all).",
+            label_prefix,
+            visible_analysis.shown_count,
+            visible_analysis.total_count,
         )
-    print(f"{label_prefix}{pprint.pformat(visible_analysis.analysis)}")
+    logging.info("%s%s", label_prefix, pprint.pformat(visible_analysis.analysis))
     results_path = make_get_filepath(
         oj(results_path, f"{ts_to_date(utc_ms())[:19].replace(':', '_')}", "")
     )

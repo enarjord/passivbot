@@ -1,3 +1,5 @@
+import logging
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -807,7 +809,7 @@ def test_post_process_disable_plotting_coin_fills_only(tmp_path, monkeypatch):
     assert calls == {"balance": 1, "twe": 1, "pnl": 1, "save": 3, "coin": 0}
 
 
-def test_post_process_visible_metrics_filters_terminal_output_only(tmp_path, monkeypatch, capsys):
+def test_post_process_visible_metrics_filters_logged_output_only(tmp_path, monkeypatch, caplog):
     def _fake_process_forager_fills(*args, **kwargs):
         fdf = pd.DataFrame(columns=["coin", "pnl"])
         bal_eq = pd.DataFrame({"balance": [1000.0], "equity": [1000.0]})
@@ -844,6 +846,7 @@ def test_post_process_visible_metrics_filters_terminal_output_only(tmp_path, mon
         },
     }
 
+    caplog.set_level(logging.INFO)
     bt.post_process(
         config=config,
         hlcvs=np.zeros((1, 1, 3), dtype=np.float64),
@@ -860,12 +863,12 @@ def test_post_process_visible_metrics_filters_terminal_output_only(tmp_path, mon
         exchange="binance",
     )
 
-    captured = capsys.readouterr().out
-    assert "Showing 3 of 4 metrics" in captured
-    assert "adg_usd" in captured
-    assert "adg_btc" in captured
-    assert "loss_profit_ratio" in captured
-    assert "peak_recovery_hours_hsl" not in captured
+    logged = caplog.text
+    assert "Showing 3 of 4 metrics" in logged
+    assert "adg_usd" in logged
+    assert "adg_btc" in logged
+    assert "loss_profit_ratio" in logged
+    assert "peak_recovery_hours_hsl" not in logged
     analysis_path = next(tmp_path.glob("*/analysis.json"))
     assert "peak_recovery_hours_hsl" in analysis_path.read_text(encoding="utf-8")
 
