@@ -156,6 +156,57 @@ def test_catalog_gap_persistence(tmp_path):
     assert gaps[0].retry_count == 3
 
 
+def test_catalog_clear_gap_range_handles_duplicate_remainders(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    base = month_start_ts(2026, 4)
+    symbol = "HYPE/USDT:USDT"
+    broad_start = int(base)
+    broad_end = int(base + 9 * 60_000)
+    clear_end = int(base + 4 * 60_000)
+    remainder_start = int(base + 5 * 60_000)
+
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=broad_start,
+        end_ts=broad_end,
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        note="broad_gap",
+    )
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=remainder_start,
+        end_ts=broad_end,
+        reason="pre_inception",
+        persistent=True,
+        retry_count=1,
+        note="existing_remainder",
+    )
+
+    changed = catalog.clear_gap_range(
+        exchange="binance",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=broad_start,
+        end_ts=clear_end,
+        reason="pre_inception",
+    )
+
+    assert changed == 1
+    gaps = catalog.get_persistent_gaps("binance", "1m", symbol, broad_start, broad_end)
+    assert len(gaps) == 1
+    assert gaps[0].start_ts == remainder_start
+    assert gaps[0].end_ts == broad_end
+    assert gaps[0].reason == "pre_inception"
+    assert gaps[0].retry_count == 3
+    assert gaps[0].note == "existing_remainder"
+
+
 def test_materializer_creates_shared_memmap_payload(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)

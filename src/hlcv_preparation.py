@@ -1453,7 +1453,7 @@ async def _resolve_v2_store_range(
                     timeframe="1m",
                     symbol=symbol,
                     start_ts=int(start_ts),
-                    end_ts=prefix_end_ts,
+                    end_ts=int(end_ts),
                     reason="pre_inception",
                 )
                 catalog.mark_gap(
