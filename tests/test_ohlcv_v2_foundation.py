@@ -317,6 +317,39 @@ def test_materializer_can_fill_accepted_edge_sparse_gaps(tmp_path):
     assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == 1
 
 
+def test_materializer_fills_large_leading_edge_gap_linearly(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    start = month_start_ts(2026, 1)
+    leading_gap_rows = 120_000
+    valid_ts = start + leading_gap_rows * 60_000
+    vals = np.array([[102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    store.write_rows("binance", "1m", "ETH/USDT", np.array([valid_ts], dtype=np.int64), vals)
+
+    handle = BacktestDatasetMaterializer(store, tmp_path / "caches" / "ohlcvs" / "materialized").materialize(
+        exchange="binance",
+        coins=["ETH/USDT"],
+        start_ts=int(start),
+        end_ts=int(valid_ts),
+        btc_usd_prices=np.full(leading_gap_rows + 1, 30_000.0, dtype=np.float64),
+        mss={"ETH/USDT": {}},
+        run_id="large_edge_sparse_fill",
+        fill_edge_gaps=True,
+    )
+
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[0, 0, :], np.array([101.0, 101.0, 101.0, 0.0]))
+    np.testing.assert_allclose(
+        hlcvs[leading_gap_rows - 1, 0, :],
+        np.array([101.0, 101.0, 101.0, 0.0]),
+    )
+    np.testing.assert_allclose(hlcvs[leading_gap_rows, 0, :], vals[0].astype(np.float64))
+    assert handle.mss["ETH/USDT"]["first_valid_index"] == 0
+    assert handle.mss["ETH/USDT"]["last_valid_index"] == leading_gap_rows
+    assert handle.mss["ETH/USDT"]["synthetic_gap_fill_count"] == leading_gap_rows
+
+
 def test_materialize_frames_creates_shared_memmap_payload(tmp_path):
     start = month_start_ts(2026, 4)
     timestamps = np.array([start, start + 60_000, start + 120_000], dtype=np.int64)
