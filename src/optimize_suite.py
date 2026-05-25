@@ -143,6 +143,7 @@ async def prepare_suite_contexts(
         shared_array_manager=shared_array_manager,
         needed_individual_exchanges=needed_individual,
         candle_interval_minutes=candle_interval,
+        scenarios=scenarios,
     )
     available_coins = set()
     for dataset in datasets.values():

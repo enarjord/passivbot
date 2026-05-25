@@ -1,4 +1,5 @@
 import asyncio
+import sys
 from copy import deepcopy
 from types import SimpleNamespace
 
@@ -15,6 +16,7 @@ from suite_runner import (
     collect_suite_coin_sources,
     extract_suite_config,
     filter_coins_by_exchange_assignment,
+    prepare_master_datasets,
     resolve_coin_sources,
     _prepare_dataset_subset,
     _run_combined_dataset,
@@ -309,6 +311,100 @@ def test_filter_coins_by_exchange_assignment_filters_correctly():
     )
     assert selected == ["BTC", "ADA"]
     assert skipped == ["ETH"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_master_datasets_uses_scenario_windows_for_individual_exchanges(
+    monkeypatch, caplog
+):
+    base_config = {
+        "backtest": {
+            "start_date": "2021",
+            "end_date": "2026-05-21",
+            "exchanges": ["binance", "bybit"],
+            "coins": {},
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["BTC"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenarios = [
+        SuiteScenario(
+            label="base",
+            start_date=None,
+            end_date=None,
+            coins=None,
+            ignored_coins=None,
+            exchanges=["binance", "bybit"],
+        ),
+        SuiteScenario(
+            label="binance_only",
+            start_date="2025-01-01",
+            end_date=None,
+            coins=None,
+            ignored_coins=None,
+            exchanges=["binance"],
+        ),
+        SuiteScenario(
+            label="bybit_only",
+            start_date="2025-01-01",
+            end_date=None,
+            coins=None,
+            ignored_coins=None,
+            exchanges=["bybit"],
+        ),
+    ]
+    calls = []
+
+    async def fake_prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps=False):
+        calls.append(
+            (
+                exchange,
+                config["backtest"]["start_date"],
+                config["backtest"]["end_date"],
+            )
+        )
+        timestamps = np.array([0, 60_000], dtype=np.int64)
+        return (
+            ["BTC"],
+            np.ones((2, 1, 4), dtype=np.float64),
+            {"BTC": {"exchange": exchange}, "__meta__": {}},
+            "",
+            f"/tmp/{exchange}",
+            np.ones(2, dtype=np.float64),
+            timestamps,
+        )
+
+    monkeypatch.setitem(
+        sys.modules,
+        "backtest",
+        SimpleNamespace(prepare_hlcvs_mss=fake_prepare_hlcvs_mss),
+    )
+    caplog.set_level("INFO")
+
+    await prepare_master_datasets(
+        base_config,
+        ["binance", "bybit"],
+        needed_individual_exchanges={"binance", "bybit"},
+        scenarios=scenarios,
+    )
+
+    assert calls == [
+        ("combined", "2021", "2026-05-21"),
+        ("binance", "2025-01-01", "2026-05-21"),
+        ("bybit", "2025-01-01", "2026-05-21"),
+    ]
+    assert any(
+        "[suite] dataset window binance start=2025-01-01 end=2026-05-21 scenarios=binance_only"
+        in rec.message
+        for rec in caplog.records
+    )
+    assert any(
+        "[suite] dataset window bybit start=2025-01-01 end=2026-05-21 scenarios=bybit_only"
+        in rec.message
+        for rec in caplog.records
+    )
 
 
 def test_aggregate_metrics_computes_stats():

@@ -10,6 +10,7 @@ All notable user-facing changes will be documented in this file.
 - Fixed flat shared bot keys to override grouped defaults during config canonicalization, and changed flat strategy coin overrides to fail loudly instead of being silently discarded.
 - Added a live-only entry cooldown guard that can anchor `entry_cooldown_minutes` from exchange-observed position increases when fill-event data is temporarily delayed.
 - Fixed optimizer/backtest HLCV universe preparation for canonical v8 grouped bot config, so side enablement reads `bot.<side>.risk.total_wallet_exposure_limit` and `bot.<side>.risk.n_positions` without requiring runtime flat aliases.
+- Fixed suite HLCV preparation so individual exchange datasets use the date windows of the scenarios that consume them instead of inheriting the global combined-suite window.
 - Fixed `position_held_*` and `position_unchanged_*` backtest metrics so still-open positions are measured through the backtest end timestamp instead of stopping at the last fill.
 - Changed optimizer `fixed_params` and `--fine_tune_params` to v8 dotted config-path selectors, with path-prefix matching such as `long.strategy` for `bot.long.strategy.<active_strategy>.*` and sorted multi-line logs showing each selector expansion in compact dotted form.
 - Extended optimizer `fixed_params` and `--fine_tune_params` selectors to match config-path suffixes, so leaf selectors such as `we_excess_allowance_pct` expand to all matching long/short bounds while still avoiding partial-substring matches.

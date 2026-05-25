@@ -86,6 +86,7 @@ class OhlcvStore:
         self.root = Path(root)
         self.catalog = catalog
         self._verified_checksums: set[tuple] = set()
+        self._checksum_backfill_counts: dict[tuple[str, str, str], int] = {}
         self.root.mkdir(parents=True, exist_ok=True)
 
     def month_paths(self, exchange: str, timeframe: str, symbol: str, year: int, month: int) -> MonthChunkPaths:
@@ -159,6 +160,40 @@ class OhlcvStore:
         self._verified_checksums = {
             key for key in self._verified_checksums if key[0] != body_path_str
         }
+
+    def _log_checksum_backfilled(self, chunk: ChunkRecord) -> None:
+        key = (str(chunk.exchange), str(chunk.timeframe), str(chunk.symbol))
+        count = self._checksum_backfill_counts.get(key, 0) + 1
+        self._checksum_backfill_counts[key] = count
+        if count == 1:
+            logging.info(
+                "[ohlcv_store] checksum backfill started exchange=%s symbol=%s timeframe=%s first_month=%04d-%02d",
+                chunk.exchange,
+                chunk.symbol,
+                chunk.timeframe,
+                chunk.year,
+                chunk.month,
+            )
+        elif count % 25 == 0:
+            logging.info(
+                "[ohlcv_store] checksum backfilled %d chunks exchange=%s symbol=%s timeframe=%s latest_month=%04d-%02d",
+                count,
+                chunk.exchange,
+                chunk.symbol,
+                chunk.timeframe,
+                chunk.year,
+                chunk.month,
+            )
+        else:
+            logging.debug(
+                "[ohlcv_store] checksum_backfilled exchange=%s symbol=%s timeframe=%s month=%04d-%02d count=%d",
+                chunk.exchange,
+                chunk.symbol,
+                chunk.timeframe,
+                chunk.year,
+                chunk.month,
+                count,
+            )
 
     def invalidate_chunk(self, chunk: ChunkRecord) -> None:
         paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
@@ -386,14 +421,7 @@ class OhlcvStore:
                 checksum=checksum,
             )
             self._verified_checksums.add(self._checksum_cache_keys_for_paths(paths, checksum))
-            logging.info(
-                "[ohlcv_store] checksum_backfilled exchange=%s symbol=%s timeframe=%s month=%04d-%02d",
-                chunk.exchange,
-                chunk.symbol,
-                chunk.timeframe,
-                chunk.year,
-                chunk.month,
-            )
+            self._log_checksum_backfilled(chunk)
             return
         cache_key = self._checksum_cache_keys_for_paths(paths, str(chunk.checksum))
         if cache_key in self._verified_checksums:
