@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Capped omega-ratio analysis metrics at a finite value when a backtest has positive returns with no losing days, and reports flat/no-movement windows as `0.0`, preventing optimizer scoring metrics from disappearing during JSON/Python aggregation.
 - Added canonical strategy-equity recovery-duration metrics: `strategy_eq_recovery_days_mean`, `strategy_eq_recovery_days_median`, `strategy_eq_recovery_days_p95`, `strategy_eq_recovery_days_p99`, `strategy_eq_recovery_days_mean_worst_5pct`, `strategy_eq_recovery_days_mean_worst_1pct`, and `strategy_eq_recovery_days_max`; `peak_recovery_days_strategy_eq` remains as a backwards-compatible alias for the max.
 - Changed pymoo NSGA-II optimization so `optimize.population_size: null` now auto-resolves to `250`, avoiding startup failures when `optimize.pymoo.algorithm: "auto"` selects NSGA-II for small objective sets.
 - Added backtest `entry_interval_hours_mean`, `entry_interval_hours_median`, `entry_interval_hours_p95`, `entry_interval_hours_p99`, and `entry_interval_hours_max` analysis metrics, measuring gaps between normal initial entries per coin and side.

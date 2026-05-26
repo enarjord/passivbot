@@ -4,6 +4,8 @@ use std::collections::HashMap;
 
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_HOUR: u64 = 3_600_000;
+const OMEGA_RATIO_CAP: f64 = 1_000.0;
+const OMEGA_RATIO_EPS: f64 = 1e-12;
 
 fn fallback_timestamp_ms(index: usize) -> u64 {
     (index as u64) * 60_000
@@ -90,11 +92,7 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
                     (gains, losses + ret.abs())
                 }
             });
-    let omega_ratio = if losses_sum != 0.0 {
-        gains_sum / losses_sum
-    } else {
-        f64::INFINITY
-    };
+    let omega_ratio = calc_omega_ratio(gains_sum, losses_sum);
     let expected_shortfall_1pct = mean_worst_1pct_abs(&daily_eqs_mins_pct_change);
     EquitySeriesMetrics {
         gain,
@@ -104,6 +102,25 @@ pub fn analyze_equity_series(equities: &[f64], timestamps_ms: &[u64]) -> EquityS
         sortino_ratio,
         omega_ratio,
         expected_shortfall_1pct,
+    }
+}
+
+fn calc_omega_ratio(gains_sum: f64, losses_sum: f64) -> f64 {
+    if losses_sum <= OMEGA_RATIO_EPS {
+        if gains_sum > OMEGA_RATIO_EPS {
+            OMEGA_RATIO_CAP
+        } else {
+            0.0
+        }
+    } else {
+        let ratio = gains_sum / losses_sum;
+        if ratio.is_finite() {
+            ratio.min(OMEGA_RATIO_CAP)
+        } else if gains_sum > OMEGA_RATIO_EPS {
+            OMEGA_RATIO_CAP
+        } else {
+            0.0
+        }
     }
 }
 
@@ -276,11 +293,7 @@ fn analyze_backtest_basic(
                     (gains, losses + ret.abs())
                 }
             });
-    let omega_ratio = if losses_sum != 0.0 {
-        gains_sum / losses_sum
-    } else {
-        f64::INFINITY
-    };
+    let omega_ratio = calc_omega_ratio(gains_sum, losses_sum);
 
     // Calculate Expected Shortfall (99%)
     let expected_shortfall_1pct = if daily_eqs_mins_pct_change.is_empty() {
@@ -1482,6 +1495,49 @@ mod tests {
             twe_short: if is_long { 0.0 } else { -0.1 },
             twe_net: if is_long { 0.1 } else { -0.1 },
         }
+    }
+
+    #[test]
+    fn omega_ratio_caps_positive_no_loss_days() {
+        let timestamps = vec![0, MS_PER_DAY, MS_PER_DAY * 2];
+        let equities = vec![100.0, 110.0, 121.0];
+
+        let metrics = analyze_equity_series(&equities, &timestamps);
+
+        assert_eq!(metrics.omega_ratio, OMEGA_RATIO_CAP);
+        assert!(metrics.omega_ratio.is_finite());
+    }
+
+    #[test]
+    fn omega_ratio_is_zero_when_no_days_move() {
+        let timestamps = vec![0, MS_PER_DAY, MS_PER_DAY * 2];
+        let equities = vec![100.0, 100.0, 100.0];
+
+        let metrics = analyze_equity_series(&equities, &timestamps);
+
+        assert_eq!(metrics.omega_ratio, 0.0);
+    }
+
+    #[test]
+    fn backtest_analysis_omega_ratio_caps_positive_no_loss_days() {
+        let timestamps = vec![0, MS_PER_DAY, MS_PER_DAY * 2];
+        let equities = vec![100.0, 110.0, 121.0];
+        let exposures_series: Vec<f64> = vec![];
+        let fills = vec![make_trade_fill(
+            0,
+            timestamps[0],
+            "BTC",
+            0.0,
+            0.1,
+            0.1,
+            100.0,
+            true,
+        )];
+
+        let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &exposures_series);
+
+        assert_eq!(analysis.omega_ratio, OMEGA_RATIO_CAP);
+        assert!(analysis.omega_ratio.is_finite());
     }
 
     #[test]
