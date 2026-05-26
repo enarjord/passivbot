@@ -33,7 +33,6 @@ def get_template_config():
                 "liquidation_threshold": 0.05,
                 "maker_fee_override": 0.0004,
                 "market_settings_sources": {},
-                "max_warmup_minutes": 0,
                 "ohlcv_source_dir": None,
                 "market_order_slippage_pct": 0.0005,
                 "visible_metrics": None,
