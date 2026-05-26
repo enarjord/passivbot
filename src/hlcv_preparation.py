@@ -3898,7 +3898,7 @@ async def _load_combined_coin_candidates(
                     catalog=catalog,
                     store=store,
                     legacy_root=legacy_root,
-                    use_v2_local=not force_refetch_gaps,
+                    use_v2_local=True,
                 )
             )
         )
@@ -3944,7 +3944,7 @@ async def _load_combined_coin_candidates(
             if candidate_report is not None:
                 candidate_report.append(summary.to_dict())
             continue
-        source_layer = "v2_store" if not force_refetch_gaps else "remote_fetch"
+        source_layer = "v2_store"
         candidate, summary = _combined_summary_from_result(
             coin=plan.coin,
             exchange=ex,
@@ -3985,6 +3985,7 @@ async def _load_combined_btc_prices(
             effective_start_date,
             end_date,
             gap_tolerance_ohlcvs_minutes=gap_tolerance_ohlcvs_minutes,
+            force_refetch_gaps=force_refetch_gaps,
         )
         try:
             btc_om.update_date_range(int(timestamps[0]), int(timestamps[-1]))
@@ -3998,32 +3999,30 @@ async def _load_combined_btc_prices(
             if not btc_om.has_coin("BTC"):
                 continue
             btc_symbol = btc_om.get_symbol("BTC")
-            if force_refetch_gaps:
-                btc_df = await btc_om.get_ohlcvs("BTC")
-            else:
-                btc_rng = await _resolve_v2_store_range(
-                    om=btc_om,
-                    catalog=catalog,
-                    store=store,
-                    legacy_root=legacy_root,
-                    exchange=to_standard_exchange_name(btc_exchange),
-                    coin="BTC",
-                    symbol=btc_symbol,
-                    start_ts=int(timestamps[0]),
-                    end_ts=int(timestamps[-1]),
-                    allow_remote_fetch=True,
-                    local_hit_log_label="combined BTC v2 local hit",
-                    remote_fetch_log_label="combined BTC fetching missing range",
+            btc_rng = await _resolve_v2_store_range(
+                om=btc_om,
+                catalog=catalog,
+                store=store,
+                legacy_root=legacy_root,
+                exchange=to_standard_exchange_name(btc_exchange),
+                coin="BTC",
+                symbol=btc_symbol,
+                start_ts=int(timestamps[0]),
+                end_ts=int(timestamps[-1]),
+                allow_remote_fetch=True,
+                local_hit_log_label="combined BTC v2 local hit",
+                remote_fetch_log_label="combined BTC fetching missing range",
+            )
+            btc_df = (
+                pd.DataFrame(
+                    {
+                        "timestamp": btc_rng.timestamps,
+                        "close": btc_rng.values[:, 2].astype(np.float64, copy=False),
+                    }
                 )
-                if btc_rng is not None:
-                    btc_df = pd.DataFrame(
-                        {
-                            "timestamp": btc_rng.timestamps,
-                            "close": btc_rng.values[:, 2].astype(np.float64, copy=False),
-                        }
-                    )
-                else:
-                    btc_df = await btc_om.get_ohlcvs("BTC")
+                if btc_rng is not None
+                else pd.DataFrame()
+            )
             if not btc_df.empty:
                 btc_source_exchange = btc_exchange
                 return btc_df, btc_source_exchange
