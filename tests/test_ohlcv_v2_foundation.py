@@ -1,3 +1,5 @@
+import sqlite3
+
 import numpy as np
 import pytest
 
@@ -324,6 +326,72 @@ def test_materializer_supports_distinct_coin_keys_and_store_symbols(tmp_path):
     np.testing.assert_allclose(hlcvs[:, 0, :], vals.astype(np.float64))
     assert handle.mss["ETH"]["first_valid_index"] == 0
     assert handle.mss["ETH"]["last_valid_index"] == 1
+
+
+def test_materializer_respects_per_coin_source_window_before_checksum_verification(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    global_start = month_start_ts(2026, 2)
+    source_start = month_start_ts(2026, 3)
+    end = source_start + 2 * 60_000
+    n_steps = int((end - global_start) // 60_000) + 1
+
+    stale_ts = np.array([global_start], dtype=np.int64)
+    stale_vals = np.array([[91.0, 89.0, 90.0, 9.0]], dtype=np.float32)
+    store.write_rows("bybit", "1m", "ONDO/USDT:USDT", stale_ts, stale_vals)
+    with sqlite3.connect(catalog.db_path) as conn:
+        conn.execute(
+            "UPDATE chunks SET checksum = NULL WHERE exchange = ? AND symbol = ? AND year = ? AND month = ?",
+            ("bybit", "ONDO/USDT:USDT", 2026, 2),
+        )
+
+    source_ts = np.array(
+        [source_start, source_start + 60_000, source_start + 2 * 60_000],
+        dtype=np.int64,
+    )
+    source_vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [102.0, 100.0, 101.0, 11.0],
+            [103.0, 101.0, 102.0, 12.0],
+        ],
+        dtype=np.float32,
+    )
+    store.write_rows("bybit", "1m", "ONDO/USDT:USDT", source_ts, source_vals)
+
+    handle = BacktestDatasetMaterializer(
+        store, tmp_path / "caches" / "ohlcvs" / "materialized"
+    ).materialize(
+        exchange="bybit",
+        coins=["ONDO"],
+        symbols_by_coin={"ONDO": "ONDO/USDT:USDT"},
+        source_windows_by_coin={"ONDO": (int(source_start), int(end))},
+        start_ts=int(global_start),
+        end_ts=int(end),
+        btc_usd_prices=np.full(n_steps, 30_000.0, dtype=np.float64),
+        mss={"ONDO": {}},
+        run_id="bounded_source_window",
+        fill_edge_gaps=True,
+    )
+
+    first_valid_index = int((source_start - global_start) // 60_000)
+    hlcvs = handle.open_hlcvs()
+    np.testing.assert_allclose(hlcvs[0, 0, :], np.array([100.0, 100.0, 100.0, 0.0]))
+    np.testing.assert_allclose(
+        hlcvs[first_valid_index - 1, 0, :],
+        np.array([100.0, 100.0, 100.0, 0.0]),
+    )
+    np.testing.assert_allclose(
+        hlcvs[first_valid_index : first_valid_index + 3, 0, :],
+        source_vals.astype(np.float64),
+    )
+    assert handle.mss["ONDO"]["first_valid_index"] == first_valid_index
+    assert handle.mss["ONDO"]["last_valid_index"] == first_valid_index + 2
+    assert handle.mss["ONDO"]["coverage_leading_missing_minutes"] == first_valid_index
+    assert handle.mss["ONDO"]["synthetic_gap_fill_count"] == first_valid_index
+    assert handle.mss["ONDO"]["source_window_start_ts"] == int(source_start)
+    assert handle.mss["ONDO"]["source_window_end_ts"] == int(end)
 
 
 def test_materializer_fills_internal_sparse_gaps_without_extending_edges(tmp_path):
