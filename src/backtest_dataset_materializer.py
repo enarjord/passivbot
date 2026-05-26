@@ -159,6 +159,7 @@ class BacktestDatasetMaterializer:
         exchange: str,
         coins: list[str],
         symbols_by_coin: dict[str, str] | None = None,
+        source_windows_by_coin: dict[str, tuple[int, int]] | None = None,
         start_ts: int,
         end_ts: int,
         btc_usd_prices: np.ndarray,
@@ -195,6 +196,7 @@ class BacktestDatasetMaterializer:
         enriched_mss = deepcopy(mss)
         valid_buffer = np.zeros(n_steps, dtype=np.bool_)
         symbols_by_coin = symbols_by_coin or {}
+        source_windows_by_coin = source_windows_by_coin or {}
         for coin_idx, coin in enumerate(coins):
             coin_t0 = time.monotonic()
             logging.info(
@@ -207,8 +209,26 @@ class BacktestDatasetMaterializer:
             valid_buffer[:] = False
             coin_view = hlcvs[:, coin_idx, :]
             store_symbol = symbols_by_coin.get(coin, coin)
+            copy_start_ts, copy_end_ts = source_windows_by_coin.get(coin, (start_ts, end_ts))
+            copy_start_ts = int(copy_start_ts)
+            copy_end_ts = int(copy_end_ts)
+            if copy_start_ts % interval_ms != 0 or copy_end_ts % interval_ms != 0:
+                raise ValueError(f"source window for {coin} must align to 1m")
+            if copy_start_ts < start_ts or copy_end_ts > end_ts or copy_end_ts < copy_start_ts:
+                raise ValueError(
+                    f"source window for {coin} must be inside materialized range: "
+                    f"{copy_start_ts}..{copy_end_ts} not within {start_ts}..{end_ts}"
+                )
+            dest_start = int((copy_start_ts - start_ts) // interval_ms)
+            dest_end = int((copy_end_ts - start_ts) // interval_ms) + 1
             self.store.copy_range_into(
-                exchange, "1m", store_symbol, start_ts, end_ts, coin_view, valid_buffer
+                exchange,
+                "1m",
+                store_symbol,
+                copy_start_ts,
+                copy_end_ts,
+                coin_view[dest_start:dest_end],
+                valid_buffer[dest_start:dest_end],
             )
             source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
                 valid_buffer
@@ -223,6 +243,8 @@ class BacktestDatasetMaterializer:
             meta = enriched_mss.setdefault(coin, {})
             meta["first_valid_index"] = source_first_valid_index
             meta["last_valid_index"] = source_last_valid_index
+            meta["source_window_start_ts"] = int(copy_start_ts)
+            meta["source_window_end_ts"] = int(copy_end_ts)
             meta.update(coverage_meta)
             if synthetic_gap_fill_count:
                 meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count

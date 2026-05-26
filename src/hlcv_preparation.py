@@ -1133,6 +1133,7 @@ async def try_prepare_hlcvs_v2_local(
         store = OhlcvStore(Path("caches") / "ohlcvs", catalog)
         mss = {}
         coin_symbols = {}
+        coin_source_windows = {}
         global_start_ts = None
 
         for coin in coins:
@@ -1177,6 +1178,7 @@ async def try_prepare_hlcvs_v2_local(
                 return None
 
             coin_symbols[coin] = symbol
+            coin_source_windows[coin] = (int(rng.timestamps[0]), int(rng.timestamps[-1]))
             mss[coin] = om.get_market_specific_settings(coin)
             global_start_ts = adjusted_start_ts if global_start_ts is None else min(global_start_ts, adjusted_start_ts)
 
@@ -1241,6 +1243,9 @@ async def try_prepare_hlcvs_v2_local(
             exchange=store_exchange,
             coins=sorted(coin_symbols),
             symbols_by_coin=coin_symbols,
+            source_windows_by_coin={
+                coin: coin_source_windows[coin] for coin in sorted(coin_symbols)
+            },
             start_ts=int(global_start_ts),
             end_ts=int(end_ts),
             btc_usd_prices=btc_prices,
