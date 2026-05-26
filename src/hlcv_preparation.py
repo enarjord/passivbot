@@ -1472,7 +1472,7 @@ async def _resolve_v2_store_range(
             )
             if partial_rng is not None:
                 logging.info(
-                    "[%s] using discovered v2 pre-inception boundary for %s (%s -> %s)",
+                    "[%s] using confirmed v2 pre-inception boundary for %s (%s -> %s)",
                     exchange,
                     coin,
                     ts_to_date(int(partial_rng.timestamps[0])),
@@ -2275,8 +2275,14 @@ def _pre_inception_gaps_are_stale(gaps, first_ts_evidence: dict[str, int]) -> bo
     )
 
 
+_CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES = {
+    "authoritative_first_candle_boundary",
+    "discovered_first_candle_during_stale_repair",
+}
+
+
 def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
-    return str(getattr(gap, "note", "") or "") == "discovered_first_candle_during_stale_repair"
+    return str(getattr(gap, "note", "") or "") in _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES
 
 
 def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
