@@ -526,11 +526,12 @@ class TestPrepareHLCVSBtcFallback:
         config = dict(sample_config)
         config["backtest"] = dict(sample_config["backtest"])
         config["backtest"]["exchanges"] = ["hyperliquid"]
-        config["backtest"]["hlcvs_cache_permissive"] = True
 
         with patch("hlcv_preparation.prepare_hlcvs_internal", new=mock_prepare_internal):
             with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
-                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(config, "hyperliquid")
+                _mss, _ts, _hlcvs, btc_usd_prices = await prepare_hlcvs(
+                    config, "hyperliquid", skip_v2_local=True
+                )
 
         assert calls[0] == "hyperliquid"
         assert calls[-1] == "binanceusdm"
@@ -586,7 +587,6 @@ class TestPrepareHLCVSBtcFallback:
                 with patch.object(HLCVManager, "get_ohlcvs", new=mock_get_ohlcvs):
                     config = dict(sample_config)
                     config["backtest"] = dict(sample_config["backtest"])
-                    config["backtest"]["hlcvs_cache_permissive"] = True
                     mss, out_timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
                         config, "binanceusdm"
                     )
@@ -600,20 +600,6 @@ class TestPrepareHLCVSBtcFallback:
         np.testing.assert_allclose(btc_usd_prices, np.array([50000.0, 50010.0]))
         assert mss["BTC"]["first_valid_index"] == 0
         assert mss["BTC"]["last_valid_index"] == 1
-
-    @pytest.mark.asyncio
-    async def test_prepare_hlcvs_rejects_legacy_fallback_by_default(self, sample_config):
-        async def mock_try_prepare_local(*args, **kwargs):
-            return None
-
-        async def fail_prepare_internal(*args, **kwargs):
-            raise AssertionError("legacy prepare_hlcvs_internal should not run by default")
-
-        with patch("hlcv_preparation.try_prepare_hlcvs_v2_local", new=mock_try_prepare_local):
-            with patch("hlcv_preparation.prepare_hlcvs_internal", new=fail_prepare_internal):
-                with pytest.raises(ValueError, match="deterministic HLCV materialization"):
-                    await prepare_hlcvs(sample_config, "binanceusdm")
-
 
 # ============================================================================
 # Test Class: Error Handling
@@ -1679,7 +1665,8 @@ async def test_fetch_data_for_coin_and_exchange_counts_sparse_v2_valid_rows(tmp_
     assert coverage_count == 2
     assert gap_count == 1
     assert total_volume == pytest.approx(202.0)
-    np.testing.assert_allclose(df["volume"].to_numpy(), np.array([100.0, 0.0, 102.0]))
+    assert df["valid"].tolist() == [True, False, True]
+    assert np.isnan(df["volume"].to_numpy()[1])
 
 
 @pytest.mark.asyncio
@@ -1699,7 +1686,7 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
             rows = np.array(
                 [
                     (since_ms, 100.0, 101.0, 99.0, 100.0, 10.0),
-                    (since_ms + 120_000, 101.0, 102.0, 100.0, 101.0, 11.0),
+                    (since_ms + 600_000, 101.0, 102.0, 100.0, 101.0, 11.0),
                 ],
                 dtype=CANDLE_DTYPE,
             )
@@ -1715,7 +1702,7 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
         "binance",
         "2026-04-01",
         "2026-04-01",
-        gap_tolerance_ohlcvs_minutes=10,
+        gap_tolerance_ohlcvs_minutes=1,
     )
     manager.markets = {"BTC/USDT:USDT": {"base": "BTC"}}
     manager.cm = FakeCandlestickManager()
@@ -1725,12 +1712,12 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
     df = await manager.fetch_ohlcvs_for_v2_store(
         "BTC",
         start_ts=start_ts,
-        end_ts=start_ts + 120_000,
+        end_ts=start_ts + 600_000,
     )
 
     np.testing.assert_array_equal(
         df["timestamp"].to_numpy(dtype=np.int64, copy=False),
-        np.array([start_ts, start_ts + 120_000], dtype=np.int64),
+        np.array([start_ts, start_ts + 600_000], dtype=np.int64),
     )
 
 
@@ -1824,6 +1811,151 @@ async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(
     assert failed["status"] == "ineligible"
     assert failed["reason"] == "api_error:RuntimeError"
     assert failed["gap_class"] == "api_error"
+
+
+@pytest.mark.asyncio
+async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
+    monkeypatch, tmp_path
+):
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 10 * 60_000
+    symbol = "BTC/USDT:USDT"
+    plan = hp.CombinedCoinPlan(
+        coin="BTC",
+        effective_start_ts=start_ts,
+        forced_exchange=None,
+        candidate_exchanges=("binanceusdm",),
+    )
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "ohlcvs", catalog)
+    values = np.array(
+        [[101.0, 99.0, 100.0, 10.0], [111.0, 109.0, 110.0, 11.0]],
+        dtype=np.float32,
+    )
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        force_refetch_gaps = True
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        def get_symbol(self, coin):
+            return symbol
+
+        def update_date_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def get_ohlcvs(self, coin):
+            raise AssertionError("combined force-refetch must use the v2 resolver")
+
+    async def sparse_remote_fetch(*args, **kwargs):
+        kwargs["store"].write_rows(
+            kwargs["exchange"],
+            "1m",
+            kwargs["symbol"],
+            np.array([start_ts, end_ts], dtype=np.int64),
+            values,
+        )
+        return True
+
+    monkeypatch.setattr(hp, "_fetch_coin_range_into_v2_store", sparse_remote_fetch)
+    report = []
+
+    candidates = await hp._load_combined_coin_candidates(
+        plan=plan,
+        om_dict={"binanceusdm": FakeManager()},
+        end_ts=end_ts,
+        force_refetch_gaps=True,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchanges_to_consider=("binanceusdm",),
+        candidate_report=report,
+    )
+
+    assert len(candidates) == 1
+    candidate = candidates[0]
+    assert not candidate.full_range
+    assert candidate.coverage_count == 1
+    np.testing.assert_array_equal(
+        candidate.df["timestamp"].to_numpy(dtype=np.int64, copy=False),
+        np.array([start_ts], dtype=np.int64),
+    )
+    assert report[0]["source_layers_used"] == ["v2_store"]
+
+
+@pytest.mark.asyncio
+async def test_combined_force_refetch_btc_prices_use_v2_resolver(monkeypatch, tmp_path):
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 10 * 60_000
+    symbol = "BTC/USDT:USDT"
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "ohlcvs", catalog)
+    values = np.array(
+        [[50101.0, 49999.0, 50000.0, 10.0], [51101.0, 50999.0, 51000.0, 11.0]],
+        dtype=np.float32,
+    )
+
+    class FakeBtcManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+
+        def __init__(self, exchange, start_date, end_date, **kwargs):
+            self.exchange = exchange
+            self.force_refetch_gaps = bool(kwargs.get("force_refetch_gaps", False))
+            self.cc = None
+
+        def update_date_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return coin == "BTC"
+
+        def get_symbol(self, coin):
+            return symbol
+
+        async def get_ohlcvs(self, coin):
+            raise AssertionError("combined BTC force-refetch must use the v2 resolver")
+
+        async def aclose(self):
+            return None
+
+    async def sparse_remote_fetch(*args, **kwargs):
+        kwargs["store"].write_rows(
+            kwargs["exchange"],
+            "1m",
+            kwargs["symbol"],
+            np.array([start_ts, end_ts], dtype=np.int64),
+            values,
+        )
+        return True
+
+    monkeypatch.setattr(hp, "HLCVManager", FakeBtcManager)
+    monkeypatch.setattr(hp, "_fetch_coin_range_into_v2_store", sparse_remote_fetch)
+
+    btc_df, source_exchange = await hp._load_combined_btc_prices(
+        exchanges_to_consider=("binanceusdm",),
+        timestamps=np.arange(start_ts, end_ts + 60_000, 60_000, dtype=np.int64),
+        effective_start_date=hp.ts_to_date(start_ts),
+        end_date=hp.ts_to_date(end_ts),
+        gap_tolerance_ohlcvs_minutes=0.0,
+        force_refetch_gaps=True,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+    )
+
+    assert source_exchange == "binanceusdm"
+    np.testing.assert_array_equal(
+        btc_df["timestamp"].to_numpy(dtype=np.int64, copy=False),
+        np.array([start_ts], dtype=np.int64),
+    )
+    np.testing.assert_allclose(btc_df["close"].to_numpy(dtype=np.float64), [50000.0])
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,14 @@
 # OHLCV V2 Architecture Handoff
 
+> Status: historical architecture handoff. The current implemented contract is:
+> use `caches/ohlcvs/` first, import legacy raw shards second, and make targeted
+> remote calls only for remaining missing/invalid windows. Late starts and early ends
+> are accepted with artifact coverage metadata. Large internal gaps are repaired or
+> excluded from the returned tradable window.
+> Local corruption, conflicting duplicates, malformed timestamps/OHLCV rows, missing
+> BTC benchmark data, no valid data, and no tradable candles after warmup still fail
+> loudly. Known persistent gaps are retried after 7 days by default.
+
 ## Purpose
 
 Redesign Passivbot's OHLCV download, persistence, gap tracking, and backtest payload assembly so

@@ -36,6 +36,7 @@ from config_utils import (
     parse_overrides,
     format_config,
 )
+from warmup_utils import compute_backtest_warmup_minutes
 
 
 def _strategy_side(config, pside, kind=None):
@@ -918,6 +919,24 @@ def test_backtest_cli_candle_interval_short_flag_parses_as_int():
     assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
 
 
+def test_backtest_cli_max_warmup_override_updates_consumed_live_field():
+    args, allowed_config_keys = _parse_backtest_args(
+        [
+            "configs/hype.json",
+            "--live.max_warmup_minutes",
+            "1",
+        ]
+    )
+    config = get_template_config()
+
+    update_config_with_args(config, args, verbose=False, allowed_keys=allowed_config_keys)
+
+    assert "backtest.max_warmup_minutes" not in allowed_config_keys
+    assert "max_warmup_minutes" not in config["backtest"]
+    assert config["live"]["max_warmup_minutes"] == pytest.approx(1.0)
+    assert compute_backtest_warmup_minutes(config) == 1
+
+
 def test_update_config_with_args_ignores_non_config_parser_args():
     config = {}
     args = SimpleNamespace(config_path="configs/hype.json", log_level="info", suite=True)
@@ -1215,6 +1234,26 @@ def test_dotted_pnls_lookback_override_accepts_all_for_non_live_commands(command
     assert getattr(parsed, "live.pnls_max_lookback_days") == "all"
 
 
+@pytest.mark.parametrize("command", ["backtest", "optimize"])
+def test_dotted_max_warmup_override_parses_for_non_live_commands(command):
+    config = project_template_config_for_cli(get_template_config(), command)
+    parser = argparse.ArgumentParser(prog=command)
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get(command, [])
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command=command,
+        help_all=False,
+        group_map=group_map,
+    )
+
+    parsed = parser.parse_args(["--live.max_warmup_minutes", "720"])
+
+    assert getattr(parsed, "live.max_warmup_minutes") == pytest.approx(720.0)
+
+
 def test_optimize_fixed_bot_runtime_overrides_parse():
     config = project_template_config_for_cli(get_template_config(), "optimize")
     parser = argparse.ArgumentParser(prog="optimize")
@@ -1296,6 +1335,7 @@ def test_project_template_config_for_cli_backtest_keeps_inherited_live_runtime_f
 
     assert "market_orders_allowed" in config["live"]
     assert "market_order_near_touch_threshold" in config["live"]
+    assert "max_warmup_minutes" in config["live"]
     assert "pnls_max_lookback_days" in config["live"]
     assert "user" not in config["live"]
 
@@ -1305,6 +1345,7 @@ def test_project_template_config_for_cli_optimize_keeps_inherited_live_runtime_f
 
     assert "market_orders_allowed" in config["live"]
     assert "market_order_near_touch_threshold" in config["live"]
+    assert "max_warmup_minutes" in config["live"]
     assert "pnls_max_lookback_days" in config["live"]
     assert "user" not in config["live"]
 

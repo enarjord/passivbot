@@ -5,7 +5,7 @@
             "default": "mean",
             "drawdown_worst_mean_1pct_strategy_eq": "max",
             "drawdown_worst_strategy_eq": "max",
-            "peak_recovery_days_strategy_eq": "mean",
+            "strategy_eq_recovery_days_max": "mean",
             "position_held_days_max": "max"
         },
         "balance_sample_divider": 60,
@@ -23,11 +23,12 @@
         ],
         "filter_by_min_effective_cost": false,
         "gap_tolerance_ohlcvs_minutes": 120,
+        "hlcvs_data_dir": null,
+        "hlcvs_data_override_mode": "intersection",
         "liquidation_threshold": 0.05,
         "maker_fee_override": 0.0004,
         "market_order_slippage_pct": 0.0005,
         "market_settings_sources": {},
-        "max_warmup_minutes": 0,
         "ohlcv_source_dir": null,
         "scenarios": [
             {
@@ -974,7 +975,7 @@
             },
             {
                 "enabled": false,
-                "metric": "peak_recovery_days_strategy_eq",
+                "metric": "strategy_eq_recovery_days_max",
                 "penalize_if": "greater_than",
                 "value": 90
             },
@@ -992,7 +993,7 @@
             },
             {
                 "enabled": false,
-                "metric": "peak_recovery_days_strategy_eq",
+                "metric": "strategy_eq_recovery_days_max",
                 "penalize_if": "greater_than_or_equal",
                 "value": 71
             },
@@ -1055,7 +1056,7 @@
             },
             {
                 "goal": "min",
-                "metric": "peak_recovery_days_strategy_eq"
+                "metric": "strategy_eq_recovery_days_max"
             },
             {
                 "goal": "min",

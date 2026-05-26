@@ -225,6 +225,15 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.max_warmup_minutes": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Date Range",
+            "optimize": "Backtest Runtime",
+        },
+    },
     "live.pnls_max_lookback_days": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -1024,21 +1033,6 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Backtest candle interval in minutes.",
     },
-    "backtest.hlcvs_cache_permissive": {
-        "visible": ["--hlcvs-cache-permissive"],
-        "hidden": [
-            "--backtest.hlcvs_cache_permissive",
-            "--backtest_hlcvs_cache_permissive",
-        ],
-        "type": str2bool,
-        "metavar": "Y/N",
-        "commands": {"backtest", "optimize"},
-        "group": {
-            "backtest": "Backtest Runtime",
-            "optimize": "Backtest Runtime",
-        },
-        "help": "Allow legacy HLCV final caches without manifests to load with warning-only compatibility behavior.",
-    },
     "backtest.hlcvs_data_dir": {
         "visible": ["--hlcvs-data-dir"],
         "hidden": ["--backtest.hlcvs_data_dir", "--backtest_hlcvs_data_dir"],
@@ -1283,7 +1277,6 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
     }
     date_range = {
         "backtest.end_date",
-        "backtest.max_warmup_minutes",
         "backtest.start_date",
     }
     runtime = {
@@ -1347,7 +1340,6 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.filter_by_min_effective_cost",
         "backtest.gap_tolerance_ohlcvs_minutes",
         "backtest.maker_fee_override",
-        "backtest.max_warmup_minutes",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
         "backtest.volume_normalization",

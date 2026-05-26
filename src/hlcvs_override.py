@@ -124,27 +124,13 @@ def load_hlcvs_data_override(config, exchange):
     cache_dir = Path(override_dir).expanduser().resolve()
     if not cache_dir.is_dir():
         raise FileNotFoundError(f"HLCV dataset override directory does not exist: {cache_dir}")
-    cache_permissive = bool(
-        get_optional_config_value(config, "backtest.hlcvs_cache_permissive", False)
-    )
     manifest = load_hlcvs_manifest(cache_dir)
-    manifest_missing = manifest is None
     if manifest is None:
-        if not cache_permissive:
-            raise HlcvsManifestError(
-                f"HLCV dataset override {cache_dir} is missing manifest.json; set "
-                "backtest.hlcvs_cache_permissive=true only for legacy compatibility"
-            )
-        logging.warning("[hlcvs] override dataset %s missing manifest; permissive load", cache_dir)
+        raise HlcvsManifestError(f"HLCV dataset override {cache_dir} is missing manifest.json")
     elif manifest_has_required_schema(manifest):
         verify_hlcvs_manifest(cache_dir, manifest)
-    elif not cache_permissive:
-        raise HlcvsManifestError(f"HLCV dataset override {cache_dir} has unsupported manifest schema")
     else:
-        logging.warning(
-            "[hlcvs] override dataset %s has unsupported manifest schema; permissive load",
-            cache_dir,
-        )
+        raise HlcvsManifestError(f"HLCV dataset override {cache_dir} has unsupported manifest schema")
 
     dataset_coins, hlcvs, mss, btc_usd_prices, timestamps = _load_hlcvs_cache_arrays(
         cache_dir, manifest
@@ -209,7 +195,6 @@ def load_hlcvs_data_override(config, exchange):
     selected_mss["__meta__"] = {
         "dataset_override": True,
         "dataset_override_mode": mode,
-        "manifest_missing": manifest_missing,
         "requested_coins": requested_coins,
         "dataset_coins": dataset_coins,
         "effective_backtested_coins": selected_coins,

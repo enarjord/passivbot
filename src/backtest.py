@@ -1266,32 +1266,19 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
     cache_dir = _resolve_hlcvs_cache_dir(cache_hash)
     compress_cache = bool(require_config_value(config, "backtest.compress_cache"))
     if cache_dir and os.path.exists(cache_dir):
-        cache_permissive = bool(
-            get_optional_config_value(config, "backtest.hlcvs_cache_permissive", False)
-        )
         manifest = load_hlcvs_manifest(cache_dir)
         if manifest is None:
-            if not cache_permissive:
-                logging.info(
-                    "[hlcvs] cache %s missing manifest; rebuilding because hlcvs_cache_permissive=false",
-                    cache_dir,
-                )
-                return None
-            logging.warning(
-                "[hlcvs] cache %s missing manifest; loading because hlcvs_cache_permissive=true",
+            logging.info(
+                "[hlcvs] cache %s missing manifest; rebuilding",
                 cache_dir,
             )
+            return None
         elif not manifest_has_required_schema(manifest):
-            if not cache_permissive:
-                logging.info(
-                    "[hlcvs] cache %s has unsupported manifest schema; rebuilding because hlcvs_cache_permissive=false",
-                    cache_dir,
-                )
-                return None
-            logging.warning(
-                "[hlcvs] cache %s has unsupported manifest schema; loading because hlcvs_cache_permissive=true",
+            logging.info(
+                "[hlcvs] cache %s has unsupported manifest schema; rebuilding",
                 cache_dir,
             )
+            return None
         else:
             verify_hlcvs_manifest(cache_dir, manifest)
         # Check warmup sufficiency: cached data must cover at least the needed warmup
@@ -1581,6 +1568,19 @@ def warn_hlcv_valid_range_coverage(config, coins, mss, timestamps):
             )
 
 
+def assert_hlcv_has_tradable_coverage(coins, mss):
+    tradable = []
+    for coin in coins:
+        meta = mss[coin]
+        first_idx = int(meta["first_valid_index"])
+        last_idx = int(meta["last_valid_index"])
+        warm_minutes = int(meta["warmup_minutes"])
+        if first_idx <= last_idx and first_idx + warm_minutes <= last_idx:
+            tradable.append(coin)
+    if not tradable:
+        raise ValueError("HLCV data has no tradable candles after warmup")
+
+
 async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = False):
     base_dir = require_config_value(config, "backtest.base_dir")
     results_path = oj(base_dir, exchange, "")
@@ -1592,6 +1592,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
         warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
+        assert_hlcv_has_tradable_coverage(coins, mss)
         return (
             coins,
             hlcvs,
@@ -1616,6 +1617,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
             warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
+            assert_hlcv_has_tradable_coverage(coins, mss)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
             return (
                 coins,
@@ -1629,23 +1631,13 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     except Exception as e:
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     local_v2 = None
-    allow_legacy_fallback = bool(
-        config.get("backtest", {}).get("hlcvs_cache_permissive", False)
-    )
     if exchange != "combined":
         try:
             local_v2 = await try_prepare_hlcvs_v2_local(
                 config, exchange, force_refetch_gaps=force_refetch_gaps
             )
         except Exception as e:
-            if not allow_legacy_fallback:
-                raise ValueError(
-                    f"{exchange} deterministic HLCV materialization failed before legacy "
-                    f"fallback was allowed: {e}"
-                ) from e
-            logging.info(
-                f"Unable to prepare hlcvs from local v2 store: {e}. Falling back."
-            )
+            raise ValueError(f"{exchange} deterministic HLCV materialization failed: {e}") from e
     if local_v2 is not None:
         mss, timestamps, hlcvs, btc_usd_prices = local_v2
     if exchange == "combined":
@@ -1660,21 +1652,14 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             force_refetch_gaps=force_refetch_gaps,
         )
     elif local_v2 is None:
-        if not allow_legacy_fallback:
-            raise ValueError(
-                f"{exchange} deterministic HLCV materialization could not build the requested "
-                "range in the v2 store; set backtest.hlcvs_cache_permissive=true only for "
-                "legacy CandlestickManager fallback compatibility"
-            )
-        mss, timestamps, hlcvs, btc_usd_prices = await prepare_hlcvs(
-            config,
-            exchange,
-            force_refetch_gaps=force_refetch_gaps,
-            skip_v2_local=True,
+        raise ValueError(
+            f"{exchange} deterministic HLCV materialization could not build usable coverage "
+            "for the requested range"
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
     warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
+    assert_hlcv_has_tradable_coverage(coins, mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
     try:
         cache_dir = save_coins_hlcvs_to_cache(

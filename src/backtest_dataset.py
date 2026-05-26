@@ -110,9 +110,6 @@ def build_backtest_dataset_metadata(config: dict, exchange: str) -> dict:
         "manifest_schema_version": manifest_schema_version,
         "materialization_schema_version": materialization_schema_version,
         "content_hashes": content_hashes,
-        "hlcvs_cache_permissive": get_optional_config_value(
-            config, "backtest.hlcvs_cache_permissive", False
-        ),
         "side_membership": side_membership,
         "coins": coins_order,
         "coin_index": {coin: idx for idx, coin in enumerate(coins_order)},
