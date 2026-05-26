@@ -925,7 +925,7 @@ async def test_resolve_v2_store_range_repairs_stale_pre_inception_gap(monkeypatc
         retry_count=3,
         last_attempt_at=0,
         next_retry_at=0,
-        note="mirrored_from_candlestick_manager",
+        note="untrusted_pre_inception_fixture",
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
@@ -1014,7 +1014,7 @@ async def test_resolve_v2_store_range_fails_loudly_on_unrepaired_stale_pre_incep
         retry_count=3,
         last_attempt_at=0,
         next_retry_at=0,
-        note="mirrored_from_candlestick_manager",
+        note="untrusted_pre_inception_fixture",
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
@@ -1499,7 +1499,7 @@ async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
     )
 
     async def fake_first_timestamps_unified(coins, exchange=None):
-        return {}
+        return {coin: int(first - 30 * 24 * 60 * 60_000) for coin in coins}
 
     monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
 
@@ -1507,6 +1507,9 @@ async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
         gap_tolerance_ohlcvs_minutes = 120.0
         cm = None
         fetch_calls = 0
+
+        def load_first_timestamp(self, coin):
+            return int(first - 30 * 24 * 60 * 60_000)
 
         async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
             self.fetch_calls += 1

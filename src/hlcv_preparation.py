@@ -1487,9 +1487,6 @@ async def _resolve_v2_store_range(
                 if _pre_inception_gaps_confirm_legacy_mirrored_boundary(
                     rng, overlapping_persistent_gaps
                 )
-                and not _pre_inception_gaps_are_stale(
-                    overlapping_persistent_gaps, first_ts_evidence
-                )
                 else None
             )
             if partial_rng is not None:
