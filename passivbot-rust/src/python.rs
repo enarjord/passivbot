@@ -689,8 +689,8 @@ fn calc_ema_anchor_quote_series(
     } else {
         0.0
     };
-    let vol_1h_alpha = if params.entry_volatility_ema_span_1h > 0.0 {
-        clamp_alpha(2.0 / (params.entry_volatility_ema_span_1h + 1.0))
+    let vol_1h_alpha = if params.offset_volatility_ema_span_1h > 0.0 {
+        clamp_alpha(2.0 / (params.offset_volatility_ema_span_1h + 1.0))
     } else {
         0.0
     };
@@ -794,7 +794,7 @@ fn calc_ema_anchor_quote_series(
     offset,
     offset_volatility_ema_span_1m,
     offset_volatility_1m_weight,
-    entry_volatility_ema_span_1h,
+    offset_volatility_ema_span_1h,
     offset_volatility_1h_weight,
     offset_psize_weight
 ))]
@@ -813,7 +813,7 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
     offset: f64,
     offset_volatility_ema_span_1m: f64,
     offset_volatility_1m_weight: f64,
-    entry_volatility_ema_span_1h: f64,
+    offset_volatility_ema_span_1h: f64,
     offset_volatility_1h_weight: f64,
     offset_psize_weight: f64,
 ) -> PyResult<(Py<PyArray1<f64>>, Py<PyArray1<f64>>)> {
@@ -826,7 +826,7 @@ pub fn calc_ema_anchor_quote_series_py<'py>(
         offset,
         offset_volatility_ema_span_1m,
         offset_volatility_1m_weight,
-        entry_volatility_ema_span_1h,
+        offset_volatility_ema_span_1h,
         offset_volatility_1h_weight,
         offset_psize_weight,
     };
@@ -2046,7 +2046,7 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
         "offset": extract_value::<f64>(dict, "offset")?,
         "offset_volatility_ema_span_1m": extract_optional_f64(dict, "offset_volatility_ema_span_1m")?,
         "offset_volatility_1m_weight": extract_optional_f64(dict, "offset_volatility_1m_weight")?,
-        "entry_volatility_ema_span_1h": extract_optional_f64(dict, "entry_volatility_ema_span_1h")?,
+        "offset_volatility_ema_span_1h": extract_optional_f64(dict, "offset_volatility_ema_span_1h")?,
         "offset_volatility_1h_weight": extract_optional_f64(dict, "offset_volatility_1h_weight")?,
         "offset_psize_weight": extract_value::<f64>(dict, "offset_psize_weight")?,
     }))

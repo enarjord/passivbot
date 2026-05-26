@@ -8186,14 +8186,14 @@ mod tests {
             long: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
                 offset_volatility_ema_span_1m: 30.0,
                 offset_volatility_1m_weight: 2.0,
-                entry_volatility_ema_span_1h: 12.0,
+                offset_volatility_ema_span_1h: 12.0,
                 offset_volatility_1h_weight: 1.0,
                 ..Default::default()
             }),
             short: StrategyParams::EmaAnchor(crate::strategies::EmaAnchorParams {
                 offset_volatility_ema_span_1m: 45.0,
                 offset_volatility_1m_weight: 3.0,
-                entry_volatility_ema_span_1h: 18.0,
+                offset_volatility_ema_span_1h: 18.0,
                 offset_volatility_1h_weight: 0.5,
                 ..Default::default()
             }),

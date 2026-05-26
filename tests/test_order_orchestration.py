@@ -4,6 +4,7 @@ import types
 import pytest
 import passivbot_rust as pbr
 from passivbot import Passivbot
+from exchanges.ccxt_bot import CCXTBot
 
 
 class OrchestrationBot(Passivbot):
@@ -82,6 +83,40 @@ def _make_order(
         "type": order_kind,
         "pb_order_type": order_type,
     }
+
+
+@pytest.mark.parametrize(
+    ("order_type", "qty", "position_side", "position_size"),
+    [
+        ("entry_ema_anchor_long", 0.1, "long", 0.0),
+        ("close_ema_anchor_long", -0.1, "long", 1.0),
+        ("entry_ema_anchor_short", -0.1, "short", 0.0),
+        ("close_ema_anchor_short", 0.1, "short", -1.0),
+    ],
+)
+def test_ema_anchor_limit_orders_route_to_ccxt_post_only_params(
+    order_type, qty, position_side, position_size
+):
+    symbol = "TEST/USDT:USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.positions[symbol][position_side]["size"] = position_size
+    order_type_id = pbr.order_type_snake_to_id(order_type)
+    ideal_orders = {symbol: [(qty, 100.0, order_type, order_type_id)]}
+
+    orders_by_symbol, _ = bot._to_executable_orders(ideal_orders, {symbol: 100.0})
+    [order] = orders_by_symbol[symbol]
+
+    assert order["pb_order_type"] == order_type
+    assert order["type"] == "limit"
+    assert order["position_side"] == position_side
+
+    ccxt_bot = CCXTBot.__new__(CCXTBot)
+    ccxt_bot.config = {"live": {"time_in_force": "post_only"}}
+
+    params = ccxt_bot._build_order_params(order)
+
+    assert params["postOnly"] is True
 
 
 def test_startup_banner_warns_when_market_orders_allowed(caplog):

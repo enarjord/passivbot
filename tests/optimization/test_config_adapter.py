@@ -264,7 +264,7 @@ class TestConfigAdapter:
                             "offset": 0.002,
                             "offset_volatility_ema_span_1m": 30.0,
                             "offset_volatility_1m_weight": 2.0,
-                            "entry_volatility_ema_span_1h": 12.0,
+                            "offset_volatility_ema_span_1h": 12.0,
                             "offset_volatility_1h_weight": 1.5,
                             "offset_psize_weight": 0.1,
                         }
@@ -281,7 +281,7 @@ class TestConfigAdapter:
                             "offset": 0.003,
                             "offset_volatility_ema_span_1m": 45.0,
                             "offset_volatility_1m_weight": 3.0,
-                            "entry_volatility_ema_span_1h": 18.0,
+                            "offset_volatility_ema_span_1h": 18.0,
                             "offset_volatility_1h_weight": 0.5,
                             "offset_psize_weight": 0.2,
                         }

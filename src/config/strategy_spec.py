@@ -9,6 +9,7 @@ import passivbot_rust as pbr
 
 BOT_POSITION_SIDES = ("long", "short")
 DEFAULT_STRATEGY_KIND = "trailing_martingale"
+EMA_ANCHOR_STRATEGY_KIND = "ema_anchor"
 
 
 def _strategy_metadata_error(exc: Exception) -> RuntimeError:

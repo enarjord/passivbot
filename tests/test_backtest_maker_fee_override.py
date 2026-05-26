@@ -177,7 +177,7 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
             "offset": 0.003,
             "offset_volatility_ema_span_1m": 30.0,
             "offset_volatility_1m_weight": 2.5,
-            "entry_volatility_ema_span_1h": 12.0,
+            "offset_volatility_ema_span_1h": 12.0,
             "offset_volatility_1h_weight": 1.75,
             "offset_psize_weight": 0.2,
     }
@@ -189,7 +189,7 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
             "offset": 0.004,
             "offset_volatility_ema_span_1m": 45.0,
             "offset_volatility_1m_weight": 3.5,
-            "entry_volatility_ema_span_1h": 18.0,
+            "offset_volatility_ema_span_1h": 18.0,
             "offset_volatility_1h_weight": 0.5,
             "offset_psize_weight": 0.1,
     }
@@ -209,7 +209,7 @@ def test_prep_backtest_args_emits_separate_ema_anchor_strategy_payload():
     assert strategy_params_list[0]["long"]["entry_double_down_factor"] == 0.8
     assert strategy_params_list[0]["long"]["offset_volatility_ema_span_1m"] == 30.0
     assert strategy_params_list[0]["long"]["offset_volatility_1m_weight"] == 2.5
-    assert strategy_params_list[0]["short"]["entry_volatility_ema_span_1h"] == 18.0
+    assert strategy_params_list[0]["short"]["offset_volatility_ema_span_1h"] == 18.0
     assert strategy_params_list[0]["short"]["offset_volatility_1h_weight"] == 0.5
     assert strategy_params_list[0]["short"]["offset"] == 0.004
     assert strategy_params_list[0]["short"]["entry_double_down_factor"] == 0.5

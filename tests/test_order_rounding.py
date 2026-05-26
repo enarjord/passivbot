@@ -202,7 +202,7 @@ def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_input
         offset=0.01,
         offset_volatility_ema_span_1m=2.0,
         offset_volatility_1m_weight=0.5,
-        entry_volatility_ema_span_1h=2.0,
+        offset_volatility_ema_span_1h=2.0,
         offset_volatility_1h_weight=0.25,
         offset_psize_weight=0.2,
     )
@@ -220,7 +220,7 @@ def test_calc_ema_anchor_quote_series_py_supports_inventory_and_volatility_input
         offset=0.01,
         offset_volatility_ema_span_1m=2.0,
         offset_volatility_1m_weight=0.5,
-        entry_volatility_ema_span_1h=2.0,
+        offset_volatility_ema_span_1h=2.0,
         offset_volatility_1h_weight=0.25,
         offset_psize_weight=0.2,
     )

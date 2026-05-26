@@ -5,6 +5,7 @@ from .shared_bot import BOT_SHARED_GROUPS
 from .strategy_spec import (
     BOT_POSITION_SIDES,
     DEFAULT_STRATEGY_KIND,
+    EMA_ANCHOR_STRATEGY_KIND,
     get_all_strategy_defaults,
     get_strategy_defaults,
     get_strategy_param_keys,

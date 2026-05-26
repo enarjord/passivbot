@@ -516,7 +516,11 @@ def compute_live_warmup_windows(
                     _get_bp(pside, "forager_volume_ema_span_1m", sym),
                     _get_bp(pside, "forager_volatility_ema_span_1m", sym),
                 )
-            max_h1_span = max(max_h1_span, _get_bp(pside, "entry_volatility_ema_span_1h", sym))
+            max_h1_span = max(
+                max_h1_span,
+                _get_bp(pside, "entry_volatility_ema_span_1h", sym),
+                _get_bp(pside, "offset_volatility_ema_span_1h", sym),
+            )
 
         if max_1m_span > 0.0:
             win = int(math.ceil(max_1m_span * span_buffer))
@@ -10789,6 +10793,7 @@ class Passivbot:
                     _strategy_lookup(
                         strategy_params,
                         ("volatility_ema_span_1h",),
+                        ("offset_volatility_ema_span_1h",),
                         ("entry_volatility_ema_span_1h",),
                     )
                     or 0.0

@@ -115,7 +115,7 @@ pub struct EmaAnchorParams {
     pub offset: f64,
     pub offset_volatility_ema_span_1m: f64,
     pub offset_volatility_1m_weight: f64,
-    pub entry_volatility_ema_span_1h: f64,
+    pub offset_volatility_ema_span_1h: f64,
     pub offset_volatility_1h_weight: f64,
     pub offset_psize_weight: f64,
 }
@@ -130,7 +130,7 @@ impl Default for EmaAnchorParams {
             offset: 0.002,
             offset_volatility_ema_span_1m: 60.0,
             offset_volatility_1m_weight: 0.0,
-            entry_volatility_ema_span_1h: 24.0,
+            offset_volatility_ema_span_1h: 24.0,
             offset_volatility_1h_weight: 0.0,
             offset_psize_weight: 0.1,
         }
@@ -221,7 +221,7 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
 pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f64> {
     match params {
         StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1h),
-        StrategyParams::EmaAnchor(params) => Some(params.entry_volatility_ema_span_1h),
+        StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1h),
     }
 }
 
@@ -271,7 +271,7 @@ pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
                 && params.volatility_ema_span_1h > 0.0
         }
         StrategyParams::EmaAnchor(params) => {
-            params.offset_volatility_1h_weight != 0.0 && params.entry_volatility_ema_span_1h > 0.0
+            params.offset_volatility_1h_weight != 0.0 && params.offset_volatility_ema_span_1h > 0.0
         }
     }
 }

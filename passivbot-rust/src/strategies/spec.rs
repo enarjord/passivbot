@@ -276,7 +276,7 @@ const EMA_ANCHOR_PARAM_SEEDS: &[ParamSeed] = &[
         short_bounds: &[0.0, 40.0, 0.1],
     },
     ParamSeed {
-        name: "entry_volatility_ema_span_1h",
+        name: "offset_volatility_ema_span_1h",
         long_default: 24.0,
         short_default: 24.0,
         long_bounds: &[1.0, 672.0, 1.0],

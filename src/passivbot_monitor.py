@@ -869,9 +869,12 @@ def _monitor_h1_entry_logrange(self, pside: str, symbol: str) -> float:
     if not isinstance(symbol_entry, dict):
         return 0.0
     try:
-        span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol)
+        span = _monitor_strategy_value(self, pside, "offset_volatility_ema_span_1h", symbol)
     except Exception:
-        return 0.0
+        try:
+            span = _monitor_strategy_value(self, pside, "entry_volatility_ema_span_1h", symbol)
+        except Exception:
+            return 0.0
     try:
         return float(symbol_entry.get(span, 0.0) or 0.0)
     except (TypeError, ValueError):

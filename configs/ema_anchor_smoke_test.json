@@ -65,7 +65,7 @@
                     "offset": 0.003,
                     "offset_volatility_ema_span_1m": 60.0,
                     "offset_volatility_1m_weight": 0.0,
-                    "entry_volatility_ema_span_1h": 24.0,
+                    "offset_volatility_ema_span_1h": 24.0,
                     "offset_volatility_1h_weight": 0.0,
                     "offset_psize_weight": 0.2
                 }
@@ -109,7 +109,7 @@
                     "offset": 0.003,
                     "offset_volatility_ema_span_1m": 60.0,
                     "offset_volatility_1m_weight": 0.0,
-                    "entry_volatility_ema_span_1h": 24.0,
+                    "offset_volatility_ema_span_1h": 24.0,
                     "offset_volatility_1h_weight": 0.0,
                     "offset_psize_weight": 0.2
                 }
@@ -219,7 +219,7 @@
                         "offset": [0,0.05,0.0001],
                         "offset_volatility_ema_span_1m": [5,720,1],
                         "offset_volatility_1m_weight": [0,40,0.1],
-                        "entry_volatility_ema_span_1h": [1,672,1],
+                        "offset_volatility_ema_span_1h": [1,672,1],
                         "offset_volatility_1h_weight": [0,40,0.1],
                         "offset_psize_weight": [0,2,0.001]
                     }
@@ -260,7 +260,7 @@
                         "offset": [0,0.05,0.0001],
                         "offset_volatility_ema_span_1m": [5,720,1],
                         "offset_volatility_1m_weight": [0,40,0.1],
-                        "entry_volatility_ema_span_1h": [1,672,1],
+                        "offset_volatility_ema_span_1h": [1,672,1],
                         "offset_volatility_1h_weight": [0,40,0.1],
                         "offset_psize_weight": [0,2,0.001]
                     }

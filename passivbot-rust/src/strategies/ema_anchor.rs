@@ -357,7 +357,51 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{EMABands, OrderBook};
+    use crate::types::{EMABands, OrderBook, Position, RuntimeBudgetState, TrailingPriceBundle};
+
+    fn base_state() -> StateParams {
+        StateParams {
+            balance: 1000.0,
+            order_book: OrderBook {
+                bid: 99.5,
+                ask: 100.5,
+            },
+            ema_bands: EMABands {
+                lower: 100.0,
+                upper: 100.0,
+            },
+            ..Default::default()
+        }
+    }
+
+    fn base_exchange() -> ExchangeParams {
+        ExchangeParams {
+            qty_step: 0.01,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        }
+    }
+
+    fn base_runtime_budget(effective_wallet_exposure_limit: f64) -> RuntimeBudgetState {
+        RuntimeBudgetState {
+            configured_wallet_exposure_limit: effective_wallet_exposure_limit,
+            effective_wallet_exposure_limit,
+            configured_n_positions: 1,
+            effective_n_positions: 1,
+        }
+    }
+
+    fn base_params() -> EmaAnchorParams {
+        EmaAnchorParams {
+            base_qty_pct: 0.01,
+            offset: 0.01,
+            offset_psize_weight: 0.1,
+            ..Default::default()
+        }
+    }
 
     #[test]
     fn bid_inventory_shift_uses_signed_wallet_exposure_ratio() {
@@ -389,5 +433,184 @@ mod tests {
 
         assert_eq!(bid_wel_1, 99.8);
         assert_eq!(bid_wel_half, 99.6);
+    }
+
+    #[test]
+    fn neutral_quotes_do_not_cross_top_of_book() {
+        let state = base_state();
+        let exchange = base_exchange();
+        let params = base_params();
+
+        let (bid, ask) = calc_quote_prices(&state, &exchange, &params, 0.0, 1.0);
+
+        assert!(bid <= state.order_book.bid);
+        assert!(ask >= state.order_book.ask);
+        assert_eq!(bid, 99.0);
+        assert_eq!(ask, 101.0);
+    }
+
+    #[test]
+    fn inventory_skew_moves_quotes_in_position_reducing_direction() {
+        let bid_state = StateParams {
+            order_book: OrderBook {
+                bid: 1000.0,
+                ask: 1000.0,
+            },
+            ..base_state()
+        };
+        let ask_state = StateParams {
+            order_book: OrderBook { bid: 1.0, ask: 1.0 },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.0,
+            offset_psize_weight: 0.2,
+            ..base_params()
+        };
+
+        let flat_bid = calc_bid_price(&bid_state, &exchange, &params, 0.0, 1.0);
+        let long_bid = calc_bid_price(&bid_state, &exchange, &params, 1.0, 1.0);
+        let short_bid = calc_bid_price(&bid_state, &exchange, &params, -1.0, 1.0);
+        let flat_ask = calc_ask_price(&ask_state, &exchange, &params, 0.0, 1.0);
+        let long_ask = calc_ask_price(&ask_state, &exchange, &params, 1.0, 1.0);
+        let short_ask = calc_ask_price(&ask_state, &exchange, &params, -1.0, 1.0);
+
+        assert!(long_bid < flat_bid);
+        assert!(long_ask < flat_ask);
+        assert!(short_bid > flat_bid);
+        assert!(short_ask > flat_ask);
+    }
+
+    #[test]
+    fn no_entries_when_effective_wallet_exposure_limit_is_zero() {
+        let state = base_state();
+        let exchange = base_exchange();
+        let bot_params = BotParams::default();
+        let params = base_params();
+        let strategy_params = StrategyParams::EmaAnchor(params);
+        let position = Position::default();
+        let trailing = TrailingPriceBundle::default();
+        let request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: true,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(0.0),
+            position: &position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+
+        let generated = generate_orders(StrategySide::Long, request);
+
+        assert!(generated.entries.is_empty());
+        assert!(generated.closes.is_empty());
+    }
+
+    #[test]
+    fn volatility_weights_widen_bid_and_ask_offsets() {
+        let calm_state = base_state();
+        let volatile_state = StateParams {
+            volatility_ema_1m: 0.05,
+            volatility_ema_1h: 0.04,
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let params = EmaAnchorParams {
+            offset: 0.01,
+            offset_volatility_1m_weight: 2.0,
+            offset_volatility_1h_weight: 3.0,
+            ..base_params()
+        };
+
+        let (calm_bid, calm_ask) = calc_quote_prices(&calm_state, &exchange, &params, 0.0, 1.0);
+        let (wide_bid, wide_ask) = calc_quote_prices(&volatile_state, &exchange, &params, 0.0, 1.0);
+
+        assert!(wide_bid < calm_bid);
+        assert!(wide_ask > calm_ask);
+    }
+
+    #[test]
+    fn entry_double_down_factor_only_scales_same_side_entry_qty() {
+        let state = StateParams {
+            order_book: OrderBook {
+                bid: 1000.0,
+                ask: 1000.0,
+            },
+            ..base_state()
+        };
+        let exchange = base_exchange();
+        let bot_params = BotParams::default();
+        let params = EmaAnchorParams {
+            entry_double_down_factor: 1.0,
+            offset_psize_weight: 0.0,
+            ..base_params()
+        };
+        let strategy_params = StrategyParams::EmaAnchor(params);
+        let trailing = TrailingPriceBundle::default();
+        let flat_position = Position {
+            size: 0.0,
+            price: 100.0,
+        };
+        let long_position = Position {
+            size: 5.0,
+            price: 100.0,
+        };
+        let short_position = Position {
+            size: -5.0,
+            price: 100.0,
+        };
+
+        let flat_request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: false,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(1.0),
+            position: &flat_position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+        let long_request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: false,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(1.0),
+            position: &long_position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+        let opposite_request = StrategyRequest {
+            wants_entries: true,
+            wants_closes: false,
+            exchange: &exchange,
+            state: &state,
+            bot_params: &bot_params,
+            strategy_params: &strategy_params,
+            runtime_budget: base_runtime_budget(1.0),
+            position: &short_position,
+            trailing: &trailing,
+            next_candle: None,
+            peek: None,
+        };
+
+        let flat_qty = generate_orders(StrategySide::Long, flat_request).entries[0].qty;
+        let same_side_qty = generate_orders(StrategySide::Long, long_request).entries[0].qty;
+        let opposite_side_qty =
+            generate_orders(StrategySide::Long, opposite_request).entries[0].qty;
+
+        assert!(same_side_qty > flat_qty);
+        assert_eq!(opposite_side_qty, flat_qty);
     }
 }

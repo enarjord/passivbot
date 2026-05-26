@@ -842,7 +842,7 @@ def test_ema_anchor_volatility_weights_widen_quotes():
         "offset": 0.01,
         "offset_volatility_ema_span_1m": 15.0,
         "offset_volatility_1m_weight": 2.0,
-        "entry_volatility_ema_span_1h": 8.0,
+        "offset_volatility_ema_span_1h": 8.0,
         "offset_volatility_1h_weight": 3.0,
         "offset_psize_weight": 0.0,
     }

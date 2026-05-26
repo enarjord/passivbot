@@ -128,6 +128,10 @@ def _install_passivbot_rust_stub():
         "close_panic_short": 23,
         "close_auto_reduce_wel_long": 24,
         "close_auto_reduce_wel_short": 25,
+        "entry_ema_anchor_long": 26,
+        "close_ema_anchor_long": 27,
+        "entry_ema_anchor_short": 28,
+        "close_ema_anchor_short": 29,
         "empty": 65535,
     }
     stub.get_order_id_type_from_string = lambda name: _order_map.get(name, 0)
