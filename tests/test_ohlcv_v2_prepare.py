@@ -1498,6 +1498,90 @@ async def test_resolve_v2_store_range_accepts_authoritative_leading_boundary_wit
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_unavailable(
+    tmp_path, caplog
+):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "OKB/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    first = start + 200 * 60_000
+    last = first + 4 * 60_000
+    end = last + 180 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(5)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 106.0, dtype=np.float32),
+            np.arange(99.0, 104.0, dtype=np.float32),
+            np.arange(100.0, 105.0, dtype=np.float32),
+            np.arange(10.0, 15.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("bybit", "1m", symbol, timestamps, values)
+    catalog.mark_gap(
+        exchange="bybit",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(start + 99 * 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        last_attempt_at=0,
+        next_retry_at=4102444800000,
+        note="authoritative_first_candle_boundary",
+    )
+    catalog.mark_gap(
+        exchange="bybit",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start + 100 * 60_000),
+        end_ts=int(first - 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        last_attempt_at=0,
+        next_retry_at=4102444800000,
+        note="authoritative_first_candle_boundary",
+    )
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+        fetch_calls = 0
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            self.fetch_calls += 1
+            raise AssertionError("confirmed boundary should not fetch remote data")
+
+    manager = FakeManager()
+    caplog.set_level("INFO")
+    rng = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="OKB",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is not None
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    assert rng.valid.all()
+    assert manager.fetch_calls == 0
+    assert any(
+        "[bybit] using confirmed v2 pre-inception boundary for OKB" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundary_repair(
     monkeypatch, tmp_path
 ):

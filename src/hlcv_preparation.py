@@ -1472,7 +1472,7 @@ async def _resolve_v2_store_range(
             )
             if partial_rng is not None:
                 logging.info(
-                    "[%s] using discovered v2 pre-inception boundary for %s (%s -> %s)",
+                    "[%s] using confirmed v2 pre-inception boundary for %s (%s -> %s)",
                     exchange,
                     coin,
                     ts_to_date(int(partial_rng.timestamps[0])),
@@ -2280,8 +2280,14 @@ def _pre_inception_gaps_are_stale(gaps, first_ts_evidence: dict[str, int]) -> bo
     )
 
 
+_CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES = {
+    "authoritative_first_candle_boundary",
+    "discovered_first_candle_during_stale_repair",
+}
+
+
 def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
-    return str(getattr(gap, "note", "") or "") == "discovered_first_candle_during_stale_repair"
+    return str(getattr(gap, "note", "") or "") in _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES
 
 
 def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
@@ -3522,7 +3528,7 @@ async def _prepare_hlcvs_combined_impl(
         coin_data = df[["high", "low", "close", "volume"]].values
         aligned_values_by_coin[coin] = np.asarray(coin_data, dtype=np.float64)
         if "valid" in df.columns:
-            valid_mask = df["valid"].fillna(False).to_numpy(dtype=bool)
+            valid_mask = df["valid"].eq(True).to_numpy(dtype=bool)
         else:
             valid_mask = ~np.isnan(coin_data[:, 0])
         valid_idx = np.flatnonzero(valid_mask)
