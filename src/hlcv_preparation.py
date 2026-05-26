@@ -3517,7 +3517,7 @@ async def _prepare_hlcvs_combined_impl(
         coin_data = df[["high", "low", "close", "volume"]].values
         aligned_values_by_coin[coin] = np.asarray(coin_data, dtype=np.float64)
         if "valid" in df.columns:
-            valid_mask = df["valid"].fillna(False).to_numpy(dtype=bool)
+            valid_mask = df["valid"].eq(True).to_numpy(dtype=bool)
         else:
             valid_mask = ~np.isnan(coin_data[:, 0])
         valid_idx = np.flatnonzero(valid_mask)

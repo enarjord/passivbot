@@ -17,6 +17,7 @@ import json
 import math
 import os
 import time
+import warnings
 from pathlib import Path
 from typing import Dict, List
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -1752,6 +1753,22 @@ def test_pick_best_combined_candidate_prefers_full_range_over_higher_volume_part
     chosen = hp._pick_best_combined_candidate("BTC", None, [partial, full])
 
     assert chosen.exchange == "binance"
+
+
+def test_combined_valid_mask_conversion_avoids_pandas_downcast_warning():
+    df = pd.DataFrame({"valid": pd.Series([True, np.nan, False], dtype=object)})
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        valid_mask = df["valid"].eq(True).to_numpy(dtype=bool)
+
+    assert valid_mask.tolist() == [True, False, False]
+    assert not [
+        warning
+        for warning in caught
+        if issubclass(warning.category, FutureWarning)
+        and "Downcasting object dtype arrays" in str(warning.message)
+    ]
 
 
 @pytest.mark.asyncio
