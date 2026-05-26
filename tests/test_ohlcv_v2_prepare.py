@@ -1465,6 +1465,84 @@ async def test_resolve_v2_store_range_accepts_confirmed_boundary_with_trailing_u
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_accepts_legacy_mirrored_leading_boundary(
+    monkeypatch, tmp_path, caplog
+):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    symbol = "SOL/USDT:USDT"
+    start = month_start_ts(2026, 4)
+    first = start + 240 * 60_000
+    end = first + 9 * 60_000
+    timestamps = np.array([first + i * 60_000 for i in range(10)], dtype=np.int64)
+    values = np.column_stack(
+        [
+            np.arange(101.0, 111.0, dtype=np.float32),
+            np.arange(99.0, 109.0, dtype=np.float32),
+            np.arange(100.0, 110.0, dtype=np.float32),
+            np.arange(10.0, 20.0, dtype=np.float32),
+        ]
+    )
+    store.write_rows("bybit", "1m", symbol, timestamps, values)
+    catalog.mark_gap(
+        exchange="bybit",
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(first - 60_000),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=3,
+        last_attempt_at=0,
+        next_retry_at=4102444800000,
+        note="mirrored_from_candlestick_manager",
+    )
+
+    async def fake_first_timestamps_unified(coins, exchange=None):
+        return {}
+
+    monkeypatch.setattr("hlcv_preparation.get_first_timestamps_unified", fake_first_timestamps_unified)
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+        fetch_calls = 0
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            self.fetch_calls += 1
+            raise AssertionError("legacy mirrored leading boundary should not fetch remote data")
+
+    manager = FakeManager()
+    caplog.set_level("INFO")
+    rng = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="SOL",
+        symbol=symbol,
+        start_ts=int(start),
+        end_ts=int(end),
+        allow_remote_fetch=True,
+        local_hit_log_label="v2 local hit",
+        remote_fetch_log_label="v2 fetching missing range",
+    )
+
+    assert rng is not None
+    np.testing.assert_array_equal(rng.timestamps, timestamps)
+    assert rng.valid.all()
+    assert manager.fetch_calls == 0
+    gaps = catalog.get_persistent_gaps("bybit", "1m", symbol, int(start), int(first - 60_000))
+    assert len(gaps) == 1
+    assert gaps[0].note == "mirrored_from_candlestick_manager"
+    assert any(
+        "[bybit] using legacy mirrored v2 pre-inception boundary for SOL" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
 async def test_resolve_v2_store_range_keeps_internal_gap_metadata_during_boundary_repair(
     monkeypatch, tmp_path
 ):

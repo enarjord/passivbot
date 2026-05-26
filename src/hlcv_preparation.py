@@ -1482,6 +1482,25 @@ async def _resolve_v2_store_range(
             first_ts_evidence = await _collect_first_timestamp_evidence(
                 om=om, exchange=exchange, coin=coin, symbol=symbol
             )
+            partial_rng = (
+                _extract_single_valid_window(rng)
+                if _pre_inception_gaps_confirm_legacy_mirrored_boundary(
+                    rng, overlapping_persistent_gaps
+                )
+                and not _pre_inception_gaps_are_stale(
+                    overlapping_persistent_gaps, first_ts_evidence
+                )
+                else None
+            )
+            if partial_rng is not None:
+                logging.info(
+                    "[%s] using legacy mirrored v2 pre-inception boundary for %s (%s -> %s); keeping gap(s) eligible for scheduled retry",
+                    exchange,
+                    coin,
+                    ts_to_date(int(partial_rng.timestamps[0])),
+                    ts_to_date(int(partial_rng.timestamps[-1])),
+                )
+                return partial_rng
             retryable_pre_inception_gaps = [
                 gap for gap in overlapping_persistent_gaps if _gap_retry_due(gap, om)
             ]
@@ -2280,6 +2299,10 @@ _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES = {
     "discovered_first_candle_during_stale_repair",
 }
 
+_LEGACY_MIRRORED_PRE_INCEPTION_BOUNDARY_NOTES = {
+    "mirrored_from_candlestick_manager",
+}
+
 
 def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
     return str(getattr(gap, "note", "") or "") in _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES
@@ -2287,6 +2310,16 @@ def _pre_inception_gap_confirms_discovered_boundary(gap) -> bool:
 
 def _pre_inception_gaps_confirm_discovered_boundary(gaps) -> bool:
     return bool(gaps) and all(_pre_inception_gap_confirms_discovered_boundary(gap) for gap in gaps)
+
+
+def _pre_inception_gaps_confirm_legacy_mirrored_boundary(rng, gaps) -> bool:
+    if not bool(gaps) or not _has_single_leading_invalid_prefix(rng):
+        return False
+    accepted_notes = (
+        _CONFIRMED_PRE_INCEPTION_BOUNDARY_NOTES
+        | _LEGACY_MIRRORED_PRE_INCEPTION_BOUNDARY_NOTES
+    )
+    return all(str(getattr(gap, "note", "") or "") in accepted_notes for gap in gaps)
 
 
 def _gap_retry_due(gap, om=None) -> bool:
