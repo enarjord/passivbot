@@ -19,6 +19,14 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
 - **market_settings_sources**: Optional mapping of `coin -> exchange` used specifically for exchange metadata such as `price_step`, `qty_step`, fees, and min-size rules. This is separate from `coin_sources`: you may source candles from one exchange while borrowing market settings from another.
 - **ohlcv_source_dir**: Optional path to a pre-populated legacy OHLCV directory to import before hitting exchange archives. Expected structure: `<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz` or `.npy`. Coin keys are normalized to base coins, but CCXT-style symbol folder names are accepted (e.g., `ETH_USDC:USDC`).
+- **hlcvs_data_dir**: Optional path to a prepared final HLCV dataset under
+  `caches/hlcvs_data/`. The dataset must have a valid manifest whose hashes
+  verify `hlcvs`, `timestamps`, `btc_usd_prices`, `coins`, and
+  `market_specific_settings`.
+- **hlcvs_data_override_mode**: How `hlcvs_data_dir` is matched to the current
+  config. `intersection` (default) keeps the config's requested coins/date
+  window clipped to the verified dataset. `dataset` adopts the dataset's
+  effective coins and timestamp window for exact artifact replay.
 - **volume_normalization**: When `true` (default), normalize volume data across exchanges to make combined datasets comparable.
 - **start_date**: Start date of backtest.
 - **starting_balance**: Starting balance in USD at the beginning of the backtest.

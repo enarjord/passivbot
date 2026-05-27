@@ -23,6 +23,10 @@ from ohlcv_planner import plan_local_symbol_range
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
+class HlcvsDataIntegrityError(ValueError):
+    pass
+
+
 def _pct_log(level: str, pct: int, msg: str, *args, **kwargs) -> None:
     """Log with percentage prefix: '12% | message here'."""
     pct_str = f"{pct:3d}%" if pct < 100 else "100%"
@@ -3111,13 +3115,24 @@ async def prepare_hlcvs_internal(
                 if len(data) == 0:
                     return None
 
-                # Validate no gaps
-                assert (np.diff(data[:, 0]) == interval_ms).all(), f"gaps in hlcv data {coin}"
+                diffs = np.diff(data[:, 0].astype(np.int64, copy=False))
+                bad_steps = np.flatnonzero(diffs != interval_ms)
+                if bad_steps.size:
+                    first_bad_idx = int(bad_steps[0])
+                    raise HlcvsDataIntegrityError(
+                        f"{exchange} non-contiguous HLCV data for {coin}: "
+                        f"first_bad_step={first_bad_idx} "
+                        f"ts={int(data[first_bad_idx, 0])}->{int(data[first_bad_idx + 1, 0])} "
+                        f"step_ms={int(diffs[first_bad_idx])} expected_ms={interval_ms} "
+                        f"bad_steps={int(bad_steps.size)}"
+                    )
 
                 data_bounds = (data[0, 0], data[-1, 0])
 
                 return (coin, data, data_bounds)
 
+            except HlcvsDataIntegrityError:
+                raise
             except Exception as e:
                 _pct_log("error", progress.pct(), f"error with get_ohlcvs for {coin} {e}. Skipping")
                 traceback.print_exc()
@@ -3135,6 +3150,8 @@ async def prepare_hlcvs_internal(
     for result in results:
         progress.maybe_log()
 
+        if isinstance(result, HlcvsDataIntegrityError):
+            raise result
         if result is None or isinstance(result, Exception):
             progress.update()
             continue

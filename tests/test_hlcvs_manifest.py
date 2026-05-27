@@ -99,6 +99,27 @@ def test_build_hlcvs_manifest_hashes_logical_arrays_and_side_membership(tmp_path
     assert changed_manifest["btc_benchmark"]["sha256"] != manifest["btc_benchmark"]["sha256"]
 
 
+def test_build_hlcvs_manifest_requires_timestamps():
+    coins = ["BTC"]
+    hlcvs = np.ones((2, 1, 4), dtype=np.float64)
+    btc_usd_prices = np.array([100.0, 101.0], dtype=np.float64)
+    mss = {"BTC": {"exchange": "binance"}, "__meta__": {"btc_source_exchange": "binanceusdm"}}
+
+    with pytest.raises(HlcvsManifestError, match="require timestamps"):
+        build_hlcvs_manifest(
+            config=_minimal_config(),
+            exchange="binance",
+            cache_hash="abc123",
+            coins=coins,
+            hlcvs=hlcvs,
+            mss=mss,
+            btc_usd_prices=btc_usd_prices,
+            timestamps=None,
+            warmup_minutes=0,
+            compressed=False,
+        )
+
+
 def test_verify_hlcvs_manifest_rejects_modified_file(tmp_path):
     cache_dir = tmp_path / "hlcvs"
     coins = ["BTC"]
