@@ -28,6 +28,7 @@ from warmup_utils import compute_backtest_warmup_minutes
 def _hlcvs_cache_artifact_path(
     cache_dir: Path, manifest, name: str, candidates: tuple[str, ...]
 ) -> Path | None:
+    cache_root = cache_dir.resolve()
     if manifest_has_required_schema(manifest):
         files = manifest.get("files", {})
         entry = files.get(name) if isinstance(files, dict) else None
@@ -36,7 +37,13 @@ def _hlcvs_cache_artifact_path(
         rel_path = entry.get("path") if isinstance(entry, dict) else None
         if not rel_path:
             raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
-        path = cache_dir / str(rel_path)
+        path = (cache_root / str(rel_path)).resolve()
+        try:
+            path.relative_to(cache_root)
+        except ValueError as exc:
+            raise HlcvsManifestError(
+                f"HLCV manifest file entry {name!r} escapes dataset directory: {rel_path}"
+            ) from exc
         if not path.exists():
             raise HlcvsManifestError(f"HLCV manifest file is missing: {path}")
         return path
@@ -48,9 +55,11 @@ def _hlcvs_cache_artifact_path(
 
 
 def _load_hlcvs_cache_arrays(cache_dir: Path, manifest):
-    coins_path = cache_dir / "coins.json"
-    mss_path = cache_dir / "market_specific_settings.json"
-    if not coins_path.exists() or not mss_path.exists():
+    coins_path = _hlcvs_cache_artifact_path(cache_dir, manifest, "coins", ("coins.json",))
+    mss_path = _hlcvs_cache_artifact_path(
+        cache_dir, manifest, "market_specific_settings", ("market_specific_settings.json",)
+    )
+    if coins_path is None or mss_path is None:
         raise FileNotFoundError(f"HLCV dataset missing coins or market settings in {cache_dir}")
     coins = json.load(open(coins_path))
     mss = json.load(open(mss_path))
@@ -161,7 +170,17 @@ def load_hlcvs_data_override(config, exchange):
     else:
         effective_start_ts = dataset_start_ts
         effective_end_ts = dataset_end_ts
-        effective_config_start_ts = dataset_start_ts
+        manifest_requested_start_ts = None
+        if manifest_has_required_schema(manifest):
+            requested = manifest.get("requested")
+            if isinstance(requested, dict) and requested.get("start_ts") is not None:
+                manifest_requested_start_ts = int(requested["start_ts"])
+        if manifest_requested_start_ts is None:
+            manifest_requested_start_ts = dataset_start_ts
+        effective_config_start_ts = min(
+            max(int(manifest_requested_start_ts), dataset_start_ts),
+            dataset_end_ts,
+        )
 
     row_mask = (timestamps >= effective_start_ts) & (timestamps <= effective_end_ts)
     if not row_mask.any():

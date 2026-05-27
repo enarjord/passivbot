@@ -64,6 +64,23 @@ def _valid_span(valid_mask: np.ndarray) -> tuple[int, int, int]:
     return int(valid_indices[0]), int(valid_indices[-1]), int(valid_indices.size)
 
 
+def _longest_contiguous_valid_span(valid_mask: np.ndarray) -> tuple[int, int, int]:
+    valid = np.asarray(valid_mask, dtype=bool)
+    if not valid.any():
+        return int(len(valid)), int(len(valid)), 0
+    padded = np.concatenate(([False], valid, [False]))
+    changes = np.diff(padded.astype(np.int8))
+    starts = np.flatnonzero(changes == 1)
+    ends = np.flatnonzero(changes == -1)
+    if starts.size == 0:
+        return int(len(valid)), int(len(valid)), 0
+    lengths = ends - starts
+    best = int(np.argmax(lengths))
+    start_idx = int(starts[best])
+    end_idx = int(ends[best]) - 1
+    return start_idx, end_idx, int(lengths[best])
+
+
 def _coverage_metadata(valid_mask: np.ndarray, *, start_ts: int, interval_ms: int) -> dict:
     first_idx, last_idx, valid_count = _valid_span(valid_mask)
     total = int(len(valid_mask))
@@ -233,6 +250,9 @@ class BacktestDatasetMaterializer:
             source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
                 valid_buffer
             )
+            tradable_first_index, tradable_last_index, _tradable_count = (
+                _longest_contiguous_valid_span(valid_buffer)
+            )
             invalid_rows = int(n_steps - source_valid_count)
             coverage_meta = _coverage_metadata(
                 valid_buffer.copy(), start_ts=int(start_ts), interval_ms=int(interval_ms)
@@ -241,10 +261,12 @@ class BacktestDatasetMaterializer:
                 coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
             )
             meta = enriched_mss.setdefault(coin, {})
-            meta["first_valid_index"] = source_first_valid_index
-            meta["last_valid_index"] = source_last_valid_index
+            meta["first_valid_index"] = tradable_first_index
+            meta["last_valid_index"] = tradable_last_index
             meta["source_window_start_ts"] = int(copy_start_ts)
             meta["source_window_end_ts"] = int(copy_end_ts)
+            meta["source_first_valid_index"] = source_first_valid_index
+            meta["source_last_valid_index"] = source_last_valid_index
             meta.update(coverage_meta)
             if synthetic_gap_fill_count:
                 meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
@@ -357,6 +379,9 @@ def materialize_frames(
         source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
             valid_mask
         )
+        tradable_first_index, tradable_last_index, _tradable_count = (
+            _longest_contiguous_valid_span(valid_mask)
+        )
         invalid_rows = int(n_steps - source_valid_count)
         coverage_meta = _coverage_metadata(
             valid_mask.copy(),
@@ -366,8 +391,10 @@ def materialize_frames(
         synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
         hlcvs[:, coin_idx, :] = aligned
         meta = enriched_mss.setdefault(coin, {})
-        meta["first_valid_index"] = source_first_valid_index
-        meta["last_valid_index"] = source_last_valid_index
+        meta["first_valid_index"] = tradable_first_index
+        meta["last_valid_index"] = tradable_last_index
+        meta["source_first_valid_index"] = source_first_valid_index
+        meta["source_last_valid_index"] = source_last_valid_index
         meta.update(coverage_meta)
         if synthetic_gap_fill_count:
             meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count

@@ -1800,6 +1800,35 @@ def test_pick_best_combined_candidate_prefers_full_range_over_higher_volume_part
     assert chosen.exchange == "binance"
 
 
+def test_combined_summary_treats_internal_gaps_as_partial():
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+    df = pd.DataFrame(
+        {
+            "timestamp": np.array([start_ts, start_ts + 60_000, end_ts], dtype=np.int64),
+            "high": [1.0, np.nan, 3.0],
+            "low": [1.0, np.nan, 3.0],
+            "close": [1.0, np.nan, 3.0],
+            "volume": [10.0, np.nan, 30.0],
+            "valid": [True, False, True],
+        }
+    )
+
+    candidate, summary = hp._combined_summary_from_result(
+        coin="BTC",
+        exchange="binance",
+        symbol="BTC/USDT:USDT",
+        result=("binance", df, 2, 1, 40.0),
+        effective_start_ts=int(start_ts),
+        end_ts=int(end_ts),
+        source_layer="v2_store",
+    )
+
+    assert candidate.full_range is False
+    assert candidate.gap_count == 1
+    assert summary.status == "partial"
+
+
 def test_combined_valid_mask_conversion_avoids_pandas_downcast_warning():
     df = pd.DataFrame({"valid": pd.Series([True, np.nan, False], dtype=object)})
 
