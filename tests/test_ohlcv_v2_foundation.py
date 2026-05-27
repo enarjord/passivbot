@@ -225,6 +225,43 @@ def test_catalog_preserves_persistent_gap_on_nonpersistent_conflict(tmp_path):
     assert gap.note == "confirmed_gap"
 
 
+def test_catalog_preserves_persistent_gap_metadata_on_default_persistent_conflict(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    start = month_start_ts(2026, 4)
+    end = start + 60_000
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT",
+        start_ts=int(start),
+        end_ts=int(end),
+        reason="pre_inception",
+        persistent=True,
+        retry_count=7,
+        last_attempt_at=123,
+        next_retry_at=456,
+        note="confirmed_gap",
+    )
+
+    catalog.mark_gap(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT",
+        start_ts=int(start),
+        end_ts=int(end),
+        reason="pre_inception_confirmed",
+        persistent=True,
+    )
+
+    gap = catalog.get_gaps("binance", "1m", "BTC/USDT", int(start), int(end))[0]
+    assert gap.persistent is True
+    assert gap.reason == "pre_inception_confirmed"
+    assert gap.retry_count == 7
+    assert gap.last_attempt_at == 123
+    assert gap.next_retry_at == 456
+    assert gap.note == "confirmed_gap"
+
+
 def test_catalog_clear_gap_range_handles_duplicate_remainders(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     base = month_start_ts(2026, 4)
@@ -629,6 +666,45 @@ def test_ensure_month_preserves_existing_chunk_checksum(tmp_path):
 
     after = catalog.list_chunks("binance", "1m", "BTC/USDT", int(start), int(start))[0]
     assert after.checksum == before.checksum
+
+
+def test_register_chunk_drops_checksum_when_paths_change_without_new_checksum(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    start = month_start_ts(2026, 4)
+    end = start + 60_000
+    catalog.register_chunk(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT",
+        year=2026,
+        month=4,
+        body_path="old_body.dat",
+        valid_path="old_valid.dat",
+        start_ts=int(start),
+        end_ts=int(end),
+        rows=2,
+        status="open",
+        checksum="abc123",
+    )
+    catalog.register_chunk(
+        exchange="binance",
+        timeframe="1m",
+        symbol="BTC/USDT",
+        year=2026,
+        month=4,
+        body_path="new_body.dat",
+        valid_path="new_valid.dat",
+        start_ts=int(start),
+        end_ts=int(end),
+        rows=2,
+        status="open",
+        checksum=None,
+    )
+
+    after = catalog.list_chunks("binance", "1m", "BTC/USDT", int(start), int(end))[0]
+    assert after.body_path == "new_body.dat"
+    assert after.valid_path == "new_valid.dat"
+    assert after.checksum is None
 
 
 def test_materialize_frames_creates_shared_memmap_payload(tmp_path):

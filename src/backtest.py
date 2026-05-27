@@ -1262,7 +1262,7 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             try:
                 cache_meta = json.load(open(meta_path))
                 cached_warmup = int(cache_meta.get("warmup_minutes", 0))
-            except Exception:
+            except (OSError, json.JSONDecodeError, TypeError, ValueError):
                 cached_warmup = 0
         else:
             cached_warmup = 0
@@ -1272,8 +1272,6 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
                 f"needed={warmup_minutes} min. Will re-fetch."
             )
             return None
-        coins = json.load(open(cache_dir / "coins.json"))
-        mss = json.load(open(cache_dir / "market_specific_settings.json"))
         def cache_artifact_path(name: str, default_name: str) -> Path:
             if manifest_has_required_schema(manifest):
                 files = manifest.get("files", {})
@@ -1290,20 +1288,18 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
                 return cache_dir / str(rel_path)
             return cache_dir / default_name
 
+        coins = json.load(open(cache_artifact_path("coins", "coins.json")))
+        mss = json.load(
+            open(cache_artifact_path("market_specific_settings", "market_specific_settings.json"))
+        )
         if compress_cache:
             fname = cache_artifact_path("hlcvs", "hlcvs.npy.gz")
             logging.info(
                 f"{exchange} Attempting to load hlcvs data from cache {fname}..."
             )
             hlcvs = load_numpy_artifact(fname)
-            # Load optional timestamps if present
             ts_fname = cache_artifact_path("timestamps", "timestamps.npy.gz")
-            timestamps = None
-            if os.path.exists(ts_fname):
-                try:
-                    timestamps = load_numpy_artifact(ts_fname)
-                except Exception:
-                    timestamps = None
+            timestamps = load_numpy_artifact(ts_fname)
             btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy.gz")
             if os.path.exists(btc_fname):
                 logging.info(
@@ -1322,12 +1318,7 @@ def load_coins_hlcvs_from_cache(config, exchange, warmup_minutes=0):
             )
             hlcvs = load_numpy_artifact(fname)
             ts_fname = cache_artifact_path("timestamps", "timestamps.npy")
-            timestamps = None
-            if os.path.exists(ts_fname):
-                try:
-                    timestamps = load_numpy_artifact(ts_fname)
-                except Exception:
-                    timestamps = None
+            timestamps = load_numpy_artifact(ts_fname)
             btc_fname = cache_artifact_path("btc_usd_prices", "btc_usd_prices.npy")
             if os.path.exists(btc_fname):
                 logging.info(

@@ -205,7 +205,13 @@ class OhlcvCatalog:
                     rows = excluded.rows,
                     status = excluded.status,
                     schema_version = excluded.schema_version,
-                    checksum = COALESCE(excluded.checksum, chunks.checksum),
+                    checksum = CASE
+                        WHEN excluded.checksum IS NOT NULL THEN excluded.checksum
+                        WHEN chunks.body_path = excluded.body_path
+                          AND chunks.valid_path = excluded.valid_path
+                        THEN chunks.checksum
+                        ELSE NULL
+                    END,
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -252,17 +258,48 @@ class OhlcvCatalog:
         end_ts: int,
         reason: str,
         persistent: bool,
-        retry_count: int = 0,
+        retry_count: int | None = None,
         last_attempt_at: int | None = None,
         next_retry_at: int | None = None,
         note: str | None = None,
     ) -> None:
         now = _utc_ms()
-        if persistent and last_attempt_at is None:
-            last_attempt_at = now
-        if persistent and next_retry_at is None:
-            next_retry_at = now + KNOWN_GAP_RETRY_MS
         with self._connect() as conn:
+            existing = conn.execute(
+                """
+                SELECT *
+                FROM gaps
+                WHERE exchange = ? AND timeframe = ? AND symbol = ?
+                  AND start_ts = ? AND end_ts = ?
+                """,
+                (exchange, timeframe, symbol, int(start_ts), int(end_ts)),
+            ).fetchone()
+            if existing is not None:
+                existing_persistent = bool(existing["persistent"])
+                result_persistent = existing_persistent or bool(persistent)
+                if existing_persistent and not persistent:
+                    reason = existing["reason"]
+                    retry_count = int(existing["retry_count"])
+                    last_attempt_at = existing["last_attempt_at"]
+                    next_retry_at = existing["next_retry_at"]
+                    note = existing["note"]
+                elif existing_persistent and persistent:
+                    if retry_count is None:
+                        retry_count = int(existing["retry_count"])
+                    if last_attempt_at is None:
+                        last_attempt_at = existing["last_attempt_at"]
+                    if next_retry_at is None:
+                        next_retry_at = existing["next_retry_at"]
+                    if note is None:
+                        note = existing["note"]
+                persistent = result_persistent
+
+            if retry_count is None:
+                retry_count = 0
+            if persistent and last_attempt_at is None:
+                last_attempt_at = now
+            if persistent and next_retry_at is None:
+                next_retry_at = now + KNOWN_GAP_RETRY_MS
             conn.execute(
                 """
                 INSERT INTO gaps(
@@ -270,29 +307,12 @@ class OhlcvCatalog:
                     retry_count, last_attempt_at, next_retry_at, note
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(exchange, timeframe, symbol, start_ts, end_ts) DO UPDATE SET
-                    reason = CASE
-                        WHEN gaps.persistent AND NOT excluded.persistent
-                        THEN gaps.reason ELSE excluded.reason
-                    END,
-                    persistent = CASE
-                        WHEN gaps.persistent OR excluded.persistent THEN 1 ELSE 0
-                    END,
-                    retry_count = CASE
-                        WHEN gaps.persistent AND NOT excluded.persistent
-                        THEN gaps.retry_count ELSE excluded.retry_count
-                    END,
-                    last_attempt_at = CASE
-                        WHEN gaps.persistent AND NOT excluded.persistent
-                        THEN gaps.last_attempt_at ELSE excluded.last_attempt_at
-                    END,
-                    next_retry_at = CASE
-                        WHEN gaps.persistent AND NOT excluded.persistent
-                        THEN gaps.next_retry_at ELSE excluded.next_retry_at
-                    END,
-                    note = CASE
-                        WHEN gaps.persistent AND NOT excluded.persistent
-                        THEN gaps.note ELSE excluded.note
-                    END
+                    reason = excluded.reason,
+                    persistent = excluded.persistent,
+                    retry_count = excluded.retry_count,
+                    last_attempt_at = excluded.last_attempt_at,
+                    next_retry_at = excluded.next_retry_at,
+                    note = excluded.note
                 """,
                 (
                     exchange,

@@ -559,21 +559,18 @@ class HLCVManager:
         if not self.markets:
             await self.load_markets()
         self.load_cc()
-        try:
+        ohlcvs = await self.cc.fetch_ohlcv(
+            self.get_symbol(coin),
+            since=int(date_to_ts("2018-01-01")),
+            timeframe="1d",
+        )
+        if not ohlcvs:
             ohlcvs = await self.cc.fetch_ohlcv(
                 self.get_symbol(coin),
-                since=int(date_to_ts("2018-01-01")),
+                since=int(date_to_ts("2020-01-01")),
                 timeframe="1d",
             )
-            if not ohlcvs:
-                ohlcvs = await self.cc.fetch_ohlcv(
-                    self.get_symbol(coin),
-                    since=int(date_to_ts("2020-01-01")),
-                    timeframe="1d",
-                )
-            fts = float(ohlcvs[0][0]) if ohlcvs else 0.0
-        except Exception:
-            fts = 0.0
+        fts = float(ohlcvs[0][0]) if ohlcvs else 0.0
         self.dump_first_timestamp(coin, fts)
         return float(fts)
 

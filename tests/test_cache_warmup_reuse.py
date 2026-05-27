@@ -37,7 +37,13 @@ from backtest import (
     load_coins_hlcvs_from_cache,
     save_coins_hlcvs_to_cache,
 )
-from hlcvs_manifest import build_hlcvs_manifest, write_hlcvs_manifest
+from hlcvs_manifest import (
+    build_hlcvs_manifest,
+    hash_json_value,
+    hash_logical_array,
+    load_hlcvs_manifest,
+    write_hlcvs_manifest,
+)
 
 # ============================================================================
 # Fixtures
@@ -768,3 +774,46 @@ class TestDescriptiveDirResolution:
         ensure_valid_index_metadata(mss_loaded, hlcvs, coins, {"__default__": 3000, "BTC": 3000})
         assert mss_loaded["BTC"]["warmup_minutes"] == 3000
         assert mss_loaded["BTC"]["trade_start_index"] == 3000
+
+    def test_load_uses_manifest_resolved_json_and_timestamp_paths(self, tmp_path, monkeypatch):
+        cfg = _base_config()
+        cache_hash = get_cache_hash(cfg, "binance")
+        cache_dir = tmp_path / "caches" / "hlcvs_data" / cache_hash[:16]
+        _write_fake_cache(str(cache_dir), warmup_minutes=100)
+
+        alt_coins = ["BTC"]
+        alt_mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 9, "marker": "verified"}}
+        alt_timestamps = np.arange(10, dtype=np.int64) * 60_000 + 123
+        (cache_dir / "coins.alt.json").write_text(json.dumps(alt_coins))
+        (cache_dir / "market_specific_settings.alt.json").write_text(json.dumps(alt_mss))
+        np.save(cache_dir / "timestamps.alt.npy", alt_timestamps)
+        (cache_dir / "coins.json").write_text(json.dumps(["STALE"]))
+        (cache_dir / "market_specific_settings.json").write_text(
+            json.dumps({"STALE": {"marker": "stale_fixed_name"}})
+        )
+
+        manifest = load_hlcvs_manifest(cache_dir)
+        manifest["files"]["coins"] = {
+            "path": "coins.alt.json",
+            "sha256": hash_json_value(alt_coins),
+        }
+        manifest["files"]["market_specific_settings"] = {
+            "path": "market_specific_settings.alt.json",
+            "sha256": hash_json_value(alt_mss),
+        }
+        manifest["files"]["timestamps"] = {
+            "path": "timestamps.alt.npy",
+            "sha256": hash_logical_array(alt_timestamps),
+            "shape": [10],
+            "dtype": str(alt_timestamps.dtype),
+        }
+        write_hlcvs_manifest(cache_dir, manifest)
+
+        monkeypatch.chdir(tmp_path)
+        result = load_coins_hlcvs_from_cache(cfg, "binance", warmup_minutes=50)
+
+        assert result is not None
+        _cache_dir, coins, _hlcvs, mss, _results_path, _btc, timestamps = result
+        assert coins == ["BTC"]
+        assert mss["BTC"]["marker"] == "verified"
+        np.testing.assert_array_equal(timestamps, alt_timestamps)

@@ -858,6 +858,27 @@ class TestHLCVManagerFirstTimestamp:
                 assert fts == inception_ts
                 mock_exchange.fetch_ohlcv.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_get_first_timestamp_fetch_error_propagates(
+        self, tmp_path, mock_exchange, mock_markets
+    ):
+        """Exchange fetch failures must not be converted into a synthetic 0 timestamp."""
+        cache_dir = tmp_path / "test_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        mock_exchange.fetch_ohlcv = AsyncMock(side_effect=RuntimeError("exchange unavailable"))
+
+        with patch("hlcv_preparation.load_ccxt_instance", return_value=mock_exchange):
+            with patch("hlcv_preparation.load_markets", return_value=mock_markets):
+                om = HLCVManager(
+                    exchange="binanceusdm",
+                    start_date="2024-01-01",
+                    end_date="2024-01-02",
+                )
+                om.cache_filepaths["first_timestamps"] = str(cache_dir / "first_timestamps.json")
+
+                with pytest.raises(RuntimeError, match="exchange unavailable"):
+                    await om.get_first_timestamp("BTC")
+
 
 # ============================================================================
 # Test Class: Prepare HLCVS Integration

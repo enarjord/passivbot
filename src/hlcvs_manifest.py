@@ -26,6 +26,8 @@ REQUIRED_HLCVS_MANIFEST_FILES = (
     "coins",
     "market_specific_settings",
 )
+OPTIONAL_HLCVS_MANIFEST_FILES = ("candidate_report",)
+ALLOWED_HLCVS_MANIFEST_FILES = REQUIRED_HLCVS_MANIFEST_FILES + OPTIONAL_HLCVS_MANIFEST_FILES
 
 
 class HlcvsManifestError(RuntimeError):
@@ -88,7 +90,7 @@ def _git_commit() -> str | None:
             text=True,
             timeout=2,
         )
-    except Exception:
+    except (OSError, subprocess.SubprocessError):
         return None
     if proc.returncode != 0:
         return None
@@ -98,7 +100,7 @@ def _git_commit() -> str | None:
 def _ccxt_version() -> str | None:
     try:
         import ccxt  # type: ignore
-    except Exception:
+    except ImportError:
         return None
     return str(getattr(ccxt, "__version__", "")) or None
 
@@ -298,6 +300,11 @@ def verify_hlcvs_manifest(cache_dir: Path, manifest: dict[str, Any] | None = Non
     if missing:
         raise HlcvsManifestError(
             f"HLCV manifest is missing required file entries in {cache_dir}: {missing}"
+        )
+    unknown = sorted(name for name in files if name not in ALLOWED_HLCVS_MANIFEST_FILES)
+    if unknown:
+        raise HlcvsManifestError(
+            f"HLCV manifest contains unknown file entries in {cache_dir}: {unknown}"
         )
     for name in ("hlcvs", "btc_usd_prices", "timestamps"):
         _verify_array_artifact(cache_dir, name, files[name])
