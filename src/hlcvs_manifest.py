@@ -126,12 +126,10 @@ def build_hlcvs_manifest(
     compressed: bool,
 ) -> dict[str, Any]:
     if timestamps is None:
-        effective_start_ts = None
-        effective_end_ts = None
-    else:
-        ts_arr = np.asarray(timestamps)
-        effective_start_ts = int(ts_arr[0]) if ts_arr.size else None
-        effective_end_ts = int(ts_arr[-1]) if ts_arr.size else None
+        raise HlcvsManifestError("HLCV manifests require timestamps artifact data")
+    ts_arr = np.asarray(timestamps)
+    effective_start_ts = int(ts_arr[0]) if ts_arr.size else None
+    effective_end_ts = int(ts_arr[-1]) if ts_arr.size else None
 
     requested_end_date = format_end_date(require_config_value(config, "backtest.end_date"))
     files = {
@@ -143,11 +141,10 @@ def build_hlcvs_manifest(
         "coins": _json_file_entry("coins.json", coins),
         "market_specific_settings": _json_file_entry("market_specific_settings.json", mss),
     }
-    if timestamps is not None:
-        files["timestamps"] = _array_file_entry(
-            "timestamps.npy.gz" if compressed else "timestamps.npy",
-            timestamps,
-        )
+    files["timestamps"] = _array_file_entry(
+        "timestamps.npy.gz" if compressed else "timestamps.npy",
+        timestamps,
+    )
     candidate_report = None
     if isinstance(mss, dict):
         candidate_report = (mss.get("__meta__", {}) or {}).get("candidate_report")

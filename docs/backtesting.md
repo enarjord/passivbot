@@ -86,12 +86,34 @@ Prepared final caches under `caches/hlcvs_data/` require a valid manifest. Old
 manifest-less final caches are rebuilt. Explicit `backtest.hlcvs_data_dir` override
 datasets also require valid manifests and checksums.
 
+### Override final HLCV datasets
+
+Use `backtest.hlcvs_data_dir` or `--hlcvs-data-dir` to replay a specific prepared
+dataset under `caches/hlcvs_data/` instead of resolving the dataset from the current
+config hash. Override datasets are accepted only when their manifest verifies every
+required artifact: `hlcvs`, `timestamps`, `btc_usd_prices`, `coins`, and
+`market_specific_settings`.
+
+`backtest.hlcvs_data_override_mode` controls how the current config is matched to
+the override dataset:
+
+- `intersection` (default): keep the current config's requested coins and date
+  window, clipped to the verified override dataset where necessary. This is the
+  conservative mode for rerunning a strategy against a known cache without
+  expanding the universe from the cache contents.
+- `dataset`: adopt the override dataset's effective coins and timestamp window.
+  This is useful for exact artifact replay when the cache itself should define the
+  run universe and date range.
+
 ## Backtest CLI args
 
 - `-dp` to disable individual coin plotting.
 - `--suite [y/n]` to override `backtest.suite_enabled` (omit the value to enable, e.g. `--suite`).
 - `--scenarios label1,label2,...` to run only specific scenarios by label (implies `--suite y`).
 - `--suite-config path/to/overrides.json` to merge an additional suite definition onto the base config. Useful when you want to keep suite definitions outside the main config file.
+- `--hlcvs-data-dir path/to/cache` to replay a verified final HLCV dataset.
+- `--hlcvs-data-override-mode intersection|dataset` to choose whether the current
+  config or the override dataset defines the effective coin/date universe.
 
 The canonical default profile keeps `backtest.suite_enabled = false`. A normal backtest run is
 therefore a single run unless you explicitly enable suite mode in the config or via `--suite`.
