@@ -234,7 +234,14 @@ def _verify_array_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) ->
     rel_path = entry.get("path")
     if not rel_path:
         raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
-    path = cache_dir / str(rel_path)
+    cache_root = cache_dir.resolve()
+    path = (cache_root / str(rel_path)).resolve()
+    try:
+        path.relative_to(cache_root)
+    except ValueError as exc:
+        raise HlcvsManifestError(
+            f"HLCV manifest file entry {name!r} escapes dataset directory: {rel_path}"
+        ) from exc
     if not path.exists():
         raise HlcvsManifestError(f"HLCV manifest file is missing: {path}")
     actual = load_numpy_artifact(path)
@@ -259,7 +266,14 @@ def _verify_json_artifact(cache_dir: Path, name: str, entry: dict[str, Any]) -> 
     rel_path = entry.get("path")
     if not rel_path:
         raise HlcvsManifestError(f"HLCV manifest file entry {name!r} is missing path")
-    path = cache_dir / str(rel_path)
+    cache_root = cache_dir.resolve()
+    path = (cache_root / str(rel_path)).resolve()
+    try:
+        path.relative_to(cache_root)
+    except ValueError as exc:
+        raise HlcvsManifestError(
+            f"HLCV manifest file entry {name!r} escapes dataset directory: {rel_path}"
+        ) from exc
     if not path.exists():
         raise HlcvsManifestError(f"HLCV manifest file is missing: {path}")
     with path.open() as f:

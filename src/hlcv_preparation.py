@@ -3736,9 +3736,14 @@ def _combined_summary_from_result(
     ex, df, coverage_count, gap_count, total_volume = result
     first_ts = int(df["timestamp"].iloc[0]) if not df.empty else None
     last_ts = int(df["timestamp"].iloc[-1]) if not df.empty else None
-    full_range = first_ts == int(effective_start_ts) and last_ts == int(end_ts)
     requested_rows = int((int(end_ts) - int(effective_start_ts)) // 60_000) + 1
     remaining_gap_count = max(0, requested_rows - int(coverage_count))
+    full_range = (
+        first_ts == int(effective_start_ts)
+        and last_ts == int(end_ts)
+        and int(gap_count) == 0
+        and remaining_gap_count == 0
+    )
     effective_gap_count = int(gap_count) if full_range else max(int(gap_count), remaining_gap_count)
     status = "eligible" if full_range else "partial"
     remaining_gaps = ()

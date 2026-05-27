@@ -421,6 +421,42 @@ def test_prepare_dataset_subset_clips_dates(monkeypatch):
     assert "warmup_minutes_requested" in meta
 
 
+def test_prepare_dataset_subset_recomputes_warmup_from_scenario(monkeypatch):
+    coins = ["BTC"]
+    timestamps = np.array([0, 60_000, 120_000, 180_000, 240_000, 300_000], dtype=np.int64)
+    hlcvs = np.random.random((len(timestamps), len(coins), 4))
+    dataset = ExchangeDataset(
+        exchange="combined",
+        coins=coins,
+        coin_index={"BTC": 0},
+        coin_exchange={"BTC": "combined"},
+        available_exchanges=["combined"],
+        hlcvs=hlcvs,
+        mss={"BTC": {"first_valid_index": 0, "last_valid_index": 5, "warmup_minutes": 1}},
+        btc_usd_prices=np.ones(len(timestamps)),
+        timestamps=timestamps,
+        cache_dir="/tmp",
+    )
+    scenario_config = {
+        "backtest": {"start_date": "1970-01-01T00:00:00", "end_date": "1970-01-01T00:05:00"},
+        "live": {"warmup_ratio": 0.0},
+        "bot": {"long": {}, "short": {}},
+        "optimize": {"bounds": {}},
+    }
+    monkeypatch.setattr("suite_runner.compute_backtest_warmup_minutes", lambda cfg: 0)
+    monkeypatch.setattr(
+        "suite_runner.compute_per_coin_warmup_minutes",
+        lambda cfg: {"__default__": 0, "BTC": 5},
+    )
+
+    _subset_hlcvs, _subset_btc, _subset_ts, subset_mss = _prepare_dataset_subset(
+        dataset, scenario_config, ["BTC"], "scenario_warmup"
+    )
+
+    assert subset_mss["BTC"]["warmup_minutes"] == 5
+    assert subset_mss["BTC"]["trade_start_index"] == 5
+
+
 def test_run_combined_dataset_passes_payload_timestamps_to_post_process(tmp_path):
     timestamps = np.array([0, 60_000, 120_000], dtype=np.int64)
     hlcvs = np.zeros((3, 1, 4), dtype=np.float64)

@@ -5,7 +5,13 @@ import pytest
 
 from backtest import build_backtest_payload
 from config_utils import get_template_config
-from hlcvs_manifest import HlcvsManifestError, build_hlcvs_manifest, write_hlcvs_manifest
+from hlcvs_manifest import (
+    HlcvsManifestError,
+    build_hlcvs_manifest,
+    hash_json_value,
+    load_hlcvs_manifest,
+    write_hlcvs_manifest,
+)
 from hlcvs_override import load_hlcvs_data_override
 
 
@@ -34,7 +40,7 @@ def _base_config(cache_dir, *, mode="dataset"):
     }
 
 
-def _write_dataset(cache_dir):
+def _write_dataset(cache_dir, *, manifest_start_date="2025-01-01"):
     cache_dir.mkdir(parents=True)
     coins = ["BTC", "ETH"]
     timestamps = np.array([1735689600000, 1735776000000, 1735862400000], dtype=np.int64)
@@ -51,6 +57,7 @@ def _write_dataset(cache_dir):
     (cache_dir / "coins.json").write_text(json.dumps(coins))
     (cache_dir / "market_specific_settings.json").write_text(json.dumps(mss))
     manifest_config = _base_config(cache_dir)
+    manifest_config["backtest"]["start_date"] = manifest_start_date
     manifest_config["live"]["approved_coins"] = {"long": ["BTC", "ETH"], "short": ["ETH"]}
     manifest = build_hlcvs_manifest(
         config=manifest_config,
@@ -85,6 +92,22 @@ def test_hlcvs_dataset_override_dataset_mode_updates_side_membership_and_effecti
     np.testing.assert_allclose(out_hlcvs, hlcvs)
     np.testing.assert_allclose(btc_usd_prices, np.array([100.0, 101.0, 102.0]))
     assert mss["__meta__"]["dataset_override"] is True
+
+
+def test_hlcvs_dataset_override_dataset_mode_preserves_manifest_requested_start(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    timestamps, _hlcvs = _write_dataset(cache_dir, manifest_start_date="2025-01-02")
+    config = _base_config(cache_dir, mode="dataset")
+    config["backtest"]["start_date"] = "2024-12-01"
+
+    _cache_dir, _coins, _hlcvs, mss, _results_path, _btc, out_timestamps = (
+        load_hlcvs_data_override(config, "binance")
+    )
+
+    np.testing.assert_array_equal(out_timestamps, timestamps)
+    assert config["backtest"]["start_date"].startswith("2025-01-02")
+    assert mss["__meta__"]["effective_data_start_ts"] == int(timestamps[0])
+    assert mss["__meta__"]["effective_requested_start_ts"] == int(timestamps[1])
 
 
 def test_hlcvs_dataset_override_intersection_mode_preserves_input_side_membership(tmp_path):
@@ -162,6 +185,53 @@ def test_hlcvs_dataset_override_rejects_manifest_hash_mismatch(tmp_path):
     np.save(cache_dir / "btc_usd_prices.npy", np.array([999.0, 998.0, 997.0]))
 
     with pytest.raises(HlcvsManifestError, match="hash mismatch"):
+        load_hlcvs_data_override(config, "binance")
+
+
+def test_hlcvs_dataset_override_loads_manifest_verified_json_paths(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    _write_dataset(cache_dir)
+    manifest = load_hlcvs_manifest(cache_dir)
+    alt_coins = ["BTC", "ETH"]
+    alt_mss = {
+        "ETH": {"exchange": "binance", "marker": "verified_alt"},
+        "BTC": {"exchange": "binance"},
+        "__meta__": {"btc_source_exchange": "binanceusdm"},
+    }
+    (cache_dir / "coins.alt.json").write_text(json.dumps(alt_coins))
+    (cache_dir / "market_specific_settings.alt.json").write_text(json.dumps(alt_mss))
+    (cache_dir / "coins.json").write_text(json.dumps(["BTC"]))
+    (cache_dir / "market_specific_settings.json").write_text(
+        json.dumps({"BTC": {"exchange": "binance", "marker": "stale_fixed_name"}})
+    )
+    manifest["files"]["coins"] = {
+        "path": "coins.alt.json",
+        "sha256": hash_json_value(alt_coins),
+    }
+    manifest["files"]["market_specific_settings"] = {
+        "path": "market_specific_settings.alt.json",
+        "sha256": hash_json_value(alt_mss),
+    }
+    write_hlcvs_manifest(cache_dir, manifest)
+    config = _base_config(cache_dir, mode="dataset")
+
+    _cache_dir, coins, _hlcvs, mss, _results_path, _btc, _timestamps = (
+        load_hlcvs_data_override(config, "binance")
+    )
+
+    assert coins == ["BTC", "ETH"]
+    assert mss["ETH"]["marker"] == "verified_alt"
+
+
+def test_hlcvs_dataset_override_rejects_manifest_paths_outside_dataset(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "custom__abc123"
+    _write_dataset(cache_dir)
+    manifest = load_hlcvs_manifest(cache_dir)
+    manifest["files"]["coins"]["path"] = "../coins.json"
+    write_hlcvs_manifest(cache_dir, manifest)
+    config = _base_config(cache_dir, mode="dataset")
+
+    with pytest.raises(HlcvsManifestError, match="escapes dataset directory"):
         load_hlcvs_data_override(config, "binance")
 
 

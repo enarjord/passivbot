@@ -1430,7 +1430,11 @@ def _recompute_index_metadata(
                 last_idx = int(valid_indices[-1]) * interval + (interval - 1)
         meta["first_valid_index"] = first_idx
         meta["last_valid_index"] = last_idx
-        warm_minutes = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        if warmup_map:
+            warm_minutes = int(warmup_map.get(coin, default_warm))
+        else:
+            cached_warm_minutes = meta.get("warmup_minutes")
+            warm_minutes = int(cached_warm_minutes) if cached_warm_minutes is not None else 0
         meta["warmup_minutes"] = warm_minutes
         if first_idx > last_idx:
             trade_start_idx = first_idx

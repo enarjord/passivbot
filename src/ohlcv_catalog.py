@@ -205,7 +205,7 @@ class OhlcvCatalog:
                     rows = excluded.rows,
                     status = excluded.status,
                     schema_version = excluded.schema_version,
-                    checksum = excluded.checksum,
+                    checksum = COALESCE(excluded.checksum, chunks.checksum),
                     updated_at = excluded.updated_at
                 """,
                 (
@@ -270,12 +270,29 @@ class OhlcvCatalog:
                     retry_count, last_attempt_at, next_retry_at, note
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(exchange, timeframe, symbol, start_ts, end_ts) DO UPDATE SET
-                    reason = excluded.reason,
-                    persistent = excluded.persistent,
-                    retry_count = excluded.retry_count,
-                    last_attempt_at = excluded.last_attempt_at,
-                    next_retry_at = excluded.next_retry_at,
-                    note = excluded.note
+                    reason = CASE
+                        WHEN gaps.persistent AND NOT excluded.persistent
+                        THEN gaps.reason ELSE excluded.reason
+                    END,
+                    persistent = CASE
+                        WHEN gaps.persistent OR excluded.persistent THEN 1 ELSE 0
+                    END,
+                    retry_count = CASE
+                        WHEN gaps.persistent AND NOT excluded.persistent
+                        THEN gaps.retry_count ELSE excluded.retry_count
+                    END,
+                    last_attempt_at = CASE
+                        WHEN gaps.persistent AND NOT excluded.persistent
+                        THEN gaps.last_attempt_at ELSE excluded.last_attempt_at
+                    END,
+                    next_retry_at = CASE
+                        WHEN gaps.persistent AND NOT excluded.persistent
+                        THEN gaps.next_retry_at ELSE excluded.next_retry_at
+                    END,
+                    note = CASE
+                        WHEN gaps.persistent AND NOT excluded.persistent
+                        THEN gaps.note ELSE excluded.note
+                    END
                 """,
                 (
                     exchange,

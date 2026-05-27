@@ -1,5 +1,5 @@
 {
-    "config_version": "v7.11.0",
+    "config_version": "v7.12.0",
     "backtest": {
         "aggregate": {
             "default": "mean",
