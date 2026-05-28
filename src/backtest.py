@@ -141,6 +141,7 @@ import logging
 import gzip
 import traceback
 from logging_setup import configure_logging, resolve_log_level
+from materialized_cache import release_materialized_payload
 from suite_runner import (
     extract_suite_config,
     filter_scenarios_by_label,
@@ -2503,34 +2504,37 @@ async def main():
                 config, exchange, force_refetch_gaps=force_refetch_gaps
             )
         )
-        exchange_preference = defaultdict(list)
-        for coin in coins:
-            exchange_preference[mss[coin]["exchange"]].append(coin)
-        for ex in exchange_preference:
-            logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
-        config["backtest"]["coins"][exchange] = coins
-        config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+        try:
+            exchange_preference = defaultdict(list)
+            for coin in coins:
+                exchange_preference[mss[coin]["exchange"]].append(coin)
+            for ex in exchange_preference:
+                logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
+            config["backtest"]["coins"][exchange] = coins
+            config["backtest"]["cache_dir"][exchange] = str(cache_dir)
 
-        fills, equities_array, analysis, payload = run_backtest(
-            hlcvs,
-            mss,
-            config,
-            exchange,
-            btc_usd_prices,
-            timestamps,
-            return_payload=True,
-        )
-        post_process(
-            config,
-            hlcvs,
-            fills,
-            equities_array,
-            btc_usd_prices,
-            analysis,
-            results_path,
-            exchange,
-            plot_context=BacktestPlotContext.from_payload(payload),
-        )
+            fills, equities_array, analysis, payload = run_backtest(
+                hlcvs,
+                mss,
+                config,
+                exchange,
+                btc_usd_prices,
+                timestamps,
+                return_payload=True,
+            )
+            post_process(
+                config,
+                hlcvs,
+                fills,
+                equities_array,
+                btc_usd_prices,
+                analysis,
+                results_path,
+                exchange,
+                plot_context=BacktestPlotContext.from_payload(payload),
+            )
+        finally:
+            release_materialized_payload(hlcvs)
     else:
         # Single exchange mode
         configs = {exchange: deepcopy(config) for exchange in backtest_exchanges}
@@ -2545,28 +2549,31 @@ async def main():
             coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps = (
                 await tasks[exchange]
             )
-            configs[exchange]["backtest"]["coins"][exchange] = coins
-            configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
-            fills, equities_array, analysis, payload = run_backtest(
-                hlcvs,
-                mss,
-                configs[exchange],
-                exchange,
-                btc_usd_prices,
-                timestamps,
-                return_payload=True,
-            )
-            post_process(
-                configs[exchange],
-                hlcvs,
-                fills,
-                equities_array,
-                btc_usd_prices,
-                analysis,
-                results_path,
-                exchange,
-                plot_context=BacktestPlotContext.from_payload(payload),
-            )
+            try:
+                configs[exchange]["backtest"]["coins"][exchange] = coins
+                configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
+                fills, equities_array, analysis, payload = run_backtest(
+                    hlcvs,
+                    mss,
+                    configs[exchange],
+                    exchange,
+                    btc_usd_prices,
+                    timestamps,
+                    return_payload=True,
+                )
+                post_process(
+                    configs[exchange],
+                    hlcvs,
+                    fills,
+                    equities_array,
+                    btc_usd_prices,
+                    analysis,
+                    results_path,
+                    exchange,
+                    plot_context=BacktestPlotContext.from_payload(payload),
+                )
+            finally:
+                release_materialized_payload(hlcvs)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
+  scratch payloads while preserving materialized directories locked by active processes.
 - Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
   strategy parameters end-to-end, with no production fallback bridge from removed v7
   `trailing_grid` fields.

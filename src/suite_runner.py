@@ -26,6 +26,7 @@ from config.param_paths import resolve_dotted_config_path
 from config.shared_bot import canonicalize_shared_bot_side
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
+from materialized_cache import release_materialized_payload
 from utils import (
     format_approved_ignored_coins,
     format_end_date,
@@ -600,8 +601,13 @@ async def prepare_master_datasets(
             coin: str(mss.get(coin, {}).get("exchange", exchange_name)) for coin in coins
         }
         available_exchanges = sorted(set(coin_exchange.values())) or [exchange_name]
-        hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
-        btc_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+        hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
+        btc_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
+        timestamps_array = (
+            None
+            if timestamps is None
+            else np.array(timestamps, dtype=np.int64, copy=True, order="C")
+        )
         hlcvs_spec = None
         btc_spec = None
         if shared_array_manager is not None:
@@ -612,6 +618,7 @@ async def prepare_master_datasets(
             btc_spec, btc_view = shared_array_manager.create_from(btc_array)
             del btc_array  # Free intermediate contiguous array
             btc_array = btc_view
+        release_materialized_payload(hlcvs)
         return ExchangeDataset(
             exchange=exchange_label,
             coins=coins,
@@ -621,7 +628,7 @@ async def prepare_master_datasets(
             hlcvs=hlcvs_array,
             mss=mss,
             btc_usd_prices=btc_array,
-            timestamps=timestamps,
+            timestamps=timestamps_array,
             cache_dir=str(cache_dir),
             hlcvs_spec=hlcvs_spec,
             btc_spec=btc_spec,
@@ -648,10 +655,12 @@ async def prepare_master_datasets(
             btc_usd_prices,
             timestamps,
         ) = await prepare_hlcvs_mss(combined_config, "combined")
+        prepared_hlcvs = hlcvs
         if candle_interval_minutes > 1:
             hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
                 hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
             )
+            release_materialized_payload(prepared_hlcvs)
         datasets["combined"] = _build_dataset(
             "combined",
             "combined",
@@ -692,10 +701,12 @@ async def prepare_master_datasets(
                     ex_btc_usd_prices,
                     ex_timestamps,
                 ) = await prepare_hlcvs_mss(exchange_config, exchange)
+                prepared_ex_hlcvs = ex_hlcvs
                 if candle_interval_minutes > 1:
                     ex_hlcvs, ex_timestamps, ex_btc_usd_prices = _apply_candle_aggregation(
                         ex_hlcvs, ex_timestamps, ex_btc_usd_prices, ex_mss, candle_interval_minutes
                     )
+                    release_materialized_payload(prepared_ex_hlcvs)
                 datasets[exchange] = _build_dataset(
                     exchange,
                     exchange,
@@ -728,10 +739,12 @@ async def prepare_master_datasets(
                 btc_usd_prices,
                 timestamps,
             ) = await prepare_hlcvs_mss(exchange_config, exchange)
+            prepared_hlcvs = hlcvs
             if candle_interval_minutes > 1:
                 hlcvs, timestamps, btc_usd_prices = _apply_candle_aggregation(
                     hlcvs, timestamps, btc_usd_prices, mss, candle_interval_minutes
                 )
+                release_materialized_payload(prepared_hlcvs)
             datasets[exchange] = _build_dataset(
                 exchange,
                 exchange,
