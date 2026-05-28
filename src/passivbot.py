@@ -426,6 +426,8 @@ def compute_live_warmup_windows(
     bp_lookup: Callable[[str, str, str], float],
     *,
     forager_enabled: Optional[Dict[str, bool]] = None,
+    strategy_lookup: Optional[Callable[[str, str, str], float]] = None,
+    forager_lookup: Optional[Callable[[str, str, str], float]] = None,
     window_candles: Optional[int] = None,
     warmup_ratio: float = 0.0,
     max_warmup_minutes: Optional[int] = None,
@@ -481,6 +483,31 @@ def compute_live_warmup_windows(
         except Exception:
             return 0.0
 
+    def _get_strategy(pside: str, key: str, sym: str) -> float:
+        if strategy_lookup is not None:
+            try:
+                return _to_float(strategy_lookup(pside, key, sym))
+            except Exception:
+                pass
+        if key == "entry_volatility_ema_span_1h":
+            legacy_hours = _get_bp(pside, "entry_volatility_ema_span_hours", sym)
+            if legacy_hours > 0.0:
+                return legacy_hours
+        return _get_bp(pside, key, sym)
+
+    def _get_forager(pside: str, key: str, sym: str) -> float:
+        if forager_lookup is not None:
+            try:
+                return _to_float(forager_lookup(pside, key, sym))
+            except Exception:
+                pass
+        if key.endswith("_1m"):
+            legacy_key = key[:-3]
+            legacy_value = _get_bp(pside, legacy_key, sym)
+            if legacy_value > 0.0:
+                return legacy_value
+        return _get_bp(pside, key, sym)
+
     if window_candles is not None:
         win = max(1, int(window_candles))
         if cap_minutes is not None:
@@ -503,23 +530,25 @@ def compute_live_warmup_windows(
                 continue
             max_1m_span = max(
                 max_1m_span,
-                _get_bp(pside, "ema_span_0", sym),
-                _get_bp(pside, "ema_span_1", sym),
-                _get_bp(pside, "offset_volatility_ema_span_1m", sym),
-                _get_bp(pside, "entry_volatility_ema_span_1m", sym),
+                _get_strategy(pside, "ema_span_0", sym),
+                _get_strategy(pside, "ema_span_1", sym),
+                _get_strategy(pside, "volatility_ema_span_1m", sym),
+                _get_strategy(pside, "offset_volatility_ema_span_1m", sym),
+                _get_strategy(pside, "entry_volatility_ema_span_1m", sym),
             )
             if (pside == "long" and is_forager_long) or (
                 pside == "short" and is_forager_short
             ):
                 max_1m_span = max(
                     max_1m_span,
-                    _get_bp(pside, "forager_volume_ema_span_1m", sym),
-                    _get_bp(pside, "forager_volatility_ema_span_1m", sym),
+                    _get_forager(pside, "forager_volume_ema_span_1m", sym),
+                    _get_forager(pside, "forager_volatility_ema_span_1m", sym),
                 )
             max_h1_span = max(
                 max_h1_span,
-                _get_bp(pside, "entry_volatility_ema_span_1h", sym),
-                _get_bp(pside, "offset_volatility_ema_span_1h", sym),
+                _get_strategy(pside, "volatility_ema_span_1h", sym),
+                _get_strategy(pside, "entry_volatility_ema_span_1h", sym),
+                _get_strategy(pside, "offset_volatility_ema_span_1h", sym),
             )
 
         if max_1m_span > 0.0:
@@ -3472,6 +3501,59 @@ class Passivbot:
         """
         return self.config_get(["bot", pside, key], symbol)
 
+    def _live_strategy_warmup_value(self, pside: str, key: str, symbol: str) -> float:
+        """Return strategy-scoped indicator spans for live candle warmup."""
+        try:
+            strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+            val = float(strategy_cfg.get(key, 0.0) or 0.0)
+            if val > 0.0:
+                return val
+        except Exception:
+            pass
+        try:
+            val = float(self.bp(pside, key, symbol) or 0.0)
+            if val > 0.0:
+                return val
+        except Exception:
+            pass
+        if key == "entry_volatility_ema_span_1h":
+            try:
+                return float(
+                    self.bp(pside, "entry_volatility_ema_span_hours", symbol)
+                    or 0.0
+                )
+            except Exception:
+                pass
+        return 0.0
+
+    def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
+        """Return grouped forager indicator spans for live candle warmup."""
+        try:
+            val = float(self.bot_value(pside, key) or 0.0)
+            if val > 0.0:
+                return val
+        except Exception:
+            pass
+        if key.endswith("_1m"):
+            try:
+                val = float(self.bot_value(pside, key[:-3]) or 0.0)
+                if val > 0.0:
+                    return val
+            except Exception:
+                pass
+        try:
+            val = float(self.bp(pside, key, symbol) or 0.0)
+            if val > 0.0:
+                return val
+        except Exception:
+            pass
+        if key.endswith("_1m"):
+            try:
+                return float(self.bp(pside, key[:-3], symbol) or 0.0)
+            except Exception:
+                pass
+        return 0.0
+
     def maybe_log_ema_debug(
         self,
         ema_bounds_long: Dict[str, Tuple[float, float]],
@@ -3664,6 +3746,12 @@ class Passivbot:
                 symbols_by_side,
                 lambda pside, key, sym: self.bp(pside, key, sym),
                 forager_enabled=forager_needed,
+                strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                    self, pside, key, sym
+                ),
+                forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                    self, pside, key, sym
+                ),
                 window_candles=window_candles,
                 warmup_ratio=warmup_ratio,
                 max_warmup_minutes=max_warmup_minutes,
@@ -4136,6 +4224,12 @@ class Passivbot:
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
             forager_enabled=forager_enabled,
+            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                self, pside, key, sym
+            ),
+            forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                self, pside, key, sym
+            ),
             warmup_ratio=warmup_ratio,
             max_warmup_minutes=max_warmup_minutes,
         )
@@ -4276,6 +4370,12 @@ class Passivbot:
             symbols_by_side,
             lambda pside, key, sym: self.bp(pside, key, sym),
             forager_enabled=forager_enabled,
+            strategy_lookup=lambda pside, key, sym: Passivbot._live_strategy_warmup_value(
+                self, pside, key, sym
+            ),
+            forager_lookup=lambda pside, key, sym: Passivbot._live_forager_warmup_value(
+                self, pside, key, sym
+            ),
             warmup_ratio=warmup_ratio,
             max_warmup_minutes=max_warmup_minutes,
         )
@@ -10827,10 +10927,70 @@ class Passivbot:
                     need_h1_lr_spans[symbol].add(h1_span)
 
         # Forager metrics use global spans (per side); include them for all symbols.
-        vol_span_long = float(self.bot_value("long", "forager_volume_ema_span_1m") or 0.0)
-        lr_span_long = float(self.bot_value("long", "forager_volatility_ema_span_1m") or 0.0)
-        vol_span_short = float(self.bot_value("short", "forager_volume_ema_span_1m") or 0.0)
-        lr_span_short = float(self.bot_value("short", "forager_volatility_ema_span_1m") or 0.0)
+        vol_span_long = float(
+            Passivbot._live_forager_warmup_value(
+                self, "long", "forager_volume_ema_span_1m", ""
+            )
+            or 0.0
+        )
+        lr_span_long = float(
+            Passivbot._live_forager_warmup_value(
+                self, "long", "forager_volatility_ema_span_1m", ""
+            )
+            or 0.0
+        )
+        vol_span_short = float(
+            Passivbot._live_forager_warmup_value(
+                self, "short", "forager_volume_ema_span_1m", ""
+            )
+            or 0.0
+        )
+        lr_span_short = float(
+            Passivbot._live_forager_warmup_value(
+                self, "short", "forager_volatility_ema_span_1m", ""
+            )
+        is_forager_mode = getattr(
+            self, "is_forager_mode", lambda *args, **kwargs: False
+        )
+
+        def _forager_score_weight(pside: str, key: str) -> float:
+            try:
+                weights = self.bot_value(pside, "forager_score_weights")
+                if isinstance(weights, dict):
+                    return float(weights.get(key, 0.0) or 0.0)
+            except Exception:
+                pass
+            return 0.0
+
+        def _forager_volume_drop_pct(pside: str) -> float:
+            try:
+                return float(self.bot_value(pside, "forager_volume_drop_pct") or 0.0)
+            except Exception:
+                return 0.0
+
+        required_forager_volume_spans: set[float] = set()
+        required_forager_m1_lr_spans: set[float] = set()
+        try:
+            if bool(is_forager_mode("long")):
+                if vol_span_long > 0.0 and (
+                    _forager_volume_drop_pct("long") > 0.0
+                    or _forager_score_weight("long", "volume") != 0.0
+                ):
+                    required_forager_volume_spans.add(vol_span_long)
+                if lr_span_long > 0.0 and _forager_score_weight("long", "volatility") != 0.0:
+                    required_forager_m1_lr_spans.add(lr_span_long)
+            if bool(is_forager_mode("short")):
+                if vol_span_short > 0.0 and (
+                    _forager_volume_drop_pct("short") > 0.0
+                    or _forager_score_weight("short", "volume") != 0.0
+                ):
+                    required_forager_volume_spans.add(vol_span_short)
+                if lr_span_short > 0.0 and _forager_score_weight("short", "volatility") != 0.0:
+                    required_forager_m1_lr_spans.add(lr_span_short)
+        except Exception:
+            pass
+            or 0.0
+        )
         m1_volume_spans = sorted(
             {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
         )
@@ -10943,9 +11103,6 @@ class Passivbot:
                     return True
             return False
 
-        is_forager_mode = getattr(
-            self, "is_forager_mode", lambda *args, **kwargs: False
-        )
         if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -11263,6 +11420,10 @@ class Passivbot:
                     tf="1h",
                     max_age_ms=h1_max_age_by_symbol.get(symbol, 600_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
+            required_m1_lr_for_symbol = sorted(need_m1_lr_spans[sym])
+            requested_m1_lr_spans = sorted(
+                set(m1_lr_spans) | set(required_m1_lr_for_symbol)
+            )
                 )
             )
 
@@ -11280,7 +11441,7 @@ class Passivbot:
                             {
                                 "close": sorted(need_close_spans[sym]),
                                 "qv": m1_volume_spans,
-                                "log_range": m1_lr_spans,
+                                "log_range": requested_m1_lr_spans,
                             },
                             latest_expected_ts=int(projection_ctx["latest_expected_ts"]),
                             last_cached_ts=int(projection_ctx["last_cached_ts"]),
@@ -11305,10 +11466,24 @@ class Passivbot:
                         sym, projected, "qv", m1_volume_spans, "m1_volume"
                     )
                     lr1m = projected_optional_map(
-                        sym, projected, "log_range", m1_lr_spans, "m1_log_range"
+                        sym,
+                        projected,
+                        "log_range",
+                        requested_m1_lr_spans,
+                        "m1_log_range",
                     )
                     missing_close = [
                         span
+                    missing_required_lr1m = [
+                        span
+                        for span in required_m1_lr_for_symbol
+                        if span not in lr1m or not math.isfinite(float(lr1m[span]))
+                    ]
+                    if missing_required_lr1m:
+                        raise RuntimeError(
+                            "[ema] projected open-tail m1 log-range EMA incomplete for "
+                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
+                        )
                         for span in sorted(need_close_spans[sym])
                         if span not in close or not math.isfinite(float(close[span]))
                     ]
@@ -11332,9 +11507,48 @@ class Passivbot:
                     vol = await fetch_map(sym, m1_volume_spans, ema_qv, "m1_volume")
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 if lr1m is None:
-                    requested_m1_lr_spans = sorted(set(m1_lr_spans) | need_m1_lr_spans[sym])
-                    lr1m = await fetch_map(
-                        sym, requested_m1_lr_spans, ema_lr_1m, "m1_log_range"
+                    required_lr1m = await fetch_required_map(
+                        sym,
+                        required_m1_lr_for_symbol,
+                        ema_lr_1m,
+                        "m1_log_range",
+                    )
+                    optional_lr1m = await fetch_map(
+                        sym,
+                    lr1m = {**optional_lr1m, **required_lr1m}
+                        [
+                            span
+                            for span in m1_lr_spans
+                            if span not in required_lr1m
+                        ],
+            missing_required_volume = [
+                span for span in sorted(required_forager_volume_spans) if span not in vol
+            ]
+            missing_required_forager_lr1m = [
+                span
+                for span in sorted(required_forager_m1_lr_spans)
+                if span not in lr1m
+            ]
+            if missing_required_volume or missing_required_forager_lr1m:
+                reasons = []
+                if missing_required_volume:
+                    reasons.append("missing_required_forager_volume")
+                if missing_required_forager_lr1m:
+                    reasons.append("missing_required_forager_log_range")
+                reason = "+".join(reasons)
+                mark_ema_unavailable(sym, reason)
+                log_ema_issue(
+                    ("required_forager_missing", sym),
+                    logging.WARNING,
+                    "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=mark_nontradable_until_fresh | %s",
+                    Passivbot._log_symbol(sym),
+                    ",".join(f"{span:.8g}" for span in missing_required_volume),
+                    ",".join(f"{span:.8g}" for span in missing_required_forager_lr1m),
+                    ema_candle_health_context(sym),
+                    interval_ms=15 * 60 * 1000,
+                )
+                        ema_lr_1m,
+                        "m1_log_range",
                     )
             except Exception:
                 if sym not in cache_only_symbols:
@@ -11343,7 +11557,6 @@ class Passivbot:
                 return {}, {}, {}, {}
             if sym in cache_only_symbols:
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
-                requested_m1_lr_spans = sorted(set(m1_lr_spans) | need_m1_lr_spans[sym])
                 missing_lr1m = [span for span in requested_m1_lr_spans if span not in lr1m]
                 if missing_volume or missing_lr1m:
                     missing_bits = []
@@ -12685,20 +12898,29 @@ class Passivbot:
                 for pside, syms in candidates_by_side.items():
                     if sym not in syms:
                         continue
-                    try:
-                        span_v = self.bp(pside, "forager_volume_ema_span_1m", sym)
-                    except Exception:
-                        span_v = None
-                    try:
-                        span_lr = self.bp(pside, "forager_volatility_ema_span_1m", sym)
-                    except Exception:
-                        span_lr = None
-                    for span in (span_v, span_lr):
-                        if span is not None:
-                            try:
-                                max_span = max(max_span, float(span))
-                            except Exception:
-                                pass
+                    for key in (
+                        "ema_span_0",
+                        "ema_span_1",
+                        "volatility_ema_span_1m",
+                        "offset_volatility_ema_span_1m",
+                        "entry_volatility_ema_span_1m",
+                    ):
+                        max_span = max(
+                            max_span,
+                            Passivbot._live_strategy_warmup_value(
+                                self, pside, key, sym
+                            ),
+                        )
+                    for key in (
+                        "forager_volume_ema_span_1m",
+                        "forager_volatility_ema_span_1m",
+                    ):
+                        max_span = max(
+                            max_span,
+                            Passivbot._live_forager_warmup_value(
+                                self, pside, key, sym
+                            ),
+                        )
                 win = (
                     max(default_win, int(math.ceil(max_span * span_buffer)))
                     if max_span > 0.0

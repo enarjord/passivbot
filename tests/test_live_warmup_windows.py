@@ -58,3 +58,39 @@ def test_compute_live_warmup_windows_override():
     assert h1["BTC"] == 2
     assert skip["BTC"] is True
     assert wins["ETH"] == 120
+
+
+def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
+    symbols_by_side = {"long": {"HYPE"}}
+
+    def bp(pside, key, sym):
+        return 0.0
+
+    def strategy(pside, key, sym):
+        values = {
+            "ema_span_0": 110.0,
+            "ema_span_1": 260.0,
+            "volatility_ema_span_1m": 86.0,
+            "volatility_ema_span_1h": 1785.0,
+        }
+        return values.get(key, 0.0)
+
+    def forager(pside, key, sym):
+        values = {
+            "forager_volume_ema_span_1m": 760.0,
+            "forager_volatility_ema_span_1m": 110.0,
+        }
+        return values.get(key, 0.0)
+
+    wins, h1, skip = compute_live_warmup_windows(
+        symbols_by_side,
+        bp,
+        forager_enabled={"long": True},
+        strategy_lookup=strategy,
+        forager_lookup=forager,
+        warmup_ratio=0.3,
+    )
+
+    assert wins["HYPE"] == 988
+    assert h1["HYPE"] == 2321
+    assert skip["HYPE"] is True

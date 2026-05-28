@@ -572,6 +572,126 @@ async def test_orchestrator_ema_bundle_fetches_flat_default_normal_planning_symb
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_marks_missing_required_forager_ema_unavailable(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 2_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    symbol = "HYPE/USDT:USDT"
+
+    class FakeCM:
+        def get_last_refresh_ms(self, symbol):
+            return now_ms
+
+        def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
+            return {"ok": True, "timeframes": {"1m": {"coverage_ok": True}}}
+
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return 100.0
+
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return float("nan")
+
+        async def get_latest_ema_log_range(
+            self,
+            symbol,
+            *,
+            span,
+            tf=None,
+            max_age_ms=None,
+            allow_remote_fetch=True,
+            **kwargs,
+        ):
+            return 0.001
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_staleness_minutes": 10,
+            }
+        }
+        positions = {}
+        open_orders = {}
+        PB_modes = {"long": {symbol: "normal"}, "short": {}}
+        active_symbols = [symbol]
+        inactive_coin_candle_ttl_ms = 600_000
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {
+                "ema_span_0": 10.0,
+                "ema_span_1": 20.0,
+                "volatility_ema_span_1m": 5.0,
+                "volatility_ema_span_1h": 0.0,
+                "entry": {
+                    "threshold_volatility_1m_weight": 0.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                },
+                "close": {
+                    "threshold_volatility_1m_weight": 0.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                },
+            }
+
+        def bot_value(self, pside, key):
+            if key == "forager_volume_ema_span_1m":
+                return 760.0 if pside == "long" else 0.0
+            if key == "forager_volatility_ema_span_1m":
+                return 0.0
+            if key == "forager_volume_drop_pct":
+                return 0.0
+            if key == "forager_score_weights":
+                return {
+                    "volume": 1.0 if pside == "long" else 0.0,
+                    "ema_readiness": 0.0,
+                    "volatility": 0.0,
+                }
+            return 0.0
+
+        has_position = pb_mod.Passivbot.has_position
+        _mode_override_to_orchestrator_mode = (
+            pb_mod.Passivbot._mode_override_to_orchestrator_mode
+        )
+        _pb_mode_to_orchestrator_mode = pb_mod.Passivbot._pb_mode_to_orchestrator_mode
+        _pside_blocks_new_entries = pb_mod.Passivbot._pside_blocks_new_entries
+        _completed_candle_health_now_ms = pb_mod.Passivbot._completed_candle_health_now_ms
+        _completed_candle_tail_gap_fallback_signature = (
+            pb_mod.Passivbot._completed_candle_tail_gap_fallback_signature
+        )
+        _active_candle_tail_gap_max_ms = pb_mod.Passivbot._active_candle_tail_gap_max_ms
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+
+    bot = FakeBot()
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        _m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], modes=bot.PB_modes
+    )
+
+    assert m1_close_emas[symbol]
+    assert m1_volume_emas[symbol] == {}
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondaries(
     monkeypatch,
     caplog,
