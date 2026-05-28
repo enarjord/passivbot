@@ -10949,6 +10949,14 @@ class Passivbot:
             Passivbot._live_forager_warmup_value(
                 self, "short", "forager_volatility_ema_span_1m", ""
             )
+            or 0.0
+        )
+        m1_volume_spans = sorted(
+            {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
+        )
+        m1_lr_spans = sorted(
+            {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
+        )
         is_forager_mode = getattr(
             self, "is_forager_mode", lambda *args, **kwargs: False
         )
@@ -10989,14 +10997,6 @@ class Passivbot:
                     required_forager_m1_lr_spans.add(lr_span_short)
         except Exception:
             pass
-            or 0.0
-        )
-        m1_volume_spans = sorted(
-            {s for s in (vol_span_long, vol_span_short) if s > 0.0 and math.isfinite(s)}
-        )
-        m1_lr_spans = sorted(
-            {s for s in (lr_span_long, lr_span_short) if s > 0.0 and math.isfinite(s)}
-        )
         if not hasattr(self, "_orchestrator_prev_close_ema"):
             self._orchestrator_prev_close_ema = {}
         if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):
@@ -11420,10 +11420,6 @@ class Passivbot:
                     tf="1h",
                     max_age_ms=h1_max_age_by_symbol.get(symbol, 600_000),
                     allow_remote_fetch=symbol not in cache_only_symbols,
-            required_m1_lr_for_symbol = sorted(need_m1_lr_spans[sym])
-            requested_m1_lr_spans = sorted(
-                set(m1_lr_spans) | set(required_m1_lr_for_symbol)
-            )
                 )
             )
 
@@ -11432,6 +11428,10 @@ class Passivbot:
             if sym in cache_only_never_fetched:
                 mark_ema_unavailable(sym, "never_fetched_cache_only")
                 return {}, {}, {}, {}
+            required_m1_lr_for_symbol = sorted(need_m1_lr_spans[sym])
+            requested_m1_lr_spans = sorted(
+                set(m1_lr_spans) | set(required_m1_lr_for_symbol)
+            )
             try:
                 projection_ctx = projection_contexts.get(sym)
                 if projection_ctx is not None:
@@ -11474,6 +11474,14 @@ class Passivbot:
                     )
                     missing_close = [
                         span
+                        for span in sorted(need_close_spans[sym])
+                        if span not in close or not math.isfinite(float(close[span]))
+                    ]
+                    if missing_close:
+                        raise RuntimeError(
+                            "[ema] projected open-tail close EMA incomplete for "
+                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
+                        )
                     missing_required_lr1m = [
                         span
                         for span in required_m1_lr_for_symbol
@@ -11483,14 +11491,6 @@ class Passivbot:
                         raise RuntimeError(
                             "[ema] projected open-tail m1 log-range EMA incomplete for "
                             f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
-                        )
-                        for span in sorted(need_close_spans[sym])
-                        if span not in close or not math.isfinite(float(close[span]))
-                    ]
-                    if missing_close:
-                        raise RuntimeError(
-                            "[ema] projected open-tail close EMA incomplete for "
-                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                         )
                     self._orchestrator_ema_projection_symbols.add(sym)
                     self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
@@ -11515,12 +11515,20 @@ class Passivbot:
                     )
                     optional_lr1m = await fetch_map(
                         sym,
-                    lr1m = {**optional_lr1m, **required_lr1m}
                         [
                             span
                             for span in m1_lr_spans
                             if span not in required_lr1m
                         ],
+                        ema_lr_1m,
+                        "m1_log_range",
+                    )
+                    lr1m = {**optional_lr1m, **required_lr1m}
+            except Exception:
+                if sym not in cache_only_symbols:
+                    raise
+                mark_ema_unavailable(sym, "cache_only_fetch_failed")
+                return {}, {}, {}, {}
             missing_required_volume = [
                 span for span in sorted(required_forager_volume_spans) if span not in vol
             ]
@@ -11547,14 +11555,6 @@ class Passivbot:
                     ema_candle_health_context(sym),
                     interval_ms=15 * 60 * 1000,
                 )
-                        ema_lr_1m,
-                        "m1_log_range",
-                    )
-            except Exception:
-                if sym not in cache_only_symbols:
-                    raise
-                mark_ema_unavailable(sym, "cache_only_fetch_failed")
-                return {}, {}, {}, {}
             if sym in cache_only_symbols:
                 missing_volume = [span for span in m1_volume_spans if span not in vol]
                 missing_lr1m = [span for span in requested_m1_lr_spans if span not in lr1m]
