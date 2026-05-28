@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
+  scratch payloads while preserving materialized directories locked by active processes.
+
 ## v7.12.0 - 2026-05-27
 
 - Changed backtest/optimizer HLCV preparation to treat normal market availability limits as coverage metadata: late coin starts and unavailable tails are logged and persisted in artifacts instead of aborting the whole run; large internal gaps are repaired or excluded from the tradable window so synthetic spans do not become tradable. Corruption, malformed candles, missing BTC benchmark data, and no tradable candles still fail loudly.

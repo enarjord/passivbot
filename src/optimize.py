@@ -104,6 +104,7 @@ from pure_funcs import (
 )
 from utils import date_to_ts, ts_to_date, utc_ms, make_get_filepath, format_approved_ignored_coins
 from logging_setup import configure_logging, resolve_log_level
+from materialized_cache import release_materialized_payload
 from copy import deepcopy
 import gc
 import numpy as np
@@ -320,21 +321,26 @@ def _register_exchange_data(
     into this helper.
     """
     coins, hlcvs, mss, _results_path, _cache_dir, btc_usd_prices, timestamps = prepare_result
+    prepared_hlcvs = hlcvs
     hlcvs, timestamps, btc_usd_prices = _maybe_aggregate_backtest_data(
         hlcvs, timestamps, btc_usd_prices, mss, config
     )
     _stamp_optimizer_warmup(config, mss, coins)
-    timestamps_dict[exchange] = timestamps
+    timestamps_dict[exchange] = (
+        None if timestamps is None else np.array(timestamps, dtype=np.int64, copy=True, order="C")
+    )
     config["backtest"]["coins"][exchange] = coins
     msss[exchange] = mss
     validate_array(hlcvs, "hlcvs")
-    hlcvs_array = np.ascontiguousarray(hlcvs, dtype=np.float64)
+    hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
     hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
     hlcvs_specs[exchange] = hlcvs_spec
-    btc_usd_array = np.ascontiguousarray(btc_usd_prices, dtype=np.float64)
+    btc_usd_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
     validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
     btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
     btc_usd_specs[exchange] = btc_usd_spec
+    release_materialized_payload(prepared_hlcvs)
+    release_materialized_payload(hlcvs)
     return coins, mss
 
 

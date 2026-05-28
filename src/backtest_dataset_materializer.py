@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 
+from materialized_cache import prepare_materialized_run, release_materialized_root
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
@@ -127,6 +128,21 @@ def _coverage_metadata(valid_mask: np.ndarray, *, start_ts: int, interval_ms: in
     return meta
 
 
+def _close_memmap(array: np.memmap | None) -> None:
+    if array is None:
+        return
+    try:
+        array.flush()
+    except (OSError, ValueError):
+        pass
+    mmap_obj = getattr(array, "_mmap", None)
+    if mmap_obj is not None:
+        try:
+            mmap_obj.close()
+        except (BufferError, OSError, ValueError):
+            pass
+
+
 @dataclass(frozen=True)
 class SharedBacktestDatasetHandle:
     root: str
@@ -197,100 +213,111 @@ class BacktestDatasetMaterializer:
                 f"btc_usd_prices must have shape ({n_steps},), got {tuple(int(x) for x in btc_arr.shape)}"
             )
 
-        run_root = self.output_root / run_id
-        run_root.mkdir(parents=True, exist_ok=True)
+        run_root = prepare_materialized_run(self.output_root, run_id)
         hlcvs_path = run_root / "hlcvs.dat"
         timestamps_path = run_root / "timestamps.dat"
         btc_path = run_root / "btc_usd_prices.dat"
 
-        hlcvs = np.memmap(hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4))
-        hlcvs[:] = np.nan
-        timestamps = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
-        timestamps[:] = np.arange(start_ts, end_ts + interval_ms, interval_ms, dtype=np.int64)
-        btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
-        btc_mm[:] = btc_arr
-
-        enriched_mss = deepcopy(mss)
-        valid_buffer = np.zeros(n_steps, dtype=np.bool_)
-        symbols_by_coin = symbols_by_coin or {}
-        source_windows_by_coin = source_windows_by_coin or {}
-        for coin_idx, coin in enumerate(coins):
-            coin_t0 = time.monotonic()
-            logging.info(
-                "[materializer] coin start %d/%d exchange=%s coin=%s",
-                coin_idx + 1,
-                len(coins),
-                exchange,
-                coin,
+        hlcvs = None
+        timestamps = None
+        btc_mm = None
+        try:
+            hlcvs = np.memmap(
+                hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4)
             )
-            valid_buffer[:] = False
-            coin_view = hlcvs[:, coin_idx, :]
-            store_symbol = symbols_by_coin.get(coin, coin)
-            copy_start_ts, copy_end_ts = source_windows_by_coin.get(coin, (start_ts, end_ts))
-            copy_start_ts = int(copy_start_ts)
-            copy_end_ts = int(copy_end_ts)
-            if copy_start_ts % interval_ms != 0 or copy_end_ts % interval_ms != 0:
-                raise ValueError(f"source window for {coin} must align to 1m")
-            if copy_start_ts < start_ts or copy_end_ts > end_ts or copy_end_ts < copy_start_ts:
-                raise ValueError(
-                    f"source window for {coin} must be inside materialized range: "
-                    f"{copy_start_ts}..{copy_end_ts} not within {start_ts}..{end_ts}"
+            hlcvs[:] = np.nan
+            timestamps = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
+            timestamps[:] = np.arange(start_ts, end_ts + interval_ms, interval_ms, dtype=np.int64)
+            btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
+            btc_mm[:] = btc_arr
+
+            enriched_mss = deepcopy(mss)
+            valid_buffer = np.zeros(n_steps, dtype=np.bool_)
+            symbols_by_coin = symbols_by_coin or {}
+            source_windows_by_coin = source_windows_by_coin or {}
+            for coin_idx, coin in enumerate(coins):
+                coin_t0 = time.monotonic()
+                logging.info(
+                    "[materializer] coin start %d/%d exchange=%s coin=%s",
+                    coin_idx + 1,
+                    len(coins),
+                    exchange,
+                    coin,
                 )
-            dest_start = int((copy_start_ts - start_ts) // interval_ms)
-            dest_end = int((copy_end_ts - start_ts) // interval_ms) + 1
-            self.store.copy_range_into(
-                exchange,
-                "1m",
-                store_symbol,
-                copy_start_ts,
-                copy_end_ts,
-                coin_view[dest_start:dest_end],
-                valid_buffer[dest_start:dest_end],
-            )
-            source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
-                valid_buffer
-            )
-            tradable_first_index, tradable_last_index, _tradable_count = (
-                _longest_contiguous_valid_span(valid_buffer)
-            )
-            invalid_rows = int(n_steps - source_valid_count)
-            coverage_meta = _coverage_metadata(
-                valid_buffer.copy(), start_ts=int(start_ts), interval_ms=int(interval_ms)
-            )
-            synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
-                coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
-            )
-            meta = enriched_mss.setdefault(coin, {})
-            meta["first_valid_index"] = tradable_first_index
-            meta["last_valid_index"] = tradable_last_index
-            meta["source_window_start_ts"] = int(copy_start_ts)
-            meta["source_window_end_ts"] = int(copy_end_ts)
-            meta["source_first_valid_index"] = source_first_valid_index
-            meta["source_last_valid_index"] = source_last_valid_index
-            meta.update(coverage_meta)
-            if synthetic_gap_fill_count:
-                meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
-                meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
-            logging.info(
-                "[materializer] coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
-                "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
-                coin_idx + 1,
-                len(coins),
-                exchange,
-                coin,
-                source_first_valid_index,
-                source_last_valid_index,
-                invalid_rows,
-                synthetic_gap_fill_count,
-                time.monotonic() - coin_t0,
-            )
+                valid_buffer[:] = False
+                coin_view = hlcvs[:, coin_idx, :]
+                store_symbol = symbols_by_coin.get(coin, coin)
+                copy_start_ts, copy_end_ts = source_windows_by_coin.get(coin, (start_ts, end_ts))
+                copy_start_ts = int(copy_start_ts)
+                copy_end_ts = int(copy_end_ts)
+                if copy_start_ts % interval_ms != 0 or copy_end_ts % interval_ms != 0:
+                    raise ValueError(f"source window for {coin} must align to 1m")
+                if copy_start_ts < start_ts or copy_end_ts > end_ts or copy_end_ts < copy_start_ts:
+                    raise ValueError(
+                        f"source window for {coin} must be inside materialized range: "
+                        f"{copy_start_ts}..{copy_end_ts} not within {start_ts}..{end_ts}"
+                    )
+                dest_start = int((copy_start_ts - start_ts) // interval_ms)
+                dest_end = int((copy_end_ts - start_ts) // interval_ms) + 1
+                self.store.copy_range_into(
+                    exchange,
+                    "1m",
+                    store_symbol,
+                    copy_start_ts,
+                    copy_end_ts,
+                    coin_view[dest_start:dest_end],
+                    valid_buffer[dest_start:dest_end],
+                )
+                source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
+                    valid_buffer
+                )
+                tradable_first_index, tradable_last_index, _tradable_count = (
+                    _longest_contiguous_valid_span(valid_buffer)
+                )
+                invalid_rows = int(n_steps - source_valid_count)
+                coverage_meta = _coverage_metadata(
+                    valid_buffer.copy(), start_ts=int(start_ts), interval_ms=int(interval_ms)
+                )
+                synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
+                    coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
+                )
+                meta = enriched_mss.setdefault(coin, {})
+                meta["first_valid_index"] = tradable_first_index
+                meta["last_valid_index"] = tradable_last_index
+                meta["source_window_start_ts"] = int(copy_start_ts)
+                meta["source_window_end_ts"] = int(copy_end_ts)
+                meta["source_first_valid_index"] = source_first_valid_index
+                meta["source_last_valid_index"] = source_last_valid_index
+                meta.update(coverage_meta)
+                if synthetic_gap_fill_count:
+                    meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+                    meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
+                logging.info(
+                    "[materializer] coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
+                    "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
+                    coin_idx + 1,
+                    len(coins),
+                    exchange,
+                    coin,
+                    source_first_valid_index,
+                    source_last_valid_index,
+                    invalid_rows,
+                    synthetic_gap_fill_count,
+                    time.monotonic() - coin_t0,
+                )
 
-        hlcvs.flush()
-        timestamps.flush()
-        btc_mm.flush()
-        del hlcvs
-        del timestamps
-        del btc_mm
+            _close_memmap(hlcvs)
+            _close_memmap(timestamps)
+            _close_memmap(btc_mm)
+            hlcvs = None
+            timestamps = None
+            btc_mm = None
+        except BaseException:
+            _close_memmap(hlcvs)
+            _close_memmap(timestamps)
+            _close_memmap(btc_mm)
+            release_materialized_root(run_root)
+            raise
 
         meta = {
             "exchange": exchange,
@@ -347,78 +374,87 @@ def materialize_frames(
             f"btc_usd_prices must have shape ({n_steps},), got {tuple(int(x) for x in btc_arr.shape)}"
         )
 
-    run_root = output_root / run_id
-    run_root.mkdir(parents=True, exist_ok=True)
+    run_root = prepare_materialized_run(output_root, run_id)
     hlcvs_path = run_root / "hlcvs.dat"
     timestamps_path = run_root / "timestamps.dat"
     btc_path = run_root / "btc_usd_prices.dat"
 
-    hlcvs = np.memmap(hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4))
-    hlcvs[:] = np.nan
-    timestamps_mm = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
-    timestamps_mm[:] = ts_arr
-    btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
-    btc_mm[:] = btc_arr
+    hlcvs = None
+    timestamps_mm = None
+    btc_mm = None
+    try:
+        hlcvs = np.memmap(hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4))
+        hlcvs[:] = np.nan
+        timestamps_mm = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
+        timestamps_mm[:] = ts_arr
+        btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
+        btc_mm[:] = btc_arr
 
-    enriched_mss = deepcopy(mss)
-    for coin_idx, coin in enumerate(coins):
-        coin_t0 = time.monotonic()
-        logging.info(
-            "[materializer] frame coin start %d/%d exchange=%s coin=%s",
-            coin_idx + 1,
-            len(coins),
-            exchange,
-            coin,
-        )
-        aligned = np.array(aligned_values_by_coin[coin], dtype=np.float64, copy=True)
-        if aligned.shape != (n_steps, 4):
-            raise ValueError(
-                f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
+        enriched_mss = deepcopy(mss)
+        for coin_idx, coin in enumerate(coins):
+            coin_t0 = time.monotonic()
+            logging.info(
+                "[materializer] frame coin start %d/%d exchange=%s coin=%s",
+                coin_idx + 1,
+                len(coins),
+                exchange,
+                coin,
             )
-        valid_mask = ~np.isnan(aligned[:, 0])
-        source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
-            valid_mask
-        )
-        tradable_first_index, tradable_last_index, _tradable_count = (
-            _longest_contiguous_valid_span(valid_mask)
-        )
-        invalid_rows = int(n_steps - source_valid_count)
-        coverage_meta = _coverage_metadata(
-            valid_mask.copy(),
-            start_ts=int(ts_arr[0]) if n_steps else 0,
-            interval_ms=60_000 if n_steps < 2 else int(ts_arr[1] - ts_arr[0]),
-        )
-        synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
-        hlcvs[:, coin_idx, :] = aligned
-        meta = enriched_mss.setdefault(coin, {})
-        meta["first_valid_index"] = tradable_first_index
-        meta["last_valid_index"] = tradable_last_index
-        meta["source_first_valid_index"] = source_first_valid_index
-        meta["source_last_valid_index"] = source_last_valid_index
-        meta.update(coverage_meta)
-        if synthetic_gap_fill_count:
-            meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
-            meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
-        logging.info(
-            "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
-            "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
-            coin_idx + 1,
-            len(coins),
-            exchange,
-            coin,
-            source_first_valid_index,
-            source_last_valid_index,
-            invalid_rows,
-            synthetic_gap_fill_count,
-            time.monotonic() - coin_t0,
-        )
+            aligned = np.array(aligned_values_by_coin[coin], dtype=np.float64, copy=True)
+            if aligned.shape != (n_steps, 4):
+                raise ValueError(
+                    f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
+                )
+            valid_mask = ~np.isnan(aligned[:, 0])
+            source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
+                valid_mask
+            )
+            tradable_first_index, tradable_last_index, _tradable_count = (
+                _longest_contiguous_valid_span(valid_mask)
+            )
+            invalid_rows = int(n_steps - source_valid_count)
+            coverage_meta = _coverage_metadata(
+                valid_mask.copy(),
+                start_ts=int(ts_arr[0]) if n_steps else 0,
+                interval_ms=60_000 if n_steps < 2 else int(ts_arr[1] - ts_arr[0]),
+            )
+            synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
+            hlcvs[:, coin_idx, :] = aligned
+            meta = enriched_mss.setdefault(coin, {})
+            meta["first_valid_index"] = tradable_first_index
+            meta["last_valid_index"] = tradable_last_index
+            meta["source_first_valid_index"] = source_first_valid_index
+            meta["source_last_valid_index"] = source_last_valid_index
+            meta.update(coverage_meta)
+            if synthetic_gap_fill_count:
+                meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
+                meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
+            logging.info(
+                "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
+                "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
+                coin_idx + 1,
+                len(coins),
+                exchange,
+                coin,
+                source_first_valid_index,
+                source_last_valid_index,
+                invalid_rows,
+                synthetic_gap_fill_count,
+                time.monotonic() - coin_t0,
+            )
 
-    hlcvs.flush()
-    timestamps_mm.flush()
-    btc_mm.flush()
-    del hlcvs
-    del timestamps_mm
-    del btc_mm
+        _close_memmap(hlcvs)
+        _close_memmap(timestamps_mm)
+        _close_memmap(btc_mm)
+        hlcvs = None
+        timestamps_mm = None
+        btc_mm = None
+    except BaseException:
+        _close_memmap(hlcvs)
+        _close_memmap(timestamps_mm)
+        _close_memmap(btc_mm)
+        release_materialized_root(run_root)
+        raise
 
     meta = {
         "exchange": exchange,
