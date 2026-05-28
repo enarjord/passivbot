@@ -13,7 +13,6 @@ ENTRY_CONFIG_KEYS = [
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
     "entry_trailing_retracement_pct",
     "entry_trailing_threshold_pct",
     "entry_weight_volatility_1h",
@@ -25,10 +24,7 @@ ENTRY_CONFIG_KEYS = [
 
 
 CLOSE_CONFIG_KEYS = [
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
@@ -145,7 +141,7 @@ def entry_trailing_limit_cap(
     *,
     wallet_exposure_limit: float,
     risk_we_excess_allowance_pct: float,
-    entry_trailing_grid_ratio: float,
+    entry_trailing_retracement_pct: float,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
     allowed_limit = wallet_exposure_limit_with_allowance(
@@ -154,21 +150,9 @@ def entry_trailing_limit_cap(
     )
     if allowed_limit <= 0.0:
         return None, None
-    trailing_ratio = float(entry_trailing_grid_ratio)
-    if trailing_ratio >= 1.0 or trailing_ratio <= -1.0:
+    if float(entry_trailing_retracement_pct) > 0.0:
         return allowed_limit, "trailing_only"
-    if trailing_ratio == 0.0:
-        return None, "grid_only"
-    wallet_exposure_ratio = wallet_exposure / allowed_limit if allowed_limit > 0.0 else 0.0
-    if trailing_ratio > 0.0:
-        if wallet_exposure_ratio < trailing_ratio:
-            if wallet_exposure == 0.0:
-                return allowed_limit, "trailing_first"
-            return min(allowed_limit * trailing_ratio * 1.01, allowed_limit), "trailing_first"
-        return None, "grid_first"
-    if wallet_exposure_ratio < 1.0 + trailing_ratio:
-        return None, "grid_first"
-    return allowed_limit, "trailing_after_grid"
+    return None, "grid_only"
 
 
 def _entry_ema_reference(inputs: Mapping[str, Any]) -> float:
@@ -193,7 +177,7 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     limit_cap, mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
-        entry_trailing_grid_ratio=_float(inputs.get("entry_trailing_grid_ratio")),
+        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )
     if limit_cap is None:
@@ -215,7 +199,6 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("entry_initial_ema_dist")),
         _float(inputs.get("entry_initial_qty_pct")),
         _float(inputs.get("entry_trailing_double_down_factor")),
-        _float(inputs.get("entry_trailing_grid_ratio")),
         _float(inputs.get("entry_trailing_retracement_pct")),
         _float(inputs.get("entry_trailing_threshold_pct")),
         _float(inputs.get("entry_weight_volatility_1h")),
@@ -339,10 +322,7 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("min_qty")),
         _float(inputs.get("min_cost")),
         _float(inputs.get("c_mult")),
-        _float(inputs.get("close_grid_markup_end")),
-        _float(inputs.get("close_grid_markup_start")),
         _float(inputs.get("close_grid_qty_pct")),
-        _float(inputs.get("close_trailing_grid_ratio")),
         _float(inputs.get("close_trailing_qty_pct")),
         _float(inputs.get("close_trailing_retracement_pct")),
         _float(inputs.get("close_trailing_threshold_pct")),
@@ -456,7 +436,7 @@ def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:
     entry_cap, entry_mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
-        entry_trailing_grid_ratio=_float(inputs.get("entry_trailing_grid_ratio")),
+        entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )
     return {

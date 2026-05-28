@@ -60,7 +60,7 @@ pub struct TrailingMartingaleCloseParams {
 }
 
 impl TrailingMartingaleParams {
-    pub fn from_bot_params(bot_params: &BotParams) -> Self {
+    pub fn from_flat_strategy_params(bot_params: &BotParams) -> Self {
         Self {
             ema_span_0: bot_params.ema_span_0,
             ema_span_1: bot_params.ema_span_1,
@@ -81,7 +81,7 @@ impl TrailingMartingaleParams {
             },
             close: TrailingMartingaleCloseParams {
                 qty_pct: bot_params.close_grid_qty_pct,
-                threshold_base_pct: bot_params.close_grid_markup_start,
+                threshold_base_pct: bot_params.close_trailing_threshold_pct,
                 threshold_we_weight: 0.0,
                 threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
                 threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,

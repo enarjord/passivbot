@@ -2128,14 +2128,11 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let wallet_exposure_limit = wallet_exposure_limit_raw;
 
     Ok(BotParams {
-        close_grid_markup_end: extract_optional_f64(dict, "close_grid_markup_end")?,
-        close_grid_markup_start: extract_optional_f64(dict, "close_grid_markup_start")?,
         close_grid_qty_pct: extract_optional_f64(dict, "close_grid_qty_pct")?,
         close_trailing_retracement_pct: extract_optional_f64(
             dict,
             "close_trailing_retracement_pct",
         )?,
-        close_trailing_grid_ratio: extract_optional_f64(dict, "close_trailing_grid_ratio")?,
         close_trailing_qty_pct: extract_optional_f64(dict, "close_trailing_qty_pct")?,
         close_trailing_threshold_pct: extract_optional_f64(dict, "close_trailing_threshold_pct")?,
         close_weight_volatility_1h: extract_optional_f64(dict, "close_weight_volatility_1h")?,
@@ -2163,7 +2160,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             dict,
             "entry_trailing_retracement_pct",
         )?,
-        entry_trailing_grid_ratio: extract_optional_f64(dict, "entry_trailing_grid_ratio")?,
         entry_trailing_threshold_pct: extract_optional_f64(dict, "entry_trailing_threshold_pct")?,
         filter_volatility_ema_span_1m: extract_value_with_fallback(
             dict,
@@ -2293,35 +2289,22 @@ fn make_trailing_martingale_entry_params(
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
     entry_weight_volatility_1h: f64,
     entry_weight_volatility_1m: f64,
     entry_we_weight: f64,
 ) -> TrailingMartingaleEntryParams {
-    let use_trailing = entry_trailing_grid_ratio != 0.0;
+    let _ = (entry_trailing_double_down_factor, entry_trailing_threshold_pct);
     TrailingMartingaleEntryParams {
-        double_down_factor: if use_trailing {
-            entry_trailing_double_down_factor
-        } else {
-            entry_grid_double_down_factor
-        },
+        double_down_factor: entry_grid_double_down_factor,
         initial_ema_dist: entry_initial_ema_dist,
         initial_qty_pct: entry_initial_qty_pct,
-        threshold_base_pct: if use_trailing {
-            entry_trailing_threshold_pct
-        } else {
-            entry_grid_spacing_pct
-        },
+        threshold_base_pct: entry_grid_spacing_pct,
         threshold_we_weight: entry_we_weight,
         threshold_volatility_1h_weight: entry_weight_volatility_1h,
         threshold_volatility_1m_weight: entry_weight_volatility_1m,
-        retracement_base_pct: if use_trailing {
-            entry_trailing_retracement_pct
-        } else {
-            0.0
-        },
+        retracement_base_pct: entry_trailing_retracement_pct,
         retracement_we_weight: entry_we_weight,
         retracement_volatility_1h_weight: entry_weight_volatility_1h,
         retracement_volatility_1m_weight: entry_weight_volatility_1m,
@@ -2329,46 +2312,22 @@ fn make_trailing_martingale_entry_params(
 }
 
 fn make_trailing_martingale_close_params(
-    side: StrategySide,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
-    close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
-    grid_close_price_anchor: &str,
-) -> PyResult<TrailingMartingaleCloseParams> {
-    let _ = (
-        side,
-        close_grid_markup_end,
-        close_trailing_grid_ratio,
-        grid_close_price_anchor,
-    );
-    Ok(TrailingMartingaleCloseParams {
-        qty_pct: if close_trailing_grid_ratio != 0.0 {
-            close_trailing_qty_pct
-        } else {
-            close_grid_qty_pct
-        },
-        threshold_base_pct: if close_trailing_grid_ratio != 0.0 {
-            close_trailing_threshold_pct
-        } else {
-            close_grid_markup_start
-        },
+) -> TrailingMartingaleCloseParams {
+    TrailingMartingaleCloseParams {
+        qty_pct: close_grid_qty_pct,
+        threshold_base_pct: close_trailing_threshold_pct,
         threshold_we_weight: 0.0,
         threshold_volatility_1h_weight: close_weight_volatility_1h,
         threshold_volatility_1m_weight: close_weight_volatility_1m,
-        retracement_base_pct: if close_trailing_grid_ratio != 0.0 {
-            close_trailing_retracement_pct
-        } else {
-            0.0
-        },
+        retracement_base_pct: close_trailing_retracement_pct,
         retracement_volatility_1h_weight: close_weight_volatility_1h,
         retracement_volatility_1m_weight: close_weight_volatility_1m,
-    })
+    }
 }
 
 fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext {
@@ -2389,7 +2348,6 @@ pub fn calc_next_entry_long_py(
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
     entry_weight_volatility_1h: f64,
@@ -2437,7 +2395,6 @@ pub fn calc_next_entry_long_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -2453,7 +2410,6 @@ pub fn calc_next_entry_long_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -2494,10 +2450,7 @@ pub fn calc_next_entry_long_py(
     min_qty,
     min_cost,
     c_mult,
-    close_grid_markup_end,
-    close_grid_markup_start,
     close_grid_qty_pct,
-    close_trailing_grid_ratio,
     close_trailing_qty_pct,
     close_trailing_retracement_pct,
     close_trailing_threshold_pct,
@@ -2516,8 +2469,7 @@ pub fn calc_next_entry_long_py(
     volatility_ema_1h = 0.0,
     volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0,
-    grid_close_price_anchor = "position_price".to_string()
+    close_weight_volatility_1m = 0.0
 ))]
 pub fn calc_next_close_long_py(
     qty_step: f64,
@@ -2525,10 +2477,7 @@ pub fn calc_next_close_long_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -2548,7 +2497,6 @@ pub fn calc_next_close_long_py(
     volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
-    grid_close_price_anchor: String,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -2573,10 +2521,7 @@ pub fn calc_next_close_long_py(
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
@@ -2588,18 +2533,12 @@ pub fn calc_next_close_long_py(
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
-        StrategySide::Long,
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
-        close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        &grid_close_price_anchor,
-    )?;
+    );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,
@@ -2639,7 +2578,6 @@ pub fn calc_next_entry_short_py(
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
     entry_weight_volatility_1h: f64,
@@ -2687,7 +2625,6 @@ pub fn calc_next_entry_short_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -2703,7 +2640,6 @@ pub fn calc_next_entry_short_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -2744,10 +2680,7 @@ pub fn calc_next_entry_short_py(
     min_qty,
     min_cost,
     c_mult,
-    close_grid_markup_end,
-    close_grid_markup_start,
     close_grid_qty_pct,
-    close_trailing_grid_ratio,
     close_trailing_qty_pct,
     close_trailing_retracement_pct,
     close_trailing_threshold_pct,
@@ -2766,8 +2699,7 @@ pub fn calc_next_entry_short_py(
     volatility_ema_1h = 0.0,
     volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0,
-    grid_close_price_anchor = "position_price".to_string()
+    close_weight_volatility_1m = 0.0
 ))]
 pub fn calc_next_close_short_py(
     qty_step: f64,
@@ -2775,10 +2707,7 @@ pub fn calc_next_close_short_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -2798,7 +2727,6 @@ pub fn calc_next_close_short_py(
     volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
-    grid_close_price_anchor: String,
 ) -> PyResult<(f64, f64, String)> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -2823,10 +2751,7 @@ pub fn calc_next_close_short_py(
         ..Default::default()
     };
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
@@ -2838,18 +2763,12 @@ pub fn calc_next_close_short_py(
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
-        StrategySide::Short,
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
-        close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        &grid_close_price_anchor,
-    )?;
+    );
     let position = Position {
         size: position_size,
         price: position_price,
@@ -2889,7 +2808,6 @@ pub fn calc_entries_long_py(
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
     entry_weight_volatility_1h: f64,
@@ -2939,7 +2857,6 @@ pub fn calc_entries_long_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -2955,7 +2872,6 @@ pub fn calc_entries_long_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -3003,7 +2919,6 @@ pub fn calc_entries_short_py(
     entry_initial_ema_dist: f64,
     entry_initial_qty_pct: f64,
     entry_trailing_double_down_factor: f64,
-    entry_trailing_grid_ratio: f64,
     entry_trailing_retracement_pct: f64,
     entry_trailing_threshold_pct: f64,
     entry_weight_volatility_1h: f64,
@@ -3053,7 +2968,6 @@ pub fn calc_entries_short_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -3069,7 +2983,6 @@ pub fn calc_entries_short_py(
         entry_initial_ema_dist,
         entry_initial_qty_pct,
         entry_trailing_double_down_factor,
-        entry_trailing_grid_ratio,
         entry_trailing_retracement_pct,
         entry_trailing_threshold_pct,
         entry_weight_volatility_1h,
@@ -3130,10 +3043,7 @@ pub fn calc_min_entry_qty_py(
     min_qty,
     min_cost,
     c_mult,
-    close_grid_markup_end,
-    close_grid_markup_start,
     close_grid_qty_pct,
-    close_trailing_grid_ratio,
     close_trailing_qty_pct,
     close_trailing_retracement_pct,
     close_trailing_threshold_pct,
@@ -3152,8 +3062,7 @@ pub fn calc_min_entry_qty_py(
     volatility_ema_1h = 0.0,
     volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0,
-    grid_close_price_anchor = "position_price".to_string()
+    close_weight_volatility_1m = 0.0
 ))]
 pub fn calc_closes_long_py(
     qty_step: f64,
@@ -3161,10 +3070,7 @@ pub fn calc_closes_long_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -3184,7 +3090,6 @@ pub fn calc_closes_long_py(
     volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
-    grid_close_price_anchor: String,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -3211,10 +3116,7 @@ pub fn calc_closes_long_py(
     };
 
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
@@ -3226,18 +3128,12 @@ pub fn calc_closes_long_py(
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
-        StrategySide::Long,
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
-        close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        &grid_close_price_anchor,
-    )?;
+    );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
 
     let position = Position {
@@ -3273,10 +3169,7 @@ pub fn calc_closes_long_py(
     min_qty,
     min_cost,
     c_mult,
-    close_grid_markup_end,
-    close_grid_markup_start,
     close_grid_qty_pct,
-    close_trailing_grid_ratio,
     close_trailing_qty_pct,
     close_trailing_retracement_pct,
     close_trailing_threshold_pct,
@@ -3295,8 +3188,7 @@ pub fn calc_closes_long_py(
     volatility_ema_1h = 0.0,
     volatility_ema_1m = 0.0,
     close_weight_volatility_1h = 0.0,
-    close_weight_volatility_1m = 0.0,
-    grid_close_price_anchor = "position_price".to_string()
+    close_weight_volatility_1m = 0.0
 ))]
 pub fn calc_closes_short_py(
     qty_step: f64,
@@ -3304,10 +3196,7 @@ pub fn calc_closes_short_py(
     min_qty: f64,
     min_cost: f64,
     c_mult: f64,
-    close_grid_markup_end: f64,
-    close_grid_markup_start: f64,
     close_grid_qty_pct: f64,
-    close_trailing_grid_ratio: f64,
     close_trailing_qty_pct: f64,
     close_trailing_retracement_pct: f64,
     close_trailing_threshold_pct: f64,
@@ -3327,7 +3216,6 @@ pub fn calc_closes_short_py(
     volatility_ema_1m: f64,
     close_weight_volatility_1h: f64,
     close_weight_volatility_1m: f64,
-    grid_close_price_anchor: String,
 ) -> PyResult<Vec<(f64, f64, u16)>> {
     let exchange_params = ExchangeParams {
         qty_step,
@@ -3354,10 +3242,7 @@ pub fn calc_closes_short_py(
     };
 
     let bot_params = BotParams {
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
         close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
@@ -3369,18 +3254,12 @@ pub fn calc_closes_short_py(
         ..Default::default()
     };
     let close_params = make_trailing_martingale_close_params(
-        StrategySide::Short,
-        close_grid_markup_end,
-        close_grid_markup_start,
         close_grid_qty_pct,
-        close_trailing_grid_ratio,
-        close_trailing_qty_pct,
         close_trailing_retracement_pct,
         close_trailing_threshold_pct,
         close_weight_volatility_1h,
         close_weight_volatility_1m,
-        &grid_close_price_anchor,
-    )?;
+    );
     let runtime_context = make_runtime_order_context(wallet_exposure_limit);
     let position = Position {
         size: position_size,

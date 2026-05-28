@@ -119,6 +119,7 @@ async def test_execute_orders_parent_records_order_opened_event():
     class FakeBot:
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
+        _is_market_execution_order = staticmethod(pb_mod.Passivbot._is_market_execution_order)
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -578,20 +579,12 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "entry_initial_qty_pct"): 0.1,
                 ("long", "entry_trailing_double_down_factor"): 1.0,
                 ("short", "entry_trailing_double_down_factor"): 1.0,
-                ("long", "entry_trailing_grid_ratio"): 1.0,
-                ("short", "entry_trailing_grid_ratio"): 0.0,
                 ("long", "entry_trailing_retracement_pct"): 0.01,
                 ("short", "entry_trailing_retracement_pct"): 0.01,
                 ("long", "entry_trailing_threshold_pct"): 0.01,
                 ("short", "entry_trailing_threshold_pct"): 0.01,
-                ("long", "close_grid_markup_end"): 0.02,
-                ("short", "close_grid_markup_end"): 0.02,
-                ("long", "close_grid_markup_start"): 0.01,
-                ("short", "close_grid_markup_start"): 0.01,
                 ("long", "close_grid_qty_pct"): 1.0,
                 ("short", "close_grid_qty_pct"): 1.0,
-                ("long", "close_trailing_grid_ratio"): 1.0,
-                ("short", "close_trailing_grid_ratio"): 0.0,
                 ("long", "close_trailing_qty_pct"): 1.0,
                 ("short", "close_trailing_qty_pct"): 1.0,
                 ("long", "close_trailing_retracement_pct"): 0.01,

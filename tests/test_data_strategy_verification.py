@@ -432,23 +432,23 @@ class TestOverrideVariations:
         assert scenarios[0].overrides["bot.short.total_wallet_exposure_limit"] == 0
         assert scenarios[1].overrides["bot.long.total_wallet_exposure_limit"] == 0
 
-    def test_tc5_3_scenario_with_grid_trailing_ratio_overrides(self):
-        """TC5.3: Scenario with grid/trailing ratio overrides."""
+    def test_tc5_3_scenario_with_trailing_retracement_overrides(self):
+        """TC5.3: Scenario with v8 trailing retracement overrides."""
         cfg = make_test_config(
             exchanges=["binance"],
             scenarios=[
                 {
-                    "label": "pure_grid",
+                    "label": "passive_recursive",
                     "overrides": {
-                        "bot.long.entry_trailing_grid_ratio": 0,
-                        "bot.long.close_trailing_grid_ratio": 0,
+                        "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0,
+                        "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0,
                     },
                 },
                 {
-                    "label": "pure_trailing",
+                    "label": "trailing_enabled",
                     "overrides": {
-                        "bot.long.entry_trailing_grid_ratio": 1,
-                        "bot.long.close_trailing_grid_ratio": 1,
+                        "bot.long.strategy.trailing_martingale.entry.retracement_base_pct": 0.01,
+                        "bot.long.strategy.trailing_martingale.close.retracement_base_pct": 0.01,
                     },
                 },
             ],
@@ -458,8 +458,16 @@ class TestOverrideVariations:
 
         scenarios, _ = build_scenarios(suite_cfg, base_exchanges=["binance"])
 
-        assert scenarios[0].overrides["bot.long.entry_trailing_grid_ratio"] == 0
-        assert scenarios[1].overrides["bot.long.entry_trailing_grid_ratio"] == 1
+        assert (
+            scenarios[0]
+            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_pct"]
+            == 0
+        )
+        assert (
+            scenarios[1]
+            .overrides["bot.long.strategy.trailing_martingale.entry.retracement_base_pct"]
+            == 0.01
+        )
 
     def test_tc5_4_scenario_with_n_positions_override(self):
         """TC5.4: Scenario with n_positions override."""

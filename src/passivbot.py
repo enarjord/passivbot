@@ -10224,11 +10224,8 @@ class Passivbot:
             "unstuck_enabled",
         }
         strategy_keys = {
-            "close_grid_markup_end",
-            "close_grid_markup_start",
             "close_grid_qty_pct",
             "close_trailing_retracement_pct",
-            "close_trailing_grid_ratio",
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
             "close_weight_volatility_1h",
@@ -10244,18 +10241,14 @@ class Passivbot:
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",
             "entry_trailing_retracement_pct",
-            "entry_trailing_grid_ratio",
             "entry_trailing_threshold_pct",
             "ema_span_0",
             "ema_span_1",
         }
         # Maintain 1:1 field coverage with `passivbot-rust/src/types.rs BotParams`.
         fields = [
-            "close_grid_markup_end",
-            "close_grid_markup_start",
             "close_grid_qty_pct",
             "close_trailing_retracement_pct",
-            "close_trailing_grid_ratio",
             "close_trailing_qty_pct",
             "close_trailing_threshold_pct",
             "close_weight_volatility_1h",
@@ -10271,7 +10264,6 @@ class Passivbot:
             "entry_initial_qty_pct",
             "entry_trailing_double_down_factor",
             "entry_trailing_retracement_pct",
-            "entry_trailing_grid_ratio",
             "entry_trailing_threshold_pct",
             "forager_volatility_ema_span_1m",
             "forager_volume_ema_span_1m",

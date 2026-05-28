@@ -820,8 +820,6 @@ def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
         "entry_we_weight": "entry.threshold_we_weight",
         "entry_volatility_ema_span_1h": "volatility_ema_span_1h",
         "entry_volatility_ema_span_1m": "volatility_ema_span_1m",
-        "close_grid_markup_start": "close.threshold_base_pct",
-        "close_grid_markup_end": "close.threshold_base_pct",
         "close_grid_qty_pct": "close.qty_pct",
         "close_trailing_qty_pct": "close.qty_pct",
         "close_trailing_threshold_pct": "close.threshold_base_pct",
@@ -841,8 +839,7 @@ def _monitor_strategy_value(self, pside: str, key: str, symbol: str) -> float:
                 current = current[part]
             return float(current)
         except (KeyError, TypeError, ValueError):
-            if key in {"entry_trailing_grid_ratio", "close_trailing_grid_ratio"}:
-                return 1.0 if _monitor_strategy_value(self, pside, "entry.retracement_base_pct" if key.startswith("entry") else "close.retracement_base_pct", symbol) > 0.0 else 0.0
+            pass
     return float(self.bp(pside, key, symbol))
 
 
@@ -962,7 +959,6 @@ def _build_monitor_trailing_entry_payload(
         "entry_initial_ema_dist",
         "entry_initial_qty_pct",
         "entry_trailing_double_down_factor",
-        "entry_trailing_grid_ratio",
         "entry_trailing_retracement_pct",
         "entry_trailing_threshold_pct",
         "entry_weight_volatility_1h",
@@ -1014,10 +1010,7 @@ def _build_monitor_trailing_close_payload(
         **dict(trailing_bundle),
     }
     for key in (
-        "close_grid_markup_end",
-        "close_grid_markup_start",
         "close_grid_qty_pct",
-        "close_trailing_grid_ratio",
         "close_trailing_qty_pct",
         "close_trailing_retracement_pct",
         "close_trailing_threshold_pct",

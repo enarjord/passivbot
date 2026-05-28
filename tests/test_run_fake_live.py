@@ -297,11 +297,8 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     class _Stub:
         def __init__(self):
             self.values = {
-                "close_grid_markup_end": 0.01,
-                "close_grid_markup_start": 0.005,
                 "close_grid_qty_pct": 1.0,
                 "close_trailing_retracement_pct": 0.001,
-                "close_trailing_grid_ratio": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_threshold_pct": 0.001,
                 "close_weight_volatility_1h": 0.0,
@@ -317,7 +314,6 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "entry_initial_qty_pct": 0.1,
                 "entry_trailing_double_down_factor": 1.0,
                 "entry_trailing_retracement_pct": 0.001,
-                "entry_trailing_grid_ratio": 0.0,
                 "entry_trailing_threshold_pct": 0.001,
                 "filter_volatility_ema_span_1m": 0.0,
                 "filter_volume_ema_span_1m": 1.0,
@@ -383,11 +379,8 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
             self.config = {
                 "bot": {
                     "long": {
-                        "close_grid_markup_end": 0.01,
-                        "close_grid_markup_start": 0.005,
                         "close_grid_qty_pct": 1.0,
                         "close_trailing_retracement_pct": 0.001,
-                        "close_trailing_grid_ratio": 0.0,
                         "close_trailing_qty_pct": 0.0,
                         "close_trailing_threshold_pct": 0.001,
                         "close_weight_volatility_1h": 0.0,
@@ -403,7 +396,6 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "entry_initial_qty_pct": 0.1,
                         "entry_trailing_double_down_factor": 1.0,
                         "entry_trailing_retracement_pct": 0.001,
-                        "entry_trailing_grid_ratio": 0.0,
                         "entry_trailing_threshold_pct": 0.001,
                         "forager_volatility_ema_span_1m": 0.0,
                         "forager_volume_ema_span_1m": 1.0,

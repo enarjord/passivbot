@@ -3379,7 +3379,7 @@ mod core {
         }
 
         fn sync_trailing_martingale_strategy_params(symbol: &mut SymbolInput) {
-            let long_params = crate::strategies::TrailingMartingaleParams::from_bot_params(
+            let long_params = crate::strategies::TrailingMartingaleParams::from_flat_strategy_params(
                 &symbol.long.bot_params,
             );
             symbol.long.strategy_params = Some(long_params.to_value());
@@ -3387,7 +3387,7 @@ mod core {
                 crate::strategies::StrategyParams::TrailingMartingale(long_params),
             );
 
-            let short_params = crate::strategies::TrailingMartingaleParams::from_bot_params(
+            let short_params = crate::strategies::TrailingMartingaleParams::from_flat_strategy_params(
                 &symbol.short.bot_params,
             );
             symbol.short.strategy_params = Some(short_params.to_value());

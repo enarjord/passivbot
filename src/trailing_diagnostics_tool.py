@@ -17,7 +17,6 @@ ENTRY_CONFIG_KEYS = [
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
     "entry_trailing_retracement_pct",
     "entry_trailing_retracement_we_weight",
     "entry_trailing_retracement_volatility_weight",
@@ -29,10 +28,7 @@ ENTRY_CONFIG_KEYS = [
 ]
 
 CLOSE_CONFIG_KEYS = [
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
@@ -95,13 +91,11 @@ WIZARD_CORE_KEYS = [
     *TRAILING_EXTREMA_KEYS,
     "wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
-    "entry_trailing_grid_ratio",
     "entry_trailing_threshold_pct",
     "entry_trailing_retracement_pct",
     "entry_weight_volatility_1h",
     "entry_weight_volatility_1m",
     "entry_we_weight",
-    "close_trailing_grid_ratio",
     "close_trailing_qty_pct",
     "close_trailing_threshold_pct",
     "close_trailing_retracement_pct",
@@ -121,8 +115,6 @@ WIZARD_ADVANCED_KEYS = [
     "entry_initial_ema_dist",
     "entry_initial_qty_pct",
     "entry_trailing_double_down_factor",
-    "close_grid_markup_end",
-    "close_grid_markup_start",
     "close_grid_qty_pct",
     "risk_wel_enforcer_threshold",
 ]
@@ -599,13 +591,11 @@ def _render_side_box(title: str, payload: Optional[dict[str, Any]], width: int) 
 
 def _render_inputs_box(state: TrailingDiagnosticsState, width: int) -> list[str]:
     important = [
-        "entry_trailing_grid_ratio",
         "entry_trailing_threshold_pct",
         "entry_trailing_retracement_pct",
         "entry_weight_volatility_1h",
         "entry_weight_volatility_1m",
         "entry_we_weight",
-        "close_trailing_grid_ratio",
         "close_trailing_qty_pct",
         "close_trailing_threshold_pct",
         "close_trailing_retracement_pct",

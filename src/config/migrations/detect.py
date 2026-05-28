@@ -69,10 +69,8 @@ def build_base_config_from_flavor(config: dict, template: dict, flavor: str, ver
             except (TypeError, ValueError, ZeroDivisionError):
                 pass
             for key in (
-                "close_trailing_grid_ratio",
                 "close_trailing_retracement_pct",
                 "close_trailing_threshold_pct",
-                "entry_trailing_grid_ratio",
                 "entry_trailing_retracement_pct",
                 "entry_trailing_threshold_pct",
                 "entry_weight_volatility_1h",

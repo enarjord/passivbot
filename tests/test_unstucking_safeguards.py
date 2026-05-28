@@ -351,8 +351,7 @@ def _dummy_config():
         cfg["bot"][side]["ema_span_0"] = 1
         cfg["bot"][side]["ema_span_1"] = 1
         cfg["bot"][side]["entry_grid_spacing_pct"] = 0.01
-        cfg["bot"][side]["close_grid_markup_start"] = 0.01
-        cfg["bot"][side]["close_grid_markup_end"] = 0.01
+        cfg["bot"][side]["close_trailing_threshold_pct"] = 0.01
     cfg = format_config(cfg, live_only=True, verbose=False)
     return cfg
 
@@ -461,15 +460,11 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "entry_we_weight": 0.0,
                 "entry_initial_ema_dist": 0.0,
                 "entry_trailing_double_down_factor": 0.0,
-                "entry_trailing_grid_ratio": 0.0,
                 "entry_trailing_retracement_pct": 0.0,
                 "entry_trailing_threshold_pct": 0.0,
                 "wallet_exposure_limit": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
-                "close_grid_markup_end": 0.0,
-                "close_grid_markup_start": 0.0,
                 "close_grid_qty_pct": 0.0,
-                "close_trailing_grid_ratio": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_retracement_pct": 0.0,
                 "close_trailing_threshold_pct": 0.0,

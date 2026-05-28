@@ -889,11 +889,11 @@ fn make_runtime_budget_state(
     }
 }
 
-fn default_strategy_params_pair_from_bot_params(
+fn default_strategy_params_pair_from_flat_strategy_params(
     bot_params: &BotParamsPair,
 ) -> StrategyParamsPairValue {
-    let long = TrailingMartingaleParams::from_bot_params(&bot_params.long).to_value();
-    let short = TrailingMartingaleParams::from_bot_params(&bot_params.short).to_value();
+    let long = TrailingMartingaleParams::from_flat_strategy_params(&bot_params.long).to_value();
+    let short = TrailingMartingaleParams::from_flat_strategy_params(&bot_params.short).to_value();
     StrategyParamsPairValue { long, short }
 }
 
@@ -1696,7 +1696,7 @@ impl<'a> Backtest<'a> {
     ) -> Self {
         let strategy_params = bot_params
             .iter()
-            .map(default_strategy_params_pair_from_bot_params)
+            .map(default_strategy_params_pair_from_flat_strategy_params)
             .collect();
         Self::new_with_strategy_params(
             hlcvs,
@@ -5117,12 +5117,12 @@ mod tests {
     use ndarray::{Array1, Array3};
     use std::fs;
 
-    fn adaptive_strategy_pair_from_bot_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
+    fn adaptive_strategy_pair_from_flat_strategy_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
         StrategyParamsPair {
-            long: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_bot_params(
+            long: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_flat_strategy_params(
                 &bot_params.long,
             )),
-            short: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_bot_params(
+            short: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_flat_strategy_params(
                 &bot_params.short,
             )),
         }
@@ -8128,7 +8128,7 @@ mod tests {
         bp.short.filter_volume_ema_span_1m = 400.0;
         bp.long.filter_volatility_ema_span_1m = 500.0;
         bp.short.filter_volatility_ema_span_1m = 600.0;
-        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
+        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
 
@@ -8164,7 +8164,7 @@ mod tests {
         bp.long.ema_span_1 = 60.0; // same so span2=60 too
         bp.short.ema_span_0 = 60.0;
         bp.short.ema_span_1 = 60.0;
-        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
+        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 5);
 
@@ -8251,7 +8251,7 @@ mod tests {
         let mut bp = BotParamsPair::default();
         bp.long.entry_volatility_ema_span_1h = 24.0;
         bp.short.entry_volatility_ema_span_1h = 48.0;
-        let strategy_pair = adaptive_strategy_pair_from_bot_params(&bp);
+        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
 
         let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
         let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);
