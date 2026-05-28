@@ -473,22 +473,22 @@ def compute_live_warmup_windows(
 
     def _to_float(val) -> float:
         try:
-            return float(val)
-        except Exception:
-            return 0.0
+            out = float(val)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"invalid live warmup span value: {val!r}") from exc
+        if not math.isfinite(out):
+            raise ValueError(f"invalid live warmup span value: {val!r}")
+        return out
 
     def _get_bp(pside: str, key: str, sym: str) -> float:
         try:
             return _to_float(bp_lookup(pside, key, sym))
-        except Exception:
+        except KeyError:
             return 0.0
 
     def _get_strategy(pside: str, key: str, sym: str) -> float:
         if strategy_lookup is not None:
-            try:
-                return _to_float(strategy_lookup(pside, key, sym))
-            except Exception:
-                pass
+            return _to_float(strategy_lookup(pside, key, sym))
         if key == "entry_volatility_ema_span_1h":
             legacy_hours = _get_bp(pside, "entry_volatility_ema_span_hours", sym)
             if legacy_hours > 0.0:
@@ -497,10 +497,7 @@ def compute_live_warmup_windows(
 
     def _get_forager(pside: str, key: str, sym: str) -> float:
         if forager_lookup is not None:
-            try:
-                return _to_float(forager_lookup(pside, key, sym))
-            except Exception:
-                pass
+            return _to_float(forager_lookup(pside, key, sym))
         if key.endswith("_1m"):
             legacy_key = key[:-3]
             legacy_value = _get_bp(pside, legacy_key, sym)
@@ -3503,56 +3500,93 @@ class Passivbot:
 
     def _live_strategy_warmup_value(self, pside: str, key: str, symbol: str) -> float:
         """Return strategy-scoped indicator spans for live candle warmup."""
-        try:
-            strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
-            val = float(strategy_cfg.get(key, 0.0) or 0.0)
-            if val > 0.0:
-                return val
-        except Exception:
-            pass
-        try:
-            val = float(self.bp(pside, key, symbol) or 0.0)
-            if val > 0.0:
-                return val
-        except Exception:
-            pass
-        if key == "entry_volatility_ema_span_1h":
+        strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
+        if not callable(strategy_getter):
             try:
-                return float(
-                    self.bp(pside, "entry_volatility_ema_span_hours", symbol)
-                    or 0.0
-                )
-            except Exception:
-                pass
+                if key == "entry_volatility_ema_span_1h":
+                    raw = self.bp(pside, "entry_volatility_ema_span_hours", symbol)
+                else:
+                    raw = self.bp(pside, key, symbol)
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"strategy {pside}.{key}",
+                symbol=symbol,
+            )
+
+        strategy_cfg = strategy_getter(pside, symbol)
+        if not isinstance(strategy_cfg, dict):
+            raise TypeError(
+                f"live strategy warmup expected dict for {pside}.{key} "
+                f"{symbol or ''}; got {type(strategy_cfg).__name__}"
+            )
+
+        if key in strategy_cfg:
+            return Passivbot._positive_finite_warmup_value(
+                strategy_cfg[key],
+                context=f"strategy {pside}.{key}",
+                symbol=symbol,
+            )
+
+        if key == "entry_volatility_ema_span_1h" and "volatility_ema_span_1h" in strategy_cfg:
+            return Passivbot._positive_finite_warmup_value(
+                strategy_cfg["volatility_ema_span_1h"],
+                context=f"strategy {pside}.volatility_ema_span_1h",
+                symbol=symbol,
+            )
+        if key == "entry_volatility_ema_span_1m" and "volatility_ema_span_1m" in strategy_cfg:
+            return Passivbot._positive_finite_warmup_value(
+                strategy_cfg["volatility_ema_span_1m"],
+                context=f"strategy {pside}.volatility_ema_span_1m",
+                symbol=symbol,
+            )
+
+        # Not every active strategy has every warmup probe key. Missing keys are
+        # treated as not-required; malformed present values still fail above.
         return 0.0
 
     def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
         """Return grouped forager indicator spans for live candle warmup."""
-        try:
-            val = float(self.bot_value(pside, key) or 0.0)
-            if val > 0.0:
-                return val
-        except Exception:
-            pass
-        if key.endswith("_1m"):
+        bot_value = getattr(self, "bot_value", None)
+        if not callable(bot_value):
             try:
-                val = float(self.bot_value(pside, key[:-3]) or 0.0)
-                if val > 0.0:
-                    return val
-            except Exception:
-                pass
+                raw = self.bp(pside, key, symbol)
+                if key.endswith("_1m"):
+                    try:
+                        legacy_raw = self.bp(pside, key[:-3], symbol)
+                    except KeyError:
+                        legacy_raw = 0.0
+                    if float(raw or 0.0) <= 0.0 and float(legacy_raw or 0.0) > 0.0:
+                        raw = legacy_raw
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"forager {pside}.{key}",
+                symbol=symbol,
+            )
+        return Passivbot._positive_finite_warmup_value(
+            bot_value(pside, key),
+            context=f"forager {pside}.{key}",
+            symbol=symbol,
+        )
+
+    @staticmethod
+    def _positive_finite_warmup_value(value, *, context: str, symbol: str | None) -> float:
         try:
-            val = float(self.bp(pside, key, symbol) or 0.0)
-            if val > 0.0:
-                return val
-        except Exception:
-            pass
-        if key.endswith("_1m"):
-            try:
-                return float(self.bp(pside, key[:-3], symbol) or 0.0)
-            except Exception:
-                pass
-        return 0.0
+            val = float(value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(
+                f"invalid live warmup value for {context} "
+                f"symbol={Passivbot._log_symbol(symbol)}: {value!r}"
+            ) from exc
+        if not math.isfinite(val):
+            raise ValueError(
+                f"invalid live warmup value for {context} "
+                f"symbol={Passivbot._log_symbol(symbol)}: {value!r}"
+            )
+        return val if val > 0.0 else 0.0
 
     def maybe_log_ema_debug(
         self,
@@ -10818,7 +10852,7 @@ class Passivbot:
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
-        def _strategy_lookup(params: dict, *paths, default=0.0):
+        def _strategy_lookup(params: dict, *paths):
             for path in paths:
                 current = params
                 for part in path:
@@ -10828,93 +10862,160 @@ class Passivbot:
                     current = current[part]
                 if current is not None:
                     return current
-            return default
+            rendered = " | ".join(".".join(path) for path in paths)
+            raise KeyError(f"missing required strategy parameter path: {rendered}")
+
+        def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
+            try:
+                raw = self.bp(pside, key, symbol)
+            except KeyError:
+                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                raw,
+                context=f"legacy strategy {pside}.{key}",
+                symbol=symbol,
+            )
 
         for pside in ["long", "short"]:
             for symbol in symbols:
                 strategy_getter = getattr(self, "_strategy_params_to_rust_dict", None)
                 if callable(strategy_getter):
                     strategy_params = strategy_getter(pside, symbol)
-                    span0 = float(strategy_params.get("ema_span_0", 0.0) or 0.0)
-                    span1 = float(strategy_params.get("ema_span_1", 0.0) or 0.0)
+                    span0 = Passivbot._positive_finite_warmup_value(
+                        strategy_params["ema_span_0"],
+                        context=f"strategy {pside}.ema_span_0",
+                        symbol=symbol,
+                    )
+                    span1 = Passivbot._positive_finite_warmup_value(
+                        strategy_params["ema_span_1"],
+                        context=f"strategy {pside}.ema_span_1",
+                        symbol=symbol,
+                    )
                 else:
-                    strategy_params = {}
-                    span0 = float(self.bp(pside, "ema_span_0", symbol) or 0.0)
-                    span1 = float(self.bp(pside, "ema_span_1", symbol) or 0.0)
+                    span0 = _legacy_bp_warmup_value(pside, "ema_span_0", symbol)
+                    span1 = _legacy_bp_warmup_value(pside, "ema_span_1", symbol)
+                    m1_span = _legacy_bp_warmup_value(
+                        pside, "entry_volatility_ema_span_1m", symbol
+                    )
+                    h1_span_legacy = _legacy_bp_warmup_value(
+                        pside, "entry_volatility_ema_span_1h", symbol
+                    )
+                    if h1_span_legacy <= 0.0:
+                        h1_span_legacy = _legacy_bp_warmup_value(
+                            pside, "entry_volatility_ema_span_hours", symbol
+                        )
+                    m1_weight = _legacy_bp_warmup_value(
+                        pside, "entry_weight_volatility_1m", symbol
+                    )
+                    h1_weight = _legacy_bp_warmup_value(
+                        pside, "entry_weight_volatility_1h", symbol
+                    )
+                    close_m1_weight = _legacy_bp_warmup_value(
+                        pside, "close_weight_volatility_1m", symbol
+                    )
+                    close_h1_weight = _legacy_bp_warmup_value(
+                        pside, "close_weight_volatility_1h", symbol
+                    )
+                    strategy_params = {
+                        "ema_span_0": span0,
+                        "ema_span_1": span1,
+                        "volatility_ema_span_1m": m1_span,
+                        "volatility_ema_span_1h": h1_span_legacy,
+                        "entry": {
+                            "threshold_volatility_1m_weight": m1_weight,
+                            "threshold_volatility_1h_weight": h1_weight,
+                        },
+                        "close": {
+                            "threshold_volatility_1m_weight": close_m1_weight,
+                            "threshold_volatility_1h_weight": close_h1_weight,
+                        },
+                    }
                 span2 = float((span0 * span1) ** 0.5) if span0 > 0.0 and span1 > 0.0 else 0.0
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                m1_lr_span = float(
+                m1_lr_span = Passivbot._positive_finite_warmup_value(
                     _strategy_lookup(
                         strategy_params,
                         ("volatility_ema_span_1m",),
                         ("entry_volatility_ema_span_1m",),
                         ("offset_volatility_ema_span_1m",),
+                    ),
+                    context=f"strategy {pside}.volatility_ema_span_1m",
+                    symbol=symbol,
+                )
+                m1_lr_weight = 0.0
+                if m1_lr_span > 0.0:
+                    m1_lr_weight = max(
+                        abs(
+                            Passivbot._positive_finite_warmup_value(
+                                _strategy_lookup(
+                                    strategy_params,
+                                    ("entry", "threshold_volatility_1m_weight"),
+                                    ("entry", "retracement_volatility_1m_weight"),
+                                    ("entry_weight_volatility_1m",),
+                                    ("offset_volatility_1m_weight",),
+                                ),
+                                context=f"strategy {pside}.entry_volatility_1m_weight",
+                                symbol=symbol,
+                            )
+                        ),
+                        abs(
+                            Passivbot._positive_finite_warmup_value(
+                                _strategy_lookup(
+                                    strategy_params,
+                                    ("close", "threshold_volatility_1m_weight"),
+                                    ("close", "retracement_volatility_1m_weight"),
+                                    ("close_weight_volatility_1m",),
+                                    ("offset_volatility_1m_weight",),
+                                ),
+                                context=f"strategy {pside}.close_volatility_1m_weight",
+                                symbol=symbol,
+                            )
+                        ),
                     )
-                    or 0.0
-                )
-                m1_lr_weight = max(
-                    abs(
-                        float(
-                            _strategy_lookup(
-                                strategy_params,
-                                ("entry", "threshold_volatility_1m_weight"),
-                                ("entry", "retracement_volatility_1m_weight"),
-                                ("entry_weight_volatility_1m",),
-                            )
-                            or 0.0
-                        )
-                    ),
-                    abs(
-                        float(
-                            _strategy_lookup(
-                                strategy_params,
-                                ("close", "threshold_volatility_1m_weight"),
-                                ("close", "retracement_volatility_1m_weight"),
-                                ("close_weight_volatility_1m",),
-                            )
-                            or 0.0
-                        )
-                    ),
-                    abs(float(strategy_params.get("offset_volatility_1m_weight", 0.0) or 0.0)),
-                )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
-                h1_span = float(
+                h1_span = Passivbot._positive_finite_warmup_value(
                     _strategy_lookup(
                         strategy_params,
                         ("volatility_ema_span_1h",),
                         ("offset_volatility_ema_span_1h",),
                         ("entry_volatility_ema_span_1h",),
+                    ),
+                    context=f"strategy {pside}.volatility_ema_span_1h",
+                    symbol=symbol,
+                )
+                h1_lr_weight = 0.0
+                if h1_span > 0.0:
+                    h1_lr_weight = max(
+                        abs(
+                            Passivbot._positive_finite_warmup_value(
+                                _strategy_lookup(
+                                    strategy_params,
+                                    ("entry", "threshold_volatility_1h_weight"),
+                                    ("entry", "retracement_volatility_1h_weight"),
+                                    ("entry_weight_volatility_1h",),
+                                    ("offset_volatility_1h_weight",),
+                                ),
+                                context=f"strategy {pside}.entry_volatility_1h_weight",
+                                symbol=symbol,
+                            )
+                        ),
+                        abs(
+                            Passivbot._positive_finite_warmup_value(
+                                _strategy_lookup(
+                                    strategy_params,
+                                    ("close", "threshold_volatility_1h_weight"),
+                                    ("close", "retracement_volatility_1h_weight"),
+                                    ("close_weight_volatility_1h",),
+                                    ("offset_volatility_1h_weight",),
+                                ),
+                                context=f"strategy {pside}.close_volatility_1h_weight",
+                                symbol=symbol,
+                            )
+                        ),
                     )
-                    or 0.0
-                )
-                h1_lr_weight = max(
-                    abs(
-                        float(
-                            _strategy_lookup(
-                                strategy_params,
-                                ("entry", "threshold_volatility_1h_weight"),
-                                ("entry", "retracement_volatility_1h_weight"),
-                                ("entry_weight_volatility_1h",),
-                            )
-                            or 0.0
-                        )
-                    ),
-                    abs(
-                        float(
-                            _strategy_lookup(
-                                strategy_params,
-                                ("close", "threshold_volatility_1h_weight"),
-                                ("close", "retracement_volatility_1h_weight"),
-                                ("close_weight_volatility_1h",),
-                            )
-                            or 0.0
-                        )
-                    ),
-                    abs(float(strategy_params.get("offset_volatility_1h_weight", 0.0) or 0.0)),
-                )
                 if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
                     need_h1_lr_spans[symbol].add(h1_span)
 
@@ -10954,41 +11055,45 @@ class Passivbot:
         )
 
         def _forager_score_weight(pside: str, key: str) -> float:
-            try:
-                weights = self.bot_value(pside, "forager_score_weights")
-                if isinstance(weights, dict):
-                    return float(weights.get(key, 0.0) or 0.0)
-            except Exception:
-                pass
-            return 0.0
+            weights = self.bot_value(pside, "forager_score_weights")
+            if not isinstance(weights, dict):
+                raise TypeError(
+                    f"bot.{pside}.forager_score_weights must be a dict; "
+                    f"got {type(weights).__name__}"
+                )
+            if key not in weights:
+                raise KeyError(f"missing bot.{pside}.forager_score_weights.{key}")
+            return Passivbot._positive_finite_warmup_value(
+                weights[key],
+                context=f"forager {pside}.score_weights.{key}",
+                symbol="",
+            )
 
         def _forager_volume_drop_pct(pside: str) -> float:
-            try:
-                return float(self.bot_value(pside, "forager_volume_drop_pct") or 0.0)
-            except Exception:
-                return 0.0
+            return Passivbot._positive_finite_warmup_value(
+                self.bot_value(pside, "forager_volume_drop_pct"),
+                context=f"forager {pside}.volume_drop_pct",
+                symbol="",
+            )
 
         required_forager_volume_spans: set[float] = set()
         required_forager_m1_lr_spans: set[float] = set()
-        try:
-            if bool(is_forager_mode("long")):
-                if vol_span_long > 0.0 and (
-                    _forager_volume_drop_pct("long") > 0.0
-                    or _forager_score_weight("long", "volume") != 0.0
-                ):
-                    required_forager_volume_spans.add(vol_span_long)
-                if lr_span_long > 0.0 and _forager_score_weight("long", "volatility") != 0.0:
-                    required_forager_m1_lr_spans.add(lr_span_long)
-            if bool(is_forager_mode("short")):
-                if vol_span_short > 0.0 and (
-                    _forager_volume_drop_pct("short") > 0.0
-                    or _forager_score_weight("short", "volume") != 0.0
-                ):
-                    required_forager_volume_spans.add(vol_span_short)
-                if lr_span_short > 0.0 and _forager_score_weight("short", "volatility") != 0.0:
-                    required_forager_m1_lr_spans.add(lr_span_short)
-        except Exception:
-            pass
+        if bool(is_forager_mode("long")):
+            if vol_span_long > 0.0 and (
+                _forager_volume_drop_pct("long") > 0.0
+                or _forager_score_weight("long", "volume") != 0.0
+            ):
+                required_forager_volume_spans.add(vol_span_long)
+            if lr_span_long > 0.0 and _forager_score_weight("long", "volatility") != 0.0:
+                required_forager_m1_lr_spans.add(lr_span_long)
+        if bool(is_forager_mode("short")):
+            if vol_span_short > 0.0 and (
+                _forager_volume_drop_pct("short") > 0.0
+                or _forager_score_weight("short", "volume") != 0.0
+            ):
+                required_forager_volume_spans.add(vol_span_short)
+            if lr_span_short > 0.0 and _forager_score_weight("short", "volatility") != 0.0:
+                required_forager_m1_lr_spans.add(lr_span_short)
         if not hasattr(self, "_orchestrator_prev_close_ema"):
             self._orchestrator_prev_close_ema = {}
         if not hasattr(self, "_orchestrator_close_ema_fallback_counts"):

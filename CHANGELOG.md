@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
+  strategy parameters end-to-end, with no production fallback bridge from removed v7
+  `trailing_grid` fields.
+- Fixed live v8 EMA warmup sizing to fail loudly on malformed strategy/forager span values
+  instead of silently shrinking the warmup window and risking missing orchestrator EMA inputs.
+- Hardened `trailing_martingale` close recursion against non-finite close prices before
+  sorting recursive close ladders.
+
 ## v7.12.0 - 2026-05-27
 
 - Changed backtest/optimizer HLCV preparation to treat normal market availability limits as coverage metadata: late coin starts and unavailable tails are logged and persisted in artifacts instead of aborting the whole run; large internal gaps are repaired or excluded from the tradable window so synthetic spans do not become tradable. Corruption, malformed candles, missing BTC benchmark data, and no tradable candles still fail loudly.

@@ -3315,6 +3315,40 @@ mod core {
         use crate::orchestrator::EntryPeekHints;
         use std::collections::HashSet;
 
+        fn tm_params_for_test(
+            bot_params: &BotParams,
+        ) -> crate::strategies::TrailingMartingaleParams {
+            crate::strategies::TrailingMartingaleParams {
+                ema_span_0: bot_params.ema_span_0,
+                ema_span_1: bot_params.ema_span_1,
+                volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
+                volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+                entry: crate::strategies::TrailingMartingaleEntryParams {
+                    double_down_factor: bot_params.entry_grid_double_down_factor,
+                    initial_ema_dist: bot_params.entry_initial_ema_dist,
+                    initial_qty_pct: bot_params.entry_initial_qty_pct,
+                    threshold_base_pct: bot_params.entry_grid_spacing_pct,
+                    threshold_we_weight: bot_params.entry_we_weight,
+                    threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                    threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                    retracement_base_pct: bot_params.entry_trailing_retracement_pct,
+                    retracement_we_weight: bot_params.entry_we_weight,
+                    retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                    retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                },
+                close: crate::strategies::TrailingMartingaleCloseParams {
+                    qty_pct: bot_params.close_grid_qty_pct,
+                    threshold_base_pct: bot_params.close_trailing_threshold_pct,
+                    threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                    threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                    retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                    retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                    ..Default::default()
+                },
+            }
+        }
+
         fn make_basic_symbol(idx: usize) -> SymbolInput {
             let mut emas = EmaBundle::default();
             emas.m1.close.push((10.0_f64, 100.0));
@@ -3379,17 +3413,13 @@ mod core {
         }
 
         fn sync_trailing_martingale_strategy_params(symbol: &mut SymbolInput) {
-            let long_params = crate::strategies::TrailingMartingaleParams::from_flat_strategy_params(
-                &symbol.long.bot_params,
-            );
+            let long_params = tm_params_for_test(&symbol.long.bot_params);
             symbol.long.strategy_params = Some(long_params.to_value());
             symbol.long.parsed_strategy_params = Some(
                 crate::strategies::StrategyParams::TrailingMartingale(long_params),
             );
 
-            let short_params = crate::strategies::TrailingMartingaleParams::from_flat_strategy_params(
-                &symbol.short.bot_params,
-            );
+            let short_params = tm_params_for_test(&symbol.short.bot_params);
             symbol.short.strategy_params = Some(short_params.to_value());
             symbol.short.parsed_strategy_params = Some(
                 crate::strategies::StrategyParams::TrailingMartingale(short_params),

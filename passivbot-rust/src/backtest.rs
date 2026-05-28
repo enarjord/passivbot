@@ -11,7 +11,6 @@ use crate::strategies::{
     parse_strategy_params, strategy_ema_spans, strategy_entry_volatility_span_hours,
     strategy_has_trailing, strategy_initial_qty_pct, strategy_needs_log_range_1h,
     strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, StrategyParams,
-    TrailingMartingaleParams,
 };
 use crate::trailing::{reset_trailing_bundle, update_trailing_bundle_with_candle};
 use crate::types::{
@@ -889,14 +888,6 @@ fn make_runtime_budget_state(
     }
 }
 
-fn default_strategy_params_pair_from_flat_strategy_params(
-    bot_params: &BotParamsPair,
-) -> StrategyParamsPairValue {
-    let long = TrailingMartingaleParams::from_flat_strategy_params(&bot_params.long).to_value();
-    let short = TrailingMartingaleParams::from_flat_strategy_params(&bot_params.short).to_value();
-    StrategyParamsPairValue { long, short }
-}
-
 fn parse_strategy_params_pair(
     strategy_kind: crate::strategies::StrategyKind,
     raw: &StrategyParamsPairValue,
@@ -916,6 +907,50 @@ fn parse_strategy_params_pair(
             &bot_params.short,
         )?,
     })
+}
+
+#[cfg(test)]
+fn test_trailing_martingale_params_value_from_flat(bot_params: &BotParams) -> serde_json::Value {
+    crate::strategies::TrailingMartingaleParams {
+        ema_span_0: bot_params.ema_span_0,
+        ema_span_1: bot_params.ema_span_1,
+        volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
+        volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+        entry: crate::strategies::TrailingMartingaleEntryParams {
+            double_down_factor: bot_params.entry_grid_double_down_factor,
+            initial_ema_dist: bot_params.entry_initial_ema_dist,
+            initial_qty_pct: bot_params.entry_initial_qty_pct,
+            threshold_base_pct: bot_params.entry_grid_spacing_pct,
+            threshold_we_weight: bot_params.entry_we_weight,
+            threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+            threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+            retracement_base_pct: bot_params.entry_trailing_retracement_pct,
+            retracement_we_weight: bot_params.entry_we_weight,
+            retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+            retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+        },
+        close: crate::strategies::TrailingMartingaleCloseParams {
+            qty_pct: bot_params.close_grid_qty_pct,
+            threshold_base_pct: bot_params.close_trailing_threshold_pct,
+            threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+            threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+            retracement_base_pct: bot_params.close_trailing_retracement_pct,
+            retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+            retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+            ..Default::default()
+        },
+    }
+    .to_value()
+}
+
+#[cfg(test)]
+fn test_strategy_params_pair_value_from_flat(
+    bot_params: &BotParamsPair,
+) -> StrategyParamsPairValue {
+    StrategyParamsPairValue {
+        long: test_trailing_martingale_params_value_from_flat(&bot_params.long),
+        short: test_trailing_martingale_params_value_from_flat(&bot_params.short),
+    }
 }
 
 impl<'a> Backtest<'a> {
@@ -1686,7 +1721,7 @@ impl<'a> Backtest<'a> {
         self.hlcvs[[row, col, feature]]
     }
 
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub fn new(
         hlcvs: ArrayView3<'a, f64>,
         btc_usd_prices: ArrayView1<'a, f64>,
@@ -1696,7 +1731,7 @@ impl<'a> Backtest<'a> {
     ) -> Self {
         let strategy_params = bot_params
             .iter()
-            .map(default_strategy_params_pair_from_flat_strategy_params)
+            .map(test_strategy_params_pair_value_from_flat)
             .collect();
         Self::new_with_strategy_params(
             hlcvs,
@@ -5113,18 +5148,49 @@ fn calc_ema_alphas(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strategies::{
+        TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
+    };
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
     use std::fs;
 
-    fn adaptive_strategy_pair_from_flat_strategy_params(bot_params: &BotParamsPair) -> StrategyParamsPair {
+    fn tm_params_for_ema_tests(bot_params: &BotParams) -> TrailingMartingaleParams {
+        TrailingMartingaleParams {
+            ema_span_0: bot_params.ema_span_0,
+            ema_span_1: bot_params.ema_span_1,
+            volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
+            volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
+            entry: TrailingMartingaleEntryParams {
+                double_down_factor: bot_params.entry_grid_double_down_factor,
+                initial_ema_dist: bot_params.entry_initial_ema_dist,
+                initial_qty_pct: bot_params.entry_initial_qty_pct,
+                threshold_base_pct: bot_params.entry_grid_spacing_pct,
+                threshold_we_weight: bot_params.entry_we_weight,
+                threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+                retracement_base_pct: bot_params.entry_trailing_retracement_pct,
+                retracement_we_weight: bot_params.entry_we_weight,
+                retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
+                retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
+            },
+            close: TrailingMartingaleCloseParams {
+                qty_pct: bot_params.close_grid_qty_pct,
+                threshold_base_pct: bot_params.close_trailing_threshold_pct,
+                threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                retracement_base_pct: bot_params.close_trailing_retracement_pct,
+                retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
+                retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
+                ..Default::default()
+            },
+        }
+    }
+
+    fn strategy_pair_for_ema_tests(bot_params: &BotParamsPair) -> StrategyParamsPair {
         StrategyParamsPair {
-            long: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_flat_strategy_params(
-                &bot_params.long,
-            )),
-            short: StrategyParams::TrailingMartingale(TrailingMartingaleParams::from_flat_strategy_params(
-                &bot_params.short,
-            )),
+            long: StrategyParams::TrailingMartingale(tm_params_for_ema_tests(&bot_params.long)),
+            short: StrategyParams::TrailingMartingale(tm_params_for_ema_tests(&bot_params.short)),
         }
     }
 
@@ -8128,7 +8194,7 @@ mod tests {
         bp.short.filter_volume_ema_span_1m = 400.0;
         bp.long.filter_volatility_ema_span_1m = 500.0;
         bp.short.filter_volatility_ema_span_1m = 600.0;
-        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
+        let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 1);
 
@@ -8164,7 +8230,7 @@ mod tests {
         bp.long.ema_span_1 = 60.0; // same so span2=60 too
         bp.short.ema_span_0 = 60.0;
         bp.short.ema_span_1 = 60.0;
-        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
+        let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas = calc_ema_alphas(&bp, &strategy_pair, 5);
 
@@ -8251,7 +8317,7 @@ mod tests {
         let mut bp = BotParamsPair::default();
         bp.long.entry_volatility_ema_span_1h = 24.0;
         bp.short.entry_volatility_ema_span_1h = 48.0;
-        let strategy_pair = adaptive_strategy_pair_from_flat_strategy_params(&bp);
+        let strategy_pair = strategy_pair_for_ema_tests(&bp);
 
         let alphas_1 = calc_ema_alphas(&bp, &strategy_pair, 1);
         let alphas_5 = calc_ema_alphas(&bp, &strategy_pair, 5);

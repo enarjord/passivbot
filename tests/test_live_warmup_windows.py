@@ -3,6 +3,8 @@
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from passivbot import compute_live_warmup_windows
@@ -94,3 +96,51 @@ def test_compute_live_warmup_windows_uses_v8_strategy_and_forager_groups():
     assert wins["HYPE"] == 988
     assert h1["HYPE"] == 2321
     assert skip["HYPE"] is True
+
+
+def test_compute_live_warmup_windows_raises_on_malformed_strategy_span():
+    symbols_by_side = {"long": {"BTC"}}
+
+    def bp(pside, key, sym):
+        return 0.0
+
+    def strategy(pside, key, sym):
+        if key == "ema_span_0":
+            return "not-a-number"
+        return 10.0
+
+    with pytest.raises(ValueError, match="invalid live warmup span value"):
+        compute_live_warmup_windows(
+            symbols_by_side,
+            bp,
+            strategy_lookup=strategy,
+        )
+
+
+def test_live_strategy_warmup_value_raises_on_malformed_present_span():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {
+                "ema_span_0": "bad",
+                "ema_span_1": 20.0,
+            }
+
+    with pytest.raises(ValueError, match="invalid live warmup value"):
+        pb_mod.Passivbot._live_strategy_warmup_value(
+            FakeBot(), "long", "ema_span_0", "BTC/USDT:USDT"
+        )
+
+
+def test_live_forager_warmup_value_raises_on_malformed_span():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        def bot_value(self, pside, key):
+            return "bad"
+
+    with pytest.raises(ValueError, match="invalid live warmup value"):
+        pb_mod.Passivbot._live_forager_warmup_value(
+            FakeBot(), "long", "forager_volume_ema_span_1m", ""
+        )

@@ -60,38 +60,6 @@ pub struct TrailingMartingaleCloseParams {
 }
 
 impl TrailingMartingaleParams {
-    pub fn from_flat_strategy_params(bot_params: &BotParams) -> Self {
-        Self {
-            ema_span_0: bot_params.ema_span_0,
-            ema_span_1: bot_params.ema_span_1,
-            volatility_ema_span_1h: bot_params.entry_volatility_ema_span_1h,
-            volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
-            entry: TrailingMartingaleEntryParams {
-                double_down_factor: bot_params.entry_grid_double_down_factor,
-                initial_ema_dist: bot_params.entry_initial_ema_dist,
-                initial_qty_pct: bot_params.entry_initial_qty_pct,
-                threshold_base_pct: bot_params.entry_grid_spacing_pct,
-                threshold_we_weight: bot_params.entry_we_weight,
-                threshold_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                threshold_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
-                retracement_base_pct: bot_params.entry_trailing_retracement_pct,
-                retracement_we_weight: bot_params.entry_we_weight,
-                retracement_volatility_1h_weight: bot_params.entry_weight_volatility_1h,
-                retracement_volatility_1m_weight: bot_params.entry_weight_volatility_1m,
-            },
-            close: TrailingMartingaleCloseParams {
-                qty_pct: bot_params.close_grid_qty_pct,
-                threshold_base_pct: bot_params.close_trailing_threshold_pct,
-                threshold_we_weight: 0.0,
-                threshold_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                threshold_volatility_1m_weight: bot_params.close_weight_volatility_1m,
-                retracement_base_pct: bot_params.close_trailing_retracement_pct,
-                retracement_volatility_1h_weight: bot_params.close_weight_volatility_1h,
-                retracement_volatility_1m_weight: bot_params.close_weight_volatility_1m,
-            },
-        }
-    }
-
     pub fn entry_params(&self) -> TrailingMartingaleEntryParams {
         self.entry
     }
@@ -100,6 +68,7 @@ impl TrailingMartingaleParams {
         self.close
     }
 
+    #[cfg(test)]
     pub fn to_value(&self) -> Value {
         serde_json::to_value(self).expect("trailing_martingale params serialize")
     }

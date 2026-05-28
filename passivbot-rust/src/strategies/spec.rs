@@ -317,7 +317,10 @@ fn build_strategy_spec(
             } else {
                 (seed.short_default, seed.short_bounds)
             };
-            defaults.get_mut(side).unwrap().insert(seed.name, default);
+            defaults
+                .get_mut(side)
+                .expect("strategy defaults initialized for side")
+                .insert(seed.name, default);
             let optimize_key = format!("{side}_{}", seed.name);
             optimize_bounds.insert(optimize_key.clone(), bounds.to_vec());
             parameters.push(StrategyParameterSpec {
@@ -359,7 +362,10 @@ fn build_nested_strategy_spec(
             } else {
                 (seed.short_default, seed.short_bounds)
             };
-            defaults.get_mut(side).unwrap().insert(seed.name, default);
+            defaults
+                .get_mut(side)
+                .expect("strategy defaults initialized for side")
+                .insert(seed.name, default);
             let optimize_key = format!("{side}_{}", seed.name);
             optimize_bounds.insert(optimize_key.clone(), bounds.to_vec());
             let mut config_path = vec!["strategy", side];

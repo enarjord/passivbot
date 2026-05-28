@@ -10,6 +10,22 @@ use crate::utils::{
     RoundingMode,
 };
 
+fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
+    for order in closes.iter() {
+        assert!(
+            order.price.is_finite(),
+            "{context}: non-finite close price {} for order_type {:?}",
+            order.price,
+            order.order_type
+        );
+    }
+    if descending {
+        closes.sort_by(|a, b| b.price.total_cmp(&a.price));
+    } else {
+        closes.sort_by(|a, b| a.price.total_cmp(&b.price));
+    }
+}
+
 pub fn calc_close_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
@@ -1054,6 +1070,17 @@ mod tests {
         assert_eq!(closes[0].price, 100.3);
         assert_eq!(closes[0].qty, -10.0);
     }
+
+    #[test]
+    #[should_panic(expected = "calc_closes_long: non-finite close price")]
+    fn test_sort_closes_by_price_rejects_non_finite_price() {
+        let mut closes = vec![Order {
+            qty: -1.0,
+            price: f64::NAN,
+            order_type: OrderType::CloseGridLong,
+        }];
+        sort_closes_by_price(&mut closes, false, "calc_closes_long");
+    }
 }
 
 pub fn calc_closes_long(
@@ -1105,7 +1132,10 @@ pub fn calc_closes_long(
                 let previous_close = closes.pop();
                 let merged_close = Order {
                     qty: round_(
-                        previous_close.unwrap().qty + close.qty,
+                        previous_close
+                            .expect("calc_closes_long merge requires existing close")
+                            .qty
+                            + close.qty,
                         exchange_params.qty_step,
                     ),
                     price: close.price,
@@ -1130,7 +1160,7 @@ pub fn calc_closes_long(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| a.price.partial_cmp(&b.price).unwrap());
+    sort_closes_by_price(&mut closes, false, "calc_closes_long");
     closes
 }
 
@@ -1183,7 +1213,10 @@ pub fn calc_closes_short(
                 let previous_close = closes.pop();
                 let merged_close = Order {
                     qty: round_(
-                        previous_close.unwrap().qty + close.qty,
+                        previous_close
+                            .expect("calc_closes_short merge requires existing close")
+                            .qty
+                            + close.qty,
                         exchange_params.qty_step,
                     ),
                     price: close.price,
@@ -1208,6 +1241,6 @@ pub fn calc_closes_short(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| b.price.partial_cmp(&a.price).unwrap());
+    sort_closes_by_price(&mut closes, true, "calc_closes_short");
     closes
 }

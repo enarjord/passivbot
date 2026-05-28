@@ -2295,7 +2295,10 @@ fn make_trailing_martingale_entry_params(
     entry_weight_volatility_1m: f64,
     entry_we_weight: f64,
 ) -> TrailingMartingaleEntryParams {
-    let _ = (entry_trailing_double_down_factor, entry_trailing_threshold_pct);
+    let _ = (
+        entry_trailing_double_down_factor,
+        entry_trailing_threshold_pct,
+    );
     TrailingMartingaleEntryParams {
         double_down_factor: entry_grid_double_down_factor,
         initial_ema_dist: entry_initial_ema_dist,
