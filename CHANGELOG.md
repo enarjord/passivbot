@@ -13,6 +13,9 @@ All notable user-facing changes will be documented in this file.
   instead of silently shrinking the warmup window and risking missing orchestrator EMA inputs.
 - Hardened `trailing_martingale` close recursion against non-finite close prices before
   sorting recursive close ladders.
+- Updated the canonical v8 schema defaults and mirrored example config to the new
+  `trailing_martingale` long-only `n_positions = 4` profile at
+  `configs/examples/default_trailing_martingale_long_npos4.json`.
 
 ## v7.12.0 - 2026-05-27
 

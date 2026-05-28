@@ -3,7 +3,7 @@
 Passivbot configurations can be optimized using a multi-objective evolutionary algorithm to balance performance metrics while meeting constraints.
 
 The canonical defaults live in `src/config/schema.py`. The example config
-`configs/examples/default_trailing_grid_long_npos7.json` mirrors those defaults exactly. For the
+`configs/examples/default_trailing_martingale_long_npos4.json` mirrors those defaults exactly. For the
 recommended config workflow, see [Config Workflow](config_workflow.md).
 
 Optimization requires the full install profile:
@@ -28,7 +28,7 @@ single-scenario by default unless you explicitly enable suite mode.
 
 Example:
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos7.json --start configs/starting_pool/
+passivbot optimize configs/examples/default_trailing_martingale_long_npos4.json --start configs/starting_pool/
 ```
 
 Most config parameters can be modified via CLI. `passivbot optimize -h` for more info.
@@ -269,7 +269,7 @@ such as `we_excess_allowance_pct` matches every bound whose config path ends wit
 parameter name.
 
 ```bash
-passivbot optimize configs/examples/default_trailing_grid_long_npos7.json \
+passivbot optimize configs/examples/default_trailing_martingale_long_npos4.json \
   --fine_tune_params long.risk,long.forager,long.unstuck
 ```
 

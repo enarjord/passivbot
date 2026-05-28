@@ -79,7 +79,7 @@ def test_backtest_with_candle_interval():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long_npos4.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -171,7 +171,7 @@ def test_backtest_allows_hsl_ema_span_below_candle_interval():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long_npos4.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}
@@ -330,7 +330,7 @@ def test_backtest_rejects_invalid_liquidation_threshold():
 
     root = Path(__file__).resolve().parents[1]
     config = load_config(
-        str(root / "configs" / "examples" / "default_trailing_grid_long_npos7.json"), verbose=False
+        str(root / "configs" / "examples" / "default_trailing_martingale_long_npos4.json"), verbose=False
     )
     config["backtest"]["exchanges"] = ["binance"]
     config["backtest"]["coins"] = {"binance": ["BTC"]}

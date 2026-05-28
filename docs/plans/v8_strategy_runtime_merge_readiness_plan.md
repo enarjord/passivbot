@@ -234,7 +234,7 @@ Strategy example smoke:
 Optional short review smoke if runtime/order logic changed during the pass:
 
 ```bash
-./venv/bin/passivbot backtest configs/examples/default_trailing_grid_long_npos7.json -sd 2025-01-01 -ed 2025-01-08
+./venv/bin/passivbot backtest configs/examples/default_trailing_martingale_long_npos4.json -sd 2025-01-01 -ed 2025-01-08
 ```
 
 Acceptance:

@@ -62,7 +62,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
-    loaded = load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
 
     assert loaded["live"]["strategy_kind"] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
@@ -412,7 +412,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     formatted = format_config(sparse, verbose=False)
     assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
-    loaded = load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
 
 
@@ -726,7 +726,7 @@ def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
 
 def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
     with caplog.at_level(logging.INFO):
-        load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=True)
+        load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=True)
 
     messages = [rec.message for rec in caplog.records]
     assert not any("Removed unused key" in msg for msg in messages)
@@ -949,7 +949,7 @@ def test_update_config_with_args_ignores_non_config_parser_args():
 
 def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_grid_long_npos7.json", log_info=False
+        "configs/examples/default_trailing_martingale_long_npos4.json", log_info=False
     )
     source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
         "threshold_we_weight", None
@@ -993,7 +993,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
 
 def test_prepare_config_preserves_sparse_leaf_cli_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_grid_long_npos7.json", log_info=False
+        "configs/examples/default_trailing_martingale_long_npos4.json", log_info=False
     )
     args = SimpleNamespace()
     vars(args)["bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"] = 3.5

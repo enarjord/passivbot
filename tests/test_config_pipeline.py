@@ -736,14 +736,14 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(1690)
-    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(60.0)
-    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(2.4)
-    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(0.0)
-    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(0.135)
-    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(1.0)
-    assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.37)
-    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(0.994)
+    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(1787)
+    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(44.0)
+    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(1.5)
+    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(4.66)
+    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(3.578)
+    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(0.985)
+    assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.1)
+    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(0.99)
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():

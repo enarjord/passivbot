@@ -973,7 +973,7 @@ class TestIndividualToConfig:
 
     def test_lossless_close_trailing_override_supports_trailing_martingale_shape(self):
         config = load_prepared_config(
-            "configs/examples/default_trailing_grid_long_npos7.json",
+            "configs/examples/default_trailing_martingale_long_npos4.json",
             verbose=False,
         )
         long_strategy = config["bot"]["long"]["strategy"]["trailing_martingale"]
@@ -1894,7 +1894,7 @@ class TestConfigsToIndividuals:
 
     def test_extract_configs_suppresses_entry_grid_inflation_warning_for_starting_seeds(self, caplog):
         with caplog.at_level(logging.WARNING):
-            result = extract_configs("configs/examples/default_trailing_grid_long_npos7.json")
+            result = extract_configs("configs/examples/default_trailing_martingale_long_npos4.json")
 
         assert len(result) == 1
         assert not any(
@@ -2855,7 +2855,7 @@ def _remove_nested_path(mapping, path):
 
 
 def test_config_to_individual_accepts_precomputed_optimization_shape():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
     shape = build_optimization_shape(config)
 
     result = config_to_individual(config, shape.bounds, optimization_shape=shape)
@@ -2864,7 +2864,7 @@ def test_config_to_individual_accepts_precomputed_optimization_shape():
 
 
 def test_old_starting_seed_inherits_current_template_shape_and_defaults():
-    config = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    config = load_prepared_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
     shape = build_optimization_shape(config)
     stale_seed = deepcopy(config)
 
@@ -2884,7 +2884,7 @@ def test_old_starting_seed_inherits_current_template_shape_and_defaults():
 
 
 def test_build_pymoo_record_entry_strips_metadata():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
     template["_config_path"] = "artifact.json"
     bounds = extract_bounds_tuple_list_from_config(template)
     vector = config_to_individual(template, bounds, sig_digits=6)
@@ -2903,7 +2903,7 @@ def test_build_pymoo_record_entry_strips_metadata():
 
 
 def test_result_recorder_preserves_unquantized_saved_param_values():
-    template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
+    template = load_prepared_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)
     entry = deepcopy(template)
 

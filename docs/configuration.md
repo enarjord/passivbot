@@ -3,7 +3,7 @@
 This document explains the canonical config schema used by Passivbot.
 
 - The source of truth for defaults is `src/config/schema.py`.
-- The example config `configs/examples/default_trailing_grid_long_npos7.json` mirrors those hardcoded defaults exactly.
+- The example config `configs/examples/default_trailing_martingale_long_npos4.json` mirrors those hardcoded defaults exactly.
 - If you omit `config_path`, Passivbot loads those in-code defaults.
 
 For the recommended user workflow, examples, and best practices, see [Config Workflow](config_workflow.md).
