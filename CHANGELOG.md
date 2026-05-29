@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
+- Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
+  `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
+  strict local v2 materialization is unavailable.
 
 ## v7.12.0 - 2026-05-27
 
