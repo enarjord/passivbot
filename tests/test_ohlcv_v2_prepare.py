@@ -2091,6 +2091,297 @@ async def test_prepare_hlcvs_mss_strict_rejects_outer_v2_none(monkeypatch, tmp_p
 
 
 @pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    source_dir = tmp_path / "ohlcv_source"
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "ohlcv_source_dir": str(source_dir),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+    prepared = (
+        {
+            "xyz:AAPL": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "hyperliquid"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64),
+        np.array([50_000.0], dtype=np.float64),
+    )
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    direct_prepare_calls = []
+
+    async def fail_try_prepare(*args, **kwargs):
+        raise AssertionError("explicit stock-perp source-dir path must skip strict v2")
+
+    async def direct_prepare(*args, **kwargs):
+        direct_prepare_calls.append((args, kwargs))
+        return prepared
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fail_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", direct_prepare)
+    monkeypatch.setattr(
+        backtest,
+        "save_coins_hlcvs_to_cache",
+        lambda *args, **kwargs: tmp_path / "cache",
+    )
+
+    coins, _hlcvs, mss, _results_path, cache_dir, _btc_prices, _timestamps = (
+        await backtest.prepare_hlcvs_mss(config, "hyperliquid")
+    )
+
+    assert coins == ["xyz:AAPL"]
+    assert mss["xyz:AAPL"]["first_valid_index"] == 0
+    assert cache_dir == tmp_path / "cache"
+    assert direct_prepare_calls
+    assert direct_prepare_calls[0][1]["skip_v2_local"] is True
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boundary(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    strict_calls = []
+
+    async def miss_try_prepare(*args, **kwargs):
+        strict_calls.append((args, kwargs))
+        return None
+
+    async def fail_prepare_hlcvs(*args, **kwargs):
+        raise AssertionError("stock-perp without source dir must not use direct prepare_hlcvs")
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", miss_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fail_prepare_hlcvs)
+
+    with pytest.raises(ValueError) as exc_info:
+        await backtest.prepare_hlcvs_mss(config, "hyperliquid")
+
+    assert strict_calls
+    assert "deterministic HLCV materialization could not build usable coverage" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_mixed_stock_without_source_dir_does_not_downgrade_crypto(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH", "xyz:AAPL"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    strict_calls = []
+
+    async def miss_try_prepare(*args, **kwargs):
+        strict_calls.append((args, kwargs))
+        return None
+
+    async def fail_prepare_hlcvs(*args, **kwargs):
+        raise AssertionError("mixed no-source-dir universe must not use direct prepare_hlcvs")
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", miss_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", fail_prepare_hlcvs)
+
+    with pytest.raises(ValueError) as exc_info:
+        await backtest.prepare_hlcvs_mss(config, "hyperliquid")
+
+    assert strict_calls
+    assert "deterministic HLCV materialization could not build usable coverage" in str(exc_info.value)
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
+    monkeypatch, tmp_path
+):
+    import hlcv_preparation as hp
+    from ohlcv_utils import dump_ohlcv_data
+    import rust_utils
+
+    source_dir = tmp_path / "ohlcv_source"
+    start_ts = month_start_ts(2026, 4)
+    stock_dir = source_dir / "hyperliquid" / "1m" / "xyz:AAPL"
+    stock_dir.mkdir(parents=True, exist_ok=True)
+    dump_ohlcv_data(
+        np.array([[start_ts, 101.0, 103.0, 99.0, 102.0, 7.0]], dtype=np.float64),
+        str(stock_dir / "2026-04-01.npy"),
+    )
+    btc_dir = source_dir / "hyperliquid" / "1m" / "BTC"
+    btc_dir.mkdir(parents=True, exist_ok=True)
+    dump_ohlcv_data(
+        np.array(
+            [[start_ts, 50_000.0, 50_100.0, 49_900.0, 50_050.0, 11.0]],
+            dtype=np.float64,
+        ),
+        str(btc_dir / "2026-04-01.npy"),
+    )
+
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "ohlcv_source_dir": str(source_dir),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["xyz:AAPL"], "short": []},
+            "minimum_coin_age_days": 0.0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    class FakeCm:
+        def standardize_gaps(self, src, **kwargs):
+            return src
+
+        async def aclose(self):
+            return None
+
+        def close(self):
+            return None
+
+    class FakeExchange:
+        async def close(self):
+            return None
+
+    async def fake_load_markets(self):
+        self.markets = {
+            "XYZ-AAPL/USDC:USDC": {
+                "symbol": "XYZ-AAPL/USDC:USDC",
+                "base": "XYZ-AAPL",
+                "quote": "USDC",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 10.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            },
+            "BTC/USDC:USDC": {
+                "symbol": "BTC/USDC:USDC",
+                "base": "BTC",
+                "quote": "USDC",
+                "maker": 0.0002,
+                "taker": 0.0004,
+                "contractSize": 1.0,
+                "limits": {"cost": {"min": 5.0}, "amount": {"min": 0.001}},
+                "precision": {"price": 0.01, "amount": 0.001},
+            },
+        }
+
+    def fake_load_cc(self):
+        self.cc = FakeExchange()
+        self.cm = FakeCm()
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    monkeypatch.setattr(hp, "_has_tradfi_provider_config", lambda: True)
+
+    async def fake_first_timestamps(_coins):
+        return {}
+
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)
+    monkeypatch.setattr(hp.HLCVManager, "load_markets", fake_load_markets)
+    monkeypatch.setattr(hp.HLCVManager, "load_cc", fake_load_cc)
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        backtest,
+        "save_coins_hlcvs_to_cache",
+        lambda *args, **kwargs: tmp_path / "cache",
+    )
+
+    coins, hlcvs, mss, _results_path, cache_dir, btc_prices, timestamps = (
+        await backtest.prepare_hlcvs_mss(config, "hyperliquid")
+    )
+
+    assert coins == ["xyz:AAPL"]
+    assert cache_dir == tmp_path / "cache"
+    np.testing.assert_array_equal(timestamps, np.array([start_ts], dtype=np.int64))
+    np.testing.assert_allclose(hlcvs[0, 0], np.array([103.0, 99.0, 102.0, 7.0]))
+    np.testing.assert_allclose(btc_prices, np.array([50_050.0]))
+    assert mss["xyz:AAPL"]["min_cost"] == 10.0
+
+
+@pytest.mark.asyncio
 async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch):
     prepared = (
         {
