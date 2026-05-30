@@ -4,11 +4,24 @@ repo_url: https://github.com/enarjord/passivbot
 use_directory_urls: True
 docs_dir: docs
 nav:
-  - Home: README.md
+  - Home: index.md
+  - Installation: installation.md
   - Configuration: configuration.md
+  - Config Workflow: config_workflow.md
   - Running live: live.md
+  - Monitor: monitor.md
   - Backtesting: backtesting.md
+  - Suite Examples: suite_examples.md
   - Optimizing: optimizing.md
+  - Tools: tools.md
+  - Forager: forager.md
+  - Risk Management: risk_management.md
+  - Coin Overrides: coin_overrides.md
+  - Fake Live: fake_live.md
+  - Container Deployment: container_deployment.md
+  - Stock Perps: stock_perps.md
+  - Metrics: metrics.md
+  - Troubleshooting: troubleshooting.md
 theme:
   name: material
   logo: 'images/logo.png'

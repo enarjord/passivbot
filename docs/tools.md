@@ -75,6 +75,17 @@ passivbot tool pareto-transform optimize_results/.../all_results.bin --out summa
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
 
+`passivbot tool pareto-analyze` inspects a Pareto front's config and metric distributions.
+`passivbot tool pareto-analysis` is an alias for the same command. `passivbot tool
+pareto-compress` selects a compact representative subset from a front, and
+`passivbot tool merge-paretos` merges Pareto fronts into starting configs.
+
+```shell
+passivbot tool pareto-analyze optimize_results/.../pareto
+passivbot tool pareto-compress optimize_results/.../pareto 8 --output-dir selected_pareto_8
+passivbot tool merge-paretos optimize_results/run_a/pareto optimize_results/run_b/pareto
+```
+
 ## Iterative backtester utilities
 
 `src/tools/iterative_backtester.py` and `iterative_history_plot.py` help replay slices of the backtester (or real fills) interactively so you can inspect order-by-order behaviour. Useful when tuning configs by hand.
@@ -87,6 +98,7 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 ## Historical data helpers
 
 - `passivbot download` – Pre-warm the v2 OHLCV store using the same config/date/exchange selection as backtesting.
+- `passivbot tool inspect-ohlcvs` – Inspect v2 OHLCV cache metadata and gaps.
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `passivbot tool verify-hlcvs-data` – Validates prepared HLCV datasets and coverage metadata before long optimizations/backtests.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_grid_long_npos7.json`).
@@ -127,6 +139,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 passivbot tool fetch-balance --user bybit_01
 ```
 
+Ticker probes inspect CCXT ticker support and latency without placing orders:
+
+- `passivbot tool ticker-probe` checks ticker capability behavior for one exchange/user context.
+- `passivbot tool ticker-endpoint-probe` compares CCXT ticker endpoint latency across configured users.
+
 ## Hyperliquid live probes
 
 These probes were added to investigate live Hyperliquid balance/state quirks, especially HIP-3
@@ -135,6 +152,8 @@ one-off scripts.
 
 - `passivbot tool hyperliquid-balance-probe` is read-only. It fetches one wallet balance and prints
   a normalized summary.
+- `passivbot tool hyperliquid-abstraction-probe` is read-only. It inspects Hyperliquid account
+  abstraction mode and related metadata for one configured user.
 - `passivbot tool hyperliquid-order-margin-probe` is mutating. It places one tiny post-only order,
   snapshots balance changes, then cancels it.
 - `passivbot tool hyperliquid-position-probe` is mutating. It can open/flatten a tiny position and

@@ -6,6 +6,11 @@ All notable user-facing changes will be documented in this file.
 
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
+- `live.custom_endpoints_path` is now part of the canonical config schema, so normalized
+  live configs preserve endpoint override files instead of dropping the documented setting.
+- Updated user-facing docs for current CLI logging flags, custom endpoint setup,
+  backtest exchange naming, suite exchange expansion, uncovered tool commands, and
+  current Forager/indicator wording.
 
 ## v7.12.0 - 2026-05-27
 

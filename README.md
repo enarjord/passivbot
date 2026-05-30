@@ -9,7 +9,7 @@
 
 Passivbot is a cryptocurrency trading bot written in Python and Rust, intended to require minimal user intervention.  
 
-It operates on perpetual futures derivatives markets, automatically creating and cancelling limit buy and sell orders on behalf of the user. It does not try to predict future price movements, it does not use technical indicators, nor does it follow trends. Rather, it is a contrarian market maker, providing resistance to price changes in both directions, thereby "serving the market" as a price stabilizer.  
+It operates on perpetual futures derivatives markets, automatically creating and cancelling limit buy and sell orders on behalf of the user. It does not try to predict future price movements or follow trends. Rather, it is a contrarian market maker, using price bands, EMA-derived context, and risk controls to provide resistance to price changes in both directions, thereby "serving the market" as a price stabilizer.
 
 Order planning is computed by a shared Rust orchestrator used by both live trading and backtesting for speed and consistency. Also included is an optimizer, which finds better configurations by iterating thousands of backtests with different candidates, converging on the optimal ones with an evolutionary algorithm.  
 
@@ -25,7 +25,7 @@ For trailing entries, the bot waits for the price to move beyond a specified thr
 Grid and trailing orders may be combined, such that the robot enters or closes a whole or a part of the position as grid orders and/or as trailing orders.
 
 ### Forager
-The Forager feature dynamically chooses the most volatile markets on which to open positions. Volatility is defined as the mean of the normalized relative range for the most recent 1m candles, i.e. `mean((ohlcv.high - ohlcv.low) / ohlcv.close)`.
+The Forager feature dynamically chooses which approved markets may open positions. It first prunes low relative-volume candidates, then ranks the remaining markets with configurable weights for quote volume, EMA readiness, and 1m log-range volatility.
 
 ### Unstucking Mechanism
 Passivbot manages underperforming, or "stuck", positions by realizing small losses over time. If multiple positions are stuck, the bot prioritizes positions with the smallest gap between the entry price and current market price for "unstucking". Losses are limited by ensuring that the account balance does not fall under a set percentage below the past peak balance.  
@@ -151,7 +151,7 @@ copying it is the recommended starting point for new configs.
 ### Logging
 
 Passivbot uses Python's logging module throughout the bot, backtester, and supporting tools.  
-- Use `--debug-level {0-3}` (alias `--log-level`) on `passivbot live` or `passivbot backtest` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.  
+- Use `--log-level {warning|info|debug|trace}` or `--log-level {0-3}` on `passivbot live` or `passivbot backtest` to adjust verbosity at runtime: `0 = warnings only`, `1 = info`, `2 = debug`, `3 = trace`.
 - Use `--verbose` on `passivbot live` to force debug logging (`--log-level debug`).  
 - Persist a default by adding a top-level section to your config: `"logging": {"level": 2}`. The CLI flag always overrides the config value for that run.
 - `passivbot live` now writes a timestamped logfile under `logs/` by default and refreshes `logs/{user}.log` as a stable alias to the current run. Control this with `config.logging.persist_to_file`, `config.logging.dir`, and the optional rotation settings in `config.logging`.

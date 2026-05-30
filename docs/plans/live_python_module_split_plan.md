@@ -1,5 +1,9 @@
 # Live Python Module Split Plan
 
+> Historical plan: this document records the module-split work as planned and validated on an
+> earlier branch. Re-check paths, test targets, and completion status against current `master`
+> before using it as an implementation checklist.
+
 ## Purpose
 
 Refactor the Python live-bot control plane into focused `src/live/` modules without
@@ -450,7 +454,7 @@ Implementation notes:
 Validation:
 
 ```bash
-./venv/bin/python -m py_compile src/passivbot.py src/live/runtime.py
+./venv/bin/python -m py_compile src/passivbot.py src/live/*.py
 ./venv/bin/python -m pytest tests/test_passivbot_balance_split.py -k "shutdown or health or execution_loop or watchdog" -q
 ```
 

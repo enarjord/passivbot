@@ -347,6 +347,7 @@ def get_template_config():
                 "balance_hysteresis_snap_pct": 0.01,
                 "balance_override": None,
                 "candle_lock_timeout_seconds": 10,
+                "custom_endpoints_path": None,
                 "defer_broad_candle_warmup": True,
                 "enable_archive_candle_fetch": False,
                 "execution_delay_seconds": 2,
