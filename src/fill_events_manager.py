@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import shutil
 import tempfile
 import time
 from collections import defaultdict, deque
@@ -53,10 +54,15 @@ PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED = "authoritative_cycle_reconciled"
 PNL_SOURCE_PENDING = "pending"
 PNL_SOURCE_SYNTHETIC_EXACT = "synthetic_fill_reconstruction_exact"
 PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
+PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1 = "gross_pnl_signed_fee_paid_v1"
 
 
 class FillEventCacheDiskFullError(RuntimeError):
     """Raised when the trading-critical fill event cache cannot be persisted."""
+
+
+class FillEventCacheContractError(RuntimeError):
+    """Raised when persisted fill events use an unsafe legacy accounting contract."""
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
@@ -277,27 +283,93 @@ def _merge_fee_lists(
     return [dict(value) for value in merged.values()]
 
 
+def _fee_entries(fees: object) -> List[Dict[str, object]]:
+    if not fees:
+        return []
+    if isinstance(fees, dict):
+        return [fees]
+    try:
+        return [entry for entry in list(fees) if isinstance(entry, dict)]
+    except Exception:
+        return []
+
+
 def _fee_cost(fees: Optional[Sequence]) -> float:
     """Sum fee costs defensively, tolerating missing/partial structures."""
     total = 0.0
-    if not fees:
-        return total
-    items: Sequence
-    if isinstance(fees, dict):
-        items = [fees]
-    else:
-        try:
-            items = list(fees)
-        except Exception:
-            return total
-    for entry in items:
-        if not isinstance(entry, dict):
-            continue
+    for entry in _fee_entries(fees):
         try:
             total += float(entry.get("cost", 0.0))
         except Exception:
             continue
     return total
+
+
+def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
+    """Return signed cashflow for one raw fee entry.
+
+    CCXT generally reports paid fees as positive absolute cost. Passivbot's
+    canonical fill contract stores the balance impact instead: paid fee is
+    negative and maker rebate is positive.
+    """
+    if "fee_paid" in fee:
+        return float(fee.get("fee_paid") or 0.0)
+    cost = float(fee.get("cost") or 0.0)
+    if cost == 0.0:
+        return 0.0
+    try:
+        rate = float(fee.get("rate"))
+    except Exception:
+        rate = 0.0
+    fee_type = str(
+        fee.get("type")
+        or fee.get("feeType")
+        or fee.get("liquidity")
+        or fee.get("liquidity_type")
+        or ""
+    ).lower()
+    rebate_markers = ("rebate", "maker_rebate")
+    if cost < 0.0 or rate < 0.0 or any(marker in fee_type for marker in rebate_markers):
+        return abs(cost)
+    return -abs(cost)
+
+
+def signed_fee_paid_from_fees(fees: object) -> float:
+    """Return canonical signed fee cashflow from CCXT-style fee payloads."""
+    return sum(_fee_entry_signed_fee_paid(entry) for entry in _fee_entries(fees))
+
+
+def signed_fee_paid_from_payload(payload: Dict[str, object]) -> float:
+    """Extract canonical signed fee cashflow from an exchange fill payload."""
+    if "fee_paid" in payload:
+        return float(payload.get("fee_paid") or 0.0)
+    fee_paid = signed_fee_paid_from_fees(payload.get("fees"))
+    if fee_paid != 0.0:
+        return fee_paid
+    fee_paid = signed_fee_paid_from_fees(payload.get("fee"))
+    if fee_paid != 0.0:
+        return fee_paid
+
+    # KuCoin futures sometimes exposes explicit paid-fee fields in raw info even
+    # when the CCXT fee wrapper is absent.
+    raw_items = _normalize_raw_field(payload.get("raw"))
+    for raw in raw_items:
+        data = raw.get("data") if isinstance(raw, dict) else raw
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        info = info if isinstance(info, dict) else {}
+        for source in (data, info):
+            for key in ("openFeePay", "closeFeePay", "fee"):
+                if key not in source:
+                    continue
+                try:
+                    value = float(source.get(key) or 0.0)
+                except Exception:
+                    continue
+                if value != 0.0:
+                    return abs(value) if value < 0.0 else -abs(value)
+    return 0.0
 
 
 def _payload_pnl_source(payload: Dict[str, object]) -> str:
@@ -700,6 +772,7 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 aggregated[key]["source_ids"] = src_ids
             aggregated[key]["qty"] = float(ev.get("qty", 0.0))
             aggregated[key]["pnl"] = float(ev.get("pnl", 0.0))
+            aggregated[key]["fee_paid"] = signed_fee_paid_from_payload(ev)
             aggregated[key]["pnl_status"] = _payload_pnl_status(ev)
             aggregated[key]["pnl_source"] = _payload_pnl_source(ev)
             aggregated[key]["pnl_synthetic_reason"] = str(ev.get("pnl_synthetic_reason") or "")
@@ -719,6 +792,7 @@ def _coalesce_events(events: List[Dict[str, object]]) -> List[Dict[str, object]]
                 agg["source_ids"] = sorted(merged_ids)
             agg["qty"] = float(agg.get("qty", 0.0)) + float(ev.get("qty", 0.0))
             agg["pnl"] = float(agg.get("pnl", 0.0)) + float(ev.get("pnl", 0.0))
+            agg["fee_paid"] = float(agg.get("fee_paid", 0.0)) + signed_fee_paid_from_payload(ev)
             if _payload_pnl_status(ev) == "pending":
                 agg["pnl_status"] = "pending"
                 agg["pnl_source"] = PNL_SOURCE_PENDING
@@ -886,6 +960,7 @@ class FillEvent:
     qty: float
     price: float
     pnl: float
+    fee_paid: float
     pnl_status: str
     fees: Optional[Sequence]
     pb_order_type: str
@@ -897,6 +972,7 @@ class FillEvent:
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
     pnl_source: str = PNL_SOURCE_AUTHORITATIVE
     pnl_synthetic_reason: str = ""
+    pnl_contract: str = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
 
     @property
     def key(self) -> str:
@@ -913,6 +989,8 @@ class FillEvent:
             "qty": self.qty,
             "price": self.price,
             "pnl": self.pnl,
+            "fee_paid": self.fee_paid,
+            "pnl_contract": self.pnl_contract or PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1,
             "pnl_status": self.pnl_status,
             "pnl_source": self.pnl_source,
             "pnl_synthetic_reason": self.pnl_synthetic_reason,
@@ -956,6 +1034,7 @@ class FillEvent:
             qty=float(data["qty"]),
             price=float(data["price"]),
             pnl=float(data["pnl"]),
+            fee_paid=signed_fee_paid_from_payload(data),
             pnl_status=str(data.get("pnl_status") or "complete").lower(),
             pnl_source=(
                 str(data.get("pnl_source") or "").lower()
@@ -966,6 +1045,10 @@ class FillEvent:
                 )
             ),
             pnl_synthetic_reason=str(data.get("pnl_synthetic_reason") or ""),
+            pnl_contract=(
+                str(data.get("pnl_contract") or "")
+                or ("legacy" if data.get("__legacy_contract") else PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1)
+            ),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -1046,6 +1129,7 @@ class CacheMetadata(TypedDict, total=False):
     covered_start_ms: int  # Earliest open-ended lookback start confirmed against exchange
     known_gaps: List[KnownGap]  # List of known gaps
     history_scope: str  # unknown, window, all
+    pnl_contract: str  # gross_pnl_signed_fee_paid_v1
 
 
 class FillEventCache:
@@ -1056,8 +1140,36 @@ class FillEventCache:
         self.root.mkdir(parents=True, exist_ok=True)
         self._metadata: Optional[CacheMetadata] = None
 
-    def load(self) -> List[FillEvent]:
-        files = sorted(path for path in self.root.glob("*.json") if path.name != "metadata.json")
+    def _data_files(self) -> List[Path]:
+        return sorted(path for path in self.root.glob("*.json") if path.name != "metadata.json")
+
+    def _metadata_has_current_pnl_contract(self) -> bool:
+        if not self.metadata_path.exists():
+            return False
+        try:
+            with self.metadata_path.open("r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except Exception:
+            return False
+        return (
+            isinstance(data, dict)
+            and str(data.get("pnl_contract") or "") == PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        )
+
+    def _assert_cache_contract(self, files: Sequence[Path]) -> None:
+        if not files:
+            return
+        if not self._metadata_has_current_pnl_contract():
+            raise FillEventCacheContractError(
+                f"fill-event cache {self.root} uses a legacy or missing pnl_contract; "
+                "run fill-events doctor with --repair or rebuild the cache before using "
+                "trading-critical accounting"
+            )
+
+    def load(self, *, allow_legacy_contract: bool = False) -> List[FillEvent]:
+        files = self._data_files()
+        if not allow_legacy_contract:
+            self._assert_cache_contract(files)
         events: List[FillEvent] = []
         for path in files:
             try:
@@ -1067,6 +1179,23 @@ class FillEventCache:
                 logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
                 continue
             for raw in payload:
+                if (
+                    not allow_legacy_contract
+                    and isinstance(raw, dict)
+                    and raw.get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                ):
+                    raise FillEventCacheContractError(
+                        f"fill-event cache record {path} uses a legacy or missing pnl_contract; "
+                        "run fill-events doctor with --repair or rebuild the cache before using "
+                        "trading-critical accounting"
+                    )
+                if (
+                    allow_legacy_contract
+                    and isinstance(raw, dict)
+                    and raw.get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                ):
+                    raw = dict(raw)
+                    raw["__legacy_contract"] = True
                 try:
                     events.append(FillEvent.from_dict(raw))
                 except Exception:
@@ -1087,6 +1216,9 @@ class FillEventCache:
         for day in day_map:
             day_map[day].sort(key=lambda ev: ev.timestamp)
         self.save_days(day_map)
+        metadata = self.load_metadata()
+        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        self.save_metadata(metadata)
 
     def save_days(self, day_events: Dict[str, Sequence[FillEvent]]) -> None:
         for day, events in day_events.items():
@@ -1134,6 +1266,7 @@ class FillEventCache:
             "covered_start_ms": 0,
             "known_gaps": [],
             "history_scope": "unknown",
+            "pnl_contract": PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1,
         }
 
         if not self.metadata_path.exists():
@@ -1163,6 +1296,7 @@ class FillEventCache:
         if self._metadata is None:
             return
 
+        self._metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
         tmp_path = self.metadata_path.with_suffix(".tmp")
         try:
             with tmp_path.open("w", encoding="utf-8") as fh:
@@ -1195,12 +1329,14 @@ class FillEventCache:
             metadata["newest_event_ts"] = newest
 
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
         self.save_metadata(metadata)
 
     def mark_refreshed(self) -> None:
         """Persist a successful refresh timestamp even if no events exist."""
         metadata = self.load_metadata()
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
         self.save_metadata(metadata)
 
     def get_known_gaps(self) -> List[KnownGap]:
@@ -1220,6 +1356,7 @@ class FillEventCache:
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
         self.save_metadata(metadata)
 
     def get_history_scope(self) -> str:
@@ -2413,13 +2550,13 @@ class FillEventsManager:
         self._loaded = False
         self._lock = asyncio.Lock()
 
-    async def ensure_loaded(self) -> None:
+    async def ensure_loaded(self, *, allow_legacy_contract: bool = False) -> None:
         if self._loaded:
             return
         async with self._lock:
             if self._loaded:
                 return
-            cached = self.cache.load()
+            cached = self.cache.load(allow_legacy_contract=allow_legacy_contract)
             filtered = []
             dropped = 0
             for ev in cached:
@@ -2429,8 +2566,10 @@ class FillEventsManager:
                 filtered.append(ev)
             self._events = sorted(filtered, key=lambda ev: ev.timestamp)
 
-            # Annotate psize/pprice for legacy caches that may lack these values
-            if self._events:
+            # Annotate psize/pprice for caches using the current accounting contract.
+            # Doctor mode loads legacy caches read-only first so backup/repair can
+            # operate on the original files.
+            if self._events and not allow_legacy_contract:
                 payload = [ev.to_dict() for ev in self._events]
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
@@ -2486,7 +2625,7 @@ class FillEventsManager:
                             gross = (pprice - price) * closing_qty
                         else:
                             gross = (price - pprice) * closing_qty
-                        synthetic_pnl = gross - _fee_cost(ev.get("fees"))
+                        synthetic_pnl = gross
                         if not basis_complete:
                             source = PNL_SOURCE_SYNTHETIC_DEGRADED
                             reason = "prior_position_basis_incomplete"
@@ -2635,8 +2774,11 @@ class FillEventsManager:
         observation: PnlObservation,
     ) -> Tuple[set[str], float, int]:
         close_fills = list(lifecycle["close_fills"])
+        lifecycle_events = list(lifecycle.get("events") or [])
+        lifecycle_fee_paid = sum(signed_fee_paid_from_payload(ev) for ev in lifecycle_events)
+        gross_target = float(observation.realized_pnl) - lifecycle_fee_paid
         synthetic_total = sum(float(ev.get("pnl") or 0.0) for ev in close_fills)
-        delta = float(observation.realized_pnl) - synthetic_total
+        delta = gross_target - synthetic_total
         weights = []
         for close in close_fills:
             signed_qty = _payload_signed_effective_qty(close)
@@ -3040,6 +3182,7 @@ class FillEventsManager:
             qty=float(qty_signed_sum),
             price=float(price),
             pnl=float(pnl),
+            fee_paid=signed_fee_paid_from_fees(fees_out),
             pnl_status=pnl_status,
             fees=fees_out,
             pb_order_type=str(best_event.pb_order_type),
@@ -3052,7 +3195,8 @@ class FillEventsManager:
 
     async def run_doctor(self, *, auto_repair: bool = False) -> Dict[str, object]:
         """Detect and optionally auto-repair known fill-event cache anomalies."""
-        await self.ensure_loaded()
+        allow_legacy = self.exchange.lower() == "kucoin"
+        await self.ensure_loaded(allow_legacy_contract=allow_legacy)
         report: Dict[str, object] = {
             "exchange": self.exchange,
             "user": self.user,
@@ -3062,6 +3206,8 @@ class FillEventsManager:
             "auto_repair": bool(auto_repair),
             "repaired": False,
         }
+        if self.exchange.lower() == "kucoin":
+            return self._run_kucoin_doctor(report, auto_repair=auto_repair)
         if self.exchange.lower() != "bybit":
             return report
 
@@ -3105,6 +3251,146 @@ class FillEventsManager:
             )
         else:
             logger.info("[fills-doctor] repair complete; no remaining Bybit anomalies")
+        return report
+
+    def _backup_cache_for_repair(self) -> Optional[str]:
+        files = self.cache._data_files()
+        if not files and not self.cache.metadata_path.exists():
+            return None
+        stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        backup_path = self.cache.root.with_name(f"{self.cache.root.name}.backup.{stamp}")
+        counter = 1
+        while backup_path.exists():
+            backup_path = self.cache.root.with_name(
+                f"{self.cache.root.name}.backup.{stamp}.{counter}"
+            )
+            counter += 1
+        shutil.copytree(self.cache.root, backup_path)
+        return str(backup_path)
+
+    def _repair_kucoin_payload_contract(
+        self, payload: List[Dict[str, object]]
+    ) -> Tuple[List[Dict[str, object]], int]:
+        grouped: Dict[Tuple[str, str], List[Dict[str, object]]] = defaultdict(list)
+        for ev in payload:
+            key = (
+                str(ev.get("symbol") or ""),
+                str(ev.get("position_side") or ev.get("pside") or "long").lower(),
+            )
+            grouped[key].append(ev)
+
+        degraded = 0
+        for (_symbol, pos_side), evs in grouped.items():
+            psize = 0.0
+            pprice = 0.0
+            basis_complete = True
+            for ev in sorted(evs, key=lambda item: item.get("timestamp", 0)):
+                ev["fee_paid"] = signed_fee_paid_from_payload(ev)
+                ev["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                signed_qty = _payload_signed_effective_qty(ev)
+                price = float(ev.get("price") or 0.0)
+                add_amt, reduce_amt = _compute_add_reduce(pos_side, signed_qty)
+
+                if add_amt > 0.0:
+                    ev["pnl"] = 0.0
+                    ev["pnl_status"] = "complete"
+                    ev["pnl_source"] = PNL_SOURCE_AUTHORITATIVE
+                    ev["pnl_synthetic_reason"] = ""
+                    if price > 0.0:
+                        if psize <= 0.0:
+                            pprice = price
+                            basis_complete = True
+                        else:
+                            pprice = ((psize * pprice) + (add_amt * price)) / (psize + add_amt)
+                        psize += add_amt
+                    else:
+                        basis_complete = False
+                    continue
+
+                if reduce_amt <= 0.0:
+                    continue
+
+                if basis_complete and price > 0.0 and psize > 0.0 and pprice > 0.0:
+                    closing_qty = min(reduce_amt, psize)
+                    if pos_side == "short":
+                        ev["pnl"] = (pprice - price) * closing_qty
+                    else:
+                        ev["pnl"] = (price - pprice) * closing_qty
+                    ev["pnl_status"] = "complete"
+                    ev["pnl_source"] = PNL_SOURCE_SYNTHETIC_EXACT
+                    ev["pnl_synthetic_reason"] = "legacy_contract_repaired_from_fill_basis"
+                else:
+                    degraded += 1
+                    ev["pnl_status"] = "pending"
+                    ev["pnl_source"] = PNL_SOURCE_SYNTHETIC_DEGRADED
+                    ev["pnl_synthetic_reason"] = "legacy_repair_incomplete_position_basis"
+
+                if psize <= 0.0:
+                    basis_complete = False
+                elif reduce_amt > psize + 1e-12:
+                    psize = 0.0
+                    pprice = 0.0
+                    basis_complete = False
+                else:
+                    psize = max(0.0, psize - reduce_amt)
+                    if psize <= 1e-12:
+                        psize = 0.0
+                        pprice = 0.0
+                        basis_complete = True
+
+        payload.sort(key=lambda ev: int(ev.get("timestamp") or 0))
+        return payload, degraded
+
+    def _run_kucoin_doctor(
+        self, report: Dict[str, object], *, auto_repair: bool
+    ) -> Dict[str, object]:
+        legacy_events = [
+            ev
+            for ev in self._events
+            if ev.to_dict().get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        ]
+        legacy_contract = not self.cache._metadata_has_current_pnl_contract() and bool(
+            self.cache._data_files()
+        )
+        missing_fee_paid = [ev for ev in self._events if "fee_paid" not in ev.to_dict()]
+        anomaly_count = len(self._events) if legacy_contract else len(legacy_events) + len(missing_fee_paid)
+        report["legacy_contract"] = bool(legacy_contract)
+        report["anomaly_events"] = anomaly_count
+        if not anomaly_count:
+            report["repaired"] = True
+            return report
+        report["anomaly_examples"] = [
+            {
+                "id": ev.id,
+                "symbol": ev.symbol,
+                "timestamp": ev.timestamp,
+                "reason": "legacy_or_missing_pnl_contract",
+            }
+            for ev in self._events[:5]
+        ]
+        if not auto_repair:
+            return report
+
+        backup_path = self._backup_cache_for_repair()
+        payload = [ev.to_dict() for ev in self._events]
+        ensure_qty_signage(payload)
+        repaired_payload, degraded_count = self._repair_kucoin_payload_contract(payload)
+        compute_psize_pprice(repaired_payload)
+        self._events = [FillEvent.from_dict(ev) for ev in repaired_payload]
+        self.cache.save(self._events)
+        self.cache.update_metadata_from_events(self._events)
+        report["backup_path"] = backup_path
+        report["degraded_events_after"] = degraded_count
+        report["anomaly_events_after"] = degraded_count
+        report["repaired"] = degraded_count == 0
+        if degraded_count:
+            logger.warning(
+                "[fills-doctor] KuCoin repair degraded %d close fill(s); cache backed up at %s",
+                degraded_count,
+                backup_path,
+            )
+        else:
+            logger.info("[fills-doctor] KuCoin repair complete; cache backed up at %s", backup_path)
         return report
 
     async def refresh(
@@ -4640,7 +4926,8 @@ class KucoinFetcher(BaseFetcher):
         if not trades:
             return []
 
-        # Compute local realized PnL from trades (gross), subtract fees when available
+        # Compute local realized PnL from trades. This is gross price PnL; fees
+        # are stored separately as signed balance cashflow in fee_paid.
         local_pnls, _ = compute_realized_pnls_from_trades(trades)
 
         closes = [
@@ -4652,8 +4939,8 @@ class KucoinFetcher(BaseFetcher):
         events: Dict[str, Dict[str, object]] = {}
         for t in trades:
             ev = dict(t)
-            fee_cost = _fee_cost(ev.get("fees"))
-            ev["pnl"] = local_pnls.get(ev["id"], 0.0) - fee_cost
+            ev["fee_paid"] = signed_fee_paid_from_payload(ev)
+            ev["pnl"] = local_pnls.get(ev["id"], 0.0)
             ev["pnl_status"] = "pending" if _is_close_payload(ev) else "complete"
             if ev["pnl_status"] == "pending":
                 ev["pnl_source"] = PNL_SOURCE_PENDING
@@ -5047,8 +5334,9 @@ class KucoinFetcher(BaseFetcher):
         reduce_only = bool(trade.get("reduceOnly") or info.get("closeOrder") or False)
         close_fee_pay = float(info.get("closeFeePay") or 0.0)
         position_side = KucoinFetcher._determine_position_side(side, reduce_only, close_fee_pay)
+        raw_payload = [{"source": "fetch_my_trades", "data": dict(trade)}]
 
-        return {
+        event = {
             "id": trade_id,
             "order_id": order_id,
             "timestamp": timestamp,
@@ -5059,11 +5347,15 @@ class KucoinFetcher(BaseFetcher):
             "price": price,
             "pnl": 0.0,
             "fees": fee,
+            "fee_paid": signed_fee_paid_from_fees(fee) if fee else 0.0,
             "pb_order_type": "",
             "position_side": position_side,
             "client_order_id": str(trade.get("clientOrderId") or info.get("clientOid") or ""),
-            "raw": [{"source": "fetch_my_trades", "data": dict(trade)}],
+            "raw": raw_payload,
         }
+        if event["fee_paid"] == 0.0:
+            event["fee_paid"] = signed_fee_paid_from_payload(event)
+        return event
 
     @staticmethod
     def _determine_position_side(side: str, reduce_only: bool, close_fee_pay: float) -> str:

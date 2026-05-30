@@ -37,11 +37,13 @@ from candlestick_manager import (
     synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
+    FillEventCacheContractError,
     FillEventsManager,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
     fill_event_pnl_pending,
+    signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
@@ -1204,23 +1206,11 @@ class Passivbot:
         if fill is None:
             return 0.0
         if isinstance(fill, dict):
-            fee_obj = fill.get("fee")
-            if isinstance(fee_obj, dict):
-                return float(fee_obj.get("cost", 0.0) or 0.0)
-            if isinstance(fee_obj, (int, float, str)):
-                return float(fee_obj or 0.0)
-            fees_obj = fill.get("fees")
-        else:
-            fees_obj = getattr(fill, "fees", None)
-        if isinstance(fees_obj, dict):
-            return float(fees_obj.get("cost", 0.0) or 0.0)
-        if isinstance(fees_obj, (list, tuple)):
-            total = 0.0
-            for item in fees_obj:
-                if isinstance(item, dict):
-                    total += float(item.get("cost", 0.0) or 0.0)
-            return total
-        return 0.0
+            return signed_fee_paid_from_payload(fill)
+        fee_paid = getattr(fill, "fee_paid", None)
+        if fee_paid is not None:
+            return float(fee_paid or 0.0)
+        return signed_fee_paid_from_payload({"fees": getattr(fill, "fees", None)})
 
     def _equity_hard_stop_realized_pnl_now(self) -> float:
         if self._pnls_manager is None:
@@ -7930,13 +7920,33 @@ class Passivbot:
                 cache_path=cache_path,
             )
 
-            # Load cached events
-            await self._pnls_manager.ensure_loaded()
-
-            # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
             doctor_mode = (
                 str(os.getenv("PASSIVBOT_FILL_EVENTS_DOCTOR", "")).strip().lower()
             )
+
+            # Load cached events
+            try:
+                await self._pnls_manager.ensure_loaded()
+            except FillEventCacheContractError:
+                if self.exchange == "kucoin" and doctor_mode in (
+                    "1",
+                    "true",
+                    "yes",
+                    "repair",
+                    "fix",
+                    "auto",
+                ):
+                    report = await self._pnls_manager.run_doctor(auto_repair=True)
+                    logging.info(
+                        "[fills-doctor] startup repaired legacy KuCoin cache anomalies=%s repaired=%s mode=%s",
+                        report.get("anomaly_events", 0),
+                        report.get("repaired", False),
+                        doctor_mode,
+                    )
+                else:
+                    raise
+
+            # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
             if self.exchange == "bybit":
                 if doctor_mode not in ("0", "false", "off", "disable", "disabled"):
                     auto_repair = doctor_mode not in ("check", "scan", "detect")
@@ -8836,18 +8846,7 @@ class Passivbot:
                 if price <= 0.0:
                     continue
                 pnl_val = _safe_float(fill.get("pnl", 0.0), 0.0)
-                fee_cost = 0.0
-                fee_obj = fill.get("fee")
-                if isinstance(fee_obj, dict):
-                    fee_cost = _safe_float(fee_obj.get("cost", 0.0), 0.0)
-                elif isinstance(fee_obj, (int, float, str)):
-                    fee_cost = _safe_float(fee_obj, 0.0)
-                elif isinstance(fill.get("fees"), (list, tuple)):
-                    fee_cost = sum(
-                        _safe_float(x.get("cost", 0.0), 0.0)
-                        for x in fill["fees"]
-                        if isinstance(x, dict)
-                    )
+                fee_paid = signed_fee_paid_from_payload(fill)
                 side = str(fill.get("side", "")).lower()
                 action = _determine_action(pside, side, qty_signed, fill.get("action"))
                 out.append(
@@ -8859,7 +8858,8 @@ class Passivbot:
                         "price": price,
                         "action": action,
                         "pnl": pnl_val,
-                        "fee": fee_cost,
+                        "fee": fee_paid,
+                        "fee_paid": fee_paid,
                         "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
                         "c_mult": float(self.c_mults.get(symbol, 1.0)),
                     }

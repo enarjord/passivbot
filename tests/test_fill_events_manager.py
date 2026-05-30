@@ -1,5 +1,6 @@
 import asyncio
 import errno
+import json
 import logging
 import sys
 import types
@@ -26,6 +27,7 @@ from src.fill_events_manager import (
     OkxFetcher,
     FillEvent,
     FillEventCache,
+    FillEventCacheContractError,
     FillEventCacheDiskFullError,
     FillEventsManager,
     PnlObservation,
@@ -1026,11 +1028,91 @@ def test_fill_event_cache_roundtrip(tmp_path: Path):
     ]
 
     cache.save(events)
-    daily_files = sorted(p.name for p in cache_dir.glob("*.json"))
+    daily_files = sorted(p.name for p in cache_dir.glob("*.json") if p.name != "metadata.json")
     assert daily_files == ["2023-11-14.json", "2023-11-15.json"]
 
     loaded = cache.load()
     assert [ev.id for ev in loaded] == ["t1", "t0"]
+
+
+@pytest.mark.asyncio
+async def test_fill_event_cache_rejects_legacy_missing_pnl_contract(tmp_path: Path):
+    cache_dir = tmp_path / "legacy_contract"
+    cache_dir.mkdir()
+    legacy_payload = [
+        {
+            "id": "legacy-entry",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "TON/USDT:USDT",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 10.0,
+            "pnl": -0.01,
+            "fees": {"currency": "USDT", "cost": 0.01},
+            "pb_order_type": "entry_grid_long",
+            "position_side": "long",
+            "client_order_id": "cid-legacy",
+            "raw": [],
+        }
+    ]
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="legacy or missing pnl_contract"):
+        await manager.ensure_loaded()
+
+
+@pytest.mark.asyncio
+async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path):
+    cache_dir = tmp_path / "legacy_repair"
+    cache_dir.mkdir()
+    ts = 1_700_000_000_000
+    legacy_payload = [
+        _kucoin_manager_fill(
+            "legacy-entry",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 0.1},
+        ),
+        _kucoin_manager_fill(
+            "legacy-close",
+            ts + 60_000,
+            side="sell",
+            qty=-1.0,
+            price=12.0,
+            fees={"currency": "USDT", "cost": 0.2},
+        ),
+    ]
+    legacy_payload[0]["pnl"] = -0.1
+    legacy_payload[1]["pnl"] = 1.7
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    assert report["legacy_contract"] is True
+    assert report["repaired"] is True
+    assert report["backup_path"]
+    assert Path(str(report["backup_path"])).exists()
+    repaired = FillEventCache(cache_dir).load()
+    by_id = {event.id: event for event in repaired}
+    assert by_id["legacy-entry"].pnl == pytest.approx(0.0)
+    assert by_id["legacy-entry"].fee_paid == pytest.approx(-0.1)
+    assert by_id["legacy-close"].pnl == pytest.approx(2.0)
+    assert by_id["legacy-close"].fee_paid == pytest.approx(-0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -2717,7 +2799,8 @@ async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
     assert close.pnl_status == "complete"
     assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
     assert close.pnl_synthetic_reason == ""
-    assert close.pnl == pytest.approx(0.9)
+    assert close.pnl == pytest.approx(1.0)
+    assert close.fee_paid == pytest.approx(-0.1)
     assert not FillEventsManager.pending_pnl_events(manager.get_events())
     assert any(
         "synthesized missing realized PnL from fill events" in record.message
@@ -3709,6 +3792,7 @@ def _kucoin_manager_fill(
     symbol: str = "TON/USDT:USDT",
     position_side: str = "long",
     pb_order_type: Optional[str] = None,
+    fees: Optional[object] = None,
 ) -> Dict[str, object]:
     is_close = (position_side == "long" and side == "sell") or (
         position_side == "short" and side == "buy"
@@ -3722,6 +3806,7 @@ def _kucoin_manager_fill(
         "qty": qty,
         "price": price,
         "pnl": 0.0,
+        "fees": fees,
         "pnl_status": "pending" if is_close else "complete",
         "pb_order_type": pb_order_type
         or ("close_grid_long" if is_close else "entry_grid_long"),
@@ -3873,6 +3958,66 @@ async def test_kucoin_fetcher_emits_observations_without_mutating_fill_pnl(monke
     assert fetcher.pnl_observations[0].close_time == ts + 60_000
 
 
+@pytest.mark.asyncio
+async def test_kucoin_fetcher_entry_fee_is_signed_fee_paid(monkeypatch):
+    fetcher = KucoinFetcher(api=object())
+    ts = 1_700_000_000_000
+    trades = [
+        _kucoin_manager_fill(
+            "entry-fee",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 0.25},
+        )
+    ]
+
+    async def _fetch_trades(since_ms, until_ms):
+        return [dict(trade) for trade in trades]
+
+    async def _enrich_with_order_details_bulk(events, detail_cache):
+        return None
+
+    monkeypatch.setattr(fetcher, "_fetch_trades", _fetch_trades)
+    monkeypatch.setattr(fetcher, "_enrich_with_order_details_bulk", _enrich_with_order_details_bulk)
+
+    out = await fetcher.fetch(ts, ts + 1_000, detail_cache={})
+
+    assert out[0]["pnl"] == pytest.approx(0.0)
+    assert out[0]["fee_paid"] == pytest.approx(-0.25)
+
+
+@pytest.mark.asyncio
+async def test_kucoin_fetcher_maker_rebate_is_positive_fee_paid(monkeypatch):
+    fetcher = KucoinFetcher(api=object())
+    ts = 1_700_000_000_000
+    trades = [
+        _kucoin_manager_fill(
+            "entry-rebate",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": -0.03, "rate": -0.0001},
+        )
+    ]
+
+    async def _fetch_trades(since_ms, until_ms):
+        return [dict(trade) for trade in trades]
+
+    async def _enrich_with_order_details_bulk(events, detail_cache):
+        return None
+
+    monkeypatch.setattr(fetcher, "_fetch_trades", _fetch_trades)
+    monkeypatch.setattr(fetcher, "_enrich_with_order_details_bulk", _enrich_with_order_details_bulk)
+
+    out = await fetcher.fetch(ts, ts + 1_000, detail_cache={})
+
+    assert out[0]["pnl"] == pytest.approx(0.0)
+    assert out[0]["fee_paid"] == pytest.approx(0.03)
+
+
 def test_kucoin_positions_history_window_extends_for_delayed_pnl_records():
     fetcher = KucoinFetcher(api=None)
     close_ts = 1_700_000_000_000
@@ -3927,6 +4072,104 @@ async def test_manager_reconciles_rapid_lifecycles_by_observation_close_time(
     assert by_id["close-2"].pnl == pytest.approx(2.5)
     assert by_id["close-1"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
     assert by_id["close-2"].pnl_source == fem.PNL_SOURCE_AUTHORITATIVE_CYCLE_RECONCILED
+
+
+@pytest.mark.asyncio
+async def test_manager_reconciles_kucoin_net_cycle_pnl_to_gross_close_pnl(tmp_path: Path):
+    ts = 1_700_000_000_000
+    events = [
+        _kucoin_manager_fill(
+            "entry-fee",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 0.10},
+        ),
+        _kucoin_manager_fill(
+            "close-fee",
+            ts + 60_000,
+            side="sell",
+            qty=-1.0,
+            price=12.0,
+            fees={"currency": "USDT", "cost": 0.20},
+        ),
+    ]
+    observations = [
+        _kucoin_cycle_observation("100", realized_pnl=1.70, close_time=ts + 60_000),
+    ]
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher(events, observations),
+        cache_path=tmp_path / "net_to_gross_cycle",
+    )
+
+    await manager.refresh()
+
+    by_id = {event.id: event for event in manager.get_events(symbol="TON/USDT:USDT")}
+    assert by_id["entry-fee"].pnl == pytest.approx(0.0)
+    assert by_id["entry-fee"].fee_paid == pytest.approx(-0.10)
+    assert by_id["close-fee"].pnl == pytest.approx(2.0)
+    assert by_id["close-fee"].fee_paid == pytest.approx(-0.20)
+    net_pnl = (
+        by_id["close-fee"].pnl
+        + by_id["entry-fee"].fee_paid
+        + by_id["close-fee"].fee_paid
+    )
+    assert net_pnl == pytest.approx(1.70)
+
+
+@pytest.mark.asyncio
+async def test_manager_distributes_kucoin_gross_cycle_delta_across_multiple_closes(
+    tmp_path: Path,
+):
+    ts = 1_700_000_000_000
+    events = [
+        _kucoin_manager_fill(
+            "entry",
+            ts,
+            side="buy",
+            qty=10.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 1.0},
+        ),
+        _kucoin_manager_fill(
+            "close-a",
+            ts + 60_000,
+            side="sell",
+            qty=-4.0,
+            price=11.0,
+            fees={"currency": "USDT", "cost": 0.4},
+        ),
+        _kucoin_manager_fill(
+            "close-b",
+            ts + 120_000,
+            side="sell",
+            qty=-6.0,
+            price=12.0,
+            fees={"currency": "USDT", "cost": 0.6},
+        ),
+    ]
+    observations = [
+        _kucoin_cycle_observation("100", realized_pnl=8.0, close_time=ts + 120_000),
+    ]
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher(events, observations),
+        cache_path=tmp_path / "multi_close_net_to_gross",
+    )
+
+    await manager.refresh()
+
+    by_id = {event.id: event for event in manager.get_events(symbol="TON/USDT:USDT")}
+    assert by_id["close-a"].pnl == pytest.approx(1.6)
+    assert by_id["close-b"].pnl == pytest.approx(8.4)
+    gross_sum = by_id["close-a"].pnl + by_id["close-b"].pnl
+    fee_sum = sum(event.fee_paid for event in by_id.values())
+    assert gross_sum == pytest.approx(10.0)
+    assert gross_sum + fee_sum == pytest.approx(8.0)
 
 
 @pytest.mark.asyncio
