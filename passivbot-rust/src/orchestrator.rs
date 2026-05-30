@@ -50,7 +50,8 @@ mod core {
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
-        calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, round_, round_dn,
+        calc_pnl_short, calc_pside_price_diff_int, calc_wallet_exposure, qty_to_cost, round_,
+        round_dn,
     };
     use serde::{Deserialize, Serialize};
 
@@ -980,6 +981,8 @@ mod core {
         order: &IdealOrder,
         pos: &Position,
         exchange: &ExchangeParams,
+        global: &OrchestratorGlobal,
+        order_book: &OrderBook,
     ) -> Option<f64> {
         const EPS: f64 = 1e-12;
         if !order.price.is_finite() || order.price <= 0.0 {
@@ -991,7 +994,7 @@ mod core {
         if !exchange.c_mult.is_finite() || exchange.c_mult <= 0.0 {
             return None;
         }
-        match order.pside {
+        let (gross_pnl, close_qty) = match order.pside {
             PositionSide::Long => {
                 let size_abs = pos.size.max(0.0);
                 if size_abs <= EPS || order.qty >= 0.0 {
@@ -1001,12 +1004,10 @@ mod core {
                 if close_qty <= EPS {
                     return None;
                 }
-                Some(calc_pnl_long(
-                    pos.price,
-                    order.price,
+                (
+                    calc_pnl_long(pos.price, order.price, close_qty, exchange.c_mult),
                     close_qty,
-                    exchange.c_mult,
-                ))
+                )
             }
             PositionSide::Short => {
                 let size_abs = pos.size.abs();
@@ -1017,14 +1018,23 @@ mod core {
                 if close_qty <= EPS {
                     return None;
                 }
-                Some(calc_pnl_short(
-                    pos.price,
-                    order.price,
+                (
+                    calc_pnl_short(pos.price, order.price, close_qty, exchange.c_mult),
                     close_qty,
-                    exchange.c_mult,
-                ))
+                )
             }
+        };
+        let fee_rate = if should_use_market_execution(order, global, order_book) {
+            exchange.taker_fee
+        } else {
+            exchange.maker_fee
+        };
+        if !fee_rate.is_finite() {
+            return None;
         }
+        let fee_abs = qty_to_cost(close_qty, order.price, exchange.c_mult) * fee_rate.abs();
+        let fee_paid = if fee_rate < 0.0 { fee_abs } else { -fee_abs };
+        Some(gross_pnl + fee_paid)
     }
 
     fn gate_lossy_closes_by_peak_balance(
@@ -1069,7 +1079,14 @@ mod core {
                     kept.push(order);
                     continue;
                 }
-                let Some(projected_pnl) = projected_close_pnl(&order, &s.pos, exchange) else {
+                let symbol = &input.symbols[s.symbol_idx];
+                let Some(projected_pnl) = projected_close_pnl(
+                    &order,
+                    &s.pos,
+                    exchange,
+                    &input.global,
+                    &symbol.order_book,
+                ) else {
                     kept.push(order);
                     continue;
                 };
@@ -1108,7 +1125,14 @@ mod core {
                     kept.push(order);
                     continue;
                 }
-                let Some(projected_pnl) = projected_close_pnl(&order, &s.pos, exchange) else {
+                let symbol = &input.symbols[s.symbol_idx];
+                let Some(projected_pnl) = projected_close_pnl(
+                    &order,
+                    &s.pos,
+                    exchange,
+                    &input.global,
+                    &symbol.order_book,
+                ) else {
                     kept.push(order);
                     continue;
                 };
@@ -4321,6 +4345,67 @@ mod core {
                     .any(|b| b.order_type == OrderType::CloseAutoReduceWelLong),
                 "expected loss-gate diagnostic for blocked auto-reduce order"
             );
+        }
+
+        #[test]
+        fn realized_loss_gate_includes_projected_close_fee() {
+            let mut sym = make_basic_symbol(0);
+            sym.long.position = Position {
+                size: 10.0,
+                price: 100.0,
+            };
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.exchange.maker_fee = 0.0002;
+            sym.exchange.taker_fee = 0.00055;
+            sym.long.bot_params.wallet_exposure_limit = 0.5;
+            sym.long.bot_params.risk_wel_enforcer_threshold = 1.0;
+            sym.long.bot_params.total_wallet_exposure_limit = 1.0;
+            sym.long.bot_params.n_positions = 1;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 1.0;
+            global_bp.long.n_positions = 1;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    panic_close_market: false,
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 0.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                },
+                symbols: vec![sym],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+
+            let out = compute_ideal_orders(&input).unwrap();
+            assert!(
+                out.orders
+                    .iter()
+                    .all(|o| o.order_type != OrderType::CloseAutoReduceWelLong),
+                "break-even gross close should be blocked when maker fee makes net PnL negative"
+            );
+            let block = out
+                .diagnostics
+                .loss_gate_blocks
+                .iter()
+                .find(|b| b.order_type == OrderType::CloseAutoReduceWelLong)
+                .expect("expected loss-gate diagnostic for fee-inclusive close");
+            assert!(block.projected_pnl < 0.0);
+            assert!(block.projected_balance_after < block.balance_floor);
         }
 
         #[test]

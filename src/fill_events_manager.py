@@ -498,11 +498,6 @@ def _normalize_fee_paid_from_payload(
                 fee_source = FEE_SOURCE_REPORTED_QUOTE
                 fee_quality = FEE_QUALITY_EXACT
                 conversion_source = "same_currency"
-        elif converted_total != 0.0:
-            fee_paid = converted_total
-            fee_source = FEE_SOURCE_REPORTED_QUOTE
-            fee_quality = FEE_QUALITY_EXACT
-            conversion_source = "same_currency_partial"
 
     if fee_source == FEE_SOURCE_NONE:
         rate = _fee_rate_from_entries(entries)
@@ -1181,6 +1176,7 @@ class FillEvent:
     source_ids: List[str] = field(default_factory=list)
     psize: float = 0.0
     pprice: float = 0.0
+    c_mult: float = 1.0
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
     pnl_source: str = PNL_SOURCE_AUTHORITATIVE
     pnl_synthetic_reason: str = ""
@@ -1224,6 +1220,7 @@ class FillEvent:
             "client_order_id": self.client_order_id,
             "psize": self.psize,
             "pprice": self.pprice,
+            "c_mult": self.c_mult,
             "raw": self.raw if self.raw is not None else [],
         }
 
@@ -1289,6 +1286,7 @@ class FillEvent:
             client_order_id=str(data["client_order_id"]),
             psize=float(data.get("psize", 0.0)),
             pprice=float(data.get("pprice", 0.0)),
+            c_mult=_payload_contract_multiplier(data),
             raw=_normalize_raw_field(data.get("raw")),
         )
 
@@ -1432,8 +1430,11 @@ class FillEventCache:
                     raw["__legacy_contract"] = True
                 try:
                     events.append(FillEvent.from_dict(raw))
-                except Exception:
-                    logger.debug("[fills] cache load: skipping malformed record in %s", path)
+                except Exception as exc:
+                    raise FillEventCacheContractError(
+                        f"fill-event cache record {path} is malformed and cannot be used for "
+                        f"trading-critical accounting: {exc}"
+                    ) from exc
         events.sort(key=lambda ev: ev.timestamp)
         logger.debug(
             "[fills] cache loaded: %d events from %d files in %s",
@@ -3576,6 +3577,7 @@ class FillEventsManager:
             client_order_id=str(best_event.client_order_id),
             psize=float(best_event.psize),
             pprice=float(best_event.pprice),
+            c_mult=float(best_event.c_mult),
             raw=raw_payload,
         )
 
@@ -3626,6 +3628,30 @@ class FillEventsManager:
         grouped: Dict[Tuple[int, str, str, str, str], List[FillEvent]] = defaultdict(list)
         for ev in self._events:
             grouped[_bybit_event_group_key(ev)].append(ev)
+
+        if legacy_contract:
+            unrepairable = []
+            for key, group in grouped.items():
+                if not any(ev.pnl_contract != PNL_CONTRACT_CURRENT for ev in group):
+                    continue
+                stats = self._bybit_group_stats(group)
+                has_duplicate_rows = int(stats["duplicate_rows"]) > 0
+                has_positions_history = any(
+                    isinstance(row, dict) and str(row.get("source")) == "positions_history"
+                    for ev in group
+                    for row in _normalize_raw_field(ev.raw)
+                )
+                if not has_duplicate_rows or not has_positions_history:
+                    unrepairable.extend(ev.id for ev in group)
+            if unrepairable:
+                report["legacy_unrepairable_events"] = len(unrepairable)
+                report["legacy_unrepairable_examples"] = unrepairable[:5]
+                logger.warning(
+                    "[fills-doctor] Bybit legacy cache has rows whose gross-PnL contract "
+                    "cannot be proven by auto-repair; rebuild the cache | examples=%s",
+                    ",".join(unrepairable[:5]),
+                )
+                return report
 
         repaired_events: List[FillEvent] = []
         for key in sorted(grouped.keys()):

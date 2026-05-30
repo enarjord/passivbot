@@ -2397,7 +2397,8 @@ impl<'a> Backtest<'a> {
                 .rolling_pnl_peak_candidates
                 .front()
                 .map(|candidate| candidate.abs_cumulative_after - base_abs_cumsum)
-                .unwrap_or(0.0);
+                .unwrap_or(0.0)
+                .max(0.0);
             let rolling_current = self.pnl_cumsum_running_net - base_abs_cumsum;
             return (rolling_peak, rolling_current);
         }
@@ -7137,8 +7138,8 @@ mod tests {
 
         let (peak2, current2) = bt.effective_pnl_cumsum(2);
         assert!(
-            (peak2 - -90.0).abs() < 1e-12,
-            "expected stale positive peak to expire from 1-bar window"
+            peak2.abs() < 1e-12,
+            "expected stale positive peak to expire to the zero baseline"
         );
         assert!(
             (current2 - -90.0).abs() < 1e-12,
@@ -7216,16 +7217,16 @@ mod tests {
 
         let input2 = bt.get_orchestrator_input_cached(2, None, None);
         assert!(
-            (input2.global.realized_pnl_cumsum_max - -90.0).abs() < 1e-12,
-            "expected rolling peak to decay after the old positive fill expires"
+            input2.global.realized_pnl_cumsum_max.abs() < 1e-12,
+            "expected rolling peak to decay to the zero baseline after the old positive fill expires"
         );
         assert!(
             (input2.global.realized_pnl_cumsum_last - -90.0).abs() < 1e-12,
             "expected rolling current pnl to keep only the still-active fill"
         );
         assert!(
-            (input2.global.unstuck_allowance_long - 20.0).abs() < 1e-12,
-            "expected allowance to recover once the stale peak ages out"
+            input2.global.unstuck_allowance_long.abs() < 1e-12,
+            "expected allowance to stay exhausted while current realized PnL is below the zero baseline"
         );
     }
 
@@ -7245,7 +7246,7 @@ mod tests {
             return (0.0, 0.0);
         }
         let mut cumsum = 0.0;
-        let mut peak = f64::NEG_INFINITY;
+        let mut peak: f64 = 0.0;
         for pnl in active {
             cumsum += pnl;
             peak = peak.max(cumsum);

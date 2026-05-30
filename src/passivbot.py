@@ -2543,7 +2543,7 @@ class Passivbot:
         )
 
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(
+        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), float(
             pnls_cumsum[-1]
         )
 
@@ -8364,7 +8364,7 @@ class Passivbot:
         )
 
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
         out = {}
         balance_raw = self.get_raw_balance()
         for pside in ["long", "short"]:
@@ -8396,7 +8396,7 @@ class Passivbot:
             events, context="realized loss gate PnL cumsum"
         )
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
-        return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
+        return {"max": max(0.0, float(pnls_cumsum.max())), "last": float(pnls_cumsum[-1])}
 
     def _log_realized_loss_gate_blocks(
         self, out: dict, idx_to_symbol: dict[int, str]

@@ -110,10 +110,10 @@ class TestGetRealizedPnlCumsumStats:
 
     def test_all_negative_events(self):
         events = [_make_fill_event(-10.0), _make_fill_event(-20.0)]
-        # cumsum: [-10, -30] → max=-10, last=-30
+        # cumsum: [-10, -30] with an explicit zero starting-balance peak.
         bot = _make_bot_with_events(events)
         result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(-10.0)
+        assert result["max"] == pytest.approx(0.0)
         assert result["last"] == pytest.approx(-30.0)
 
     def test_uses_only_events_inside_configured_lookback_window(self):

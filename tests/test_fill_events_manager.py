@@ -1016,6 +1016,26 @@ def test_fee_policy_converts_reported_non_quote_fee_to_quote():
     assert meta["fee_quality"] == fem.FEE_QUALITY_CONVERTED
 
 
+def test_fee_policy_falls_back_when_mixed_fee_has_unresolved_non_quote():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fees": [
+                {"currency": "USDT", "cost": 0.10},
+                {"currency": "BNB", "cost": 0.0001},
+            ],
+        },
+        fee_pct_fallback=0.0002,
+    )
+
+    assert fee_paid == pytest.approx(-0.2)
+    assert meta["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+    assert meta["fee_quality"] == fem.FEE_QUALITY_FALLBACK
+    assert meta["fee_unresolved_non_quote"] is True
+
+
 def test_fee_policy_falls_back_to_configured_pct_with_contract_multiplier():
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         {
@@ -1118,6 +1138,7 @@ def test_fill_event_cache_roundtrip(tmp_path: Path):
                 qty=1,
                 price=2,
                 pnl=0.0,
+                c_mult=10.0,
                 pb_order_type="entry",
                 position_side="long",
                 client_order_id="cid1",
@@ -1146,6 +1167,23 @@ def test_fill_event_cache_roundtrip(tmp_path: Path):
 
     loaded = cache.load()
     assert [ev.id for ev in loaded] == ["t1", "t0"]
+    assert loaded[0].c_mult == pytest.approx(10.0)
+
+
+def test_fill_event_cache_rejects_malformed_current_contract_record(tmp_path: Path):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text(
+        json.dumps([{"id": "broken", "pnl_contract": fem.PNL_CONTRACT_CURRENT}]),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(FillEventCacheContractError, match="malformed"):
+        FillEventCache(cache_dir).load()
 
 
 @pytest.mark.asyncio
@@ -2264,6 +2302,91 @@ async def test_fill_events_manager_bybit_doctor_repairs_legacy_duplicate_cache(t
     assert repaired[0].pnl_contract == fem.PNL_CONTRACT_CURRENT
     assert repaired[0].qty == pytest.approx(-0.4)
     assert repaired[0].pnl == pytest.approx(-4.0)
+
+
+@pytest.mark.asyncio
+async def test_bybit_doctor_does_not_stamp_unproven_legacy_rows_current(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_legacy_bybit_mixed"
+    cache_path.mkdir()
+    ts = 1_770_000_000_000
+    trade_a = {
+        "id": "exec-a",
+        "timestamp": ts,
+        "amount": 0.4,
+        "price": 100.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "fee": {"currency": "USDT", "cost": 0.02},
+        "info": {"execId": "exec-a", "orderId": "order-1", "execQty": "0.4", "closedSize": "0.4"},
+    }
+    pos_hist = {
+        "source": "positions_history",
+        "data": {
+            "info": {
+                "orderId": "order-1",
+                "avgEntryPrice": "110.0",
+                "closedSize": "0.4",
+                "closeFee": "0.02",
+                "openFee": "0.0",
+            }
+        },
+    }
+    legacy_payload = [
+        {
+            "id": "exec-a+exec-a",
+            "source_ids": ["exec-a"],
+            "timestamp": ts,
+            "datetime": "2026-02-02T00:00:00",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": -0.8,
+            "price": 100.0,
+            "pnl": -8.0,
+            "fees": {"currency": "USDT", "cost": 0.04},
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "raw": [
+                {"source": "fetch_my_trades", "data": dict(trade_a)},
+                {"source": "fetch_my_trades", "data": dict(trade_a)},
+                dict(pos_hist),
+            ],
+        },
+        {
+            "id": "legacy-unproven",
+            "source_ids": ["legacy-unproven"],
+            "timestamp": ts + 1,
+            "datetime": "2026-02-02T00:00:01",
+            "symbol": "ETH/USDT:USDT",
+            "side": "sell",
+            "qty": -1.0,
+            "price": 100.0,
+            "pnl": 9.95,
+            "fee_paid": -0.05,
+            "fees": {"currency": "USDT", "cost": 0.05},
+            "pb_order_type": "close_grid_long",
+            "position_side": "long",
+            "client_order_id": "0xdef",
+            "raw": [{"source": "fetch_my_trades", "data": {"id": "legacy-unproven"}}],
+        },
+    ]
+    (cache_path / "2026-02-02.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+    assert report["legacy_contract"] is True
+    assert report["repaired"] is False
+    assert report["legacy_unrepairable_events"] == 1
+    assert report["legacy_unrepairable_examples"] == ["legacy-unproven"]
+
+    with pytest.raises(FillEventCacheContractError):
+        FillEventCache(cache_path).load()
 
 
 @pytest.mark.asyncio
