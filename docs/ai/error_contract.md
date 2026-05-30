@@ -34,6 +34,7 @@ Default rule: hard-fail.
 | Exchange fetch methods (`fetch_balance`, `fetch_positions`, `fetch_open_orders`, etc.) | Raise | None | N/A |
 | Required EMA inputs | Raise | Reuse previous EMA for same `symbol/span` only when explicitly implemented for that path | Log warning tag `[ema]` with reason/context + fallback tests |
 | Risk-gating inputs | Raise | None unless explicitly approved in task | Log warning tag `[risk]` + regression tests |
+| Live fill fee normalization (`fee_paid` used by accounting/risk gates) | Best-effort fee contract | Reported quote fee -> fresh ticker conversion for non-quote fee -> exchange fee rate -> `live.fee_pct_fallback` (which may be `0.0`); sanity outliers are replaced by the configured fallback | Per-fill fee metadata + `[fills]` warning summary + fee policy regression tests |
 | Other required trading inputs | Raise | None unless documented and approved | Log warning + regression tests |
 
 ## Warning Log Fields For Fallback Use

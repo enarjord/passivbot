@@ -3531,10 +3531,11 @@ class FillEventsManager:
                 exit_price = float(row.get("price") or info_row.get("execPrice") or 0.0)
                 if exit_price <= 0.0:
                     continue
+                c_mult = float(best_event.c_mult or 1.0)
                 if str(best_event.position_side).lower() == "long":
-                    gross = (exit_price - avg_entry) * closed_size
+                    gross = (exit_price - avg_entry) * closed_size * c_mult
                 else:
-                    gross = (avg_entry - exit_price) * closed_size
+                    gross = (avg_entry - exit_price) * closed_size * c_mult
                 recomputed += gross
                 used = True
             if used:
@@ -3583,8 +3584,8 @@ class FillEventsManager:
 
     async def run_doctor(self, *, auto_repair: bool = False) -> Dict[str, object]:
         """Detect and optionally auto-repair known fill-event cache anomalies."""
-        allow_legacy = self.exchange.lower() in {"bybit", "kucoin"}
-        await self.ensure_loaded(allow_legacy_contract=allow_legacy)
+        exchange = self.exchange.lower()
+        await self.ensure_loaded(allow_legacy_contract=True)
         report: Dict[str, object] = {
             "exchange": self.exchange,
             "user": self.user,
@@ -3602,9 +3603,37 @@ class FillEventsManager:
         )
         legacy_contract = metadata_legacy or record_legacy
         report["legacy_contract"] = legacy_contract
-        if self.exchange.lower() == "kucoin":
+        if exchange not in {"bybit", "kucoin"} and legacy_contract:
+            legacy_events = [
+                ev for ev in self._events if ev.pnl_contract != PNL_CONTRACT_CURRENT
+            ]
+            anomaly_events = len(legacy_events)
+            if metadata_legacy:
+                anomaly_events = max(anomaly_events, len(self.cache._data_files()))
+            examples = [ev.id for ev in legacy_events[:5]]
+            if not examples and metadata_legacy:
+                examples = [path.name for path in self.cache._data_files()[:5]]
+            report.update(
+                {
+                    "anomaly_events": anomaly_events,
+                    "anomaly_examples": examples,
+                    "unsupported_legacy_contract": True,
+                    "action": "rebuild_cache",
+                    "message": (
+                        "fill-event cache uses a legacy or missing pnl_contract; "
+                        "auto-repair is only supported for bybit and kucoin, so rebuild this cache "
+                        "before using trading-critical accounting"
+                    ),
+                }
+            )
+            if auto_repair:
+                report["anomaly_events_after"] = anomaly_events
+                report["anomaly_examples_after"] = examples
+            logger.warning("[fills-doctor] %s", report["message"])
+            return report
+        if exchange == "kucoin":
             return self._run_kucoin_doctor(report, auto_repair=auto_repair)
-        if self.exchange.lower() != "bybit":
+        if exchange != "bybit":
             return report
 
         anomalies = self._scan_bybit_qty_inflation(self._events)

@@ -1221,6 +1221,47 @@ async def test_fill_event_cache_rejects_legacy_missing_pnl_contract(tmp_path: Pa
 
 
 @pytest.mark.asyncio
+async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path: Path):
+    cache_dir = tmp_path / "unsupported_legacy_contract"
+    cache_dir.mkdir()
+    legacy_payload = [
+        {
+            "id": "legacy-bitget-entry",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "TON/USDT:USDT",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 10.0,
+            "pnl": 0.0,
+            "fees": {"currency": "USDT", "cost": 0.01},
+            "pb_order_type": "entry_grid_long",
+            "position_side": "long",
+            "client_order_id": "cid-legacy",
+            "raw": [],
+        }
+    ]
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+        fee_pct_sanity_abs_max=1.0,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    assert report["legacy_contract"] is True
+    assert report["unsupported_legacy_contract"] is True
+    assert report["repaired"] is False
+    assert report["action"] == "rebuild_cache"
+    assert report["anomaly_events"] == 1
+    assert report["anomaly_examples"] == ["legacy-bitget-entry"]
+    assert report["anomaly_events_after"] == 1
+
+
+@pytest.mark.asyncio
 async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path):
     cache_dir = tmp_path / "legacy_repair"
     cache_dir.mkdir()
@@ -1266,6 +1307,50 @@ async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path)
     assert by_id["legacy-entry"].fee_paid == pytest.approx(-0.1)
     assert by_id["legacy-close"].pnl == pytest.approx(2.0)
     assert by_id["legacy-close"].fee_paid == pytest.approx(-0.2)
+
+
+@pytest.mark.asyncio
+async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
+    cache_dir = tmp_path / "legacy_repair_c_mult"
+    cache_dir.mkdir()
+    ts = 1_700_000_000_000
+    legacy_payload = [
+        _kucoin_manager_fill(
+            "legacy-entry",
+            ts,
+            side="buy",
+            qty=1.0,
+            price=10.0,
+            fees={"currency": "USDT", "cost": 0.1},
+        ),
+        _kucoin_manager_fill(
+            "legacy-close",
+            ts + 60_000,
+            side="sell",
+            qty=-1.0,
+            price=12.0,
+            fees={"currency": "USDT", "cost": 0.2},
+        ),
+    ]
+    for row in legacy_payload:
+        row["c_mult"] = 5.0
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+        fee_pct_sanity_abs_max=1.0,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    assert report["repaired"] is True
+    repaired = FillEventCache(cache_dir).load()
+    by_id = {event.id: event for event in repaired}
+    assert by_id["legacy-entry"].c_mult == pytest.approx(5.0)
+    assert by_id["legacy-close"].c_mult == pytest.approx(5.0)
+    assert by_id["legacy-close"].pnl == pytest.approx(10.0)
 
 
 # ---------------------------------------------------------------------------
@@ -2269,6 +2354,7 @@ async def test_fill_events_manager_bybit_doctor_repairs_legacy_duplicate_cache(t
             "qty": -0.8,
             "price": 100.0,
             "pnl": -8.0,
+            "c_mult": 10.0,
             "fees": {"currency": "USDT", "cost": 0.04},
             "pb_order_type": "close_auto_reduce_wel_long",
             "position_side": "long",
@@ -2301,7 +2387,8 @@ async def test_fill_events_manager_bybit_doctor_repairs_legacy_duplicate_cache(t
     assert len(repaired) == 1
     assert repaired[0].pnl_contract == fem.PNL_CONTRACT_CURRENT
     assert repaired[0].qty == pytest.approx(-0.4)
-    assert repaired[0].pnl == pytest.approx(-4.0)
+    assert repaired[0].c_mult == pytest.approx(10.0)
+    assert repaired[0].pnl == pytest.approx(-40.0)
 
 
 @pytest.mark.asyncio
