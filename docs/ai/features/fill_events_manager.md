@@ -5,11 +5,15 @@
 1. Build a deduplicated fill-event stream per exchange/account.
 2. Preserve source data needed for realized PnL reconstruction.
 3. Keep fetch behavior explicit and observable during investigations.
-4. Canonical event accounting uses `pnl_contract = gross_pnl_signed_fee_paid_v1`:
-   `pnl` is gross price PnL excluding fees, `fee_paid` is signed balance impact
-   (paid fees negative, rebates positive), and net realized PnL is derived as
-   `pnl + fee_paid`.
-5. Do not mix legacy/missing-contract cache rows with current rows. Repair or
+4. Canonical event accounting uses `pnl_contract = gross_pnl_quote_fee_best_effort_v2`:
+   `pnl` is gross price PnL excluding fees, `fee_paid` is signed quote-currency
+   balance impact (paid fees negative, rebates positive), and net realized PnL
+   is derived as `pnl + fee_paid`.
+5. Fee resolution is best-effort but observable: reported quote fee, reported
+   non-quote fee converted by a fresh ticker, reported fee rate, then
+   `live.fee_pct_fallback`. Every fill is sanity-checked by fee/notional ratio
+   against `live.fee_pct_sanity_abs_max`; outliers use the fallback percentage.
+6. Do not mix legacy/missing-contract cache rows with current rows. Repair or
    rebuild legacy fill-event caches before using trading-critical accounting.
 
 ## Exchange Endpoint Map (Quick Lookup)

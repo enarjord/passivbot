@@ -55,6 +55,24 @@ PNL_SOURCE_PENDING = "pending"
 PNL_SOURCE_SYNTHETIC_EXACT = "synthetic_fill_reconstruction_exact"
 PNL_SOURCE_SYNTHETIC_DEGRADED = "synthetic_fill_reconstruction_degraded"
 PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1 = "gross_pnl_signed_fee_paid_v1"
+PNL_CONTRACT_GROSS_QUOTE_FEE_BEST_EFFORT_V2 = "gross_pnl_quote_fee_best_effort_v2"
+PNL_CONTRACT_CURRENT = PNL_CONTRACT_GROSS_QUOTE_FEE_BEST_EFFORT_V2
+DEFAULT_FEE_PCT_FALLBACK = 0.0002
+DEFAULT_FEE_PCT_SANITY_ABS_MAX = 0.001
+DEFAULT_FEE_CONVERSION_MAX_AGE_MS = 24 * 60 * 60 * 1000
+
+FEE_SOURCE_REPORTED_QUOTE = "reported_quote"
+FEE_SOURCE_REPORTED_CONVERTED = "reported_converted"
+FEE_SOURCE_ESTIMATED_RATE = "estimated_rate"
+FEE_SOURCE_FALLBACK_PCT = "fallback_pct"
+FEE_SOURCE_EXISTING = "existing_fee_paid"
+FEE_SOURCE_NONE = "none"
+
+FEE_QUALITY_EXACT = "exact"
+FEE_QUALITY_CONVERTED = "converted"
+FEE_QUALITY_ESTIMATED = "estimated"
+FEE_QUALITY_FALLBACK = "fallback"
+FEE_QUALITY_SANITY_REPLACED = "sanity_replaced"
 
 
 class FillEventCacheDiskFullError(RuntimeError):
@@ -332,6 +350,192 @@ def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
     if cost < 0.0 or rate < 0.0 or any(marker in fee_type for marker in rebate_markers):
         return abs(cost)
     return -abs(cost)
+
+
+def _fee_entry_currency(fee: Dict[str, object]) -> str:
+    return str(fee.get("currency") or fee.get("code") or "").strip().upper()
+
+
+def _quote_currency_from_symbol(symbol: object) -> str:
+    value = str(symbol or "").strip().upper()
+    if ":" in value:
+        suffix = value.rsplit(":", 1)[-1].strip()
+        if suffix:
+            return suffix
+    if "/" in value:
+        rhs = value.split("/", 1)[1]
+        return rhs.split(":", 1)[0].strip()
+    for quote in ("USDT", "USDC", "USD"):
+        if value.endswith(quote) and len(value) > len(quote):
+            return quote
+    return ""
+
+
+def _payload_quote_notional(payload: Dict[str, object]) -> float:
+    quote_value = _raw_quote_value(payload)
+    if quote_value > 0.0:
+        return quote_value
+    for key in ("cost", "value", "notional", "quoteQty", "quote_qty", "execValue"):
+        try:
+            value = abs(float(payload.get(key) or 0.0))
+        except Exception:
+            value = 0.0
+        if value > 0.0:
+            return value
+    try:
+        qty_abs = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
+        price = float(payload.get("price") or payload.get("fillPx") or 0.0)
+        c_mult = _payload_contract_multiplier(payload)
+    except Exception:
+        return 0.0
+    if qty_abs <= 0.0 or price <= 0.0 or c_mult <= 0.0:
+        return 0.0
+    return qty_abs * price * c_mult
+
+
+def _fallback_fee_paid(payload: Dict[str, object], fee_pct_fallback: float) -> float:
+    notional = _payload_quote_notional(payload)
+    if notional <= 0.0:
+        return 0.0
+    return -abs(notional * float(fee_pct_fallback))
+
+
+def _fee_rate_from_entries(fees: object) -> Optional[float]:
+    rates = []
+    for entry in _fee_entries(fees):
+        try:
+            rate = float(entry.get("rate"))
+        except Exception:
+            continue
+        if rate == 0.0:
+            continue
+        rates.append(rate)
+    if not rates:
+        return None
+    return sum(rates) / len(rates)
+
+
+def _rate_estimated_fee_paid(payload: Dict[str, object], rate: float) -> float:
+    notional = _payload_quote_notional(payload)
+    if notional <= 0.0:
+        return 0.0
+    fee_abs = abs(notional * rate)
+    return fee_abs if rate < 0.0 else -fee_abs
+
+
+def _normalize_fee_paid_from_payload(
+    payload: Dict[str, object],
+    *,
+    fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
+    fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
+    quote_currency: Optional[str] = None,
+    conversion_rates: Optional[Dict[str, float]] = None,
+) -> Tuple[float, Dict[str, object]]:
+    """Resolve a fill fee to signed quote-currency balance impact.
+
+    The stored contract remains split into gross price PnL (`pnl`) and signed
+    quote-currency fee impact (`fee_paid`). Missing or unusable fees are
+    replaced with the configured fallback percentage; setting that percentage to
+    zero makes the fallback fee exactly zero.
+    """
+    quote = (quote_currency or _quote_currency_from_symbol(payload.get("symbol"))).upper()
+    conversion_rates = conversion_rates or {}
+    entries = _fee_entries(payload.get("fees")) + _fee_entries(payload.get("fee"))
+    notional = _payload_quote_notional(payload)
+
+    fee_paid = 0.0
+    fee_source = FEE_SOURCE_NONE
+    fee_quality = FEE_QUALITY_FALLBACK
+    fee_currency = ""
+    conversion_source = "none"
+    unresolved_non_quote = False
+
+    trusted_fee_paid = (
+        "fee_paid" in payload
+        and (
+            payload.get("fee_source")
+            or str(payload.get("pnl_contract") or "") == PNL_CONTRACT_CURRENT
+            or (not entries and float(payload.get("fee_paid") or 0.0) != 0.0)
+        )
+    )
+    if trusted_fee_paid:
+        fee_paid = float(payload.get("fee_paid") or 0.0)
+        fee_source = str(payload.get("fee_source") or FEE_SOURCE_EXISTING)
+        fee_quality = str(payload.get("fee_quality") or FEE_QUALITY_EXACT)
+        fee_currency = str(payload.get("fee_currency") or quote or "").upper()
+    elif entries:
+        converted_total = 0.0
+        saw_quote = False
+        saw_converted = False
+        for entry in entries:
+            signed = _fee_entry_signed_fee_paid(entry)
+            if signed == 0.0:
+                continue
+            currency = _fee_entry_currency(entry)
+            if not fee_currency and currency:
+                fee_currency = currency
+            if not currency or (quote and currency == quote):
+                converted_total += signed
+                saw_quote = True
+                continue
+            rate = conversion_rates.get(currency)
+            if rate is None:
+                unresolved_non_quote = True
+                continue
+            converted_total += signed * float(rate)
+            saw_converted = True
+        if converted_total != 0.0 and not unresolved_non_quote:
+            fee_paid = converted_total
+            if saw_converted and not saw_quote:
+                fee_source = FEE_SOURCE_REPORTED_CONVERTED
+                fee_quality = FEE_QUALITY_CONVERTED
+                conversion_source = "ticker"
+            elif saw_converted:
+                fee_source = FEE_SOURCE_REPORTED_CONVERTED
+                fee_quality = FEE_QUALITY_CONVERTED
+                conversion_source = "ticker"
+            else:
+                fee_source = FEE_SOURCE_REPORTED_QUOTE
+                fee_quality = FEE_QUALITY_EXACT
+                conversion_source = "same_currency"
+        elif converted_total != 0.0:
+            fee_paid = converted_total
+            fee_source = FEE_SOURCE_REPORTED_QUOTE
+            fee_quality = FEE_QUALITY_EXACT
+            conversion_source = "same_currency_partial"
+
+    if fee_source == FEE_SOURCE_NONE:
+        rate = _fee_rate_from_entries(entries)
+        if rate is not None and abs(rate) <= max(float(fee_pct_sanity_abs_max), 0.0):
+            fee_paid = _rate_estimated_fee_paid(payload, rate)
+            fee_source = FEE_SOURCE_ESTIMATED_RATE
+            fee_quality = FEE_QUALITY_ESTIMATED
+        else:
+            fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
+            fee_source = FEE_SOURCE_FALLBACK_PCT
+            fee_quality = FEE_QUALITY_FALLBACK
+
+    fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
+    sanity_replaced = False
+    sanity_max = max(float(fee_pct_sanity_abs_max), 0.0)
+    if notional > 0.0 and sanity_max > 0.0 and abs(fee_ratio) > sanity_max:
+        fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
+        fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
+        sanity_replaced = True
+        fee_source = FEE_SOURCE_FALLBACK_PCT
+        fee_quality = FEE_QUALITY_SANITY_REPLACED
+
+    meta = {
+        "fee_source": fee_source,
+        "fee_quality": fee_quality,
+        "fee_currency": fee_currency or quote,
+        "fee_conversion_source": conversion_source,
+        "fee_notional": notional,
+        "fee_ratio": fee_ratio,
+        "fee_sanity_replaced": sanity_replaced,
+        "fee_unresolved_non_quote": unresolved_non_quote,
+    }
+    return float(fee_paid), meta
 
 
 def signed_fee_paid_from_fees(fees: object) -> float:
@@ -980,7 +1184,13 @@ class FillEvent:
     raw: List[Dict[str, object]] = None  # List of raw payloads from multiple sources
     pnl_source: str = PNL_SOURCE_AUTHORITATIVE
     pnl_synthetic_reason: str = ""
-    pnl_contract: str = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+    pnl_contract: str = PNL_CONTRACT_CURRENT
+    fee_source: str = FEE_SOURCE_NONE
+    fee_quality: str = FEE_QUALITY_FALLBACK
+    fee_currency: str = ""
+    fee_conversion_source: str = "none"
+    fee_notional: float = 0.0
+    fee_ratio: float = 0.0
 
     @property
     def key(self) -> str:
@@ -998,7 +1208,13 @@ class FillEvent:
             "price": self.price,
             "pnl": self.pnl,
             "fee_paid": self.fee_paid,
-            "pnl_contract": self.pnl_contract or PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1,
+            "pnl_contract": self.pnl_contract or PNL_CONTRACT_CURRENT,
+            "fee_source": self.fee_source,
+            "fee_quality": self.fee_quality,
+            "fee_currency": self.fee_currency,
+            "fee_conversion_source": self.fee_conversion_source,
+            "fee_notional": self.fee_notional,
+            "fee_ratio": self.fee_ratio,
             "pnl_status": self.pnl_status,
             "pnl_source": self.pnl_source,
             "pnl_synthetic_reason": self.pnl_synthetic_reason,
@@ -1028,6 +1244,10 @@ class FillEvent:
         missing = [key for key in required if key not in data]
         if missing:
             raise ValueError(f"Fill event missing required keys: {missing}")
+        fee_paid, fee_meta = _normalize_fee_paid_from_payload(
+            data,
+            fee_pct_sanity_abs_max=float("inf"),
+        )
         return cls(
             id=str(data["id"]),
             source_ids=(
@@ -1042,7 +1262,7 @@ class FillEvent:
             qty=float(data["qty"]),
             price=float(data["price"]),
             pnl=float(data["pnl"]),
-            fee_paid=signed_fee_paid_from_payload(data),
+            fee_paid=fee_paid,
             pnl_status=str(data.get("pnl_status") or "complete").lower(),
             pnl_source=(
                 str(data.get("pnl_source") or "").lower()
@@ -1055,8 +1275,14 @@ class FillEvent:
             pnl_synthetic_reason=str(data.get("pnl_synthetic_reason") or ""),
             pnl_contract=(
                 str(data.get("pnl_contract") or "")
-                or ("legacy" if data.get("__legacy_contract") else PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1)
+                or ("legacy" if data.get("__legacy_contract") else PNL_CONTRACT_CURRENT)
             ),
+            fee_source=str(fee_meta.get("fee_source") or FEE_SOURCE_NONE),
+            fee_quality=str(fee_meta.get("fee_quality") or FEE_QUALITY_FALLBACK),
+            fee_currency=str(fee_meta.get("fee_currency") or ""),
+            fee_conversion_source=str(fee_meta.get("fee_conversion_source") or "none"),
+            fee_notional=float(fee_meta.get("fee_notional") or 0.0),
+            fee_ratio=float(fee_meta.get("fee_ratio") or 0.0),
             fees=data.get("fees"),
             pb_order_type=str(data["pb_order_type"]),
             position_side=str(data["position_side"]).lower(),
@@ -1137,7 +1363,7 @@ class CacheMetadata(TypedDict, total=False):
     covered_start_ms: int  # Earliest open-ended lookback start confirmed against exchange
     known_gaps: List[KnownGap]  # List of known gaps
     history_scope: str  # unknown, window, all
-    pnl_contract: str  # gross_pnl_signed_fee_paid_v1
+    pnl_contract: str  # gross_pnl_quote_fee_best_effort_v2
 
 
 class FillEventCache:
@@ -1161,7 +1387,7 @@ class FillEventCache:
             return False
         return (
             isinstance(data, dict)
-            and str(data.get("pnl_contract") or "") == PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+            and str(data.get("pnl_contract") or "") == PNL_CONTRACT_CURRENT
         )
 
     def _assert_cache_contract(self, files: Sequence[Path]) -> None:
@@ -1190,7 +1416,7 @@ class FillEventCache:
                 if (
                     not allow_legacy_contract
                     and isinstance(raw, dict)
-                    and raw.get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                    and raw.get("pnl_contract") != PNL_CONTRACT_CURRENT
                 ):
                     raise FillEventCacheContractError(
                         f"fill-event cache record {path} uses a legacy or missing pnl_contract; "
@@ -1200,7 +1426,7 @@ class FillEventCache:
                 if (
                     allow_legacy_contract
                     and isinstance(raw, dict)
-                    and raw.get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                    and raw.get("pnl_contract") != PNL_CONTRACT_CURRENT
                 ):
                     raw = dict(raw)
                     raw["__legacy_contract"] = True
@@ -1225,7 +1451,7 @@ class FillEventCache:
             day_map[day].sort(key=lambda ev: ev.timestamp)
         self.save_days(day_map)
         metadata = self.load_metadata()
-        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
     def save_days(self, day_events: Dict[str, Sequence[FillEvent]]) -> None:
@@ -1274,7 +1500,7 @@ class FillEventCache:
             "covered_start_ms": 0,
             "known_gaps": [],
             "history_scope": "unknown",
-            "pnl_contract": PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1,
+            "pnl_contract": PNL_CONTRACT_CURRENT,
         }
 
         if not self.metadata_path.exists():
@@ -1304,7 +1530,7 @@ class FillEventCache:
         if self._metadata is None:
             return
 
-        self._metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        self._metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         tmp_path = self.metadata_path.with_suffix(".tmp")
         try:
             with tmp_path.open("w", encoding="utf-8") as fh:
@@ -1337,14 +1563,14 @@ class FillEventCache:
             metadata["newest_event_ts"] = newest
 
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
     def mark_refreshed(self) -> None:
         """Persist a successful refresh timestamp even if no events exist."""
         metadata = self.load_metadata()
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
     def get_known_gaps(self) -> List[KnownGap]:
@@ -1364,7 +1590,7 @@ class FillEventCache:
         if current == 0 or start_ts < current:
             metadata["covered_start_ms"] = start_ts
         metadata["last_refresh_ms"] = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
-        metadata["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+        metadata["pnl_contract"] = PNL_CONTRACT_CURRENT
         self.save_metadata(metadata)
 
     def get_history_scope(self) -> str:
@@ -2548,15 +2774,167 @@ class FillEventsManager:
         fetcher: BaseFetcher,
         cache_path: Path,
         rate_limit_coordinator: Optional[RateLimitCoordinator] = None,
+        fee_pct_fallback: float = DEFAULT_FEE_PCT_FALLBACK,
+        fee_pct_sanity_abs_max: float = DEFAULT_FEE_PCT_SANITY_ABS_MAX,
+        fee_conversion_max_age_ms: int = DEFAULT_FEE_CONVERSION_MAX_AGE_MS,
     ) -> None:
         self.exchange = exchange
         self.user = user
         self.fetcher = fetcher
         self.cache = FillEventCache(cache_path)
         self.rate_limiter = rate_limit_coordinator or RateLimitCoordinator(exchange, user)
+        self.fee_pct_fallback = float(fee_pct_fallback)
+        self.fee_pct_sanity_abs_max = float(fee_pct_sanity_abs_max)
+        self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
+        self._fee_conversion_cache: Dict[Tuple[str, str], Optional[float]] = {}
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
+
+    def _apply_fee_policy(
+        self,
+        payload: Dict[str, object],
+        *,
+        conversion_rates: Optional[Dict[str, float]] = None,
+    ) -> Dict[str, object]:
+        fee_paid, fee_meta = _normalize_fee_paid_from_payload(
+            payload,
+            fee_pct_fallback=self.fee_pct_fallback,
+            fee_pct_sanity_abs_max=self.fee_pct_sanity_abs_max,
+            conversion_rates=conversion_rates,
+        )
+        payload["fee_paid"] = fee_paid
+        payload["pnl_contract"] = PNL_CONTRACT_CURRENT
+        payload.update(fee_meta)
+        return fee_meta
+
+    async def _fee_conversion_rate(
+        self,
+        fee_currency: str,
+        quote_currency: str,
+        fill_ts: int,
+    ) -> Optional[float]:
+        fee_currency = str(fee_currency or "").upper()
+        quote_currency = str(quote_currency or "").upper()
+        if not fee_currency or not quote_currency or fee_currency == quote_currency:
+            return 1.0 if fee_currency == quote_currency else None
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        if fill_ts > 0 and abs(now_ms - int(fill_ts)) > self.fee_conversion_max_age_ms:
+            return None
+        cache_key = (fee_currency, quote_currency)
+        if cache_key in self._fee_conversion_cache:
+            return self._fee_conversion_cache[cache_key]
+        api = getattr(self.fetcher, "api", None)
+        fetch_ticker = getattr(api, "fetch_ticker", None)
+        if fetch_ticker is None:
+            self._fee_conversion_cache[cache_key] = None
+            return None
+        symbols = [
+            f"{fee_currency}/{quote_currency}",
+            f"{fee_currency}/{quote_currency}:{quote_currency}",
+        ]
+        markets = getattr(api, "markets", None)
+        if isinstance(markets, dict):
+            market_symbols = list(markets.keys())
+            symbols = [sym for sym in symbols if sym in markets] + [
+                sym
+                for sym in market_symbols
+                if sym.upper().startswith(f"{fee_currency}/{quote_currency}")
+            ]
+        seen: set[str] = set()
+        for symbol in symbols:
+            if not symbol or symbol in seen:
+                continue
+            seen.add(symbol)
+            try:
+                ticker = await fetch_ticker(symbol)
+            except Exception as exc:
+                logger.debug(
+                    "[fills] fee conversion ticker unavailable | exchange=%s user=%s pair=%s/%s symbol=%s error=%s",
+                    self.exchange,
+                    self.user,
+                    fee_currency,
+                    quote_currency,
+                    symbol,
+                    exc,
+                )
+                continue
+            if not isinstance(ticker, dict):
+                continue
+            ticker_ts = int(ticker.get("timestamp") or 0)
+            if (
+                ticker_ts > 0
+                and fill_ts > 0
+                and abs(ticker_ts - int(fill_ts)) > self.fee_conversion_max_age_ms
+            ):
+                continue
+            for key in ("last", "close", "mark", "bid", "ask"):
+                try:
+                    rate = float(ticker.get(key) or 0.0)
+                except Exception:
+                    rate = 0.0
+                if rate > 0.0:
+                    self._fee_conversion_cache[cache_key] = rate
+                    return rate
+        self._fee_conversion_cache[cache_key] = None
+        return None
+
+    async def _apply_fee_policy_to_batch(self, batch: List[Dict[str, object]]) -> None:
+        stats = {
+            FEE_SOURCE_REPORTED_QUOTE: 0,
+            FEE_SOURCE_REPORTED_CONVERTED: 0,
+            FEE_SOURCE_ESTIMATED_RATE: 0,
+            FEE_SOURCE_FALLBACK_PCT: 0,
+            FEE_QUALITY_SANITY_REPLACED: 0,
+        }
+        examples = []
+        for raw in batch:
+            quote = _quote_currency_from_symbol(raw.get("symbol"))
+            conversion_rates: Dict[str, float] = {}
+            for entry in _fee_entries(raw.get("fees")) + _fee_entries(raw.get("fee")):
+                currency = _fee_entry_currency(entry)
+                if not currency or currency == quote:
+                    continue
+                rate = await self._fee_conversion_rate(
+                    currency,
+                    quote,
+                    int(raw.get("timestamp") or 0),
+                )
+                if rate is not None:
+                    conversion_rates[currency] = rate
+            meta = self._apply_fee_policy(raw, conversion_rates=conversion_rates)
+            source = str(meta.get("fee_source") or "")
+            quality = str(meta.get("fee_quality") or "")
+            if source in stats:
+                stats[source] += 1
+            if quality == FEE_QUALITY_SANITY_REPLACED:
+                stats[FEE_QUALITY_SANITY_REPLACED] += 1
+            if (
+                source in {FEE_SOURCE_ESTIMATED_RATE, FEE_SOURCE_FALLBACK_PCT}
+                or quality == FEE_QUALITY_SANITY_REPLACED
+            ) and len(examples) < 5:
+                examples.append(
+                    f"{str(raw.get('id', ''))[:12]}:{raw.get('symbol')}:{source}:{quality}:"
+                    f"ratio={float(meta.get('fee_ratio') or 0.0):.8f}"
+                )
+        degraded = (
+            stats[FEE_SOURCE_ESTIMATED_RATE]
+            + stats[FEE_SOURCE_FALLBACK_PCT]
+            + stats[FEE_QUALITY_SANITY_REPLACED]
+        )
+        if degraded:
+            logger.warning(
+                "[fills] fee policy used non-exact fee accounting | exchange=%s user=%s "
+                "fallback_pct=%.8f sanity_abs_max=%.8f estimated=%d fallback=%d sanity_replaced=%d examples=%s",
+                self.exchange,
+                self.user,
+                self.fee_pct_fallback,
+                self.fee_pct_sanity_abs_max,
+                stats[FEE_SOURCE_ESTIMATED_RATE],
+                stats[FEE_SOURCE_FALLBACK_PCT],
+                stats[FEE_QUALITY_SANITY_REPLACED],
+                ",".join(examples),
+            )
 
     async def ensure_loaded(self, *, allow_legacy_contract: bool = False) -> None:
         if self._loaded:
@@ -2579,6 +2957,8 @@ class FillEventsManager:
             # operate on the original files.
             if self._events and not allow_legacy_contract:
                 payload = [ev.to_dict() for ev in self._events]
+                for raw in payload:
+                    self._apply_fee_policy(raw)
                 ensure_qty_signage(payload)
                 compute_psize_pprice(payload)
                 apply_hyperliquid_raw_psize_overrides(payload)
@@ -3216,7 +3596,7 @@ class FillEventsManager:
             self.cache._data_files()
         )
         record_legacy = any(
-            ev.pnl_contract != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1 for ev in self._events
+            ev.pnl_contract != PNL_CONTRACT_CURRENT for ev in self._events
         )
         legacy_contract = metadata_legacy or record_legacy
         report["legacy_contract"] = legacy_contract
@@ -3260,7 +3640,7 @@ class FillEventsManager:
         repaired_events.sort(key=lambda ev: ev.timestamp)
         payload = [ev.to_dict() for ev in repaired_events]
         for ev in payload:
-            ev["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+            ev["pnl_contract"] = PNL_CONTRACT_CURRENT
         ensure_qty_signage(payload)
         compute_psize_pprice(payload)
         apply_hyperliquid_raw_psize_overrides(payload)
@@ -3313,8 +3693,8 @@ class FillEventsManager:
             pprice = 0.0
             basis_complete = True
             for ev in sorted(evs, key=lambda item: item.get("timestamp", 0)):
-                ev["fee_paid"] = signed_fee_paid_from_payload(ev)
-                ev["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+                self._apply_fee_policy(ev)
+                ev["pnl_contract"] = PNL_CONTRACT_CURRENT
                 signed_qty = _payload_signed_effective_qty(ev)
                 price = float(ev.get("price") or 0.0)
                 add_amt, reduce_amt = _compute_add_reduce(pos_side, signed_qty)
@@ -3375,7 +3755,7 @@ class FillEventsManager:
         legacy_events = [
             ev
             for ev in self._events
-            if ev.to_dict().get("pnl_contract") != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+            if ev.to_dict().get("pnl_contract") != PNL_CONTRACT_CURRENT
         ]
         legacy_contract = not self.cache._metadata_has_current_pnl_contract() and bool(
             self.cache._data_files()
@@ -3501,8 +3881,16 @@ class FillEventsManager:
         if wrapped_api:
             self.fetcher.api = _TimedApiProxy(original_api, request_stats)
         self.fetcher.pnl_observations = []
+        fetched_batches: List[List[Dict[str, object]]] = []
+
+        def collect_batch(batch: List[Dict[str, object]]) -> None:
+            if batch:
+                fetched_batches.append([dict(ev) for ev in batch])
+
         try:
-            await self.fetcher.fetch(start_ms, end_ms, detail_cache, on_batch=handle_batch)
+            fetched_events = await self.fetcher.fetch(
+                start_ms, end_ms, detail_cache, on_batch=collect_batch
+            )
         except RateLimitExceeded:
             # Preserve bounded-range failures as known gaps so retry logic can
             # revisit them.  We still re-raise to fail loudly on critical input.
@@ -3541,12 +3929,23 @@ class FillEventsManager:
                     request_stats.format_endpoints(),
                 )
 
+        if fetched_batches:
+            for batch in fetched_batches:
+                await self._apply_fee_policy_to_batch(batch)
+                handle_batch(batch)
+        elif fetched_events:
+            batch = [dict(ev) for ev in fetched_events]
+            await self._apply_fee_policy_to_batch(batch)
+            handle_batch(batch)
+
         self._events = sorted(updated_map.values(), key=lambda ev: ev.timestamp)
         pnl_observations = list(getattr(self.fetcher, "pnl_observations", []) or [])
 
         # Annotate psize/pprice for all events
         if self._events:
             payload = [ev.to_dict() for ev in self._events]
+            for raw in payload:
+                self._apply_fee_policy(raw)
             ensure_qty_signage(payload)
             compute_psize_pprice(payload)
             apply_hyperliquid_raw_psize_overrides(payload)
@@ -5856,7 +6255,13 @@ class OkxFetcher(BaseFetcher):
         client_order_id = str(raw.get("clOrdId") or "")
         fee_ccy = str(raw.get("feeCcy") or "")
         fee_amt = float(raw.get("fee") or 0.0)
-        fee = {"currency": fee_ccy, "cost": abs(fee_amt)} if fee_ccy else None
+        fee = None
+        if fee_ccy:
+            fee = {
+                "currency": fee_ccy,
+                "cost": abs(fee_amt),
+                "type": "rebate" if fee_amt > 0.0 else "fee",
+            }
 
         return {
             "id": trade_id,
@@ -5969,6 +6374,19 @@ def _extract_symbol_pool(config: dict, override: Optional[List[str]]) -> List[st
     elif isinstance(approved, list):
         symbols.extend(approved)
     return sorted({sym for sym in symbols if sym})
+
+
+def fee_policy_kwargs_from_config(config: dict) -> Dict[str, object]:
+    live = config.get("live", {}) if isinstance(config, dict) else {}
+    return {
+        "fee_pct_fallback": float(live.get("fee_pct_fallback", DEFAULT_FEE_PCT_FALLBACK)),
+        "fee_pct_sanity_abs_max": float(
+            live.get("fee_pct_sanity_abs_max", DEFAULT_FEE_PCT_SANITY_ABS_MAX)
+        ),
+        "fee_conversion_max_age_ms": int(
+            live.get("fee_conversion_max_age_ms", DEFAULT_FEE_CONVERSION_MAX_AGE_MS)
+        ),
+    }
 
 
 def _symbol_resolver(bot) -> Callable[[Optional[str]], str]:
@@ -6103,6 +6521,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
             user=bot.user,
             fetcher=fetcher,
             cache_path=cache_path,
+            **fee_policy_kwargs_from_config(config),
         )
         now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
         start_ms = _parse_time_arg(args.start) or (

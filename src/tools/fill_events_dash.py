@@ -47,6 +47,7 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     _instantiate_bot,
+    fee_policy_kwargs_from_config,
     signed_fee_paid_from_payload,
 )
 from logging_setup import configure_logging
@@ -211,7 +212,11 @@ def _build_managers(
             key = f"{bot.exchange}:{bot.user}"
             result[key] = {
                 "manager": FillEventsManager(
-                    exchange=bot.exchange, user=bot.user, fetcher=fetcher, cache_path=cache_path
+                    exchange=bot.exchange,
+                    user=bot.user,
+                    fetcher=fetcher,
+                    cache_path=cache_path,
+                    **fee_policy_kwargs_from_config(config),
                 ),
                 "bot": bot,
                 "exchange": bot.exchange,
@@ -251,7 +256,11 @@ def _rebuild_manager(data: Dict[str, Any]) -> None:
 
         # Create new manager
         data["manager"] = FillEventsManager(
-            exchange=bot.exchange, user=bot.user, fetcher=fetcher, cache_path=cache_path
+            exchange=bot.exchange,
+            user=bot.user,
+            fetcher=fetcher,
+            cache_path=cache_path,
+            **fee_policy_kwargs_from_config(config),
         )
         data["bot"] = bot
         logging.debug(f"Rebuilt manager for {data['exchange']}:{data['user']}")

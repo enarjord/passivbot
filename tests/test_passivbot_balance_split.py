@@ -2638,8 +2638,8 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     bot.balance_raw = 200.0
     bot._pnls_manager = types.SimpleNamespace(
         get_events=lambda: [
-            types.SimpleNamespace(pnl=10.0),
-            types.SimpleNamespace(pnl=-4.0),
+            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+            types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
         ]
     )
 
@@ -2670,6 +2670,8 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     assert out["short"] == pytest.approx(0.0)
     assert len(calls) == 1
     assert calls[0][0] == pytest.approx(200.0)  # raw balance
+    assert calls[0][2] == pytest.approx(9.0)
+    assert calls[0][3] == pytest.approx(4.5)
 
 
 def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):

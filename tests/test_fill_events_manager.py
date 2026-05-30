@@ -985,6 +985,119 @@ def test_fill_event_from_dict_preserves_pending_pnl_status():
     assert event.pnl_pending is True
 
 
+def test_fee_policy_uses_reported_quote_fee():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fees": {"currency": "USDT", "cost": 0.2},
+        }
+    )
+
+    assert fee_paid == pytest.approx(-0.2)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+
+
+def test_fee_policy_converts_reported_non_quote_fee_to_quote():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fees": {"currency": "BNB", "cost": 0.0001},
+        },
+        conversion_rates={"BNB": 300.0},
+    )
+
+    assert fee_paid == pytest.approx(-0.03)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_CONVERTED
+    assert meta["fee_quality"] == fem.FEE_QUALITY_CONVERTED
+
+
+def test_fee_policy_falls_back_to_configured_pct_with_contract_multiplier():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 2.0,
+            "price": 100.0,
+            "c_mult": 10.0,
+            "fees": {"currency": "BNB", "cost": 0.0001},
+        },
+        fee_pct_fallback=0.0002,
+    )
+
+    assert fee_paid == pytest.approx(-0.4)
+    assert meta["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+    assert meta["fee_notional"] == pytest.approx(2000.0)
+
+
+def test_fee_policy_zero_fallback_means_net_equals_gross_when_fee_unresolved():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fees": {"currency": "BNB", "cost": 0.0001},
+        },
+        fee_pct_fallback=0.0,
+    )
+
+    assert fee_paid == pytest.approx(0.0)
+    assert meta["fee_source"] == fem.FEE_SOURCE_FALLBACK_PCT
+
+
+def test_fee_policy_sanity_replaces_absurd_reported_fee_with_fallback():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fees": {"currency": "USDT", "cost": 10.0},
+        },
+        fee_pct_fallback=0.0002,
+        fee_pct_sanity_abs_max=0.001,
+    )
+
+    assert fee_paid == pytest.approx(-0.2)
+    assert meta["fee_quality"] == fem.FEE_QUALITY_SANITY_REPLACED
+    assert meta["fee_ratio"] == pytest.approx(-0.0002)
+
+
+@pytest.mark.asyncio
+async def test_fee_conversion_cache_does_not_reuse_stale_fill_age(tmp_path: Path):
+    class _TickerApi:
+        markets = {"BNB/USDT": {}}
+
+        def __init__(self, ts: int) -> None:
+            self.ts = ts
+            self.calls = 0
+
+        async def fetch_ticker(self, symbol: str):
+            self.calls += 1
+            return {"symbol": symbol, "timestamp": self.ts, "last": 300.0}
+
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    fetcher = _StaticFetcher([])
+    api = _TickerApi(now_ms)
+    fetcher.api = api
+    manager = FillEventsManager(
+        exchange="binance",
+        user="user",
+        fetcher=fetcher,
+        cache_path=tmp_path,
+        fee_conversion_max_age_ms=24 * 60 * 60 * 1000,
+    )
+
+    stale_fill_ts = now_ms - 2 * 24 * 60 * 60 * 1000
+    assert await manager._fee_conversion_rate("BNB", "USDT", stale_fill_ts) is None
+    assert api.calls == 0
+
+    assert await manager._fee_conversion_rate("BNB", "USDT", now_ms) == pytest.approx(300.0)
+    assert api.calls == 1
+
+
 # ---------------------------------------------------------------------------
 # Cache tests
 # ---------------------------------------------------------------------------
@@ -1062,6 +1175,7 @@ async def test_fill_event_cache_rejects_legacy_missing_pnl_contract(tmp_path: Pa
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
+        fee_pct_sanity_abs_max=1.0,
     )
 
     with pytest.raises(FillEventCacheContractError, match="legacy or missing pnl_contract"):
@@ -1099,6 +1213,7 @@ async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path)
         user="default",
         fetcher=_StaticFetcher([]),
         cache_path=cache_dir,
+        fee_pct_sanity_abs_max=1.0,
     )
 
     report = await manager.run_doctor(auto_repair=True)
@@ -2146,7 +2261,7 @@ async def test_fill_events_manager_bybit_doctor_repairs_legacy_duplicate_cache(t
 
     repaired = FillEventCache(cache_path).load()
     assert len(repaired) == 1
-    assert repaired[0].pnl_contract == fem.PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+    assert repaired[0].pnl_contract == fem.PNL_CONTRACT_CURRENT
     assert repaired[0].qty == pytest.approx(-0.4)
     assert repaired[0].pnl == pytest.approx(-4.0)
 
@@ -2284,6 +2399,7 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()
@@ -2531,6 +2647,7 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()
@@ -2625,6 +2742,7 @@ async def test_manager_reconciles_cycle_pnl_without_leaving_synthetic_anchor(
         user="default",
         fetcher=fetcher,
         cache_path=cache_dir,
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()
@@ -2746,6 +2864,7 @@ async def test_manager_reconciles_multiple_closed_cycles_from_observations(
         user="default",
         fetcher=_StaticFetcher(events, observations=observations),
         cache_path=cache_dir,
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()
@@ -2913,6 +3032,7 @@ async def test_manager_synthesizes_pending_close_pnl_with_contract_value(
         user="default",
         fetcher=_StaticFetcher(events),
         cache_path=tmp_path / "fills_synthetic_exact",
+        fee_pct_sanity_abs_max=1.0,
     )
 
     with caplog.at_level(logging.WARNING, logger=fem.logger.name):
@@ -4226,6 +4346,7 @@ async def test_manager_reconciles_rapid_lifecycles_by_observation_close_time(
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "rapid_cycles",
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()
@@ -4266,6 +4387,7 @@ async def test_manager_reconciles_kucoin_net_cycle_pnl_to_gross_close_pnl(tmp_pa
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "net_to_gross_cycle",
+        fee_pct_sanity_abs_max=1.0,
     )
 
     await manager.refresh()
@@ -4322,6 +4444,7 @@ async def test_manager_distributes_kucoin_gross_cycle_delta_across_multiple_clos
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "multi_close_net_to_gross",
+        fee_pct_sanity_abs_max=1.0,
     )
 
     await manager.refresh()
@@ -4365,6 +4488,7 @@ async def test_manager_reconciles_out_of_order_delayed_rows_by_close_time(
         user="default",
         fetcher=_StaticFetcher(events, observations),
         cache_path=tmp_path / "out_of_order_delayed",
+        fee_pct_fallback=0.0,
     )
 
     await manager.refresh()

@@ -281,10 +281,10 @@ mod core {
         /// <=0 blocks all lossy closes; >=1 disables gating.
         #[serde(default = "default_max_realized_loss_pct")]
         pub max_realized_loss_pct: f64,
-        /// Gross realized pnl cumsum peak from fill history (statelessly reconstructed).
+        /// Net realized pnl cumsum peak from fill history (statelessly reconstructed).
         #[serde(default)]
         pub realized_pnl_cumsum_max: f64,
-        /// Gross realized pnl cumsum current value from fill history.
+        /// Net realized pnl cumsum current value from fill history.
         #[serde(default)]
         pub realized_pnl_cumsum_last: f64,
         /// If true, output orders are globally sorted by the canonical (live-bot) distance metric.

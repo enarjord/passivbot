@@ -42,6 +42,8 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
+    fee_policy_kwargs_from_config,
+    fill_event_net_pnl,
     fill_event_pnl_pending,
     signed_fee_paid_from_payload,
 )
@@ -2540,7 +2542,7 @@ class Passivbot:
             events, context="unstuck allowance logging realized PnL"
         )
 
-        pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(
             pnls_cumsum[-1]
         )
@@ -6958,7 +6960,7 @@ class Passivbot:
                 round(float(getattr(ev, "price", 0.0) or 0.0), 12),
                 round(float(getattr(ev, "pnl", 0.0) or 0.0), 12),
                 str(getattr(ev, "pnl_status", "complete") or "complete").lower(),
-                round(float(getattr(ev, "fee", 0.0) or 0.0), 12),
+                round(float(getattr(ev, "fee_paid", 0.0) or 0.0), 12),
             )
 
         return tuple(_event_key(ev) for ev in events)
@@ -7918,6 +7920,7 @@ class Passivbot:
                 user=self.user,
                 fetcher=fetcher,
                 cache_path=cache_path,
+                **fee_policy_kwargs_from_config(self.config),
             )
 
             doctor_mode = (
@@ -8301,12 +8304,16 @@ class Passivbot:
 
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
-        self._health_pnl += sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+        )
 
         if len(new_events) > 20:
             # Truncate to summary
             pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
-            total_pnl = sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+            total_pnl = sum(
+                fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+            )
             pnl_sign = "+" if total_pnl >= 0 else ""
             pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
             logging.info(
@@ -8335,7 +8342,9 @@ class Passivbot:
         """Log realized-PnL enrichment for already seen close fills."""
         if not events:
             return
-        self._health_pnl += sum(ev.pnl for ev in events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in events if not fill_event_pnl_pending(ev)
+        )
         for event in sorted(events, key=lambda e: e.timestamp):
             logging.info(
                 "[fill] enriched realized pnl for previously pending fill | %s",
@@ -8354,7 +8363,7 @@ class Passivbot:
             events, context="unstuck allowance realized PnL"
         )
 
-        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
         out = {}
         balance_raw = self.get_raw_balance()
@@ -8377,7 +8386,7 @@ class Passivbot:
         return out
 
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
-        """Return gross realized pnl cumsum peak/current from FillEventsManager history."""
+        """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
         events = self._get_effective_pnl_events()
@@ -8386,7 +8395,7 @@ class Passivbot:
         self._assert_no_pending_pnl_events(
             events, context="realized loss gate PnL cumsum"
         )
-        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
 
     def _log_realized_loss_gate_blocks(

@@ -447,6 +447,7 @@ pub struct Backtest<'a> {
     pnl_cumsum_running: f64,
     pnl_cumsum_max: f64,
     pnl_cumsum_running_net: f64,
+    pnl_cumsum_max_net: f64,
     pnl_cumsum_running_net_pside: [f64; 2],
     pnl_lookback_bars: usize,
     pnl_events: VecDeque<RollingPnlEvent>,
@@ -1757,6 +1758,7 @@ impl<'a> Backtest<'a> {
             pnl_cumsum_running: 0.0,
             pnl_cumsum_max: 0.0,
             pnl_cumsum_running_net: 0.0,
+            pnl_cumsum_max_net: 0.0,
             pnl_cumsum_running_net_pside: [0.0, 0.0],
             pnl_lookback_bars: if backtest_params.pnls_max_lookback_days < 0.0 {
                 usize::MAX
@@ -2349,7 +2351,7 @@ impl<'a> Backtest<'a> {
             return;
         }
         self.prune_rolling_pnl_window(k);
-        let abs_cumulative_after = self.pnl_cumsum_running;
+        let abs_cumulative_after = self.pnl_cumsum_running_net;
         let seq = self.pnl_event_seq;
         self.pnl_event_seq = self.pnl_event_seq.saturating_add(1);
         self.pnl_events.push_back(RollingPnlEvent {
@@ -2375,7 +2377,7 @@ impl<'a> Backtest<'a> {
     #[inline]
     fn effective_pnl_cumsum(&mut self, k: usize) -> (f64, f64) {
         if self.pnl_lookback_bars == usize::MAX {
-            return (self.pnl_cumsum_max, self.pnl_cumsum_running);
+            return (self.pnl_cumsum_max_net, self.pnl_cumsum_running_net);
         }
         if self.pnl_lookback_bars > 0 {
             self.prune_rolling_pnl_window(k);
@@ -2396,10 +2398,10 @@ impl<'a> Backtest<'a> {
                 .front()
                 .map(|candidate| candidate.abs_cumulative_after - base_abs_cumsum)
                 .unwrap_or(0.0);
-            let rolling_current = self.pnl_cumsum_running - base_abs_cumsum;
+            let rolling_current = self.pnl_cumsum_running_net - base_abs_cumsum;
             return (rolling_peak, rolling_current);
         }
-        (self.pnl_cumsum_max, self.pnl_cumsum_running)
+        (self.pnl_cumsum_max_net, self.pnl_cumsum_running_net)
     }
 
     #[inline]
@@ -3205,8 +3207,9 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
+        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[LONG] += pnl + fee_paid;
-        self.record_rolling_pnl(k, pnl);
+        self.record_rolling_pnl(k, pnl + fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3304,8 +3307,9 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_running += pnl;
         self.pnl_cumsum_max = self.pnl_cumsum_max.max(self.pnl_cumsum_running);
         self.pnl_cumsum_running_net += pnl + fee_paid;
+        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[SHORT] += pnl + fee_paid;
-        self.record_rolling_pnl(k, pnl);
+        self.record_rolling_pnl(k, pnl + fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3380,7 +3384,9 @@ impl<'a> Backtest<'a> {
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
+        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[LONG] += fee_paid;
+        self.record_rolling_pnl(k, fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3457,7 +3463,9 @@ impl<'a> Backtest<'a> {
         let fee_paid = -qty_to_cost(order.qty, exec.price, self.exchange_params_list[idx].c_mult)
             * exec.fee_rate;
         self.pnl_cumsum_running_net += fee_paid;
+        self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[SHORT] += fee_paid;
+        self.record_rolling_pnl(k, fee_paid);
         let balance_before = self.snapshot_balance();
         self.update_balance(k, 0.0, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -6935,6 +6943,8 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 100.0;
         bt.pnl_cumsum_max = 10.0;
         bt.pnl_cumsum_running = 0.0;
+        bt.pnl_cumsum_max_net = 10.0;
+        bt.pnl_cumsum_running_net = 0.0;
 
         let input = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
@@ -6950,14 +6960,14 @@ mod tests {
         let expected_from_raw = calc_auto_unstuck_allowance(
             200.0,
             allowance_pct,
-            bt.pnl_cumsum_max,
-            bt.pnl_cumsum_running,
+            bt.pnl_cumsum_max_net,
+            bt.pnl_cumsum_running_net,
         );
         let expected_from_snapped = calc_auto_unstuck_allowance(
             100.0,
             allowance_pct,
-            bt.pnl_cumsum_max,
-            bt.pnl_cumsum_running,
+            bt.pnl_cumsum_max_net,
+            bt.pnl_cumsum_running_net,
         );
         assert!(
             (input.global.unstuck_allowance_long - expected_from_raw).abs() < 1e-12,
@@ -7026,6 +7036,8 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 1000.0;
         bt.pnl_cumsum_max = 0.0;
         bt.pnl_cumsum_running = 0.0;
+        bt.pnl_cumsum_max_net = 0.0;
+        bt.pnl_cumsum_running_net = 0.0;
 
         let input1 = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
@@ -7044,6 +7056,8 @@ mod tests {
         bt.balance.usd_total_balance_rounded = 1000.0; // snapped stays (hysteresis)
         bt.pnl_cumsum_max = 50.0;
         bt.pnl_cumsum_running = 50.0;
+        bt.pnl_cumsum_max_net = 50.0;
+        bt.pnl_cumsum_running_net = 50.0;
 
         let input2 = bt.get_orchestrator_input_cached(1, None, None);
         assert!(
@@ -7242,6 +7256,8 @@ mod tests {
     fn record_realized_pnl_for_test(bt: &mut Backtest, k: usize, pnl: f64) {
         bt.pnl_cumsum_running += pnl;
         bt.pnl_cumsum_max = bt.pnl_cumsum_max.max(bt.pnl_cumsum_running);
+        bt.pnl_cumsum_running_net += pnl;
+        bt.pnl_cumsum_max_net = bt.pnl_cumsum_max_net.max(bt.pnl_cumsum_running_net);
         bt.record_rolling_pnl(k, pnl);
     }
 

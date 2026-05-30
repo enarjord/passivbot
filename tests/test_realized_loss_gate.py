@@ -90,11 +90,11 @@ class TestGetRealizedPnlCumsumStats:
         assert result["max"] == pytest.approx(50.0)
         assert result["last"] == pytest.approx(50.0)
 
-    def test_realized_loss_gate_uses_gross_pnl_without_fee_paid(self):
+    def test_realized_loss_gate_uses_net_pnl_with_fee_paid(self):
         bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
         result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(50.0)
-        assert result["last"] == pytest.approx(50.0)
+        assert result["max"] == pytest.approx(45.0)
+        assert result["last"] == pytest.approx(45.0)
 
     def test_cumsum_peak_differs_from_last(self):
         events = [

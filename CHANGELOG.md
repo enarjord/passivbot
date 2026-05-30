@@ -5,9 +5,16 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Canonicalized live fill-event accounting: cached fills now store gross `pnl`,
-  signed `fee_paid`, and a `gross_pnl_signed_fee_paid_v1` cache contract; KuCoin
-  positions-history net cycle PnL is converted back to gross close-fill PnL before
-  reconciliation, and legacy/missing-contract caches must be repaired or rebuilt.
+  signed quote-currency `fee_paid`, fee-quality metadata, and a
+  `gross_pnl_quote_fee_best_effort_v2` cache contract. Non-quote fees are
+  converted when a fresh ticker is available, otherwise estimated from reported
+  fee rates or `live.fee_pct_fallback`; every fill is sanity-checked against
+  `live.fee_pct_sanity_abs_max`.
+- Live realized-loss gates, unstuck allowances, fill health summaries, and
+  backtest rolling realized-PnL risk windows now use net realized PnL
+  (`pnl + fee_paid`) consistently. KuCoin positions-history net cycle PnL is
+  converted back to gross close-fill PnL before reconciliation, and
+  legacy/missing-contract caches must be repaired or rebuilt.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit

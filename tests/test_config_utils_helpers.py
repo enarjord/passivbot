@@ -322,6 +322,8 @@ def test_migrate_config_version_sets_current_schema_version():
 def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatting():
     template = get_template_config()
     assert template["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+    assert template["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert template["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     sparse = {
         "live": {},
@@ -332,9 +334,13 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     }
     formatted = format_config(sparse, verbose=False)
     assert formatted["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+    assert formatted["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert formatted["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
     loaded = load_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
+    assert loaded["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
+    assert loaded["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
 
 def test_migrate_btc_collateral_settings_converts_bool():
@@ -1132,6 +1138,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_near_touch = parser.parse_args(["-montt", "0.002"])
     parsed_lookback = parser.parse_args(["-pmld", "14"])
     parsed_loss = parser.parse_args(["-mrlp", "0.75"])
+    parsed_fee_fallback = parser.parse_args(["--fee-pct-fallback", "0"])
+    parsed_fee_sanity = parser.parse_args(["--fee-pct-sanity-abs-max", "0.002"])
 
     assert getattr(parsed_market, "live.market_orders_allowed") is True
     assert getattr(parsed_hedge, "live.hedge_mode") is False
@@ -1140,6 +1148,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     )
     assert getattr(parsed_lookback, "live.pnls_max_lookback_days") == pytest.approx(14.0)
     assert getattr(parsed_loss, "live.max_realized_loss_pct") == pytest.approx(0.75)
+    assert getattr(parsed_fee_fallback, "live.fee_pct_fallback") == pytest.approx(0.0)
+    assert getattr(parsed_fee_sanity, "live.fee_pct_sanity_abs_max") == pytest.approx(0.002)
 
 
 def test_backtest_default_help_shows_live_near_touch_threshold_override():
