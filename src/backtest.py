@@ -117,6 +117,7 @@ from warmup_utils import (
 from backtest_universe import (
     POSITION_SIDES,
     effective_backtest_approved_coins_by_side,
+    effective_backtest_data_coins,
     normalize_backtest_coin,
 )
 from pathlib import Path
@@ -1608,10 +1609,27 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         logging.info(f"Unable to load hlcvs data from cache: {e}. Fetching...")
     local_v2 = None
     if exchange != "combined":
+        backtest_cfg = config.get("backtest", {}) if isinstance(config, dict) else {}
+        has_explicit_source_dir = bool(backtest_cfg.get("ohlcv_source_dir"))
+        stock_perp_coins = [
+            coin
+            for coin in effective_backtest_data_coins(config)
+            if str(coin).startswith("xyz:")
+        ]
         try:
-            local_v2 = await try_prepare_hlcvs_v2_local(
-                config, exchange, force_refetch_gaps=force_refetch_gaps
-            )
+            if stock_perp_coins and has_explicit_source_dir:
+                # Source-dir stock-perp imports need the direct preparer; keep that
+                # exception explicit so default stock-perp runs still fail strict.
+                local_v2 = await prepare_hlcvs(
+                    config,
+                    exchange,
+                    force_refetch_gaps=force_refetch_gaps,
+                    skip_v2_local=True,
+                )
+            else:
+                local_v2 = await try_prepare_hlcvs_v2_local(
+                    config, exchange, force_refetch_gaps=force_refetch_gaps
+                )
         except Exception as e:
             raise ValueError(f"{exchange} deterministic HLCV materialization failed: {e}") from e
     if local_v2 is not None:

@@ -11,6 +11,9 @@ All notable user-facing changes will be documented in this file.
 - Updated user-facing docs for current CLI logging flags, custom endpoint setup,
   backtest exchange naming, suite exchange expansion, uncovered tool commands, and
   current Forager/indicator wording.
+- Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
+  `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
+  strict local v2 materialization is unavailable.
 
 ## v7.12.0 - 2026-05-27
 
