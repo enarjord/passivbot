@@ -1423,8 +1423,9 @@ async def test_bybit_fetcher_merges_pnl_and_batches(monkeypatch):
     event = events[0]
     assert event["id"] == "trade-1"
     assert event["pb_order_type"] == "close_grid_long"
-    # PnL = (105 - 100) * 0.1 - fees = 0.5 - 0.0002 = 0.4998
-    assert event["pnl"] == pytest.approx(0.4998, rel=1e-3)
+    # Canonical PnL is gross; fees are carried separately as signed fee_paid.
+    assert event["pnl"] == pytest.approx(0.5, rel=1e-3)
+    assert FillEvent.from_dict(event).fee_paid == pytest.approx(-0.0001)
     assert event["pnl_status"] == "complete"
     assert event["client_order_id"] == "0xabc"
     assert event["symbol"] == "BTC/USDT"
@@ -2078,6 +2079,79 @@ async def test_fill_events_manager_bybit_doctor_auto_repairs_cross_event_duplica
 
 
 @pytest.mark.asyncio
+async def test_fill_events_manager_bybit_doctor_repairs_legacy_duplicate_cache(tmp_path: Path):
+    cache_path = tmp_path / "fills_doctor_legacy_bybit"
+    cache_path.mkdir()
+    ts = 1_770_000_000_000
+    trade_a = {
+        "id": "exec-a",
+        "timestamp": ts,
+        "amount": 0.4,
+        "price": 100.0,
+        "side": "sell",
+        "symbol": "BTC/USDT:USDT",
+        "fee": {"currency": "USDT", "cost": 0.02},
+        "info": {"execId": "exec-a", "orderId": "order-1", "execQty": "0.4", "closedSize": "0.4"},
+    }
+    pos_hist = {
+        "source": "positions_history",
+        "data": {
+            "info": {
+                "orderId": "order-1",
+                "avgEntryPrice": "110.0",
+                "closedSize": "0.4",
+                "closeFee": "0.02",
+                "openFee": "0.0",
+            }
+        },
+    }
+    legacy_payload = [
+        {
+            "id": "exec-a+exec-a",
+            "source_ids": ["exec-a"],
+            "timestamp": ts,
+            "datetime": "2026-02-02T00:00:00",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": -0.8,
+            "price": 100.0,
+            "pnl": -8.0,
+            "fees": {"currency": "USDT", "cost": 0.04},
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "raw": [
+                {"source": "fetch_my_trades", "data": dict(trade_a)},
+                {"source": "fetch_my_trades", "data": dict(trade_a)},
+                dict(pos_hist),
+            ],
+        }
+    ]
+    (cache_path / "2026-02-02.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_path,
+    )
+
+    with pytest.raises(FillEventCacheContractError):
+        await manager.ensure_loaded()
+
+    report = await manager.run_doctor(auto_repair=True)
+    assert report["legacy_contract"] is True
+    assert report["anomaly_events"] > 0
+    assert report["repaired"] is True
+
+    repaired = FillEventCache(cache_path).load()
+    assert len(repaired) == 1
+    assert repaired[0].pnl_contract == fem.PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
+    assert repaired[0].qty == pytest.approx(-0.4)
+    assert repaired[0].pnl == pytest.approx(-4.0)
+
+
+@pytest.mark.asyncio
 async def test_hyperliquid_fetcher_basic(monkeypatch):
     base_ts = int(datetime.now(timezone.utc).timestamp() * 1000)
     trades_batches = [
@@ -2240,6 +2314,55 @@ async def test_manager_refresh_persists_and_queries(tmp_path: Path, sample_event
     await manager2.ensure_loaded()
     assert manager2.get_last_timestamp() == last_ts
     assert manager2.get_pnl_sum() == pytest.approx(0.5)
+
+
+def test_manager_pnl_helpers_report_net_pnl(tmp_path: Path):
+    ts = 1_700_000_000_000
+    manager = FillEventsManager(
+        exchange="bitget",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path / "fills_net_pnl",
+    )
+    manager._events = [
+        FillEvent.from_dict(
+            {
+                "id": "gross-profit",
+                "timestamp": ts,
+                "datetime": "",
+                "symbol": "BTC/USDT",
+                "side": "sell",
+                "qty": -1.0,
+                "price": 11.0,
+                "pnl": 1.0,
+                "fees": {"currency": "USDT", "cost": 0.1},
+                "pb_order_type": "close",
+                "position_side": "long",
+                "client_order_id": "cid-1",
+            }
+        ),
+        FillEvent.from_dict(
+            {
+                "id": "rebated-loss",
+                "timestamp": ts + 1_000,
+                "datetime": "",
+                "symbol": "BTC/USDT",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 10.5,
+                "pnl": -0.5,
+                "fees": {"currency": "USDT", "cost": -0.05},
+                "pb_order_type": "close",
+                "position_side": "short",
+                "client_order_id": "cid-2",
+            }
+        ),
+    ]
+    manager._loaded = True
+
+    assert manager.get_pnl_sum() == pytest.approx(0.45)
+    assert manager.get_pnl_cumsum()[-1][1] == pytest.approx(0.45)
+    assert manager.reconstruct_equity_curve(starting_equity=10.0)[-1][1] == pytest.approx(10.45)
 
 
 @pytest.mark.asyncio
@@ -3986,6 +4109,46 @@ async def test_kucoin_fetcher_entry_fee_is_signed_fee_paid(monkeypatch):
 
     assert out[0]["pnl"] == pytest.approx(0.0)
     assert out[0]["fee_paid"] == pytest.approx(-0.25)
+
+
+def test_kucoin_normalize_trade_reads_plural_fees():
+    ts = 1_700_000_000_000
+    event = KucoinFetcher._normalize_trade(
+        {
+            "id": "plural-fee",
+            "timestamp": ts,
+            "symbol": "BTC/USDT:USDT",
+            "side": "buy",
+            "amount": 1.0,
+            "price": 10.0,
+            "fees": [{"currency": "USDT", "cost": 0.25}],
+            "info": {"tradeId": "plural-fee", "orderId": "order-1"},
+        }
+    )
+
+    assert event["fees"] == [{"currency": "USDT", "cost": 0.25}]
+    assert event["fee_paid"] == pytest.approx(-0.25)
+
+
+def test_signed_fee_paid_sums_raw_kucoin_fee_fields():
+    fee_paid = fem.signed_fee_paid_from_payload(
+        {
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "info": {
+                            "openFeePay": "0.1",
+                            "closeFeePay": "0.2",
+                            "fee": "-0.03",
+                        }
+                    },
+                }
+            ]
+        }
+    )
+
+    assert fee_paid == pytest.approx(-0.27)
 
 
 @pytest.mark.asyncio

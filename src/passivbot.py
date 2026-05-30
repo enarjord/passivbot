@@ -7928,14 +7928,15 @@ class Passivbot:
             try:
                 await self._pnls_manager.ensure_loaded()
             except FillEventCacheContractError:
-                if self.exchange == "kucoin" and doctor_mode in (
+                auto_repair_mode = doctor_mode in (
                     "1",
                     "true",
                     "yes",
                     "repair",
                     "fix",
                     "auto",
-                ):
+                )
+                if self.exchange == "kucoin" and auto_repair_mode:
                     report = await self._pnls_manager.run_doctor(auto_repair=True)
                     logging.info(
                         "[fills-doctor] startup repaired legacy KuCoin cache anomalies=%s repaired=%s mode=%s",
@@ -7943,6 +7944,24 @@ class Passivbot:
                         report.get("repaired", False),
                         doctor_mode,
                     )
+                    if not report.get("repaired", False):
+                        raise
+                elif self.exchange == "bybit" and doctor_mode not in (
+                    "0",
+                    "false",
+                    "off",
+                    "disable",
+                    "disabled",
+                ):
+                    report = await self._pnls_manager.run_doctor(auto_repair=True)
+                    logging.info(
+                        "[fills-doctor] startup repaired legacy Bybit cache anomalies=%s repaired=%s mode=%s",
+                        report.get("anomaly_events", 0),
+                        report.get("repaired", False),
+                        doctor_mode or "repair",
+                    )
+                    if not report.get("repaired", False):
+                        raise
                 else:
                     raise
 

@@ -352,6 +352,7 @@ def signed_fee_paid_from_payload(payload: Dict[str, object]) -> float:
 
     # KuCoin futures sometimes exposes explicit paid-fee fields in raw info even
     # when the CCXT fee wrapper is absent.
+    raw_fee_paid = 0.0
     raw_items = _normalize_raw_field(payload.get("raw"))
     for raw in raw_items:
         data = raw.get("data") if isinstance(raw, dict) else raw
@@ -368,8 +369,15 @@ def signed_fee_paid_from_payload(payload: Dict[str, object]) -> float:
                 except Exception:
                     continue
                 if value != 0.0:
-                    return abs(value) if value < 0.0 else -abs(value)
-    return 0.0
+                    raw_fee_paid += abs(value) if value < 0.0 else -abs(value)
+    return raw_fee_paid
+
+
+def fill_event_net_pnl(event: object) -> float:
+    """Return canonical net realized PnL for a FillEvent-like object."""
+    pnl = float(getattr(event, "pnl", 0.0) or 0.0)
+    fee_paid = float(getattr(event, "fee_paid", 0.0) or 0.0)
+    return pnl + fee_paid
 
 
 def _payload_pnl_source(payload: Dict[str, object]) -> str:
@@ -1162,8 +1170,8 @@ class FillEventCache:
         if not self._metadata_has_current_pnl_contract():
             raise FillEventCacheContractError(
                 f"fill-event cache {self.root} uses a legacy or missing pnl_contract; "
-                "run fill-events doctor with --repair or rebuild the cache before using "
-                "trading-critical accounting"
+                "run `passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
+                "for supported repair paths, or rebuild the cache before using trading-critical accounting"
             )
 
     def load(self, *, allow_legacy_contract: bool = False) -> List[FillEvent]:
@@ -1186,8 +1194,8 @@ class FillEventCache:
                 ):
                     raise FillEventCacheContractError(
                         f"fill-event cache record {path} uses a legacy or missing pnl_contract; "
-                        "run fill-events doctor with --repair or rebuild the cache before using "
-                        "trading-critical accounting"
+                        "run `passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
+                        "for supported repair paths, or rebuild the cache before using trading-critical accounting"
                     )
                 if (
                     allow_legacy_contract
@@ -3131,7 +3139,6 @@ class FillEventsManager:
             total_closed = float(info.get("closedSize") or data.get("contracts") or 0.0)
             if avg_entry <= 0.0 or total_closed <= 0.0:
                 continue
-            total_fees = float(info.get("closeFee") or 0.0) + float(info.get("openFee") or 0.0)
             recomputed = 0.0
             used = False
             for row in mt_rows_unique:
@@ -3147,8 +3154,7 @@ class FillEventsManager:
                     gross = (exit_price - avg_entry) * closed_size
                 else:
                     gross = (avg_entry - exit_price) * closed_size
-                fee_portion = (closed_size / total_closed) * total_fees if total_closed > 0.0 else 0.0
-                recomputed += gross - fee_portion
+                recomputed += gross
                 used = True
             if used:
                 pnl = recomputed
@@ -3195,7 +3201,7 @@ class FillEventsManager:
 
     async def run_doctor(self, *, auto_repair: bool = False) -> Dict[str, object]:
         """Detect and optionally auto-repair known fill-event cache anomalies."""
-        allow_legacy = self.exchange.lower() == "kucoin"
+        allow_legacy = self.exchange.lower() in {"bybit", "kucoin"}
         await self.ensure_loaded(allow_legacy_contract=allow_legacy)
         report: Dict[str, object] = {
             "exchange": self.exchange,
@@ -3206,6 +3212,14 @@ class FillEventsManager:
             "auto_repair": bool(auto_repair),
             "repaired": False,
         }
+        metadata_legacy = not self.cache._metadata_has_current_pnl_contract() and bool(
+            self.cache._data_files()
+        )
+        record_legacy = any(
+            ev.pnl_contract != PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1 for ev in self._events
+        )
+        legacy_contract = metadata_legacy or record_legacy
+        report["legacy_contract"] = legacy_contract
         if self.exchange.lower() == "kucoin":
             return self._run_kucoin_doctor(report, auto_repair=auto_repair)
         if self.exchange.lower() != "bybit":
@@ -3215,6 +3229,18 @@ class FillEventsManager:
         report["anomaly_events"] = len(anomalies)
         report["anomaly_examples"] = anomalies[:5]
         if not anomalies or not auto_repair:
+            if legacy_contract and auto_repair and not record_legacy:
+                self.cache.update_metadata_from_events(self._events)
+                report["repaired"] = True
+                report["anomaly_events_after"] = 0
+                report["anomaly_examples_after"] = []
+                logger.info("[fills-doctor] repaired Bybit fill cache metadata contract")
+                return report
+            if legacy_contract and not anomalies:
+                logger.warning(
+                    "[fills-doctor] Bybit cache uses a legacy pnl_contract but has no "
+                    "known auto-repairable duplicate-fill anomaly; rebuild the cache"
+                )
             return report
 
         grouped: Dict[Tuple[int, str, str, str, str], List[FillEvent]] = defaultdict(list)
@@ -3233,6 +3259,8 @@ class FillEventsManager:
 
         repaired_events.sort(key=lambda ev: ev.timestamp)
         payload = [ev.to_dict() for ev in repaired_events]
+        for ev in payload:
+            ev["pnl_contract"] = PNL_CONTRACT_GROSS_SIGNED_FEE_PAID_V1
         ensure_qty_signage(payload)
         compute_psize_pprice(payload)
         apply_hyperliquid_raw_psize_overrides(payload)
@@ -3834,7 +3862,7 @@ class FillEventsManager:
     ) -> float:
         events = self.get_events(start_ms, end_ms, symbol)
         self.assert_no_pending_pnl(events, context="FillEventsManager.get_pnl_sum")
-        return float(sum(ev.pnl for ev in events))
+        return float(sum(fill_event_net_pnl(ev) for ev in events))
 
     def get_pnl_cumsum(
         self,
@@ -3847,7 +3875,7 @@ class FillEventsManager:
         total = 0.0
         result = []
         for ev in events:
-            total += ev.pnl
+            total += fill_event_net_pnl(ev)
             result.append((ev.timestamp, total))
         return result
 
@@ -3875,7 +3903,7 @@ class FillEventsManager:
         total = starting_equity
         points: List[Tuple[int, float]] = []
         for ev in self._events:
-            total += ev.pnl
+            total += fill_event_net_pnl(ev)
             points.append((ev.timestamp, total))
         return points
 
@@ -4276,19 +4304,23 @@ class BybitFetcher(BaseFetcher):
                     else:
                         gross_pnl = (avg_entry - exit_price) * closed_size
 
-                    # Distribute fees proportionally if this fill is part of larger close
-                    total_closed = pnl_record["closedSize"]
-                    total_fees = pnl_record["closeFee"] + pnl_record["openFee"]
-                    if total_closed > 0:
-                        fee_portion = (closed_size / total_closed) * total_fees
-                    else:
-                        fee_portion = 0.0
-
-                    event["pnl"] = gross_pnl - fee_portion
+                    event["pnl"] = gross_pnl
                     computed_count += 1
                 else:
-                    # Fallback to closedPnl if avgEntryPrice unavailable
-                    event["pnl"] = pnl_record["closedPnl"]
+                    # Bybit closedPnl is net. Without entry/exit basis we cannot
+                    # convert it to the canonical gross-PnL contract.
+                    event["pnl"] = 0.0
+                    event["pnl_status"] = "pending"
+                    event["pnl_source"] = PNL_SOURCE_PENDING
+                    if order_id in raw_pnl_by_order:
+                        event["raw"].append(
+                            {
+                                "source": "positions_history",
+                                "data": raw_pnl_by_order[order_id],
+                            }
+                        )
+                    events.append(event)
+                    continue
 
                 matched_count += 1
                 event["pnl_status"] = "complete"
@@ -4328,7 +4360,7 @@ class BybitFetcher(BaseFetcher):
         position_side = BybitFetcher._determine_position_side(side, closed_size)
         pnl = float(trade.get("pnl") or 0.0)
         client_order_id = info.get("orderLinkId") or trade.get("clientOrderId")
-        fee = trade.get("fee")
+        fee = trade.get("fees") or trade.get("fee")
         symbol = trade.get("symbol") or info.get("symbol")
 
         return {
@@ -5330,7 +5362,7 @@ class KucoinFetcher(BaseFetcher):
         side = str(trade.get("side") or info.get("side") or "").lower()
         qty = abs(float(trade.get("amount") or info.get("size") or info.get("amount") or 0.0))
         price = float(trade.get("price") or info.get("price") or 0.0)
-        fee = trade.get("fee")
+        fee = trade.get("fees") or trade.get("fee")
         reduce_only = bool(trade.get("reduceOnly") or info.get("closeOrder") or False)
         close_fee_pay = float(info.get("closeFeePay") or 0.0)
         position_side = KucoinFetcher._determine_position_side(side, reduce_only, close_fee_pay)
