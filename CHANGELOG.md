@@ -15,8 +15,16 @@ All notable user-facing changes will be documented in this file.
   (`pnl + fee_paid`) consistently. KuCoin positions-history net cycle PnL is
   converted back to gross close-fill PnL before reconciliation, and
   legacy/missing-contract caches must be repaired or rebuilt.
+- Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
+  account-state or candle fetches are logged, counted, and routed through the
+  existing restart/backoff path instead of silently exiting without countdown.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
+- `live.custom_endpoints_path` is now part of the canonical config schema, so normalized
+  live configs preserve endpoint override files instead of dropping the documented setting.
+- Updated user-facing docs for current CLI logging flags, custom endpoint setup,
+  backtest exchange naming, suite exchange expansion, uncovered tool commands, and
+  current Forager/indicator wording.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.

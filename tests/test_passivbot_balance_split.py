@@ -2211,6 +2211,59 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
 
 
 @pytest.mark.asyncio
+async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_surface():
+    from live import state_refresh
+
+    class FakeBot:
+        def __init__(self):
+            self.progress_cancelled = False
+            self.positions_cancelled = False
+            self.timing_logs = []
+
+        async def capture_authoritative_state_staged_snapshot(self, plan, timings_ms):
+            return None
+
+        async def _timed_authoritative_fetch(self, surface, coro, timings_ms):
+            return await state_refresh.timed_authoritative_fetch(
+                self, surface, coro, timings_ms
+            )
+
+        async def _capture_balance_staged_snapshot(self):
+            raise asyncio.CancelledError("balance fetch cancelled")
+
+        async def _capture_positions_staged_snapshot(self):
+            try:
+                await asyncio.sleep(60.0)
+            except asyncio.CancelledError:
+                self.positions_cancelled = True
+                raise
+
+        async def _log_staged_refresh_progress_until(
+            self, plan, timings_ms, tasks, wall_started_ms
+        ):
+            try:
+                await asyncio.sleep(60.0)
+            except asyncio.CancelledError:
+                self.progress_cancelled = True
+                raise
+
+        def _log_staged_refresh_timings(self, plan, timings_ms, wall_ms):
+            self.timing_logs.append((set(plan), dict(timings_ms), int(wall_ms)))
+
+    bot = FakeBot()
+
+    with pytest.raises(asyncio.CancelledError, match="balance fetch cancelled"):
+        await state_refresh.fetch_authoritative_state_staged_snapshot(
+            bot, {"balance", "positions"}
+        )
+
+    assert bot.positions_cancelled is True
+    assert bot.progress_cancelled is True
+    assert bot.timing_logs
+    assert bot.timing_logs[-1][0] == {"balance", "positions"}
+
+
+@pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_publish_when_fills_fail():
     bot = Passivbot.__new__(Passivbot)
     plan = {"balance", "positions", "open_orders", "fills"}
@@ -4366,6 +4419,101 @@ async def test_run_execution_loop_suppresses_inflight_shutdown_refresh_error(cap
     assert not [record for record in caplog.records if record.levelno >= logging.ERROR]
     assert any(
         "execution loop stopped during in-flight refresh" in r.message
+        for r in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_records_nonshutdown_cancelled_error(
+    caplog, monkeypatch
+):
+    bot = Passivbot.__new__(Passivbot)
+
+    bot.exchange = "gateio"
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._health_errors = 0
+    bot._health_rate_limits = 0
+    bot.error_counts = []
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._monitor_record_error = MagicMock()
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_sleep(_seconds):
+        return None
+
+    async def fake_refresh_authoritative_state():
+        raise asyncio.CancelledError("ccxt load_markets cancelled")
+
+    async def fake_restart():
+        bot.stop_signal_received = True
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.restart_bot_on_too_many_errors.side_effect = fake_restart
+    bot.execute_to_exchange = AsyncMock()
+
+    with caplog.at_level(logging.ERROR):
+        result = await bot.run_execution_loop()
+
+    assert result is None
+    assert bot._health_errors == 1
+    bot._monitor_record_error.assert_called_once()
+    bot.restart_bot_on_too_many_errors.assert_awaited_once()
+    bot.execute_to_exchange.assert_not_awaited()
+    messages = [record.message for record in caplog.records]
+    assert any(
+        "[error] run_execution_loop failed" in message
+        and "error_type=CancelledError" in message
+        and "action=record_error_restart_backoff" in message
+        for message in messages
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_treats_shutdown_cancelled_error_as_clean_stop(caplog):
+    bot = Passivbot.__new__(Passivbot)
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = False
+    bot._health_errors = 0
+    bot._health_rate_limits = 0
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._monitor_record_error = MagicMock(
+        side_effect=AssertionError("shutdown cancellation should not be recorded")
+    )
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        bot.stop_signal_received = True
+        raise asyncio.CancelledError("shutdown")
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.execute_to_exchange = AsyncMock()
+
+    with caplog.at_level(logging.DEBUG):
+        result = await bot.run_execution_loop()
+
+    assert result is None
+    assert bot._health_errors == 0
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    bot.execute_to_exchange.assert_not_awaited()
+    assert any(
+        "authoritative refresh cancelled during shutdown" in r.message
         for r in caplog.records
     )
 
