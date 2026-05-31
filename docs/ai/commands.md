@@ -24,7 +24,7 @@ pytest tests/test_specific.py::test_name
 
 ```bash
 passivbot live -u {account_name}
-passivbot live path/to/config.json --debug-level {0-3}
+passivbot live path/to/config.json --log-level {warning|info|debug|trace|0-3}
 ```
 
 ## Backtest

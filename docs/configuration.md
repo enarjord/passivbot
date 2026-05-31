@@ -13,7 +13,7 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **base_dir**: Location to save backtest results.
 - **compress_cache**: Set to `true` to save disk space. Set to `false` for faster loading.
 - **end_date**: End date of backtest, e.g., `2024-06-23`. Set to `'now'` to use today's date as the end date.
-- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. Supported exchanges include `binance`, `bybit`, `gateio`, and `bitget`. The current default profile uses `['binance', 'bybit']`.
+- **exchanges**: Exchanges from which to fetch 1m OHLCV data for backtesting and optimizing. The most exercised choices are `binance` and `bybit`, which are also the current default profile. `bitget` and `gateio` are supported, with the GateIO history caveat below. `kucoin` has archive-fetch support but should be treated as experimental for backtesting until broader real-data smoke coverage is collected. Use short exchange names in configs; Passivbot converts to CCXT-specific IDs such as `binanceusdm` and `kucoinfutures` only when it talks to CCXT.
   **GateIO note:** If you already have `caches/ohlcv/gateio` data on disk, delete it before a fresh run so Passivbot rebuilds the cache with base-volume-normalized data.
   GateIO's public 1m OHLCV endpoint only serves a recent window of roughly 10,000 candles; use `backtest.ohlcv_source_dir` or another candle source for older GateIO backtests.
 - **coin_sources**: Optional mapping of `coin -> exchange` used to override the automatic exchange selection when multiple exchanges are configured. Scenarios may add more overrides; conflicting assignments raise an error.
@@ -61,7 +61,7 @@ Suite configuration uses a flattened structure directly under `backtest`:
   - `label`: Directory name under `backtests/suite_runs/<timestamp>/`.
   - `start_date`, `end_date`: Override the global date window.
   - `coins`, `ignored_coins`: Restrict or skip symbols.
-  - `exchanges`: Limit which exchanges can contribute data to this scenario.
+  - `exchanges`: Exchanges that can contribute data to this scenario. Scenario-only exchanges are added to the suite preparation set before the run starts.
   - `coin_sources`: Scenario-specific overrides for `coin_sources`.
   - `overrides`: Arbitrary config path overrides (e.g., `{"bot.long.risk.total_wallet_exposure_limit": 2}`).
 - **backtest.aggregate**: Dict of metric-specific aggregation modes (default `mean`). Keys fall back to the `default` entry if unspecified.
@@ -85,7 +85,7 @@ Example per-metric aggregation:
 
 - **level**: Controls global verbosity for Passivbot and tooling.
   - Accepted values: `0` (warnings), `1` (info), `2` (debug), `3` (trace).
-  - The CLI flag `--debug-level`/`--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run.
+  - The CLI flag `--log-level` on `passivbot live` and `passivbot backtest` overrides the configured value for a single run. It accepts `warning`, `info`, `debug`, `trace`, or `0-3`.
   - Components such as the CandlestickManager inherit this level, so EMA warm-up and candle maintenance logs follow the same verbosity.
 - **persist_to_file**: When `true`, `passivbot live` also writes the console log stream to a timestamped file on disk and refreshes `logs/{user}.log` as a stable alias to the current run. The canonical default is `true`, so live runs write to `logs/` unless you disable it explicitly. In this first integrated version, backtest/optimize still use console logging unless you wrap them externally.
 - **dir**: Directory used for persisted live log files and the stable current-run alias when `persist_to_file` is enabled. Default `logs`.
@@ -327,10 +327,10 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 
 ## Coin Overrides
 - **coin_overrides**:
-  - Specify full or partial configs for individual coins, overriding values from master config.
-  - Format: {"COIN1": overrides1, "COIN2": overrides2}
-  - Whole configs may be loaded with parameter "override_config_path". May either be full path to config, or filename for alternate config file from the same directory as master config file.
-  - Specific override parameters take precedence over override parameters loaded from external config.
+  - Specify full or partial configs for individual coins, overriding values from the master config.
+  - Format: `{"COIN1": overrides1, "COIN2": overrides2}`.
+  - Whole configs may be loaded with `override_config_path`. This may be a full path or a filename for an alternate config file in the same directory as the master config file.
+  - Specific override parameters take precedence over override parameters loaded from an external config.
   - Only a subset of config parameters are eligible for overriding master config:
     - `config.bot.long/short.strategy.trailing_martingale`:
       ```
@@ -434,6 +434,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
     - otherwise => `limit`
     - panic closes are still controlled separately by `bot.{long,short}.hsl.panic_close_order_type`
   - Ownership is `config.live`. Backtests always inherit `live.market_orders_allowed` and `live.market_order_near_touch_threshold`; `config.backtest` does not accept overrides for either field.
+- **market_snapshot_ticker_strategy**: Selects the live market-snapshot ticker path. `auto` lets Passivbot choose the exchange-appropriate default, `bulk` requests one broad ticker snapshot when the exchange supports it, and `symbols` fetches tickers symbol by symbol.
+- **custom_endpoints_path**: Optional live-config path to a custom endpoint override JSON file. Set to `null` to use the default auto-discovery behavior, set to a path such as `configs/custom_endpoints.json` to force that file, or set to `"none"` to disable endpoint overrides even if the default file exists. See [Running live](live.md#custom-exchange-endpoints).
 - **forager_score_hysteresis_pct**: Fractional normalized-score tolerance for forager incumbent selection. Default is `0.02`, meaning an already-selected flat forager coin is kept if a challenger beats it by no more than 2.0 percentage points of final forager score. Applies to live, backtest, and optimizer.
 - **initial_entry_exec_max_market_dist_pct**: Live executor-side distance gate for `entry_initial_*` order creation. Default is `0.005`, meaning initial entries farther than 0.5% from current market price are logged but not posted until price comes closer. Set `0.0` to disable. Existing matching initial entries are kept by `order_match_tolerance_pct`; if they drift beyond tolerance while still outside this gate, they may be cancelled without immediate re-creation.
 - **order_match_tolerance_pct**: Fractional relative tolerance used to match near-identical cancel/create pairs and avoid order churn. Default is `0.0002`, meaning 0.02% relative price/quantity tolerance. When a newly proposed order is within this tolerance of an existing open order, Passivbot may keep the existing order instead of cancelling/replacing it.

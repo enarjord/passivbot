@@ -637,6 +637,15 @@ def test_prepare_config_preserves_live_fill_refresh_economy_controls():
     assert prepared["live"]["fills_confirmation_overlap_minutes"] == pytest.approx(45.0)
 
 
+def test_prepare_config_preserves_live_custom_endpoints_path():
+    source = get_template_config()
+    source["live"]["custom_endpoints_path"] = "configs/custom_endpoints.json"
+
+    prepared = prepare_config(source, verbose=False, target="live", runtime="live")
+
+    assert prepared["live"]["custom_endpoints_path"] == "configs/custom_endpoints.json"
+
+
 @pytest.mark.parametrize(
     "field,value",
     [

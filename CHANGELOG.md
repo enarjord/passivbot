@@ -7,8 +7,16 @@ All notable user-facing changes will be documented in this file.
 - Changed v8 optimizer fine-tuning so combining `--fine-tune-params` with `--start`
   treats the starting configs as fixed-parameter anchors, letting one run tune selected
   params across multiple Pareto candidates while preserving plain `--start` as seed-only.
+- Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
+  account-state or candle fetches are logged, counted, and routed through the
+  existing restart/backoff path instead of silently exiting without countdown.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
+- `live.custom_endpoints_path` is now part of the canonical config schema, so normalized
+  live configs preserve endpoint override files instead of dropping the documented setting.
+- Updated user-facing docs for current CLI logging flags, custom endpoint setup,
+  backtest exchange naming, suite exchange expansion, uncovered tool commands, and
+  current Forager/indicator wording.
 - Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
   strategy parameters end-to-end, with no production fallback bridge from removed v7
   `trailing_grid` fields.

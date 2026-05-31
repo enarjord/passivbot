@@ -127,9 +127,9 @@ Minimal shape example:
 
 See:
 
-- [`hsl_long_red_restart.hjson`](../scenarios/fake_live/hsl_long_red_restart.hjson)
-- [`hsl_long_terminal_no_restart.hjson`](../scenarios/fake_live/hsl_long_terminal_no_restart.hjson)
-- [`minimal.hjson`](../scenarios/fake_live/minimal.hjson)
+- `scenarios/fake_live/hsl_long_red_restart.hjson`
+- `scenarios/fake_live/hsl_long_terminal_no_restart.hjson`
+- `scenarios/fake_live/minimal.hjson`
 
 ## HSL Replay Notes
 
@@ -180,7 +180,7 @@ The fake exchange can be selected through `api-keys.json` style user info:
 }
 ```
 
-[`api-keys.json.example`](../api-keys.json.example) does not ship with a fake entry by default.
+`api-keys.json.example` does not ship with a fake entry by default.
 Add one to your local `api-keys.json` when you want a reusable fake user.
 
 ## Troubleshooting

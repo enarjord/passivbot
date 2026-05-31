@@ -2,7 +2,8 @@
 
 Thanks for contributing! Please read and follow:
 
-- `passivbot_agent_principles.yaml`
+- `docs/ai/principles.yaml`
+- `docs/ai/error_contract.md`
 - The quick guidelines below, distilled from maintainer discussions.
 
 ## Expectations

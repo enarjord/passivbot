@@ -27,6 +27,9 @@ def test_to_ccxt_exchange_id(monkeypatch):
     assert utils.to_ccxt_exchange_id("bybit") == "bybit"
     # Already ccxt ID stays as-is
     assert utils.to_ccxt_exchange_id("binanceusdm") == "binanceusdm"
+    # User-facing and cache/data names stay on the short exchange spelling.
+    assert utils.to_standard_exchange_name("binanceusdm") == "binance"
+    assert utils.to_standard_exchange_name("kucoinfutures") == "kucoin"
 
 
 def test_deduplicate_rows():

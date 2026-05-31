@@ -189,7 +189,7 @@ The data strategy is determined implicitly by the number of exchanges configured
 - **Single exchange** (1 exchange in `backtest.exchanges`): Data is fetched from that exchange only. Scenario labels include the exchange suffix (e.g., `base/binance`).
 - **Combined exchanges** (>1 exchanges): Data is combined from all listed exchanges, selecting the best feed per coin based on coverage and quality. Scenario labels do not include an exchange suffix.
 
-Per-scenario `exchanges` overrides can narrow down which exchanges a scenario sees, but cannot add exchanges not in the base config.
+Per-scenario `exchanges` overrides can narrow down which exchanges a scenario sees and can also require extra exchanges that are not listed in the top-level base config. Passivbot expands the prepared dataset set to include every scenario-required exchange before running the suite.
 
 ### Comparing Exchanges
 
@@ -231,11 +231,16 @@ The backtester supports OHLCV data from the following exchanges:
 - **binance** - Binance USDT-M Futures
 - **bybit** - Bybit USDT Perpetuals
 - **bitget** - Bitget USDT Perpetuals
-- **gateio** - Gate.io USDT Perpetuals
+- **gateio** - Gate.io USDT Perpetuals, with the public-history window caveat above
+
+Experimental or narrower-coverage sources:
+
+- **kucoin** - KuCoin Futures archive/CCXT data path. Use `kucoin` in configs and cache paths; Passivbot converts to CCXT's `kucoinfutures` ID internally. Treat KuCoin backtest data as experimental until your intended coins/date windows pass a real data smoke.
+- **hyperliquid** - Supported for live and metadata paths; broader historical backtest coverage depends on the available candle source for the requested market universe.
 
 The canonical default template currently uses `binance` and `bybit`. Add `bitget` and/or `gateio`
 explicitly in `backtest.exchanges` when you want them included.
 
 ## Exchange Name Conventions
 
-Cache paths and output directories use standard exchange names (e.g., `binance`, `bybit`, `gateio`). The ccxt-specific suffixes (`binanceusdm`, `bybitusdt`) are only used internally when communicating with the exchange API. Always use the short names in your configuration files.
+Cache paths and output directories use standard exchange names (e.g., `binance`, `bybit`, `gateio`, `kucoin`). CCXT-specific IDs such as `binanceusdm`, `bybitusdt`, and `kucoinfutures` are only used internally when communicating with exchange APIs. Always use the short names in your configuration files and external OHLCV source directories.

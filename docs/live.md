@@ -46,7 +46,7 @@ file located at `configs/custom_endpoints.json`.
 Copy the example file and edit it:
 
 ```sh
-cp custom_endpoints.json.example configs/custom_endpoints.json
+cp configs/custom_endpoints.json.example configs/custom_endpoints.json
 ```
 
 Populate the file with the proxy endpoints. A minimal Binance USDT‑margined

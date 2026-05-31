@@ -4717,7 +4717,7 @@ class Passivbot:
                     return True
         return False
 
-    def _execution_loop_error_fields(self, exc: Exception) -> dict[str, str]:
+    def _execution_loop_error_fields(self, exc: BaseException) -> dict[str, str]:
         """Return compact fields for execution-loop error logs."""
         fields: dict[str, str] = {
             "error_type": type(exc).__name__,
@@ -4763,7 +4763,10 @@ class Passivbot:
         now = utc_ms()
         window_ms = 15 * 60 * 1000
         state = getattr(self, "_execution_loop_error_burst", None)
-        if not isinstance(state, dict) or now - int(state.get("first_ms", now)) > window_ms:
+        if (
+            not isinstance(state, dict)
+            or now - int(state.get("first_ms", now)) > window_ms
+        ):
             state = {
                 "first_ms": now,
                 "last_log_ms": now,
@@ -4795,6 +4798,50 @@ class Passivbot:
             fields.get("status", "-"),
             fields.get("code", "-"),
         )
+
+    async def _handle_execution_loop_failure(
+        self, exc: BaseException, *, allow_time_sync_recovery: bool
+    ) -> bool:
+        """Record a runtime loop failure and apply the existing restart budget policy."""
+        if self._shutdown_requested():
+            logging.debug(
+                "[shutdown] execution loop stopped during in-flight refresh: %s",
+                exc,
+            )
+            return False
+        if allow_time_sync_recovery and await self._maybe_recover_exchange_time_sync(
+            exc, source="run_execution_loop"
+        ):
+            self._health_errors += 1
+            self._monitor_record_error(
+                "error.exchange",
+                exc,
+                tags=("error", "exchange", "time_sync"),
+                payload={"source": "run_execution_loop"},
+            )
+            await self.restart_bot_on_too_many_errors()
+            await asyncio.sleep(0.5)
+            return True
+        self._health_errors += 1
+        self._monitor_record_error(
+            "error.bot",
+            exc,
+            tags=("error", "bot"),
+            payload={"source": "run_execution_loop"},
+        )
+        fields = self._execution_loop_error_fields(exc)
+        logging.error(
+            "[error] run_execution_loop failed | error_type=%s status=%s code=%s action=record_error_restart_backoff cycle=abandoned error=%s",
+            fields["error_type"],
+            fields["status"],
+            fields["code"],
+            fields["error"],
+        )
+        self._log_execution_loop_error_burst(fields)
+        traceback.print_exception(type(exc), exc, exc.__traceback__)
+        await self.restart_bot_on_too_many_errors()
+        await asyncio.sleep(1.0)
+        return True
 
     async def run_execution_loop(self):
         """Main execution loop coordinating order generation and exchange interaction."""
@@ -5019,45 +5066,16 @@ class Passivbot:
                 )
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5.0)
-            except Exception as e:
-                if self._shutdown_requested():
-                    logging.debug(
-                        "[shutdown] execution loop stopped during in-flight refresh: %s",
-                        e,
-                    )
-                    break
-                if await self._maybe_recover_exchange_time_sync(
-                    e, source="run_execution_loop"
+            except asyncio.CancelledError as e:
+                if not await self._handle_execution_loop_failure(
+                    e, allow_time_sync_recovery=False
                 ):
-                    self._health_errors += 1
-                    self._monitor_record_error(
-                        "error.exchange",
-                        e,
-                        tags=("error", "exchange", "time_sync"),
-                        payload={"source": "run_execution_loop"},
-                    )
-                    await self.restart_bot_on_too_many_errors()
-                    await asyncio.sleep(0.5)
-                    continue
-                self._health_errors += 1
-                self._monitor_record_error(
-                    "error.bot",
-                    e,
-                    tags=("error", "bot"),
-                    payload={"source": "run_execution_loop"},
-                )
-                fields = self._execution_loop_error_fields(e)
-                logging.error(
-                    "[error] run_execution_loop failed | error_type=%s status=%s code=%s action=record_error_restart_backoff cycle=abandoned error=%s",
-                    fields["error_type"],
-                    fields["status"],
-                    fields["code"],
-                    fields["error"],
-                )
-                self._log_execution_loop_error_burst(fields)
-                traceback.print_exc()
-                await self.restart_bot_on_too_many_errors()
-                await asyncio.sleep(1.0)
+                    break
+            except Exception as e:
+                if not await self._handle_execution_loop_failure(
+                    e, allow_time_sync_recovery=True
+                ):
+                    break
         if getattr(self, "_execution_loop_task", None) is current_task:
             self._execution_loop_task = None
         if getattr(self, "_execution_loop_stopped", None) is execution_loop_stopped:
@@ -14134,6 +14152,12 @@ async def main():
         except FatalBotException as e:
             fatal_error = e
             logging.error(f"passivbot fatal error {e}")
+        except asyncio.CancelledError as e:
+            if bot.stop_signal_received or getattr(bot, "_shutdown_in_progress", False):
+                logging.info("passivbot cancellation received during shutdown")
+            else:
+                logging.error(f"passivbot cancelled unexpectedly {e}")
+                traceback.print_exc()
         except Exception as e:
             logging.error(f"passivbot error {e}")
             traceback.print_exc()
