@@ -32,6 +32,9 @@ Optimizer selector contract:
 - `*` is allowed as a one-segment wildcard, for example `*.strategy.close`.
 - Do not use flattened underscore selector names such as `long_entry_*` in v8 user-facing docs
   or agent instructions.
+- When `--fine_tune_params` is combined with `--start`, the starting configs are anchor configs:
+  non-tuned optimizer-bound bot params are fixed from the selected anchor, while the fine-tune
+  selectors remain tunable. Without `--fine_tune_params`, `--start` remains seed-only.
 
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example

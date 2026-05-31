@@ -38,17 +38,21 @@ from optimize import (
     extract_configs,
     get_starting_configs,
     iter_starting_configs,
+    iter_anchored_fine_tune_seed_configs,
     configs_to_individuals,
     configs_to_individuals_streaming,
     ConstraintAwareFitness,
     ResultRecorder,
+    install_anchored_fine_tune_plan,
 )
 from multiprocessing_utils import ignore_sigint_in_worker
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.shape import build_optimization_shape
+from optimization.warmup import build_optimizer_max_config
 from optimize_suite import ScenarioEvalContext
 from config import load_prepared_config, prepare_config
 from config.parse import load_raw_config
@@ -1015,6 +1019,117 @@ class TestIndividualToConfig:
         assert result["bot"]["short"]["a_param"] == 30.0
         assert result["bot"]["short"]["z_param"] == 40.0
 
+    def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
+        template = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "bot": {
+                "long": {"param1": 0.1, "param2": 0.2},
+                "short": {"param1": 0.3, "param2": 0.4},
+            },
+            "backtest": {"start_date": "2024-01-01"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "source": "anchor0.json",
+                        "bot": {
+                            "long": {"param1": 0.11, "param2": 0.22},
+                            "short": {"param1": 0.33, "param2": 0.44},
+                        },
+                    },
+                    {
+                        "source": "anchor1.json",
+                        "bot": {
+                            "long": {"param1": 0.55, "param2": 0.66},
+                            "short": {"param1": 0.77, "param2": 0.88},
+                        },
+                    },
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+
+        result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], template)
+
+        assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
+        assert result["bot"]["long"]["param2"] == pytest.approx(0.66)
+        assert result["bot"]["short"]["param1"] == pytest.approx(0.77)
+        assert result["backtest"]["start_date"] == "2024-01-01"
+        assert result["_optimizer_anchor"]["id"] == 1
+        assert result["_optimizer_anchor"]["source"] == "anchor1.json"
+        assert ANCHOR_PLAN_KEY not in result
+
+    def test_anchored_build_optimizer_max_config_uses_filtered_shape(self):
+        template = {
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.25,
+                    "param2": 0.75,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "source": "anchor0.json",
+                        "bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.1,
+                                "param2": 0.2,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                    },
+                    {
+                        "source": "anchor1.json",
+                        "bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.3,
+                                "param2": 0.4,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                    },
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+
+        result = build_optimizer_max_config(template)
+
+        assert result["bot"]["long"]["param1"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["param2"] == pytest.approx(0.4)
+        assert result["_optimizer_anchor"]["id"] == 1
+
 class TestConfigToIndividual:
     """Test config_to_individual function."""
 
@@ -1106,6 +1221,54 @@ class TestConfigToIndividual:
         result = config_to_individual(config, shape.bounds, optimization_shape=shape)
 
         assert len(result) == len(shape.bounds)
+
+    def test_uses_anchor_id_with_anchored_optimization_shape(self):
+        config = {
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.25,
+                    "param2": 0.75,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                }
+            },
+            ANCHOR_PLAN_KEY: {
+                "anchors": [
+                    {
+                        "bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": 0.1,
+                                "param2": 0.2,
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        }
+                    }
+                ],
+                "fixed_keys": ["long_param2"],
+                "key_paths": [["bot", "long", "param1"]],
+                "tunable_keys": ["long_param1"],
+            },
+        }
+        shape = build_optimization_shape(config)
+
+        result = config_to_individual(config, shape.bounds, optimization_shape=shape, anchor_id=3)
+
+        assert shape.key_paths[0][0] == ANCHOR_GENE_KEY
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_param1"]
+        assert result == pytest.approx([0.0, 0.25])
 
 
 class TestValidateArray:
@@ -1641,9 +1804,13 @@ class TestApplyFineTuneBounds:
         config = {
             "optimize": {
                 "bounds": {
+                    "long_n_positions": [1.0, 1.0],
                     "long_param1": [0.0, 1.0],
                     "long_param2": [0.0, 1.0],
                     "long_param3": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
                 },
                 "fixed_params": ["bot.long.param3"],
             },
@@ -1656,6 +1823,112 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param1"] == [0.0, 1.0]
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
         assert config["optimize"]["bounds"]["long_param3"] == [0.9, 0.9]
+
+    def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_param3": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+                "fixed_params": ["long.param3"],
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "param2": 0.2,
+                    "param3": 0.3,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        anchors_dir = tmp_path / "anchors"
+        anchors_dir.mkdir()
+        for idx, values in enumerate(((0.11, 0.22, 0.33), (0.44, 0.55, 0.66))):
+            (anchors_dir / f"anchor_{idx}.json").write_text(
+                json.dumps(
+                    {
+                        "live": {"strategy_kind": "trailing_martingale"},
+                        "bot": {
+                            "long": {
+                                "n_positions": 1.0,
+                                "param1": values[0],
+                                "param2": values[1],
+                                "param3": values[2],
+                                "total_wallet_exposure_limit": 1.0,
+                            },
+                            "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+                        },
+                    }
+                )
+            )
+
+        install_anchored_fine_tune_plan(config, ["long.param1", "long.param3"], str(anchors_dir))
+        shape = build_optimization_shape(config)
+        result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
+
+        assert config["optimize"]["bounds"]["long_param2"] == [0.0, 1.0]
+        assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_param1"]
+        assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
+        assert result["bot"]["long"]["param2"] == pytest.approx(0.55)
+        assert result["bot"]["long"]["param3"] == pytest.approx(0.66)
+        assert result["_optimizer_anchor"]["id"] == 1
+
+    def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_param2": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.1,
+                    "param2": 0.2,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        anchors_dir = tmp_path / "anchors"
+        anchors_dir.mkdir()
+        for idx, strategy_kind in enumerate(
+            ("trailing_martingale", "ema_anchor", "trailing_martingale")
+        ):
+            anchor = deepcopy(config)
+            anchor["live"]["strategy_kind"] = strategy_kind
+            anchor["bot"]["long"]["param1"] = 0.1 + idx * 0.1
+            (anchors_dir / f"anchor_{idx}.json").write_text(
+                json.dumps(anchor),
+                encoding="utf-8",
+            )
+        install_anchored_fine_tune_plan(config, ["long.param1"], str(anchors_dir))
+        shape = build_optimization_shape(config)
+
+        streamed, raw_count = configs_to_individuals_streaming(
+            iter_anchored_fine_tune_seed_configs(config),
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        assert raw_count == 2
+        assert sorted(individual[0] for individual in streamed) == [0, 1]
 
 
 class TestExtractConfigs:
@@ -1706,7 +1979,9 @@ class TestExtractConfigs:
             result = extract_configs(path)
             assert len(result) == 1
             assert "bot" in result[0]
-            assert result[0]["bot"]["long"]["forager"]["score_weights"]["volatility"] == 1.0
+            assert result[0]["bot"]["long"]["forager"]["score_weights"]["volatility"] == pytest.approx(
+                template["bot"]["long"]["forager"]["score_weights"]["volatility"]
+            )
         finally:
             os.unlink(path)
 

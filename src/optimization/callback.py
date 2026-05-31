@@ -27,7 +27,10 @@ def build_pymoo_record_entry(
         list(overrides_list or []),
         template,
     )
+    anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    if anchor_meta is not None:
+        entry["optimizer_anchor"] = anchor_meta
     if callable(overrides_fn):
         entry = overrides_fn(list(overrides_list or []), entry, None)
     if suite_metrics is not None:

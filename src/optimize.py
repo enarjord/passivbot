@@ -176,6 +176,7 @@ from optimization.bounds import (
     Bound,
     enforce_bounds,
 )
+from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.backend_shared import cancel_pending_async_results, drain_async_results
 from optimization.backends import get_backend_runner
 from optimization.config_adapter import get_optimization_key_paths, resolve_optimization_bound_path
@@ -602,7 +603,10 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     metrics = getattr(individual, "evaluation_metrics", {}) or {}
     suite_metrics = metrics.pop("suite_metrics", None)
     config = individual_to_config(individual, optimizer_overrides, overrides_list, evaluator_config)
+    anchor_meta = config.get("_optimizer_anchor")
     entry = clean_config(strip_config_metadata(config))
+    if anchor_meta is not None:
+        entry["optimizer_anchor"] = anchor_meta
     entry = optimizer_overrides(overrides_list, entry, None)
     if suite_metrics is not None:
         entry["suite_metrics"] = suite_metrics
@@ -822,6 +826,7 @@ def config_to_individual(
     sig_digits=None,
     key_paths=None,
     optimization_shape: OptimizationShape | None = None,
+    anchor_id: int | None = None,
 ):
     if optimization_shape is not None:
         bounds = optimization_shape.bounds
@@ -832,6 +837,9 @@ def config_to_individual(
     values = []
     key_paths = key_paths or get_optimization_key_paths(config)
     for _, path in key_paths:
+        if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
+            values.append(0 if anchor_id is None else int(anchor_id))
+            continue
         target = config
         for part in path:
             target = target[part]
@@ -1586,7 +1594,7 @@ def add_extra_options(parser, *, help_all: bool):
         dest="starting_configs",
         default=None,
         help=(
-            "Start with given live configs. Single json file or dir with multiple json files"
+            "Start with given live configs. With --fine-tune-params, these configs are fixed-param anchors."
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1624,116 +1632,146 @@ def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | Non
     return normalize_limit_entries(replacement)
 
 
+def _flat_optimize_bounds_for_config(config: dict) -> tuple[dict, bool]:
+    bounds = config.get("optimize", {}).get("bounds", {})
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
+    use_flat_bounds = isinstance(bounds, dict) and any(
+        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_"))
+        for key in bounds
+    )
+    return flat_bounds, use_flat_bounds
+
+
+def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
+    bounds = config.get("optimize", {}).get("bounds", {})
+    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    _, use_flat_bounds = _flat_optimize_bounds_for_config(config)
+    if use_flat_bounds:
+        bounds[bound_key] = value
+    else:
+        set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
+
+
+def _format_bound_path_for_log(path) -> str:
+    if (
+        len(path) >= 5
+        and path[0] == "bot"
+        and path[1] in ("long", "short")
+        and path[2] == "strategy"
+    ):
+        return ".".join((path[1], *path[4:]))
+    if len(path) >= 3 and path[0] == "bot" and path[1] in ("long", "short"):
+        return ".".join(path[1:])
+    return ".".join(path)
+
+
+def _format_bound_key_for_log(config: dict, bound_key: str, path=None) -> str:
+    resolved_path = path if path is not None else resolve_optimization_bound_path(config, bound_key)
+    if resolved_path is None:
+        return bound_key
+    return _format_bound_path_for_log(resolved_path)
+
+
+def _resolve_bound_selectors_for_config(config: dict, selectors, label: str) -> set[str]:
+    flat_bounds, _ = _flat_optimize_bounds_for_config(config)
+    resolved: set[str] = set()
+    selectors_sorted = sorted({str(selector).strip() for selector in selectors if str(selector).strip()})
+    if not selectors_sorted:
+        return resolved
+    logging.info("%s selectors:", label)
+    for selector in selectors_sorted:
+        selector_matches = resolve_bound_selectors(config, [selector], flat_bounds)
+        matches = sorted(selector_matches)
+        if not matches:
+            logging.warning("%s selector matched no optimize bounds: %s", label, selector)
+            continue
+        logging.info("  %s ->", selector)
+        for match in sorted(
+            matches,
+            key=lambda key: _format_bound_key_for_log(config, key, selector_matches[key]),
+        ):
+            logging.info(
+                "    %s (%s)",
+                _format_bound_key_for_log(config, match, selector_matches[match]),
+                ".".join(selector_matches[match]),
+            )
+        resolved.update(matches)
+    return resolved
+
+
+def _log_bound_set(config: dict, header: str, keys: set[str]) -> None:
+    if not keys:
+        logging.info("%s: none", header)
+        return
+    logging.info("%s:", header)
+    for key in sorted(keys, key=lambda item: _format_bound_key_for_log(config, item)):
+        logging.info("  %s", _format_bound_key_for_log(config, key))
+
+
+def _resolve_fine_tune_key_sets(
+    config: dict,
+    fine_tune_params: list[str],
+) -> tuple[dict, set[str], set[str], set[str]]:
+    flat_bounds, _ = _flat_optimize_bounds_for_config(config)
+    fine_tune_set = _resolve_bound_selectors_for_config(
+        config,
+        fine_tune_params,
+        "fine-tune",
+    )
+    config_fixed_params = _resolve_bound_selectors_for_config(
+        config,
+        config.get("optimize", {}).get("fixed_params", []) or [],
+        "optimize.fixed_params",
+    )
+    effective_fixed_params = set(config_fixed_params)
+    if fine_tune_params:
+        effective_fixed_params.update(key for key in flat_bounds if key not in fine_tune_set)
+    return flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params
+
+
+def _fix_bound_to_current_value(config: dict, bound_key: str) -> bool:
+    path = resolve_optimization_bound_path(config, bound_key)
+    if path is None:
+        logging.warning("fine-tune bounds: unable to resolve key '%s', skipping", bound_key)
+        return False
+    target = config
+    try:
+        for part in path:
+            target = target[part]
+    except (KeyError, TypeError):
+        try:
+            pside, key = bound_key.split("_", 1)
+        except ValueError:
+            logging.warning(
+                "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                bound_key,
+            )
+            return False
+        target = config
+        try:
+            for part in ("bot", pside, key):
+                target = target[part]
+        except (KeyError, TypeError):
+            logging.warning(
+                "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
+                bound_key,
+            )
+            return False
+    try:
+        value_float = float(target)
+        _set_optimize_bound(config, bound_key, [value_float, value_float])
+    except (TypeError, ValueError):
+        _set_optimize_bound(config, bound_key, [target, target])
+    return True
+
+
 def apply_fine_tune_bounds(
     config: dict,
     fine_tune_params: list[str],
     cli_overridden_bounds: set[str],
 ) -> None:
-    bounds = config.get("optimize", {}).get("bounds", {})
-    strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
-    flat_bounds = flatten_optimize_bounds(bounds, strategy_kind=strategy_kind)
-    use_flat_bounds = isinstance(bounds, dict) and any(
-        isinstance(key, str) and (key.startswith("long_") or key.startswith("short_")) for key in bounds
-    )
-
-    def _set_bound(bound_key: str, value) -> None:
-        if use_flat_bounds:
-            bounds[bound_key] = value
-        else:
-            set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
-
-    def _resolve_bound_selectors(selectors, label: str) -> set[str]:
-        resolved: set[str] = set()
-        selectors_sorted = sorted(
-            {str(selector).strip() for selector in selectors if str(selector).strip()}
-        )
-        if not selectors_sorted:
-            return resolved
-        logging.info("%s selectors:", label)
-        for selector in selectors_sorted:
-            selector_matches = resolve_bound_selectors(config, [selector], flat_bounds)
-            matches = sorted(selector_matches)
-            if not matches:
-                logging.warning("%s selector matched no optimize bounds: %s", label, selector)
-                continue
-            logging.info("  %s ->", selector)
-            for match in sorted(
-                matches,
-                key=lambda key: _format_bound_key_for_log(key, selector_matches[key]),
-            ):
-                logging.info(
-                    "    %s (%s)",
-                    _format_bound_key_for_log(match, selector_matches[match]),
-                    ".".join(selector_matches[match]),
-                )
-            resolved.update(matches)
-        return resolved
-
-    def _format_bound_path_for_log(path) -> str:
-        if (
-            len(path) >= 5
-            and path[0] == "bot"
-            and path[1] in ("long", "short")
-            and path[2] == "strategy"
-        ):
-            return ".".join((path[1], *path[4:]))
-        if len(path) >= 3 and path[0] == "bot" and path[1] in ("long", "short"):
-            return ".".join(path[1:])
-        return ".".join(path)
-
-    def _format_bound_key_for_log(bound_key: str, path=None) -> str:
-        resolved_path = path if path is not None else resolve_optimization_bound_path(
-            config, bound_key
-        )
-        if resolved_path is None:
-            return bound_key
-        return _format_bound_path_for_log(resolved_path)
-
-    def _log_bound_set(header: str, keys: set[str]) -> None:
-        if not keys:
-            logging.info("%s: none", header)
-            return
-        logging.info("%s:", header)
-        for key in sorted(keys, key=_format_bound_key_for_log):
-            logging.info("  %s", _format_bound_key_for_log(key))
-
-    def _resolve_bound_key_path(bound_key: str):
-        return resolve_optimization_bound_path(config, bound_key)
-
-    def _fix_bound_to_current_value(bound_key: str) -> bool:
-        path = _resolve_bound_key_path(bound_key)
-        if path is None:
-            logging.warning("fine-tune bounds: unable to resolve key '%s', skipping", bound_key)
-            return False
-        target = config
-        try:
-            for part in path:
-                target = target[part]
-        except (KeyError, TypeError):
-            try:
-                pside, key = bound_key.split("_", 1)
-            except ValueError:
-                logging.warning(
-                    "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
-                    bound_key,
-                )
-                return False
-            target = config
-            try:
-                for part in ("bot", pside, key):
-                    target = target[part]
-            except (KeyError, TypeError):
-                logging.warning(
-                    "fine-tune bounds: missing current config value for '%s', leaving bounds unchanged",
-                    bound_key,
-                )
-                return False
-        try:
-            value_float = float(target)
-            _set_bound(bound_key, [value_float, value_float])
-        except (TypeError, ValueError):
-            _set_bound(bound_key, [target, target])
-        return True
+    flat_bounds, _ = _flat_optimize_bounds_for_config(config)
 
     # First, normalize any CLI overrides such that single values mean fixed bounds
     for key in cli_overridden_bounds:
@@ -1742,35 +1780,94 @@ def apply_fine_tune_bounds(
         raw_val = flat_bounds[key]
         if isinstance(raw_val, (list, tuple)):
             if len(raw_val) == 1:
-                _set_bound(key, [float(raw_val[0]), float(raw_val[0])])
+                _set_optimize_bound(config, key, [float(raw_val[0]), float(raw_val[0])])
         else:
             try:
                 val = float(raw_val)
             except (TypeError, ValueError):
                 continue
-            _set_bound(key, [val, val])
+            _set_optimize_bound(config, key, [val, val])
 
-    fine_tune_set = _resolve_bound_selectors(fine_tune_params, "fine-tune")
-    config_fixed_params = _resolve_bound_selectors(
-        config.get("optimize", {}).get("fixed_params", []) or [],
-        "optimize.fixed_params",
+    _, fine_tune_set, _, effective_fixed_params = _resolve_fine_tune_key_sets(
+        config,
+        fine_tune_params,
     )
-
-    effective_fixed_params = set(config_fixed_params)
-    if fine_tune_params:
-        effective_fixed_params.update(key for key in flat_bounds if key not in fine_tune_set)
 
     if not effective_fixed_params:
         return
 
     if fine_tune_set:
-        _log_bound_set("fine-tune tunable bounds", fine_tune_set)
-    _log_bound_set("fixed optimize bounds", effective_fixed_params)
+        _log_bound_set(config, "fine-tune tunable bounds", fine_tune_set)
+    _log_bound_set(config, "fixed optimize bounds", effective_fixed_params)
 
     for key in sorted(effective_fixed_params):
         if key not in flat_bounds:
             continue
-        _fix_bound_to_current_value(key)
+        _fix_bound_to_current_value(config, key)
+
+
+def install_anchored_fine_tune_plan(
+    config: dict,
+    fine_tune_params: list[str],
+    starting_configs_path: str,
+) -> None:
+    flat_bounds, fine_tune_set, config_fixed_params, effective_fixed_params = (
+        _resolve_fine_tune_key_sets(config, fine_tune_params)
+    )
+    tunable_keys = sorted(key for key in fine_tune_set if key in flat_bounds and key not in config_fixed_params)
+    fixed_keys = sorted(key for key in flat_bounds if key not in tunable_keys)
+    if fine_tune_set:
+        _log_bound_set(config, "fine-tune tunable bounds", set(tunable_keys))
+    _log_bound_set(config, "anchored fixed optimize bounds", set(fixed_keys))
+    if effective_fixed_params != set(fixed_keys):
+        # Keep this relationship explicit for future selector changes; fixed_params must win over -ft.
+        logging.info(
+            "anchored fine-tune fixed %d bounds across starting-config anchors",
+            len(fixed_keys),
+        )
+
+    anchors = []
+    base_strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    for raw_anchor in iter_starting_configs(starting_configs_path):
+        try:
+            anchor_cfg = _build_starting_seed_config(raw_anchor)
+            anchor_strategy_kind = normalize_strategy_kind(
+                anchor_cfg.get("live", {}).get("strategy_kind")
+            )
+            if anchor_strategy_kind != base_strategy_kind:
+                raise ValueError(
+                    "starting config strategy_kind "
+                    f"{anchor_strategy_kind!r} does not match base {base_strategy_kind!r}"
+                )
+            anchors.append(
+                {
+                    "source": raw_anchor.get("_starting_config_source", "<memory>")
+                    if isinstance(raw_anchor, dict)
+                    else "<memory>",
+                    "bot": deepcopy(anchor_cfg["bot"]),
+                }
+            )
+        except Exception as exc:
+            logging.warning("failed to use starting config as fine-tune anchor: %s", exc)
+    if not anchors:
+        raise ValueError(
+            "anchored fine-tune requires at least one valid starting config from "
+            f"{starting_configs_path!r}"
+        )
+    base_key_paths = get_optimization_key_paths(config)
+    key_paths = [path for key, path in base_key_paths if key in tunable_keys]
+    config[ANCHOR_PLAN_KEY] = {
+        "anchors": anchors,
+        "fixed_keys": fixed_keys,
+        "key_paths": [list(path) for path in key_paths],
+        "tunable_keys": tunable_keys,
+    }
+    logging.info(
+        "Anchored fine-tune enabled | anchors=%d | tunable_bounds=%d | fixed_bounds=%d",
+        len(anchors),
+        len(tunable_keys),
+        len(fixed_keys),
+    )
 
 
 def extract_configs(path):
@@ -1860,10 +1957,21 @@ def iter_starting_configs(starting_configs: str):
         return
     if os.path.isdir(starting_configs):
         with os.scandir(starting_configs) as entries:
-            for entry in entries:
+            for entry in sorted(entries, key=lambda item: item.name):
                 yield from iter_starting_configs(entry.path)
         return
     yield from iter_extract_configs(starting_configs)
+
+
+def iter_anchored_fine_tune_seed_configs(config: dict):
+    anchor_plan = get_anchor_plan(config)
+    if anchor_plan is None:
+        return
+    for anchor in anchor_plan.get("anchors") or []:
+        yield {
+            "bot": deepcopy(anchor["bot"]),
+            "_starting_config_source": anchor.get("source", "<memory>"),
+        }
 
 
 def configs_to_individuals(
@@ -1892,6 +2000,12 @@ def configs_to_individuals_streaming(
 ):
     inds = set()
     raw_count = 0
+    anchored_shape = bool(
+        optimization_shape is not None
+        and optimization_shape.key_paths
+        and optimization_shape.key_paths[0][0] == ANCHOR_GENE_KEY
+    )
+    anchor_count = 0
     for cfg in cfgs:
         raw_count += 1
         try:
@@ -1902,8 +2016,11 @@ def configs_to_individuals_streaming(
                 sig_digits,
                 key_paths=key_paths,
                 optimization_shape=optimization_shape,
+                anchor_id=anchor_count if anchored_shape else None,
             )
             inds.add(tuple(individual))
+            if anchored_shape:
+                anchor_count += 1
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     return list(inds), raw_count
@@ -2054,7 +2171,10 @@ async def main():
         for key, value in vars(args).items()
         if key.startswith("optimize.bounds.") and value is not None
     }
-    apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
+    if fine_tune_params and args.starting_configs:
+        install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
+    else:
+        apply_fine_tune_bounds(config, fine_tune_params, cli_bounds_overrides)
     suite_override = None
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
@@ -2278,6 +2398,9 @@ async def main():
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)
         backend_runner = get_backend_runner(backend_name)
+        starting_config_iter = iter_starting_configs
+        if get_anchor_plan(config) is not None:
+            starting_config_iter = lambda _path: iter_anchored_fine_tune_seed_configs(config)
         backend_result = backend_runner(
             config=config,
             evaluator=evaluator,
@@ -2290,7 +2413,7 @@ async def main():
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
             configs_to_individuals=configs_to_individuals,
-            iter_starting_configs=iter_starting_configs,
+            iter_starting_configs=starting_config_iter,
             configs_to_individuals_streaming=configs_to_individuals_streaming,
             optimization_shape=evaluator.optimization_shape,
             record_individual_result=_record_individual_result,

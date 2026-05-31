@@ -39,7 +39,12 @@ passivbot backtest --suite
 ```bash
 passivbot optimize path/to/config.json
 passivbot optimize --suite
+passivbot optimize path/to/config.json -t path/to/anchor_configs -ft long.forager,long.risk
 ```
+
+When `-ft/--fine-tune-params` and `-t/--start` are used together, the start configs are
+fine-tune anchors: non-tuned optimizer-bound bot params are fixed from the selected anchor and
+only the fine-tune selectors are optimized.
 
 ## Rust
 

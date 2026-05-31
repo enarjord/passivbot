@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed v8 optimizer fine-tuning so combining `--fine-tune-params` with `--start`
+  treats the starting configs as fixed-parameter anchors, letting one run tune selected
+  params across multiple Pareto candidates while preserving plain `--start` as seed-only.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
 - Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
