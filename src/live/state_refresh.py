@@ -430,6 +430,13 @@ async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict
     )
     try:
         exchange_snapshot = await exchange_task
+    except asyncio.CancelledError:
+        if not progress_task.done():
+            progress_task.cancel()
+        await asyncio.gather(progress_task, return_exceptions=True)
+        wall_ms = int(max(0, _utc_ms() - wall_started))
+        bot._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+        raise
     except Exception:
         if not progress_task.done():
             progress_task.cancel()
@@ -478,6 +485,20 @@ async def fetch_authoritative_state_staged_snapshot(bot, plan: set[str]) -> dict
     try:
         keys = list(tasks)
         results = await asyncio.gather(*[tasks[key] for key in keys])
+    except asyncio.CancelledError:
+        for task in tasks.values():
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(
+            *tasks.values(),
+            return_exceptions=True,
+        )
+        if not progress_task.done():
+            progress_task.cancel()
+        await asyncio.gather(progress_task, return_exceptions=True)
+        wall_ms = int(max(0, _utc_ms() - wall_started))
+        bot._log_staged_refresh_timings(plan, timings_ms, wall_ms)
+        raise
     except Exception:
         for task in tasks.values():
             if not task.done():

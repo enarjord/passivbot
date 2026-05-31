@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
+  account-state or candle fetches are logged, counted, and routed through the
+  existing restart/backoff path instead of silently exiting without countdown.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
 - `live.custom_endpoints_path` is now part of the canonical config schema, so normalized
