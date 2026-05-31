@@ -1000,6 +1000,22 @@ def test_fee_policy_uses_reported_quote_fee():
     assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
+def test_fee_policy_uses_scalar_quote_fee():
+    for raw_fee, expected in [(0.25, -0.25), ("0.25", -0.25), (-0.05, 0.05)]:
+        payload = {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fee": raw_fee,
+        }
+
+        assert fem.signed_fee_paid_from_payload(payload) == pytest.approx(expected)
+        fee_paid, meta = fem._normalize_fee_paid_from_payload(payload)
+        assert fee_paid == pytest.approx(expected)
+        assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+        assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+
+
 def test_fee_policy_converts_reported_non_quote_fee_to_quote():
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         {

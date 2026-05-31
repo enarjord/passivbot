@@ -1250,6 +1250,7 @@ impl<'a> Backtest<'a> {
                 market_order_near_touch_threshold: self
                     .backtest_params
                     .market_order_near_touch_threshold,
+                market_order_slippage_pct: self.backtest_params.market_order_slippage_pct,
                 panic_close_market: self
                     .backtest_params
                     .equity_hard_stop_loss

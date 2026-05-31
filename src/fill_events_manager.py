@@ -306,6 +306,14 @@ def _fee_entries(fees: object) -> List[Dict[str, object]]:
         return []
     if isinstance(fees, dict):
         return [fees]
+    if isinstance(fees, (int, float, str)) and not isinstance(fees, bool):
+        try:
+            cost = float(fees)
+        except (TypeError, ValueError):
+            return []
+        if cost != 0.0:
+            return [{"cost": cost}]
+        return []
     try:
         return [entry for entry in list(fees) if isinstance(entry, dict)]
     except Exception:

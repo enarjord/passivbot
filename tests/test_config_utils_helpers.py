@@ -11,6 +11,7 @@ from cli_utils import build_command_parser, expand_help_all_argv, help_all_reque
 from config import load_input_config, prepare_config
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
+from config.validate import validate_config
 from config_transform import ConfigTransformTracker, record_transform
 from utils import normalize_coins_source
 from config_utils import (
@@ -52,6 +53,15 @@ def test_default_example_config_matches_schema_defaults():
         example = json.load(fh)
 
     assert example == get_template_config()
+
+
+def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
+    for value in (1.5, "1.5", True):
+        config = get_template_config()
+        config["live"]["fee_conversion_max_age_ms"] = value
+
+        with pytest.raises(TypeError, match="fee_conversion_max_age_ms must be an integer"):
+            validate_config(config, verbose=False)
 
 
 def test_prepare_config_strips_deprecated_price_distance_threshold():
