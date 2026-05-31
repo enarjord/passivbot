@@ -1396,6 +1396,52 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
 
 
 @pytest.mark.asyncio
+async def test_doctor_repairs_metadata_only_legacy_cache_for_any_exchange(tmp_path: Path):
+    cache_dir = tmp_path / "metadata_only_legacy"
+    cache_dir.mkdir()
+    event = _kucoin_manager_fill(
+        "current-row",
+        1_700_000_000_000,
+        side="buy",
+        qty=1.0,
+        price=10.0,
+        fees={"currency": "USDT", "cost": 0.1},
+    )
+    event["pnl_contract"] = fem.PNL_CONTRACT_CURRENT
+    event["fee_paid"] = -0.1
+    (cache_dir / "2023-11-14.json").write_text(json.dumps([event]), encoding="utf-8")
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    assert report["legacy_contract"] is True
+    assert report["repaired"] is True
+    assert FillEventCache(cache_dir).load_metadata()["pnl_contract"] == fem.PNL_CONTRACT_CURRENT
+    assert [ev.id for ev in FillEventCache(cache_dir).load()] == ["current-row"]
+
+
+def test_fill_event_cache_quarantine_for_rebuild_moves_legacy_payload(tmp_path: Path):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "2023-11-14.json").write_text("[]", encoding="utf-8")
+    cache = FillEventCache(cache_dir)
+
+    quarantined = cache.quarantine_for_rebuild(reason="legacy pnl contract")
+
+    assert quarantined is not None
+    quarantine_path = Path(str(quarantined))
+    assert quarantine_path.exists()
+    assert (quarantine_path / "2023-11-14.json").exists()
+    assert cache_dir.exists()
+    assert list(cache_dir.iterdir()) == []
+
+
+@pytest.mark.asyncio
 async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path):
     cache_dir = tmp_path / "legacy_repair"
     cache_dir.mkdir()

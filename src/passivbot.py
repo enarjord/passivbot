@@ -7944,55 +7944,67 @@ class Passivbot:
             doctor_mode = (
                 str(os.getenv("PASSIVBOT_FILL_EVENTS_DOCTOR", "")).strip().lower()
             )
+            doctor_disabled = doctor_mode in (
+                "0",
+                "false",
+                "off",
+                "disable",
+                "disabled",
+            )
+
+            async def rebuild_fill_cache_from_lookback() -> None:
+                lookback = parse_pnls_max_lookback_days(
+                    self.live_value("pnls_max_lookback_days"),
+                    field_name="live.pnls_max_lookback_days",
+                )
+                age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+                start_ms = None if age_limit is None else int(age_limit)
+                logging.warning(
+                    "[fills] rebuilding fill-event cache after legacy contract quarantine | start=%s scope=%s",
+                    ts_to_date(start_ms)[:19] if start_ms is not None else "all",
+                    "all" if lookback.is_all else "window",
+                )
+                await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
+                self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
 
             # Load cached events
             try:
                 await self._pnls_manager.ensure_loaded()
             except FillEventCacheContractError:
-                auto_repair_mode = doctor_mode in (
-                    "1",
-                    "true",
-                    "yes",
-                    "repair",
-                    "fix",
-                    "auto",
-                )
-                if self.exchange == "kucoin" and auto_repair_mode:
-                    report = await self._pnls_manager.run_doctor(auto_repair=True)
-                    logging.info(
-                        "[fills-doctor] startup repaired legacy KuCoin cache anomalies=%s repaired=%s mode=%s",
-                        report.get("anomaly_events", 0),
-                        report.get("repaired", False),
-                        doctor_mode,
-                    )
-                    if not report.get("repaired", False):
-                        raise
-                elif self.exchange == "bybit" and doctor_mode not in (
-                    "0",
-                    "false",
-                    "off",
-                    "disable",
-                    "disabled",
-                ):
-                    report = await self._pnls_manager.run_doctor(auto_repair=True)
-                    logging.info(
-                        "[fills-doctor] startup repaired legacy Bybit cache anomalies=%s repaired=%s mode=%s",
-                        report.get("anomaly_events", 0),
-                        report.get("repaired", False),
-                        doctor_mode or "repair",
-                    )
-                    if not report.get("repaired", False):
-                        raise
-                else:
+                if doctor_disabled:
                     raise
+                report = await self._pnls_manager.run_doctor(auto_repair=True)
+                logging.info(
+                    "[fills-doctor] startup legacy cache report anomalies=%s repaired=%s action=%s mode=%s",
+                    report.get("anomaly_events", 0),
+                    report.get("repaired", False),
+                    report.get("action", ""),
+                    doctor_mode or "auto",
+                )
+                if report.get("repaired", False):
+                    pass
+                elif self.exchange == "kucoin" and "degraded_events_after" in report:
+                    logging.warning(
+                        "[fills-doctor] startup KuCoin repair left %s degraded fill(s); continuing with current cache for refresh/enrichment",
+                        report.get("degraded_events_after", 0),
+                    )
+                else:
+                    quarantine_path = self._pnls_manager.quarantine_cache_for_rebuild(
+                        reason="legacy_pnl_contract"
+                    )
+                    logging.warning(
+                        "[fills] quarantined legacy fill-event cache for rebuild | exchange=%s user=%s backup=%s",
+                        self.exchange,
+                        self.user,
+                        quarantine_path or "none",
+                    )
+                    await rebuild_fill_cache_from_lookback()
 
             # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
             if self.exchange == "bybit":
-                if doctor_mode not in ("0", "false", "off", "disable", "disabled"):
+                if not doctor_disabled:
                     auto_repair = doctor_mode not in ("check", "scan", "detect")
-                    report = await self._pnls_manager.run_doctor(
-                        auto_repair=auto_repair
-                    )
+                    report = await self._pnls_manager.run_doctor(auto_repair=auto_repair)
                     logging.info(
                         "[fills-doctor] startup report anomalies=%s repaired=%s mode=%s",
                         report.get("anomaly_events", 0),

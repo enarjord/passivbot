@@ -1403,8 +1403,9 @@ class FillEventCache:
         if not self._metadata_has_current_pnl_contract():
             raise FillEventCacheContractError(
                 f"fill-event cache {self.root} uses a legacy or missing pnl_contract; "
-                "run `passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
-                "for supported repair paths, or rebuild the cache before using trading-critical accounting"
+                "startup will try to repair or quarantine/rebuild it automatically; "
+                "`passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
+                "can be used for manual inspection"
             )
 
     def load(self, *, allow_legacy_contract: bool = False) -> List[FillEvent]:
@@ -1427,8 +1428,9 @@ class FillEventCache:
                 ):
                     raise FillEventCacheContractError(
                         f"fill-event cache record {path} uses a legacy or missing pnl_contract; "
-                        "run `passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
-                        "for supported repair paths, or rebuild the cache before using trading-critical accounting"
+                        "startup will try to repair or quarantine/rebuild it automatically; "
+                        "`passivbot tool fill-events-doctor --exchange EXCHANGE --user USER --repair` "
+                        "can be used for manual inspection"
                     )
                 if (
                     allow_legacy_contract
@@ -1452,6 +1454,37 @@ class FillEventCache:
             self.root,
         )
         return events
+
+    def quarantine_for_rebuild(self, *, reason: str = "legacy_contract") -> Optional[str]:
+        """Move the current cache aside so a fresh canonical cache can be rebuilt."""
+        if not self.root.exists():
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._metadata = None
+            return None
+        try:
+            has_payload = any(self.root.iterdir())
+        except FileNotFoundError:
+            self.root.mkdir(parents=True, exist_ok=True)
+            self._metadata = None
+            return None
+        if not has_payload:
+            self._metadata = None
+            return None
+        safe_reason = "".join(
+            ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(reason or "legacy")
+        ).strip("_") or "legacy"
+        stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        quarantine_path = self.root.with_name(f"{self.root.name}.{safe_reason}.{stamp}")
+        counter = 1
+        while quarantine_path.exists():
+            quarantine_path = self.root.with_name(
+                f"{self.root.name}.{safe_reason}.{stamp}.{counter}"
+            )
+            counter += 1
+        shutil.move(str(self.root), str(quarantine_path))
+        self.root.mkdir(parents=True, exist_ok=True)
+        self._metadata = None
+        return str(quarantine_path)
 
     def save(self, events: Sequence[FillEvent]) -> None:
         day_map: Dict[str, List[FillEvent]] = defaultdict(list)
@@ -3639,6 +3672,13 @@ class FillEventsManager:
         )
         legacy_contract = metadata_legacy or record_legacy
         report["legacy_contract"] = legacy_contract
+        if metadata_legacy and not record_legacy and auto_repair:
+            self.cache.update_metadata_from_events(self._events)
+            report["repaired"] = True
+            report["anomaly_events_after"] = 0
+            report["anomaly_examples_after"] = []
+            logger.info("[fills-doctor] repaired fill cache metadata contract")
+            return report
         if exchange not in {"bybit", "kucoin"} and legacy_contract:
             legacy_events = [
                 ev for ev in self._events if ev.pnl_contract != PNL_CONTRACT_CURRENT
@@ -3766,6 +3806,13 @@ class FillEventsManager:
             counter += 1
         shutil.copytree(self.cache.root, backup_path)
         return str(backup_path)
+
+    def quarantine_cache_for_rebuild(self, *, reason: str = "legacy_contract") -> Optional[str]:
+        """Move the current cache aside and reset in-memory fill state."""
+        quarantine_path = self.cache.quarantine_for_rebuild(reason=reason)
+        self._events = []
+        self._loaded = False
+        return quarantine_path
 
     def _repair_kucoin_payload_contract(
         self, payload: List[Dict[str, object]]
