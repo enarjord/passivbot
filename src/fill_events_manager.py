@@ -361,7 +361,7 @@ def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
 
 
 def _fee_entry_currency(fee: Dict[str, object]) -> str:
-    return str(fee.get("currency") or fee.get("code") or "").strip().upper()
+    return str(fee.get("currency") or fee.get("code") or fee.get("feeCoin") or "").strip().upper()
 
 
 def _quote_currency_from_symbol(symbol: object) -> str:
@@ -471,6 +471,7 @@ def _normalize_fee_paid_from_payload(
         fee_source = str(payload.get("fee_source") or FEE_SOURCE_EXISTING)
         fee_quality = str(payload.get("fee_quality") or FEE_QUALITY_EXACT)
         fee_currency = str(payload.get("fee_currency") or quote or "").upper()
+        conversion_source = str(payload.get("fee_conversion_source") or "none")
     elif entries:
         converted_total = 0.0
         saw_quote = False
@@ -2154,6 +2155,33 @@ class BitgetFetcher(BaseFetcher):
             total += res or 0
         return total
 
+    @staticmethod
+    def _normalize_fee_detail(fee_detail: object) -> object:
+        """Normalize Bitget feeDetail rows into canonical signed fee entries."""
+        entries = _fee_entries(fee_detail)
+        if not entries:
+            return fee_detail
+        normalized: List[Dict[str, object]] = []
+        for entry in entries:
+            item = dict(entry)
+            currency = _fee_entry_currency(item)
+            if currency:
+                item["currency"] = currency
+            fee_paid_raw = (
+                item.get("fee_paid")
+                if "fee_paid" in item
+                else item.get("totalFee")
+                if item.get("totalFee") not in (None, "")
+                else item.get("totalDeductionFee")
+            )
+            if fee_paid_raw not in (None, ""):
+                try:
+                    item["fee_paid"] = float(fee_paid_raw)
+                except (TypeError, ValueError):
+                    pass
+            normalized.append(item)
+        return normalized
+
     def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
         timestamp = int(raw["cTime"])
         side, position_side = deduce_side_pside(raw)
@@ -2168,7 +2196,7 @@ class BitgetFetcher(BaseFetcher):
             "qty": float(raw.get("baseVolume", 0.0)),
             "price": float(raw.get("price", 0.0)),
             "pnl": float(raw.get("profit", 0.0)),
-            "fees": raw.get("feeDetail"),
+            "fees": self._normalize_fee_detail(raw.get("feeDetail")),
             "pb_order_type": raw.get("pb_order_type", ""),
             "position_side": position_side,
             "client_order_id": raw.get("client_order_id"),
@@ -3828,7 +3856,6 @@ class FillEventsManager:
         report["legacy_contract"] = bool(legacy_contract)
         report["anomaly_events"] = anomaly_count
         if not anomaly_count:
-            report["repaired"] = True
             return report
         report["anomaly_examples"] = [
             {
@@ -3946,9 +3973,22 @@ class FillEventsManager:
         self.fetcher.pnl_observations = []
         fetched_batches: List[List[Dict[str, object]]] = []
 
+        def in_requested_range(raw: Dict[str, object]) -> bool:
+            try:
+                timestamp = int(raw.get("timestamp") or 0)
+            except (TypeError, ValueError):
+                return True
+            if start_ms is not None and timestamp < start_ms:
+                return False
+            if end_ms is not None and timestamp > end_ms:
+                return False
+            return True
+
         def collect_batch(batch: List[Dict[str, object]]) -> None:
             if batch:
-                fetched_batches.append([dict(ev) for ev in batch])
+                bounded = [dict(ev) for ev in batch if in_requested_range(ev)]
+                if bounded:
+                    fetched_batches.append(bounded)
 
         try:
             fetched_events = await self.fetcher.fetch(
@@ -3997,7 +4037,7 @@ class FillEventsManager:
                 await self._apply_fee_policy_to_batch(batch)
                 handle_batch(batch)
         elif fetched_events:
-            batch = [dict(ev) for ev in fetched_events]
+            batch = [dict(ev) for ev in fetched_events if in_requested_range(ev)]
             await self._apply_fee_policy_to_batch(batch)
             handle_batch(batch)
 
@@ -4210,7 +4250,8 @@ class FillEventsManager:
         if not self._events:
             logger.debug("[fills] refresh_range: cache empty, refreshing entire interval")
             await self.refresh(start_ms=start_ms, end_ms=end_ms)
-            await self.refresh_latest(overlap=overlap)
+            if self._events:
+                await self.refresh_latest(overlap=overlap)
             return
 
         events_sorted = self._events
@@ -4901,7 +4942,11 @@ class HyperliquidFetcher(BaseFetcher):
                 break
             prev_params = new_key
             try:
-                trades = await self.api.fetch_my_trades(params=params)
+                trades = await self.api.fetch_my_trades(
+                    since=params.get("since"),
+                    limit=self.trade_limit,
+                    params={},
+                )
             except RateLimitExceeded as exc:
                 rate_limit_retries += 1
                 if rate_limit_retries >= max_rate_limit_retries:

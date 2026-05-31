@@ -194,8 +194,21 @@ class _FakeHyperliquidAPI:
         self._batches = list(batches)
         self.calls: List[Dict[str, Any]] = []
 
-    async def fetch_my_trades(self, params: Dict[str, Any]):
-        self.calls.append(dict(params))
+    async def fetch_my_trades(
+        self,
+        symbol: Optional[str] = None,
+        since: Optional[int] = None,
+        limit: Optional[int] = None,
+        params: Optional[Dict[str, Any]] = None,
+    ):
+        self.calls.append(
+            {
+                "symbol": symbol,
+                "since": since,
+                "limit": limit,
+                "params": dict(params or {}),
+            }
+        )
         if not self._batches:
             return []
         return self._batches.pop(0)
@@ -1030,6 +1043,28 @@ def test_fee_policy_converts_reported_non_quote_fee_to_quote():
     assert fee_paid == pytest.approx(-0.03)
     assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_CONVERTED
     assert meta["fee_quality"] == fem.FEE_QUALITY_CONVERTED
+    assert meta["fee_conversion_source"] == "ticker"
+
+
+def test_fee_policy_preserves_existing_conversion_metadata():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fee_paid": -0.03,
+            "fee_source": fem.FEE_SOURCE_REPORTED_CONVERTED,
+            "fee_quality": fem.FEE_QUALITY_CONVERTED,
+            "fee_currency": "BNB",
+            "fee_conversion_source": "ticker",
+            "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+        }
+    )
+
+    assert fee_paid == pytest.approx(-0.03)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_CONVERTED
+    assert meta["fee_quality"] == fem.FEE_QUALITY_CONVERTED
+    assert meta["fee_conversion_source"] == "ticker"
 
 
 def test_fee_policy_falls_back_when_mixed_fee_has_unresolved_non_quote():
@@ -1132,6 +1167,89 @@ async def test_fee_conversion_cache_does_not_reuse_stale_fill_age(tmp_path: Path
 
     assert await manager._fee_conversion_rate("BNB", "USDT", now_ms) == pytest.approx(300.0)
     assert api.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_refresh_does_not_persist_out_of_range_fetcher_rows(tmp_path: Path):
+    in_range_ts = 1_500
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher(
+            [
+                {
+                    "id": "old",
+                    "timestamp": 500,
+                    "datetime": "",
+                    "symbol": "BTC/USDC:USDC",
+                    "side": "buy",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "fees": {"currency": "USDC", "cost": 0.01},
+                    "pb_order_type": "unknown",
+                    "position_side": "long",
+                    "client_order_id": "",
+                },
+                {
+                    "id": "current",
+                    "timestamp": in_range_ts,
+                    "datetime": "",
+                    "symbol": "BTC/USDC:USDC",
+                    "side": "buy",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "fees": {"currency": "USDC", "cost": 0.01},
+                    "pb_order_type": "unknown",
+                    "position_side": "long",
+                    "client_order_id": "",
+                },
+            ]
+        ),
+        cache_path=tmp_path,
+    )
+
+    await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    loaded = FillEventCache(tmp_path).load()
+    assert [event.id for event in loaded] == ["current"]
+    assert loaded[0].timestamp == in_range_ts
+
+
+@pytest.mark.asyncio
+async def test_refresh_range_empty_bounded_window_does_not_fetch_unbounded_latest(
+    tmp_path: Path,
+):
+    fetcher = _StaticFetcher(
+        [
+            {
+                "id": "old",
+                "timestamp": 500,
+                "datetime": "",
+                "symbol": "BTC/USDC:USDC",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "pnl": 0.0,
+                "fees": {"currency": "USDC", "cost": 0.01},
+                "pb_order_type": "unknown",
+                "position_side": "long",
+                "client_order_id": "",
+            }
+        ]
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=fetcher,
+        cache_path=tmp_path,
+    )
+
+    await manager.refresh_range(start_ms=1_000, end_ms=2_000)
+
+    assert fetcher.calls == [(1_000, 2_000)]
+    assert FillEventCache(tmp_path).load() == []
 
 
 # ---------------------------------------------------------------------------
@@ -1326,6 +1444,38 @@ async def test_kucoin_doctor_repairs_legacy_contract_with_backup(tmp_path: Path)
 
 
 @pytest.mark.asyncio
+async def test_kucoin_doctor_clean_cache_does_not_report_repaired(tmp_path: Path):
+    cache_dir = tmp_path / "clean_kucoin"
+    cache_dir.mkdir()
+    event = _kucoin_manager_fill(
+        "clean-entry",
+        1_700_000_000_000,
+        side="buy",
+        qty=1.0,
+        price=10.0,
+        fees={"currency": "USDT", "cost": 0.1},
+    )
+    event["pnl_contract"] = fem.PNL_CONTRACT_CURRENT
+    event["fee_paid"] = -0.1
+    (cache_dir / "2023-11-14.json").write_text(json.dumps([event]), encoding="utf-8")
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=False)
+
+    assert report["anomaly_events"] == 0
+    assert report["repaired"] is False
+
+
+@pytest.mark.asyncio
 async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
     cache_dir = tmp_path / "legacy_repair_c_mult"
     cache_dir.mkdir()
@@ -1436,6 +1586,47 @@ async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     assert api.detail_calls, "Expected detail endpoint to be called"
     assert len(batches) == 1
     assert [ev["id"] for ev in batches[0]] == ["tid-1", "tid-2"]
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetcher_preserves_signed_fee_detail(monkeypatch):
+    fills = [
+        [
+            {
+                "tradeId": "tid-fee",
+                "orderId": "oid-fee",
+                "cTime": "1000",
+                "symbol": "XLMUSDT",
+                "side": "buy",
+                "baseVolume": "174",
+                "price": "0.22375",
+                "profit": "0",
+                "feeDetail": [
+                    {
+                        "feeCoin": "USDT",
+                        "totalFee": "-0.0077865",
+                        "totalDeductionFee": "0",
+                    }
+                ],
+            }
+        ]
+    ]
+    api = _FakeBitgetAPI(fills)
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    fetcher = BitgetFetcher(api, symbol_resolver=resolver)
+
+    events = await fetcher.fetch(
+        since_ms=500,
+        until_ms=2000,
+        detail_cache={"tid-fee": ("client", "entry_grid_long")},
+    )
+
+    assert len(events) == 1
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(events[0])
+    assert fee_paid == pytest.approx(-0.0077865)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
 @pytest.mark.asyncio
@@ -2546,6 +2737,9 @@ async def test_hyperliquid_fetcher_basic(monkeypatch):
     assert event["client_order_id"] == "0xabc"
     assert isinstance(event["fees"], dict)
     assert event["fees"]["cost"] == pytest.approx(0.7)
+    assert api.calls[0]["since"] == base_ts - 1
+    assert api.calls[0]["limit"] == fetcher.trade_limit
+    assert api.calls[0]["params"] == {}
 
 
 @pytest.mark.asyncio
@@ -3753,7 +3947,13 @@ async def test_hyperliquid_fetcher_raises_after_max_rate_limit_retries(monkeypat
         def __init__(self):
             self.calls = 0
 
-        async def fetch_my_trades(self, params: Dict[str, Any]):
+        async def fetch_my_trades(
+            self,
+            symbol: Optional[str] = None,
+            since: Optional[int] = None,
+            limit: Optional[int] = None,
+            params: Optional[Dict[str, Any]] = None,
+        ):
             self.calls += 1
             raise RateLimitExceeded("429 too many requests")
 
