@@ -10,6 +10,9 @@ All notable user-facing changes will be documented in this file.
   converted when a fresh ticker is available, otherwise estimated from reported
   fee rates or `live.fee_pct_fallback`; every fill is sanity-checked against
   `live.fee_pct_sanity_abs_max`.
+- Fee-policy warnings now deduplicate repeated overlapping-refresh examples
+  and include the original rejected fee ratio/source when sanity replacement
+  uses `live.fee_pct_fallback`.
 - Live realized-loss gates, unstuck allowances, fill health summaries, and
   backtest rolling realized-PnL risk windows now use net realized PnL
   (`pnl + fee_paid`) consistently. KuCoin positions-history net cycle PnL is

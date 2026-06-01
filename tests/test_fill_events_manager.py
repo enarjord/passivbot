@@ -1134,6 +1134,49 @@ def test_fee_policy_sanity_replaces_absurd_reported_fee_with_fallback():
     assert fee_paid == pytest.approx(-0.2)
     assert meta["fee_quality"] == fem.FEE_QUALITY_SANITY_REPLACED
     assert meta["fee_ratio"] == pytest.approx(-0.0002)
+    assert meta["fee_original_paid"] == pytest.approx(-10.0)
+    assert meta["fee_original_ratio"] == pytest.approx(-0.01)
+    assert meta["fee_original_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert meta["fee_original_quality"] == fem.FEE_QUALITY_EXACT
+
+
+@pytest.mark.asyncio
+async def test_fee_policy_warning_dedupes_and_logs_original_sanity_ratio(
+    tmp_path: Path, caplog
+):
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="fee_user",
+        fetcher=_StaticFetcher([]),
+        cache_path=tmp_path / "fills",
+        fee_pct_fallback=0.0002,
+        fee_pct_sanity_abs_max=0.001,
+    )
+    raw = {
+        "id": "duplicate-fee-event",
+        "timestamp": 1_700_000_000_000,
+        "symbol": "BTC/USDT:USDT",
+        "qty": 1.0,
+        "price": 1000.0,
+        "fees": {"currency": "USDT", "cost": 10.0},
+    }
+
+    caplog.set_level(logging.WARNING, logger=fem.logger.name)
+    await manager._apply_fee_policy_to_batch([dict(raw)])
+    await manager._apply_fee_policy_to_batch([dict(raw)])
+
+    warnings = [
+        record.getMessage()
+        for record in caplog.records
+        if "fee policy used non-exact fee accounting" in record.getMessage()
+    ]
+    assert len(warnings) == 1
+    assert "new_degraded=1" in warnings[0]
+    assert "symbols=BTC/USDT:USDT:1" in warnings[0]
+    assert "ratio=-0.00020000" in warnings[0]
+    assert "orig_source=reported_quote" in warnings[0]
+    assert "orig_ratio=-0.01000000" in warnings[0]
+    assert "orig_paid=-10.00000000" in warnings[0]
 
 
 @pytest.mark.asyncio
@@ -1390,6 +1433,7 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
     assert report["unsupported_legacy_contract"] is True
     assert report["repaired"] is False
     assert report["action"] == "rebuild_cache"
+    assert "startup auto-migration" in report["message"]
     assert report["anomaly_events"] == 1
     assert report["anomaly_examples"] == ["legacy-bitget-entry"]
     assert report["anomaly_events_after"] == 1

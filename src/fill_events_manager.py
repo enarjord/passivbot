@@ -457,6 +457,10 @@ def _normalize_fee_paid_from_payload(
     fee_currency = ""
     conversion_source = "none"
     unresolved_non_quote = False
+    original_fee_paid: Optional[float] = None
+    original_fee_ratio: Optional[float] = None
+    original_fee_source: Optional[str] = None
+    original_fee_quality: Optional[str] = None
 
     trusted_fee_paid = (
         "fee_paid" in payload
@@ -523,6 +527,10 @@ def _normalize_fee_paid_from_payload(
     sanity_replaced = False
     sanity_max = max(float(fee_pct_sanity_abs_max), 0.0)
     if notional > 0.0 and sanity_max > 0.0 and abs(fee_ratio) > sanity_max:
+        original_fee_paid = fee_paid
+        original_fee_ratio = fee_ratio
+        original_fee_source = fee_source
+        original_fee_quality = fee_quality
         fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
         fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
         sanity_replaced = True
@@ -539,6 +547,15 @@ def _normalize_fee_paid_from_payload(
         "fee_sanity_replaced": sanity_replaced,
         "fee_unresolved_non_quote": unresolved_non_quote,
     }
+    if sanity_replaced:
+        meta.update(
+            {
+                "fee_original_paid": original_fee_paid,
+                "fee_original_ratio": original_fee_ratio,
+                "fee_original_source": original_fee_source,
+                "fee_original_quality": original_fee_quality,
+            }
+        )
     return float(fee_paid), meta
 
 
@@ -2857,6 +2874,7 @@ class FillEventsManager:
         self.fee_pct_sanity_abs_max = float(fee_pct_sanity_abs_max)
         self.fee_conversion_max_age_ms = int(fee_conversion_max_age_ms)
         self._fee_conversion_cache: Dict[Tuple[str, str], Optional[float]] = {}
+        self._fee_warning_reported_ids: set[str] = set()
         self._events: List[FillEvent] = []
         self._loaded = False
         self._lock = asyncio.Lock()
@@ -2957,6 +2975,7 @@ class FillEventsManager:
             FEE_SOURCE_FALLBACK_PCT: 0,
             FEE_QUALITY_SANITY_REPLACED: 0,
         }
+        symbol_counts: Dict[str, int] = defaultdict(int)
         examples = []
         for raw in batch:
             quote = _quote_currency_from_symbol(raw.get("symbol"))
@@ -2982,20 +3001,38 @@ class FillEventsManager:
             if (
                 source in {FEE_SOURCE_ESTIMATED_RATE, FEE_SOURCE_FALLBACK_PCT}
                 or quality == FEE_QUALITY_SANITY_REPLACED
-            ) and len(examples) < 5:
-                examples.append(
-                    f"{str(raw.get('id', ''))[:12]}:{raw.get('symbol')}:{source}:{quality}:"
-                    f"ratio={float(meta.get('fee_ratio') or 0.0):.8f}"
-                )
-        degraded = (
-            stats[FEE_SOURCE_ESTIMATED_RATE]
-            + stats[FEE_SOURCE_FALLBACK_PCT]
-            + stats[FEE_QUALITY_SANITY_REPLACED]
+            ):
+                event_id = str(raw.get("id") or "")
+                warning_key = event_id or f"{raw.get('symbol')}:{raw.get('timestamp')}"
+                if warning_key in self._fee_warning_reported_ids:
+                    continue
+                self._fee_warning_reported_ids.add(warning_key)
+                symbol_counts[str(raw.get("symbol") or "")] += 1
+                if len(examples) < 5:
+                    detail = (
+                        f"{event_id[:12]}:{raw.get('symbol')}:{source}:{quality}:"
+                        f"ratio={float(meta.get('fee_ratio') or 0.0):.8f}"
+                    )
+                    if quality == FEE_QUALITY_SANITY_REPLACED:
+                        detail += (
+                            f":orig_source={meta.get('fee_original_source')}"
+                            f":orig_ratio={float(meta.get('fee_original_ratio') or 0.0):.8f}"
+                            f":orig_paid={float(meta.get('fee_original_paid') or 0.0):.8f}"
+                        )
+                    examples.append(detail)
+        new_degraded = sum(symbol_counts.values())
+        top_symbols = ",".join(
+            f"{symbol}:{count}"
+            for symbol, count in sorted(
+                symbol_counts.items(), key=lambda item: (-item[1], item[0])
+            )[:5]
+            if symbol
         )
-        if degraded:
+        if new_degraded:
             logger.warning(
                 "[fills] fee policy used non-exact fee accounting | exchange=%s user=%s "
-                "fallback_pct=%.8f sanity_abs_max=%.8f estimated=%d fallback=%d sanity_replaced=%d examples=%s",
+                "fallback_pct=%.8f sanity_abs_max=%.8f estimated=%d fallback=%d "
+                "sanity_replaced=%d new_degraded=%d symbols=%s examples=%s",
                 self.exchange,
                 self.user,
                 self.fee_pct_fallback,
@@ -3003,7 +3040,24 @@ class FillEventsManager:
                 stats[FEE_SOURCE_ESTIMATED_RATE],
                 stats[FEE_SOURCE_FALLBACK_PCT],
                 stats[FEE_QUALITY_SANITY_REPLACED],
+                new_degraded,
+                top_symbols or "-",
                 ",".join(examples),
+            )
+        degraded = (
+            stats[FEE_SOURCE_ESTIMATED_RATE]
+            + stats[FEE_SOURCE_FALLBACK_PCT]
+            + stats[FEE_QUALITY_SANITY_REPLACED]
+        )
+        if degraded and not new_degraded:
+            logger.debug(
+                "[fills] fee policy non-exact accounting already reported | exchange=%s user=%s "
+                "estimated=%d fallback=%d sanity_replaced=%d",
+                self.exchange,
+                self.user,
+                stats[FEE_SOURCE_ESTIMATED_RATE],
+                stats[FEE_SOURCE_FALLBACK_PCT],
+                stats[FEE_QUALITY_SANITY_REPLACED],
             )
 
     async def ensure_loaded(self, *, allow_legacy_contract: bool = False) -> None:
@@ -3697,8 +3751,8 @@ class FillEventsManager:
                     "action": "rebuild_cache",
                     "message": (
                         "fill-event cache uses a legacy or missing pnl_contract; "
-                        "auto-repair is only supported for bybit and kucoin, so rebuild this cache "
-                        "before using trading-critical accounting"
+                        "startup auto-migration will quarantine and rebuild unsupported legacy "
+                        "caches from exchange fills; run fill-events-doctor for manual inspection"
                     ),
                 }
             )
