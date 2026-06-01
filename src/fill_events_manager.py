@@ -74,6 +74,14 @@ FEE_QUALITY_ESTIMATED = "estimated"
 FEE_QUALITY_FALLBACK = "fallback"
 FEE_QUALITY_SANITY_REPLACED = "sanity_replaced"
 
+FEE_FALLBACK_REASON_NONE = "none"
+FEE_FALLBACK_REASON_NO_FEE = "no_fee"
+FEE_FALLBACK_REASON_NO_NOTIONAL = "no_notional"
+FEE_FALLBACK_REASON_UNRESOLVED_NON_QUOTE = "unresolved_non_quote"
+FEE_FALLBACK_REASON_RATE_UNAVAILABLE = "rate_unavailable"
+FEE_FALLBACK_REASON_RATE_OUT_OF_BOUNDS = "rate_out_of_bounds"
+FEE_FALLBACK_REASON_SANITY_REPLACED = "sanity_replaced"
+
 
 class FillEventCacheDiskFullError(RuntimeError):
     """Raised when the trading-critical fill event cache cannot be persisted."""
@@ -461,11 +469,13 @@ def _normalize_fee_paid_from_payload(
     original_fee_ratio: Optional[float] = None
     original_fee_source: Optional[str] = None
     original_fee_quality: Optional[str] = None
+    fallback_reason = FEE_FALLBACK_REASON_NONE
 
+    payload_fee_source = str(payload.get("fee_source") or "")
     trusted_fee_paid = (
         "fee_paid" in payload
         and (
-            payload.get("fee_source")
+            (payload_fee_source and payload_fee_source != FEE_SOURCE_NONE)
             or str(payload.get("pnl_contract") or "") == PNL_CONTRACT_CURRENT
             or (not entries and float(payload.get("fee_paid") or 0.0) != 0.0)
         )
@@ -522,6 +532,16 @@ def _normalize_fee_paid_from_payload(
             fee_paid = _fallback_fee_paid(payload, fee_pct_fallback)
             fee_source = FEE_SOURCE_FALLBACK_PCT
             fee_quality = FEE_QUALITY_FALLBACK
+            if unresolved_non_quote:
+                fallback_reason = FEE_FALLBACK_REASON_UNRESOLVED_NON_QUOTE
+            elif not entries:
+                fallback_reason = FEE_FALLBACK_REASON_NO_FEE
+            elif notional <= 0.0:
+                fallback_reason = FEE_FALLBACK_REASON_NO_NOTIONAL
+            elif rate is None:
+                fallback_reason = FEE_FALLBACK_REASON_RATE_UNAVAILABLE
+            else:
+                fallback_reason = FEE_FALLBACK_REASON_RATE_OUT_OF_BOUNDS
 
     fee_ratio = fee_paid / notional if notional > 0.0 else 0.0
     sanity_replaced = False
@@ -536,6 +556,7 @@ def _normalize_fee_paid_from_payload(
         sanity_replaced = True
         fee_source = FEE_SOURCE_FALLBACK_PCT
         fee_quality = FEE_QUALITY_SANITY_REPLACED
+        fallback_reason = FEE_FALLBACK_REASON_SANITY_REPLACED
 
     meta = {
         "fee_source": fee_source,
@@ -546,6 +567,7 @@ def _normalize_fee_paid_from_payload(
         "fee_ratio": fee_ratio,
         "fee_sanity_replaced": sanity_replaced,
         "fee_unresolved_non_quote": unresolved_non_quote,
+        "fee_fallback_reason": fallback_reason,
     }
     if sanity_replaced:
         meta.update(
@@ -663,6 +685,58 @@ def _payload_contract_multiplier(payload: Dict[str, object]) -> float:
     if quote_value <= 0.0:
         return 1.0
     return quote_value / denominator
+
+
+def _market_contract_size(api: object, *, symbol: str = "", market_id: str = "") -> float:
+    """Return CCXT contract size for a symbol/market id when markets are loaded."""
+    candidates = [str(symbol or ""), str(market_id or "")]
+    markets = getattr(api, "markets", None)
+    if isinstance(markets, dict):
+        for candidate in candidates:
+            if not candidate:
+                continue
+            market = markets.get(candidate)
+            if isinstance(market, dict):
+                for key in ("contractSize", "contract_size"):
+                    try:
+                        value = float(market.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    if value > 0.0:
+                        return value
+        market_id_upper = str(market_id or "").upper()
+        if market_id_upper:
+            for market in markets.values():
+                if not isinstance(market, dict):
+                    continue
+                if str(market.get("id") or "").upper() != market_id_upper:
+                    continue
+                for key in ("contractSize", "contract_size"):
+                    try:
+                        value = float(market.get(key) or 0.0)
+                    except (TypeError, ValueError):
+                        value = 0.0
+                    if value > 0.0:
+                        return value
+    market_fn = getattr(api, "market", None)
+    if callable(market_fn):
+        for candidate in candidates:
+            if not candidate:
+                continue
+            try:
+                market = market_fn(candidate)
+            except Exception:
+                continue
+            if not isinstance(market, dict):
+                continue
+            for key in ("contractSize", "contract_size"):
+                try:
+                    value = float(market.get(key) or 0.0)
+                except (TypeError, ValueError):
+                    value = 0.0
+                if value > 0.0:
+                    return value
+    return 1.0
 
 
 def _payload_signed_effective_qty(payload: Dict[str, object]) -> float:
@@ -2401,8 +2475,28 @@ class BinanceFetcher(BaseFetcher):
                 trade_events[event["id"]] = event
 
         merged: Dict[str, Dict[str, object]] = {}
+
+        def _merge_income_into_event(event: Dict[str, object], incoming: Dict[str, object]) -> None:
+            if float(event.get("pnl") or 0.0) == 0.0 and incoming.get("pnl") is not None:
+                event["pnl"] = float(incoming.get("pnl") or 0.0)
+            if not event.get("symbol") and incoming.get("symbol"):
+                event["symbol"] = incoming["symbol"]
+            if not event.get("position_side") and incoming.get("position_side"):
+                event["position_side"] = incoming["position_side"]
+            incoming_fees = incoming.get("fees")
+            if incoming_fees:
+                current_fees = _fee_entries(event.get("fees"))
+                event["fees"] = current_fees + _fee_entries(incoming_fees)
+            if incoming.get("raw"):
+                event.setdefault("raw", [])
+                event["raw"].extend(_normalize_raw_field(incoming.get("raw")))
+
         for ev in income_events:
-            merged[ev["id"]] = ev
+            event_id = str(ev["id"])
+            if event_id in merged:
+                _merge_income_into_event(merged[event_id], ev)
+            else:
+                merged[event_id] = ev
 
         def _event_from_trade(trade: Dict[str, object]) -> Dict[str, object]:
             symbol = trade.get("symbol") or self._resolve_symbol(trade.get("info", {}).get("symbol"))
@@ -2605,13 +2699,24 @@ class BinanceFetcher(BaseFetcher):
         since_ms: Optional[int],
         until_ms: Optional[int],
     ) -> List[Dict[str, object]]:
-        params: Dict[str, object] = {"incomeType": "REALIZED_PNL", "limit": self.income_limit}
+        realized = await self._fetch_income_by_type("REALIZED_PNL", since_ms, until_ms)
+        commission = await self._fetch_income_by_type("COMMISSION", since_ms, until_ms)
+        return sorted(realized + commission, key=lambda x: x["timestamp"])
+
+    async def _fetch_income_by_type(
+        self,
+        income_type: str,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+    ) -> List[Dict[str, object]]:
+        params: Dict[str, object] = {"incomeType": income_type, "limit": self.income_limit}
         if until_ms is None:
             if since_ms is None:
                 logger.debug(f"BinanceFetcher._fetch_income.fapiprivate_get_income params={params}")
                 payload = await self.api.fapiprivate_get_income(params=params)
                 return sorted(
-                    [self._normalize_income(x) for x in payload], key=lambda x: x["timestamp"]
+                    [self._normalize_income(x, income_type=income_type) for x in payload],
+                    key=lambda x: x["timestamp"],
                 )
             until_ms = self._now_func() + 1000 * 60 * 60
         week_buffer_ms = 1000 * 60 * 60 * 24 * 6.95
@@ -2651,7 +2756,10 @@ class BinanceFetcher(BaseFetcher):
                 params["endTime"] = int(min(until_ms, params["startTime"] + week_buffer_ms))
                 continue
             events.extend(
-                sorted([self._normalize_income(x) for x in payload], key=lambda x: x["timestamp"])
+                sorted(
+                    [self._normalize_income(x, income_type=income_type) for x in payload],
+                    key=lambda x: x["timestamp"],
+                )
             )
             params["startTime"] = int(events[-1]["timestamp"]) + 1
             params["endTime"] = int(min(until_ms, params["startTime"] + week_buffer_ms))
@@ -2755,13 +2863,20 @@ class BinanceFetcher(BaseFetcher):
             logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
             return []
 
-    def _normalize_income(self, entry: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_income(
+        self, entry: Dict[str, object], *, income_type: str = "REALIZED_PNL"
+    ) -> Dict[str, object]:
         trade_id = entry.get("tradeId") or entry.get("id") or f"income-{entry.get('time')}"
         timestamp = int(entry.get("time") or entry.get("timestamp") or 0)
         raw_symbol = entry.get("symbol")
         ccxt_symbol = self._resolve_symbol(raw_symbol)
-        pnl = float(entry.get("income") or entry.get("pnl") or 0.0)
+        income = float(entry.get("income") or entry.get("pnl") or 0.0)
+        pnl = income if income_type == "REALIZED_PNL" else 0.0
         position_side = str(entry.get("positionSide") or entry.get("pside") or "unknown").lower()
+        asset = str(entry.get("asset") or _quote_currency_from_symbol(ccxt_symbol) or "")
+        fees = None
+        if income_type == "COMMISSION":
+            fees = {"currency": asset, "fee_paid": income}
         return {
             "id": str(trade_id),
             "timestamp": timestamp,
@@ -2771,10 +2886,11 @@ class BinanceFetcher(BaseFetcher):
             "qty": 0.0,
             "price": 0.0,
             "pnl": pnl,
-            "fees": None,
+            "fees": fees,
             "pb_order_type": "",
             "position_side": position_side or "unknown",
             "client_order_id": entry.get("clientOrderId") or "",
+            "raw": [{"source": f"binance_income_{income_type.lower()}", "data": dict(entry)}],
         }
 
     def _normalize_trade(self, trade: Dict[str, object]) -> Dict[str, object]:
@@ -2976,6 +3092,7 @@ class FillEventsManager:
             FEE_QUALITY_SANITY_REPLACED: 0,
         }
         symbol_counts: Dict[str, int] = defaultdict(int)
+        reason_counts: Dict[str, int] = defaultdict(int)
         examples = []
         for raw in batch:
             quote = _quote_currency_from_symbol(raw.get("symbol"))
@@ -3003,14 +3120,26 @@ class FillEventsManager:
                 or quality == FEE_QUALITY_SANITY_REPLACED
             ):
                 event_id = str(raw.get("id") or "")
-                warning_key = event_id or f"{raw.get('symbol')}:{raw.get('timestamp')}"
+                source_ids = _extract_source_ids(raw.get("raw"), event_id)
+                warning_key = (
+                    "|".join(source_ids)
+                    or event_id
+                    or f"{raw.get('symbol')}:{raw.get('timestamp')}"
+                )
                 if warning_key in self._fee_warning_reported_ids:
                     continue
                 self._fee_warning_reported_ids.add(warning_key)
                 symbol_counts[str(raw.get("symbol") or "")] += 1
+                reason = str(meta.get("fee_fallback_reason") or FEE_FALLBACK_REASON_NONE)
+                if source == FEE_SOURCE_ESTIMATED_RATE and reason == FEE_FALLBACK_REASON_NONE:
+                    reason = FEE_SOURCE_ESTIMATED_RATE
+                reason_counts[reason] += 1
                 if len(examples) < 5:
+                    display_id = event_id or warning_key
                     detail = (
-                        f"{event_id[:12]}:{raw.get('symbol')}:{source}:{quality}:"
+                        f"id={display_id}:symbol={raw.get('symbol')}:source={source}:"
+                        f"quality={quality}:reason={reason}:"
+                        f"notional={float(meta.get('fee_notional') or 0.0):.8f}:"
                         f"ratio={float(meta.get('fee_ratio') or 0.0):.8f}"
                     )
                     if quality == FEE_QUALITY_SANITY_REPLACED:
@@ -3028,11 +3157,18 @@ class FillEventsManager:
             )[:5]
             if symbol
         )
+        top_reasons = ",".join(
+            f"{reason}:{count}"
+            for reason, count in sorted(
+                reason_counts.items(), key=lambda item: (-item[1], item[0])
+            )[:5]
+            if reason
+        )
         if new_degraded:
             logger.warning(
                 "[fills] fee policy used non-exact fee accounting | exchange=%s user=%s "
                 "fallback_pct=%.8f sanity_abs_max=%.8f estimated=%d fallback=%d "
-                "sanity_replaced=%d new_degraded=%d symbols=%s examples=%s",
+                "sanity_replaced=%d new_degraded=%d symbols=%s reasons=%s examples=%s",
                 self.exchange,
                 self.user,
                 self.fee_pct_fallback,
@@ -3042,6 +3178,7 @@ class FillEventsManager:
                 stats[FEE_QUALITY_SANITY_REPLACED],
                 new_degraded,
                 top_symbols or "-",
+                top_reasons or "-",
                 ",".join(examples),
             )
         degraded = (
@@ -4213,7 +4350,18 @@ class FillEventsManager:
                 start_ms = metadata_start_ms if start_ms is None else max(start_ms, metadata_start_ms)
         pending_pnl_events = self.pending_pnl_events(self._events)
         synthetic_pnl_events = self.synthetic_pnl_events(self._events)
-        pnl_refresh_events = pending_pnl_events + synthetic_pnl_events
+        now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+        synthetic_refresh_margin_ms = (
+            KUCOIN_POSITION_HISTORY_LOOKAHEAD_MS + PENDING_PNL_REFRESH_MARGIN_MS
+        )
+        recent_synthetic_pnl_events = [
+            ev
+            for ev in synthetic_pnl_events
+            if str(getattr(ev, "pnl_source", "") or "") != PNL_SOURCE_SYNTHETIC_DEGRADED
+            or int(getattr(ev, "timestamp", 0) or 0) >= now_ms - synthetic_refresh_margin_ms
+        ]
+        old_synthetic_count = len(synthetic_pnl_events) - len(recent_synthetic_pnl_events)
+        pnl_refresh_events = pending_pnl_events + recent_synthetic_pnl_events
         if pnl_refresh_events:
             oldest_pnl_refresh_ts = min(int(ev.timestamp) for ev in pnl_refresh_events)
             pnl_refresh_start_ms = max(
@@ -4229,6 +4377,15 @@ class FillEventsManager:
                     _format_ms(pnl_refresh_start_ms),
                 )
                 start_ms = pnl_refresh_start_ms
+        elif old_synthetic_count:
+            logger.debug(
+                "[fills] refresh_latest: keeping old synthetic PnL out of routine refresh "
+                "window | exchange=%s user=%s skipped=%d max_age_minutes=%.1f",
+                self.exchange,
+                self.user,
+                old_synthetic_count,
+                synthetic_refresh_margin_ms / 60_000,
+            )
         await self.refresh(start_ms=start_ms, end_ms=None)
 
     async def refresh_for_lookback(
@@ -5360,6 +5517,7 @@ class GateioFetcher(BaseFetcher):
         # Get contract and convert to CCXT symbol format (e.g., BNB_USDT -> BNB/USDT:USDT)
         contract = str(raw.get("contract") or "")
         symbol = contract.replace("_", "/") + ":USDT" if contract else ""
+        c_mult = _market_contract_size(self.api, symbol=symbol, market_id=contract)
 
         # Determine side from size sign (positive = buy, negative = sell)
         size = float(raw.get("size") or 0)
@@ -5378,6 +5536,7 @@ class GateioFetcher(BaseFetcher):
             "amount": abs(size),
             "price": float(raw.get("price") or 0),
             "fee": fee,
+            "c_mult": c_mult,
             "info": raw,  # Keep raw data for _normalize_trade to access
         }
 
@@ -5472,6 +5631,7 @@ class GateioFetcher(BaseFetcher):
         qty = abs(float(trade.get("amount") or info.get("size") or 0.0))
         price = float(trade.get("price") or info.get("price") or 0.0)
         fee = trade.get("fee")
+        c_mult = float(trade.get("c_mult") or info.get("c_mult") or 1.0)
 
         # Distribute PnL proportionally
         proportion = qty / total_qty if total_qty > 0 else 0
@@ -5510,6 +5670,7 @@ class GateioFetcher(BaseFetcher):
             "pb_order_type": pb_type or "unknown",
             "position_side": position_side,
             "client_order_id": client_order_id,
+            "c_mult": c_mult,
             "raw": [{"source": "my_trades_timerange", "data": dict(trade)}],
         }
 
@@ -6419,8 +6580,7 @@ class OkxFetcher(BaseFetcher):
 
         return fetch_count, collected
 
-    @staticmethod
-    def _normalize_fill(raw: Dict[str, object]) -> Dict[str, object]:
+    def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
         """Normalize a raw OKX fill to the canonical fill event format."""
         trade_id = str(raw.get("tradeId") or "")
         order_id = str(raw.get("ordId") or "")
@@ -6444,6 +6604,7 @@ class OkxFetcher(BaseFetcher):
         qty = abs(float(raw.get("fillSz") or 0.0))
         price = float(raw.get("fillPx") or 0.0)
         pnl = float(raw.get("fillPnl") or 0.0)
+        c_mult = _market_contract_size(self.api, symbol=symbol, market_id=inst_id)
 
         # Position side handling (supports both hedge and net modes)
         pos_side_raw = str(raw.get("posSide") or "").lower()
@@ -6487,7 +6648,7 @@ class OkxFetcher(BaseFetcher):
             "position_side": position_side,
             "client_order_id": client_order_id,
             "raw": [{"source": "okx_fills", "data": raw}],
-            "c_mult": 1.0,
+            "c_mult": c_mult,
         }
 
 

@@ -7974,11 +7974,18 @@ class Passivbot:
                 if doctor_disabled:
                     raise
                 report = await self._pnls_manager.run_doctor(auto_repair=True)
+                doctor_action = str(report.get("action") or "")
+                if (
+                    not doctor_action
+                    and self.exchange == "kucoin"
+                    and "degraded_events_after" in report
+                ):
+                    doctor_action = "continue_with_degraded_kucoin_repairs"
                 logging.info(
                     "[fills-doctor] startup legacy cache report anomalies=%s repaired=%s action=%s mode=%s",
                     report.get("anomaly_events", 0),
                     report.get("repaired", False),
-                    report.get("action", ""),
+                    doctor_action,
                     doctor_mode or "auto",
                 )
                 if report.get("repaired", False):
@@ -8268,7 +8275,13 @@ class Passivbot:
                 tags=("error", "exchange"),
                 payload={"source": "update_pnls"},
             )
-            logging.error("[fills] Failed to update FillEventsManager: %s", e)
+            logging.error(
+                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s error=%s",
+                type(e).__name__,
+                getattr(e, "status", "-"),
+                getattr(e, "code", "-"),
+                e,
+            )
             if self.logging_level >= 2:
                 traceback.print_exc()
             raise
