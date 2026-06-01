@@ -316,6 +316,65 @@ async def test_binance_fetcher_merges_trade_details(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_binance_fetcher_merges_commission_income_into_realized_pnl(monkeypatch):
+    ts = 1_700_000_000_000
+    fetcher = BinanceFetcher(
+        api=object(),
+        symbol_resolver=lambda sym: "ADA/USDT:USDT" if sym == "ADAUSDT" else sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+    realized = fetcher._normalize_income(
+        {
+            "tradeId": "trade-commission",
+            "time": ts,
+            "symbol": "ADAUSDT",
+            "income": "1.5",
+            "asset": "USDT",
+            "positionSide": "LONG",
+        },
+        income_type="REALIZED_PNL",
+    )
+    commission = fetcher._normalize_income(
+        {
+            "tradeId": "trade-commission",
+            "time": ts,
+            "symbol": "ADAUSDT",
+            "income": "-0.003",
+            "asset": "USDT",
+            "positionSide": "LONG",
+        },
+        income_type="COMMISSION",
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [realized, commission]
+
+    async def fake_fetch_trades(self, symbol, *_args, **_kwargs):
+        return []
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_symbol_trades",
+        types.MethodType(fake_fetch_trades, fetcher),
+    )
+
+    events = await fetcher.fetch(ts, ts + 1_000, detail_cache={})
+
+    assert len(events) == 1
+    assert events[0]["pnl"] == pytest.approx(1.5)
+    assert events[0]["fees"] == [{"currency": "USDT", "fee_paid": -0.003}]
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(events[0])
+    assert fee_paid == pytest.approx(-0.003)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+
+
+@pytest.mark.asyncio
 async def test_binance_fetch_symbol_trades_uses_now_bound_and_one_percent_margin():
     now_ms = 1_700_000_000_000
     seven_days_ms = 7 * 24 * 60 * 60 * 1000
@@ -1173,10 +1232,30 @@ async def test_fee_policy_warning_dedupes_and_logs_original_sanity_ratio(
     assert len(warnings) == 1
     assert "new_degraded=1" in warnings[0]
     assert "symbols=BTC/USDT:USDT:1" in warnings[0]
+    assert "reasons=sanity_replaced:1" in warnings[0]
+    assert "id=duplicate-fee-event" in warnings[0]
     assert "ratio=-0.00020000" in warnings[0]
     assert "orig_source=reported_quote" in warnings[0]
     assert "orig_ratio=-0.01000000" in warnings[0]
     assert "orig_paid=-10.00000000" in warnings[0]
+
+
+def test_fee_policy_does_not_trust_fee_source_none_over_fee_entries():
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        {
+            "symbol": "BTC/USDT:USDT",
+            "qty": 1.0,
+            "price": 1000.0,
+            "fee_paid": 0.0,
+            "fee_source": fem.FEE_SOURCE_NONE,
+            "fees": {"currency": "USDT", "cost": 0.25},
+        },
+        fee_pct_fallback=0.0002,
+    )
+
+    assert fee_paid == pytest.approx(-0.25)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
 @pytest.mark.asyncio
@@ -4421,6 +4500,40 @@ async def test_okx_fetcher_symbol_normalization(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_okx_fetcher_uses_market_contract_size_for_fee_notional(monkeypatch):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    fill = _make_okx_fill(
+        trade_id="tid-doge",
+        ts=now_ms - 100,
+        inst_id="DOGE-USDT-SWAP",
+        qty="1",
+        price="0.20",
+    )
+    fill["fee"] = "-0.004"
+    api = _FakeOkxAPI([[fill]])
+    api.markets = {"DOGE/USDT:USDT": {"id": "DOGE-USDT-SWAP", "contractSize": 100.0}}
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = OkxFetcher(api, trade_limit=100)
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1_000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert events[0]["c_mult"] == pytest.approx(100.0)
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        events[0],
+        fee_pct_fallback=0.0002,
+        fee_pct_sanity_abs_max=0.001,
+    )
+    assert fee_paid == pytest.approx(-0.004)
+    assert meta["fee_notional"] == pytest.approx(20.0)
+    assert meta["fee_ratio"] == pytest.approx(-0.0002)
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+
+
+@pytest.mark.asyncio
 async def test_okx_fetcher_hedge_mode(monkeypatch):
     """Test hedge mode with explicit long/short position sides."""
     now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
@@ -5162,6 +5275,51 @@ async def test_kucoin_fetcher_empty_fetch_logs_debug(monkeypatch, caplog):
     )
 
 
+@pytest.mark.asyncio
+async def test_refresh_latest_does_not_extend_to_old_synthetic_pnl(tmp_path: Path):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    old_ts = now_ms - 3 * 24 * 60 * 60 * 1000
+    events = [
+        _kucoin_manager_fill(
+            "old-synthetic",
+            old_ts,
+            side="sell",
+            qty=-1.0,
+            price=10.0,
+        )
+    ]
+    events[0]["pnl_status"] = "complete"
+    events[0]["pnl_source"] = fem.PNL_SOURCE_SYNTHETIC_DEGRADED
+    events[0]["pnl_synthetic_reason"] = "incomplete_position_basis"
+    for idx in range(30):
+        ts = now_ms - (30 - idx) * 60_000
+        events.append(
+            _kucoin_manager_fill(
+                f"recent-{idx}",
+                ts,
+                side="buy",
+                qty=1.0,
+                price=10.0 + idx,
+            )
+        )
+    fetcher = _StaticFetcher([])
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=fetcher,
+        cache_path=tmp_path / "refresh_latest_synthetic_bound",
+        fee_pct_fallback=0.0,
+    )
+    manager._events = [FillEvent.from_dict(ev) for ev in events]
+    manager._loaded = True
+
+    await manager.refresh_latest(overlap=20)
+
+    assert fetcher.calls
+    assert fetcher.calls[-1][0] is not None
+    assert fetcher.calls[-1][0] > old_ts
+
+
 def test_kucoin_pnl_discrepancy_logs_symbol_diagnostics(caplog):
     fetcher = KucoinFetcher(api=object())
     fem._pnl_discrepancy_last_log.clear()
@@ -5549,6 +5707,44 @@ async def test_gateio_fetcher_captures_fees(monkeypatch):
     assert events[0]["fees"] is not None
     assert events[0]["fees"]["cost"] == pytest.approx(0.05)
     assert events[0]["fees"]["currency"] == "USDT"
+
+
+@pytest.mark.asyncio
+async def test_gateio_fetcher_uses_market_contract_size_for_fee_notional(monkeypatch):
+    now_ms = int(datetime.now(timezone.utc).timestamp() * 1000)
+    trades = [
+        _make_gateio_trade(
+            trade_id="trade-doge",
+            order_id="order-doge",
+            ts=now_ms - 100,
+            symbol="DOGE/USDT:USDT",
+            amount=1.0,
+            price=0.20,
+            fee_cost=0.004,
+        ),
+    ]
+    orders = [_make_gateio_order(order_id="order-doge", ts=now_ms - 100)]
+    api = _FakeGateioAPI([trades], [orders])
+    api.markets = {"DOGE/USDT:USDT": {"id": "DOGE_USDT", "contractSize": 100.0}}
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda v: v or "unknown")
+
+    fetcher = GateioFetcher(api, trade_limit=100)
+    events = await fetcher.fetch(
+        since_ms=now_ms - 1_000,
+        until_ms=now_ms,
+        detail_cache={},
+    )
+
+    assert events[0]["c_mult"] == pytest.approx(100.0)
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        events[0],
+        fee_pct_fallback=0.0002,
+        fee_pct_sanity_abs_max=0.001,
+    )
+    assert fee_paid == pytest.approx(-0.004)
+    assert meta["fee_notional"] == pytest.approx(20.0)
+    assert meta["fee_ratio"] == pytest.approx(-0.0002)
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
 @pytest.mark.asyncio
