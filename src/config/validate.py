@@ -83,6 +83,26 @@ def validate_config(
         raise ValueError(
             "config.live.max_forager_candle_refresh_seconds must be finite and > 0.0"
         )
+    for key in ("fee_pct_fallback", "fee_pct_sanity_abs_max"):
+        try:
+            value = float(config["live"][key])
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"config.live.{key} must be numeric") from exc
+        if not math.isfinite(value) or value < 0.0:
+            raise ValueError(f"config.live.{key} must be finite and >= 0.0")
+    fee_conversion_max_age_ms_raw = config["live"]["fee_conversion_max_age_ms"]
+    if isinstance(fee_conversion_max_age_ms_raw, bool) or isinstance(
+        fee_conversion_max_age_ms_raw, float
+    ):
+        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
+    try:
+        fee_conversion_max_age_ms = int(fee_conversion_max_age_ms_raw)
+    except (TypeError, ValueError) as exc:
+        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer") from exc
+    if str(fee_conversion_max_age_ms_raw).strip() != str(fee_conversion_max_age_ms):
+        raise TypeError("config.live.fee_conversion_max_age_ms must be an integer")
+    if fee_conversion_max_age_ms < 0:
+        raise ValueError("config.live.fee_conversion_max_age_ms must be >= 0")
     max_cancellations = int(config["live"]["max_n_cancellations_per_batch"])
     max_creations = int(config["live"]["max_n_creations_per_batch"])
     if max_cancellations <= max_creations:

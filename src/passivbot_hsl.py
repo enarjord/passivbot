@@ -20,6 +20,7 @@ from config.coerce import (
     normalize_hsl_signal_mode,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
+from fill_events_manager import signed_fee_paid_from_payload
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
 
@@ -377,23 +378,11 @@ def _equity_hard_stop_fee_cost(fill: Any) -> float:
     if fill is None:
         return 0.0
     if isinstance(fill, dict):
-        fee_obj = fill.get("fee")
-        if isinstance(fee_obj, dict):
-            return float(fee_obj.get("cost", 0.0) or 0.0)
-        if isinstance(fee_obj, (int, float, str)):
-            return float(fee_obj or 0.0)
-        fees_obj = fill.get("fees")
-    else:
-        fees_obj = getattr(fill, "fees", None)
-    if isinstance(fees_obj, dict):
-        return float(fees_obj.get("cost", 0.0) or 0.0)
-    if isinstance(fees_obj, (list, tuple)):
-        total = 0.0
-        for item in fees_obj:
-            if isinstance(item, dict):
-                total += float(item.get("cost", 0.0) or 0.0)
-        return total
-    return 0.0
+        return signed_fee_paid_from_payload(fill)
+    fee_paid = getattr(fill, "fee_paid", None)
+    if fee_paid is not None:
+        return float(fee_paid or 0.0)
+    return signed_fee_paid_from_payload({"fees": getattr(fill, "fees", None)})
 
 
 def _get_exchange_fee_rates(self, symbol: str) -> tuple[float, float]:

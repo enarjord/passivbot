@@ -47,6 +47,8 @@ from fill_events_manager import (
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     _instantiate_bot,
+    fee_policy_kwargs_from_config,
+    signed_fee_paid_from_payload,
 )
 from logging_setup import configure_logging
 
@@ -133,6 +135,10 @@ def _normalize_fee_cost(fees: Optional[object]) -> float:
     return total
 
 
+def _normalize_fee_paid(row: dict) -> float:
+    return signed_fee_paid_from_payload(row)
+
+
 def _format_datetime_str(dt: pd.Timestamp) -> str:
     """Format datetime consistently as 'YYYY-MM-DD HH:MM:SS' for display."""
     if pd.isna(dt):
@@ -173,7 +179,9 @@ def _events_to_dataframe(events: List[dict], account_label: str) -> pd.DataFrame
     df["datetime_str"] = df["datetime"].apply(_format_datetime_str)
     fees_col = df.get("fees", pd.Series([None] * len(df)))
     df["fee_cost"] = [_normalize_fee_cost(x) for x in fees_col]
-    df["pnl_with_fees"] = df["pnl"] - df["fee_cost"]
+    df["fee_paid"] = [_normalize_fee_paid(row) for row in df.to_dict(orient="records")]
+    df["net_pnl"] = df["pnl"] + df["fee_paid"]
+    df["pnl_with_fees"] = df["net_pnl"]
     # Add normalized coin column (base asset only, e.g., BTC instead of BTC/USDT:USDT)
     # This allows aggregation across different quote currencies (USDT, USDC, etc.)
     df["coin"] = df["symbol"].apply(_extract_base_coin)
@@ -204,7 +212,11 @@ def _build_managers(
             key = f"{bot.exchange}:{bot.user}"
             result[key] = {
                 "manager": FillEventsManager(
-                    exchange=bot.exchange, user=bot.user, fetcher=fetcher, cache_path=cache_path
+                    exchange=bot.exchange,
+                    user=bot.user,
+                    fetcher=fetcher,
+                    cache_path=cache_path,
+                    **fee_policy_kwargs_from_config(config),
                 ),
                 "bot": bot,
                 "exchange": bot.exchange,
@@ -244,7 +256,11 @@ def _rebuild_manager(data: Dict[str, Any]) -> None:
 
         # Create new manager
         data["manager"] = FillEventsManager(
-            exchange=bot.exchange, user=bot.user, fetcher=fetcher, cache_path=cache_path
+            exchange=bot.exchange,
+            user=bot.user,
+            fetcher=fetcher,
+            cache_path=cache_path,
+            **fee_policy_kwargs_from_config(config),
         )
         data["bot"] = bot
         logging.debug(f"Rebuilt manager for {data['exchange']}:{data['user']}")
@@ -418,8 +434,8 @@ def _get_coverage_summaries(
 def build_figures(df: pd.DataFrame):
     """Build the main dashboard figures.
 
-    Note: Uses raw PnL instead of pnl_with_fees since fee data is
-    inconsistent/unavailable across different exchanges.
+    Uses canonical net PnL (gross PnL + signed fee_paid) for account-level
+    equity views.
     """
     if df.empty:
         return (
@@ -429,43 +445,49 @@ def build_figures(df: pd.DataFrame):
             px.bar(title="PnL by Account (no data)"),
         )
     df = df.sort_values("timestamp").copy()
-    df["cum_pnl"] = df.groupby("account")["pnl"].cumsum()
+    df["cum_pnl"] = df.groupby("account")["net_pnl"].cumsum()
     cum_fig = px.line(
         df,
         x="datetime",
         y="cum_pnl",
         color="account",
-        title="Cumulative Realized PnL",
-        hover_data=["symbol", "pnl", "pb_order_type"],
+        title="Cumulative Net Realized PnL",
+        hover_data=["symbol", "pnl", "fee_paid", "net_pnl", "pb_order_type"],
     )
-    daily = df.groupby(["date", "account"], as_index=False).agg({"pnl": "sum"}).sort_values("date")
+    daily = (
+        df.groupby(["date", "account"], as_index=False)
+        .agg({"net_pnl": "sum", "pnl": "sum", "fee_paid": "sum"})
+        .sort_values("date")
+    )
     daily_fig = px.bar(
         daily,
         x="date",
-        y="pnl",
+        y="net_pnl",
         color="account",
-        title="Daily Realized PnL",
+        title="Daily Net Realized PnL",
         barmode="group",
     )
     # Group by normalized coin (base asset only) to merge BTC/USDT:USDT and BTC/USDC:USDC
     top_coins = (
         df.groupby(["coin", "account"], as_index=False)
-        .agg({"pnl": "sum", "qty": "sum"})
-        .sort_values("pnl", ascending=False)
+        .agg({"net_pnl": "sum", "pnl": "sum", "fee_paid": "sum", "qty": "sum"})
+        .sort_values("net_pnl", ascending=False)
         .head(30)
     )
     top_fig = px.bar(
         top_coins,
         x="coin",
-        y="pnl",
+        y="net_pnl",
         color="account",
-        title="Top Coins by Realized PnL",
+        title="Top Coins by Net Realized PnL",
     )
     # Replace fees chart with PnL by account summary
     account_pnl = (
-        df.groupby("account", as_index=False).agg({"pnl": "sum"}).sort_values("pnl", ascending=False)
+        df.groupby("account", as_index=False)
+        .agg({"net_pnl": "sum", "pnl": "sum", "fee_paid": "sum"})
+        .sort_values("net_pnl", ascending=False)
     )
-    account_fig = px.bar(account_pnl, x="account", y="pnl", title="Total PnL by Account")
+    account_fig = px.bar(account_pnl, x="account", y="net_pnl", title="Total Net PnL by Account")
     return cum_fig, daily_fig, top_fig, account_fig
 
 
@@ -486,7 +508,7 @@ def build_symbol_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         color="side",
         color_discrete_map={"buy": "blue", "sell": "red"},
         size=symbol_df["qty"].abs(),
-        hover_data=["qty", "pnl", "pb_order_type", "datetime_str"],
+        hover_data=["qty", "pnl", "fee_paid", "net_pnl", "pb_order_type", "datetime_str"],
         title=f"{symbol} Fills",
     )
     return fig
@@ -510,7 +532,7 @@ def build_coin_chart(df: pd.DataFrame, coin: str) -> go.Figure:
         symbol="side",
         symbol_map={"buy": "triangle-up", "sell": "triangle-down"},
         size=coin_df["qty"].abs(),
-        hover_data=["symbol", "qty", "pnl", "pb_order_type", "datetime_str"],
+        hover_data=["symbol", "qty", "pnl", "fee_paid", "net_pnl", "pb_order_type", "datetime_str"],
         title=f"{coin} Fills (across all quote currencies)",
     )
     return fig
@@ -908,8 +930,8 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
             figs = build_figures(df)
             # Sort by timestamp (numeric) for correct ordering, use datetime_str for display
             recent = df.sort_values("timestamp", ascending=False).head(200).to_dict(orient="records")
-            # Define columns: datetime_str for readable display, exclude fee_cost from main view
-            # (fees are inconsistent across exchanges)
+            # Define columns: datetime_str for readable display, showing canonical
+            # gross PnL, signed fee cashflow, and derived net PnL separately.
             # Use normalized coin (base asset) instead of full symbol to merge USDT/USDC variants
             table_columns = [
                 {"name": "Time", "id": "datetime_str"},
@@ -919,7 +941,9 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
                 {"name": "Pos Side", "id": "position_side"},
                 {"name": "Qty", "id": "qty", "type": "numeric", "format": {"specifier": ".6f"}},
                 {"name": "Price", "id": "price", "type": "numeric", "format": {"specifier": ".4f"}},
-                {"name": "PnL", "id": "pnl", "type": "numeric", "format": {"specifier": ".4f"}},
+                {"name": "Gross PnL", "id": "pnl", "type": "numeric", "format": {"specifier": ".4f"}},
+                {"name": "Fee Paid", "id": "fee_paid", "type": "numeric", "format": {"specifier": ".4f"}},
+                {"name": "Net PnL", "id": "net_pnl", "type": "numeric", "format": {"specifier": ".4f"}},
                 {"name": "Type", "id": "pb_order_type"},
             ]
             return html.Div(
@@ -970,10 +994,12 @@ def serve_dash(accounts: Dict[str, Dict[str, Any]], default_days: int = 30, port
 
             fig = build_coin_chart(df, selected_coin)
 
-            # Coin stats (PnL without fees since fees are inconsistent)
+            # Coin stats use canonical net PnL.
             coin_df = df[df["coin"] == selected_coin]
             stats = {
-                "PnL": f"{coin_df['pnl'].sum():.4f}",
+                "Gross PnL": f"{coin_df['pnl'].sum():.4f}",
+                "Fee Paid": f"{coin_df['fee_paid'].sum():.4f}",
+                "Net PnL": f"{coin_df['net_pnl'].sum():.4f}",
                 "Trades": len(coin_df),
                 "Buys": len(coin_df[coin_df["side"] == "buy"]),
                 "Sells": len(coin_df[coin_df["side"] == "sell"]),

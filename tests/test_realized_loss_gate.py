@@ -17,11 +17,15 @@ from backtest import prep_backtest_args
 
 
 def _make_fill_event(
-    pnl: float, timestamp: float = 0.0, pnl_status: str = "complete"
+    pnl: float,
+    timestamp: float = 0.0,
+    pnl_status: str = "complete",
+    fee_paid: float = 0.0,
 ) -> types.SimpleNamespace:
     """Create a minimal fill-event namespace with a .pnl attribute."""
     return types.SimpleNamespace(
         pnl=pnl,
+        fee_paid=fee_paid,
         timestamp=timestamp,
         pnl_status=pnl_status,
         id="test-fill",
@@ -55,6 +59,22 @@ def _set_pnl_lookback(bot, *, lookback_days: float | str, now_ms: int) -> None:
     bot.get_exchange_time = lambda: now_ms
 
 
+def _rust_effective_pnl_cumsum_reference(events, *, start_ms=None):
+    active = [
+        ev for ev in events if start_ms is None or getattr(ev, "timestamp", 0.0) >= start_ms
+    ]
+    if not active:
+        return {"max": 0.0, "last": 0.0}
+    cumsum = 0.0
+    peak = 0.0
+    for ev in active:
+        cumsum += float(getattr(ev, "pnl", 0.0) or 0.0) + float(
+            getattr(ev, "fee_paid", 0.0) or 0.0
+        )
+        peak = max(peak, cumsum)
+    return {"max": peak, "last": cumsum}
+
+
 def _make_bot_for_logging():
     """Return a Passivbot instance with throttle state initialized."""
     bot = object.__new__(Passivbot)
@@ -86,6 +106,12 @@ class TestGetRealizedPnlCumsumStats:
         assert result["max"] == pytest.approx(50.0)
         assert result["last"] == pytest.approx(50.0)
 
+    def test_realized_loss_gate_uses_net_pnl_with_fee_paid(self):
+        bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
+        result = bot._get_realized_pnl_cumsum_stats()
+        assert result["max"] == pytest.approx(45.0)
+        assert result["last"] == pytest.approx(45.0)
+
     def test_cumsum_peak_differs_from_last(self):
         events = [
             _make_fill_event(100.0),
@@ -100,10 +126,10 @@ class TestGetRealizedPnlCumsumStats:
 
     def test_all_negative_events(self):
         events = [_make_fill_event(-10.0), _make_fill_event(-20.0)]
-        # cumsum: [-10, -30] → max=-10, last=-30
+        # cumsum: [-10, -30] with an explicit zero starting-balance peak.
         bot = _make_bot_with_events(events)
         result = bot._get_realized_pnl_cumsum_stats()
-        assert result["max"] == pytest.approx(-10.0)
+        assert result["max"] == pytest.approx(0.0)
         assert result["last"] == pytest.approx(-30.0)
 
     def test_uses_only_events_inside_configured_lookback_window(self):
@@ -152,11 +178,34 @@ class TestGetRealizedPnlCumsumStats:
         assert result["max"] == pytest.approx(100.0)
         assert result["last"] == pytest.approx(30.0)
 
+    def test_live_cumsum_matches_rust_effective_contract_reference(self):
+        now_ms = 10 * 86_400_000
+        events = [
+            _make_fill_event(100.0, timestamp=now_ms - 4 * 86_400_000, fee_paid=-2.0),
+            _make_fill_event(50.0, timestamp=now_ms - 2 * 86_400_000),
+            _make_fill_event(-120.0, timestamp=now_ms - 86_400_000, fee_paid=-1.5),
+            _make_fill_event(190.0, timestamp=now_ms - 60_000, fee_paid=-0.5),
+        ]
+        bot = _make_bot_with_events(events)
+        _set_pnl_lookback(bot, lookback_days=2.0, now_ms=now_ms)
+        start_ms = now_ms - 2 * 86_400_000
+
+        result = bot._get_realized_pnl_cumsum_stats()
+        expected = _rust_effective_pnl_cumsum_reference(events, start_ms=start_ms)
+
+        assert result["max"] == pytest.approx(expected["max"])
+        assert result["last"] == pytest.approx(expected["last"])
+
     def test_pending_close_pnl_fails_loudly(self):
         bot = _make_bot_with_events([_make_fill_event(0.0, pnl_status="pending")])
 
         with pytest.raises(RuntimeError, match="realized PnL pending"):
             bot._get_realized_pnl_cumsum_stats()
+
+    def test_equity_hard_stop_uses_net_pnl_with_fee_paid(self):
+        bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
+        result = bot._equity_hard_stop_realized_pnl_now()
+        assert result == pytest.approx(45.0)
 
 
 # ---------------------------------------------------------------------------

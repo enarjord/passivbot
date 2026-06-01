@@ -161,7 +161,8 @@ slot accounting, or bot-scope TWE/TWEL accounting.
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 
-The gate is anchored to the realized PnL peak reconstructed from fill history:
+The gate is anchored to the net realized PnL peak reconstructed from fill history
+(`pnl + fee_paid`):
 
 `balance_peak = current_balance + (realized_pnl_cumsum_max - realized_pnl_cumsum_last)`
 
