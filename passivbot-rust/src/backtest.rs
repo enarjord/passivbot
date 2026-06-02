@@ -1,6 +1,9 @@
 use crate::analysis::{analyze_equity_series, calc_fill_activity_metrics, FillActivityMetrics};
 use crate::constants::{CLOSE, HIGH, LONG, LOW, SHORT, VOLUME};
-use crate::entries::calc_min_entry_qty;
+use crate::entries::{
+    calc_min_entry_qty, effective_we_excess_allowance_pct,
+    wallet_exposure_limit_with_allowance_from_base,
+};
 use crate::equity_hard_stop_loss as ehsl;
 use crate::orchestrator;
 use crate::orchestrator::{
@@ -861,9 +864,9 @@ fn calc_entry_balance_pct(
     if effective_n_positions == 0 {
         return 0.0;
     }
-    let allowance_multiplier = 1.0 + params.risk_we_excess_allowance_pct.max(0.0);
-    params.total_wallet_exposure_limit * entry_initial_qty_pct * allowance_multiplier
-        / effective_n_positions as f64
+    let base_limit = params.total_wallet_exposure_limit / effective_n_positions as f64;
+    let allowance_multiplier = 1.0 + effective_we_excess_allowance_pct(params, base_limit);
+    base_limit * entry_initial_qty_pct * allowance_multiplier
 }
 
 fn configured_wallet_exposure_limit(params: &BotParams) -> f64 {
@@ -1069,8 +1072,10 @@ impl<'a> Backtest<'a> {
         let ex = &self.exchange_params_list[idx];
 
         let size_abs = position.size.abs();
-        let allowance_multiplier = 1.0 + bp.risk_we_excess_allowance_pct.max(0.0);
-        let effective_wel = runtime_budget.effective_wallet_exposure_limit * allowance_multiplier;
+        let effective_wel = wallet_exposure_limit_with_allowance_from_base(
+            bp,
+            runtime_budget.effective_wallet_exposure_limit,
+        );
         let wallet_exposure = calc_wallet_exposure(ex.c_mult, balance, size_abs, position.price);
         let ema_price_target = match side {
             LONG => ema_bands.upper * (1.0 + bp.unstuck_ema_dist),
@@ -2518,8 +2523,7 @@ impl<'a> Backtest<'a> {
         if base_limit <= 0.0 {
             return false;
         }
-        let allowance_multiplier = 1.0 + bot.risk_we_excess_allowance_pct.max(0.0);
-        let effective_limit = base_limit * allowance_multiplier;
+        let effective_limit = wallet_exposure_limit_with_allowance_from_base(bot, base_limit);
         let projected_cost =
             self.balance.usd_total_balance * effective_limit * entry_initial_qty_pct;
         projected_cost >= min_cost

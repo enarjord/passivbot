@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Capped `risk_we_excess_allowance_pct` by the side's `total_wallet_exposure_limit`
+  before per-position sizing, WEL enforcement, unstuck, threshold weighting, and
+  min-effective-cost projections use it, so `n_positions = 1` no longer allows
+  per-symbol exposure above TWEL through excess allowance.
 - Changed v8 optimizer fine-tuning so combining `--fine-tune-params` with `--start`
   treats the starting configs as fixed-parameter anchors, letting one run tune selected
   params across multiple Pareto candidates while preserving plain `--start` as seed-only.

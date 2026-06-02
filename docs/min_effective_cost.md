@@ -16,12 +16,13 @@ effective min cost. If it cannot meet the minimum, the symbol is excluded (leadi
 
 ## How is the initial entry computed?
 
-For most perpetuals, `initial_notional ≈ balance * (twel / n_positions) * (1 + we_allowance) * strategy_initial_sizing_fraction`.
+For most perpetuals, `initial_notional ≈ balance * effective_wel * strategy_initial_sizing_fraction`.
 
 With:
 - `balance`: current account balance in quote currency (e.g., USDT/USDC).
 - `twel = total_wallet_exposure_limit`: side-level cap; divided by `n_positions` to get per-position WE.
-- `we_allowance = risk_we_excess_allowance_pct`: optional headroom multiplier on per-position WEL.
+- `we_allowance = min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`: optional headroom multiplier on per-position WEL, capped so a single symbol cannot exceed the side-level TWEL.
+- `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
   order. For `live.strategy_kind = "trailing_martingale"`, this is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for
@@ -40,8 +41,6 @@ If this fails, the symbol is dropped, unless `filter_by_min_effective_cost` is s
 
 Rearrange the inequality to solve for the minimum balance:
 
-`balance_required ≈ effective_min_cost / ((twel / n_positions) * (1 + we_allowance) * strategy_initial_sizing_fraction)`
-or  
 `balance_required ≈ effective_min_cost / (effective_wel * strategy_initial_sizing_fraction)`
 
 Use the highest effective_min_cost among the symbols you want to trade. Example:

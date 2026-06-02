@@ -1,6 +1,6 @@
 use super::{EmaAnchorParams, GeneratedOrders, StrategyParams, StrategyRequest, StrategySide};
 use crate::dynamic::{calc_dynamic_distance_multiplier, DynamicDistanceInputs};
-use crate::entries::calc_min_entry_qty;
+use crate::entries::{calc_min_entry_qty, wallet_exposure_limit_with_allowance_from_base};
 use crate::types::{BotParams, ExchangeParams, Order, OrderType, StateParams};
 use crate::utils::{cost_to_qty, qty_to_cost, round_, round_dn, round_up};
 
@@ -30,15 +30,6 @@ fn calc_offset_multiplier(state: &StateParams, params: &EmaAnchorParams) -> f64 
         weight_wallet_exposure: 0.0,
         min_multiplier: 1.0,
     })
-}
-
-#[inline]
-fn effective_wallet_exposure_limit_with_allowance(bot_params: &BotParams, base_limit: f64) -> f64 {
-    if base_limit <= 0.0 {
-        base_limit
-    } else {
-        base_limit * (1.0 + bot_params.risk_we_excess_allowance_pct.max(0.0))
-    }
 }
 
 #[inline]
@@ -122,7 +113,7 @@ fn calc_base_clip_qty(
         return 0.0;
     }
     let effective_limit =
-        effective_wallet_exposure_limit_with_allowance(bot_params, effective_wallet_exposure_limit);
+        wallet_exposure_limit_with_allowance_from_base(bot_params, effective_wallet_exposure_limit);
     if effective_limit <= 0.0 || params.base_qty_pct <= 0.0 {
         return 0.0;
     }

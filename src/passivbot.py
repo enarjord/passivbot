@@ -7020,7 +7020,13 @@ class Passivbot:
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
-        allowance_multiplier = 1.0 + max(0.0, allowance_pct)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        effective_allowance_pct = max(0.0, allowance_pct)
+        if base_limit > 0.0 and twel > 0.0:
+            effective_allowance_pct = min(
+                effective_allowance_pct, max(0.0, twel / base_limit - 1.0)
+            )
+        allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
         return self.get_hysteresis_snapped_balance() * effective_limit * self.bp(
             pside, "entry_initial_qty_pct", symbol
@@ -9823,7 +9829,13 @@ class Passivbot:
             allowance_pct = float(
                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
             )
-            effective_wel = wel * (1.0 + max(0.0, allowance_pct))
+            twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+            effective_allowance_pct = max(0.0, allowance_pct)
+            if wel > 0.0 and twel > 0.0:
+                effective_allowance_pct = min(
+                    effective_allowance_pct, max(0.0, twel / wel - 1.0)
+                )
+            effective_wel = wel * (1.0 + effective_allowance_pct)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
             WELe_ratio = wallet_exposure / effective_wel if effective_wel > 0.0 else 0.0

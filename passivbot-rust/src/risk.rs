@@ -317,7 +317,7 @@ pub struct UnstuckPositionInput {
     pub position_size: f64,
     pub position_price: f64,
     pub wallet_exposure_limit: f64,
-    pub risk_we_excess_allowance_pct: f64,
+    pub effective_we_excess_allowance_pct: f64,
     pub unstuck_threshold: f64,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
@@ -369,7 +369,7 @@ pub fn calc_unstucking_action(
 
         let wallet_exposure =
             calc_wallet_exposure(input.c_mult, balance, size_abs, input.position_price);
-        let allowance_multiplier = 1.0 + input.risk_we_excess_allowance_pct.max(0.0);
+        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
         let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
         let unstuck_threshold = input.unstuck_threshold;
@@ -478,7 +478,7 @@ pub fn calc_unstucking_action(
             ..Default::default()
         };
         let min_entry_qty = calc_min_entry_qty(input.current_price, &exchange_params);
-        let allowance_multiplier = 1.0 + input.risk_we_excess_allowance_pct.max(0.0);
+        let allowance_multiplier = 1.0 + input.effective_we_excess_allowance_pct.max(0.0);
         let effective_wel = input.wallet_exposure_limit * allowance_multiplier;
 
         match input.side {

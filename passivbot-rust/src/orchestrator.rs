@@ -33,7 +33,10 @@ mod core {
         ForagerSelectionConfig, ForagerSelectionError, ForagerSelectionResult,
     };
     use crate::constants::{LONG, SHORT};
-    use crate::entries::calc_min_entry_qty;
+    use crate::entries::{
+        calc_min_entry_qty, effective_we_excess_allowance_pct,
+        wallet_exposure_limit_with_allowance_from_base,
+    };
     use crate::risk::{
         calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
         TwelEnforcerInputPosition, UnstuckPositionInput,
@@ -915,9 +918,7 @@ mod core {
             return None;
         }
         let base_limit = runtime_budget.effective_wallet_exposure_limit;
-        let allowance_pct = bot.risk_we_excess_allowance_pct;
-        let allowance_multiplier = 1.0 + allowance_pct.max(0.0);
-        let effective_limit = base_limit * allowance_multiplier;
+        let effective_limit = wallet_exposure_limit_with_allowance_from_base(bot, base_limit);
         if !(effective_limit.is_finite() && effective_limit > 0.0) {
             return None;
         }
@@ -2849,7 +2850,10 @@ mod core {
                 position_size: s.pos.size,
                 position_price: s.pos.price,
                 wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
-                risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
+                effective_we_excess_allowance_pct: effective_we_excess_allowance_pct(
+                    bot,
+                    runtime_budget.effective_wallet_exposure_limit,
+                ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
@@ -2896,7 +2900,10 @@ mod core {
                 position_size: s.pos.size,
                 position_price: s.pos.price,
                 wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
-                risk_we_excess_allowance_pct: bot.risk_we_excess_allowance_pct,
+                effective_we_excess_allowance_pct: effective_we_excess_allowance_pct(
+                    bot,
+                    runtime_budget.effective_wallet_exposure_limit,
+                ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
@@ -4880,8 +4887,10 @@ mod core {
                 .diagnostics
                 .loss_gate_blocks
                 .iter()
-                .find(|b| b.order_type == OrderType::CloseGridLong
-                    || b.order_type == OrderType::CloseAutoReduceWelLong)
+                .find(|b| {
+                    b.order_type == OrderType::CloseGridLong
+                        || b.order_type == OrderType::CloseAutoReduceWelLong
+                })
                 .expect("expected loss-gate diagnostic for fee-inclusive close");
             assert!(block.projected_pnl < 0.0);
             assert!(block.projected_balance_after < block.balance_floor);

@@ -1110,12 +1110,16 @@ pub fn calc_unstucking_close_py(
             .get_item("wallet_exposure_limit")?
             .ok_or_else(|| PyValueError::new_err("position missing 'wallet_exposure_limit'"))?
             .extract::<f64>()?;
-        let risk_we_excess_allowance_pct = dict
-            .get_item("risk_we_excess_allowance_pct")?
-            .ok_or_else(|| {
-                PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
-            })?
-            .extract::<f64>()?;
+        let effective_we_excess_allowance_pct =
+            if let Some(value) = dict.get_item("effective_we_excess_allowance_pct")? {
+                value.extract::<f64>()?
+            } else {
+                dict.get_item("risk_we_excess_allowance_pct")?
+                    .ok_or_else(|| {
+                        PyValueError::new_err("position missing 'risk_we_excess_allowance_pct'")
+                    })?
+                    .extract::<f64>()?
+            };
         let unstuck_threshold = dict
             .get_item("unstuck_threshold")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_threshold'"))?
@@ -1167,7 +1171,7 @@ pub fn calc_unstucking_close_py(
             position_size,
             position_price,
             wallet_exposure_limit,
-            risk_we_excess_allowance_pct,
+            effective_we_excess_allowance_pct,
             unstuck_threshold,
             unstuck_close_pct,
             unstuck_ema_dist,

@@ -764,6 +764,46 @@ mod tests {
     }
 
     #[test]
+    fn test_wel_enforcer_caps_excess_at_total_limit_for_single_position() {
+        let exchange = make_exchange_params();
+        let state = StateParams {
+            balance: 1000.0,
+            order_book: crate::types::OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            n_positions: 1,
+            risk_we_excess_allowance_pct: 1.5,
+            risk_wel_enforcer_threshold: 1.0,
+            ..Default::default()
+        };
+        let pos = Position {
+            size: 12.0,
+            price: 100.0,
+        };
+        let we = calc_wallet_exposure(exchange.c_mult, state.balance, pos.size, pos.price);
+        assert!(we > 1.0);
+        let order = super::calc_wel_auto_reduce_long(
+            &exchange,
+            &state,
+            &bot,
+            &make_runtime_context(),
+            &pos,
+            we,
+        )
+        .expect("single-position excess must be capped by TWEL");
+        let new_psize = (pos.size - order.qty.abs()).max(0.0);
+        let new_we = calc_wallet_exposure(exchange.c_mult, state.balance, new_psize, pos.price);
+        assert!(new_we < 1.0, "new_we={} not strictly below target", new_we);
+    }
+
+    #[test]
     fn test_wel_enforcer_disabled_suppresses_reduce() {
         let exchange = make_exchange_params();
         let state = StateParams {

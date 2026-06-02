@@ -133,20 +133,45 @@ def wallet_exposure_limit_with_allowance(
     *,
     wallet_exposure_limit: float,
     risk_we_excess_allowance_pct: float,
+    total_wallet_exposure_limit: float = 0.0,
 ) -> float:
-    return float(wallet_exposure_limit) * (1.0 + max(0.0, float(risk_we_excess_allowance_pct)))
+    base_limit = float(wallet_exposure_limit)
+    return base_limit * (
+        1.0
+        + effective_we_excess_allowance_pct(
+            wallet_exposure_limit=wallet_exposure_limit,
+            risk_we_excess_allowance_pct=risk_we_excess_allowance_pct,
+            total_wallet_exposure_limit=total_wallet_exposure_limit,
+        )
+    )
+
+
+def effective_we_excess_allowance_pct(
+    *,
+    wallet_exposure_limit: float,
+    risk_we_excess_allowance_pct: float,
+    total_wallet_exposure_limit: float = 0.0,
+) -> float:
+    base_limit = float(wallet_exposure_limit)
+    raw_allowance = max(0.0, float(risk_we_excess_allowance_pct))
+    total_limit = float(total_wallet_exposure_limit)
+    if base_limit > 0.0 and total_limit > 0.0:
+        return min(raw_allowance, max(0.0, total_limit / base_limit - 1.0))
+    return raw_allowance
 
 
 def entry_trailing_limit_cap(
     *,
     wallet_exposure_limit: float,
     risk_we_excess_allowance_pct: float,
+    total_wallet_exposure_limit: float = 0.0,
     entry_trailing_retracement_pct: float,
     wallet_exposure: float,
 ) -> tuple[Optional[float], Optional[str]]:
     allowed_limit = wallet_exposure_limit_with_allowance(
         wallet_exposure_limit=wallet_exposure_limit,
         risk_we_excess_allowance_pct=risk_we_excess_allowance_pct,
+        total_wallet_exposure_limit=total_wallet_exposure_limit,
     )
     if allowed_limit <= 0.0:
         return None, None
@@ -177,6 +202,7 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     limit_cap, mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
         entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )
@@ -188,6 +214,11 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     trailing_bundle = normalize_trailing_extrema(inputs)
     entry_volatility_1h = _float(inputs.get("h1_log_range_ema"))
     entry_volatility_1m = _float(inputs.get("m1_log_range_ema"))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
+        risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+    )
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
@@ -205,7 +236,7 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("entry_weight_volatility_1m")),
         _float(inputs.get("entry_we_weight")),
         _float(inputs.get("wallet_exposure_limit")),
-        _float(inputs.get("risk_we_excess_allowance_pct")),
+        effective_allowance_pct,
         balance_raw,
         position_size,
         position_price,
@@ -316,6 +347,11 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     trailing_bundle = normalize_trailing_extrema(inputs)
     close_volatility_1h = _float(inputs.get("h1_log_range_ema"))
     close_volatility_1m = _float(inputs.get("m1_log_range_ema"))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
+        risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
+    )
     common_args = [
         _float(inputs.get("qty_step")),
         _float(inputs.get("price_step")),
@@ -327,7 +363,7 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         _float(inputs.get("close_trailing_retracement_pct")),
         _float(inputs.get("close_trailing_threshold_pct")),
         _float(inputs.get("wallet_exposure_limit")),
-        _float(inputs.get("risk_we_excess_allowance_pct")),
+        effective_allowance_pct,
         _float(inputs.get("risk_wel_enforcer_threshold")),
         balance_raw,
         position_size,
@@ -432,10 +468,12 @@ def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:
     allowed_limit = wallet_exposure_limit_with_allowance(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
     )
     entry_cap, entry_mode = entry_trailing_limit_cap(
         wallet_exposure_limit=_float(inputs.get("wallet_exposure_limit")),
         risk_we_excess_allowance_pct=_float(inputs.get("risk_we_excess_allowance_pct")),
+        total_wallet_exposure_limit=_float(inputs.get("total_wallet_exposure_limit")),
         entry_trailing_retracement_pct=_float(inputs.get("entry_trailing_retracement_pct")),
         wallet_exposure=wallet_exposure,
     )

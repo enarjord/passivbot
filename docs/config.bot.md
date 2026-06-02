@@ -16,6 +16,10 @@ Throughout:
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
+* `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
+  max(0, total_wallet_exposure_limit / wel_base - 1))`.
+* `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never
+  expands a symbol above the side's configured `total_wallet_exposure_limit`.
 
 ## Trailing Martingale Entries
 
@@ -126,7 +130,7 @@ if equity < unstuck_allowed:
 ```
 
 Positions become eligible when
-`wallet_exposure / wel_base > unstuck_threshold`.
+`wallet_exposure / wel_allowed > unstuck_threshold`.
 
 When multiple positions are eligible, auto-unstuck chooses the least stuck
 position first, defined as the lowest pside-aware relative distance between
@@ -149,7 +153,7 @@ their exposure rises above the allowance-adjusted per-position cap:
 if not position_exposure_enforcer_enabled:
     disabled
 
-allowed_i    = wel_base_i * (1 + risk_we_excess_allowance_pct)
+allowed_i    = wel_base_i * (1 + we_excess_effective_i)
 target_i     = allowed_i * position_exposure_enforcer_threshold
 ```
 
@@ -180,16 +184,17 @@ if not total_exposure_enforcer_enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-allowed_i       = wel_base_i * (1 + risk_we_excess_allowance_pct)
-base_psize_i    = allowed_i * balance / (price_i * c_mult_i)
-max_reducible_i = max(0, |pos.size_i| - base_psize_i)
+floor_i         = min(wel_base_i,
+                      total_wallet_exposure_limit * total_exposure_enforcer_threshold
+                      / effective_n_positions)
+floor_psize_i   = floor_i * balance / (price_i * c_mult_i)
 ```
 
 While bot-scope `Σ exposure_i` exceeds the threshold:
 
 1. Pick the position with the smallest relative price move from entry.
-2. Reduce it by `min(max_reducible_i,
-                   (Σ exposure - threshold) * balance / (price_i * c_mult_i))`.
+2. First reduce only exposure above `floor_i`.
+3. If total exposure is still above target, continue reducing below that floor.
 
 The final reduce-only order is:
 
@@ -238,7 +243,7 @@ intervention:
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
 | `position_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
-| `total_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Bot-scope portfolio exposure cap                         | `max_reducible_i`, `qty` |
+| `total_exposure_enforcer_threshold`             | Bot-scope portfolio exposure cap                         | `floor_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.
