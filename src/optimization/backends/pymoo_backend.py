@@ -51,8 +51,9 @@ DEFAULT_PYMOO_REF_DIRS = {
     "method": "das_dennis",
     "n_partitions": "auto",
 }
-DEFAULT_AUTO_REF_DIR_TARGET = 500
 DEFAULT_NSGA2_POPULATION_SIZE = 250
+DEFAULT_NSGA3_POPULATION_SIZE = 500
+DEFAULT_AUTO_REF_DIR_TARGET = DEFAULT_NSGA3_POPULATION_SIZE
 SUPPORTED_PYMOO_ALGORITHMS = {"auto", "nsga2", "nsga3"}
 SUPPORTED_REF_DIR_METHODS = {"das_dennis"}
 
@@ -344,16 +345,13 @@ def _resolve_pymoo_population_plan(
         algorithm_name = "nsga2"
 
     if algorithm_name == "nsga3":
+        target_population_size = requested_population_size or DEFAULT_NSGA3_POPULATION_SIZE
         ref_dirs, n_partitions, resolution = _resolve_nsga3_ref_dirs(
             config,
             n_obj=n_obj,
-            population_size=requested_population_size,
+            population_size=target_population_size,
         )
-        actual_population_size = (
-            int(len(ref_dirs))
-            if requested_population_size is None
-            else max(requested_population_size, int(len(ref_dirs)))
-        )
+        actual_population_size = max(target_population_size, int(len(ref_dirs)))
         return {
             "algorithm_name": algorithm_name,
             "requested_population_size": requested_population_size,
@@ -410,7 +408,7 @@ def _build_algorithm(
         actual_population_size = population_plan["actual_population_size"]
         if requested_population_size is None:
             logging.info(
-                "Using pymoo nsga3 auto population size=%d from %d reference directions",
+                "Using pymoo nsga3 auto population size=%d with %d reference directions",
                 actual_population_size,
                 len(ref_dirs),
             )
@@ -432,7 +430,7 @@ def _build_algorithm(
         )
         algorithm = NSGA3(
             ref_dirs=ref_dirs,
-            pop_size=None if requested_population_size is None else actual_population_size,
+            pop_size=actual_population_size,
             sampling=sampling,
             crossover=crossover,
             mutation=mutation,

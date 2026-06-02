@@ -136,14 +136,22 @@ The main NSGA-III-specific knob is:
     - `n_partitions = 5` -> `792`
   - Default is `"auto"`. For the default 8-objective setup, Passivbot currently resolves that to
     `n_partitions = 4`, which gives `330` reference directions.
+  - In auto mode, Passivbot chooses the largest Das-Dennis grid whose reference-direction count
+    fits within the resolved NSGA-III population budget. This preserves the NSGA-III invariant that
+    `population_size >= reference directions`.
 
 - `optimize.population_size`
   - For `pymoo` + `nsga3`, `null` means “auto”.
-  - In that case Passivbot resolves the NSGA-III reference directions first and then uses the
-    number of reference directions as the population size.
-  - For the default 8-objective setup, that means `population_size = 330`.
+  - In that case Passivbot uses the default NSGA-III population budget of `500`, then resolves
+    auto reference directions to the finest Das-Dennis grid that fits inside that budget.
+  - For the default 8-objective setup, that means `population_size = 500` with `330` reference
+    directions.
+  - For a 10-objective setup, auto keeps `population_size = 500` and uses `220` reference
+    directions (`n_partitions = 3`) because the next grid would require `715` reference directions.
   - For `pymoo` + `nsga2`, `null` means “auto” and currently resolves to `250`.
-  - Set an explicit integer when you want to override either auto behavior.
+  - Set an explicit integer when you want to change the per-generation evaluation budget and the
+    maximum auto reference-direction grid size. For example, `population_size = 1000` allows the
+    10-objective auto resolver to use `715` reference directions (`n_partitions = 4`).
   - For `deap`, Passivbot currently falls back to its legacy fixed default when `null` is left in
     place.
 
@@ -194,12 +202,13 @@ Recommended defaults for typical Passivbot runs:
 - Keep `crossover_prob_var: 0.5` unless you have evidence that crossover is either too timid or
   too disruptive for your runs.
 - Leave `population_size: null` and `ref_dirs.n_partitions: "auto"` for default pymoo behavior:
-  NSGA-II resolves null population size to `250`, while NSGA-III derives it from reference
-  directions.
+  NSGA-II resolves null population size to `250`, while NSGA-III uses a default population budget
+  of `500` and chooses the finest compatible reference-direction grid.
 - Keep `pareto_max_size: 1000` unless archived front updates become a measured bottleneck for your
   machine or workflow.
-- If you need more or less exploration pressure, change `n_partitions` or override
-  `population_size` explicitly before you start tuning crossover/mutation hyperparameters.
+- If you need more or less exploration pressure, change `population_size` first. It is the main
+  budget/coarseness knob for NSGA-III auto reference directions. Use explicit `n_partitions` only
+  when you specifically want to force a grid resolution.
 
 Practical interpretation for the default shared block:
 

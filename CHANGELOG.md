@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed pymoo NSGA-III `population_size: null` to use a default population
+  budget of `500` while auto-selecting the finest compatible reference-direction
+  grid, so adding objectives no longer drops the per-generation population
+  because of Das-Dennis grid jumps.
 - Capped `risk_we_excess_allowance_pct` by the side's `total_wallet_exposure_limit`
   before per-position sizing, WEL enforcement, unstuck, threshold weighting, and
   min-effective-cost projections use it, so `n_positions = 1` no longer allows
