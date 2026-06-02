@@ -114,20 +114,28 @@ The raw excess is capped before use so a single position cannot receive more hea
 > **Comprehensive Calculation Example:**
 > Given a **$2000 balance**, `TWEL=1.0`, `excess_allowance=0.5`, `n_positions=4`, `unstuck_threshold=0.48`:
 >
-> 1.  **Per position allowance:**
->     `((balance * twel) / n_positions) * (1 + excess_allowance)`
->     `(($2000 * 1.0) / 4) * (1 + 0.5) == $500 * 1.5 == $750`
+> 1.  **Base WEL:**
+>     `base_wel = twel / n_positions`
+>     `1.0 / 4 == 0.25`
 >
-> 2.  **Per position effective exposure limit:**
->     `(twel / n_position) * (1 + excess_allowance)`
->     `(1.0 / 4) * (1 + 0.5) == 0.375`
+> 2.  **Effective excess allowance:**
+>     `min(max(0, excess_allowance), max(0, twel / base_wel - 1))`
+>     `min(0.5, 1.0 / 0.25 - 1) == min(0.5, 3.0) == 0.5`
+>
+> 3.  **Per position effective exposure limit:**
+>     `base_wel * (1 + effective_we_excess_allowance_pct)`
+>     `0.25 * 1.5 == 0.375`
+>
+> 4.  **Per position allowance:**
+>     `balance * effective_wel`
+>     `$2000 * 0.375 == $750`
 >
 > **The Result:**
 > The bot will stop making entries when a position's exposure hits **0.375** or when the overall account's exposure hits **1.0**.
 >
 > Since `0.375 * 4 > 1.0`, the bot will allow filling up the first positions' effective limits, but will gate new entries when filling those entries would lead to `twe > twel`.
 >
-> With `n_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`, not `TWEL * (1 + excess_allowance)`.
+> With `n_positions=1`, the effective excess is capped at `0.0`: `min(1 - 1, excess_allowance)`. The single position's per-position allowance therefore remains `TWEL`; raw excess does not increase it.
 >
 > **Auto-Unstuck Trigger:**
 > Auto unstuck will begin at `effective_we_limit * unstuck_threshold`:
@@ -137,7 +145,9 @@ The raw excess is capped before use so a single position cannot receive more hea
 
 * **Edge Case:**
     * *Scenario:* `TWEL = 1.0`, `n_positions = 10`, `excess_allowance = 0.5`.
-    * *Effective per-position limit:* `(1.0 / 10) * (1 + 0.5) = 0.15`.
+    * *Base WEL:* `1.0 / 10 = 0.10`.
+    * *Effective excess allowance:* `min(0.5, 1.0 / 0.10 - 1) = 0.5`.
+    * *Effective per-position limit:* `0.10 * 1.5 = 0.15`.
     * If there is a market crash and 6 positions fill to their effective limit, the total exposure is `6 * 0.15 = 0.9`.
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new orders for that 7th position that would cause the total wallet exposure to breach the TWEL, effectively blocking the "excess" allowance for the last few positions.

@@ -603,6 +603,7 @@ def _render_inputs_box(state: TrailingDiagnosticsState, width: int) -> list[str]
         "close_trailing_threshold_pct",
         "close_trailing_retracement_pct",
         "wallet_exposure_limit",
+        "total_wallet_exposure_limit",
         "risk_we_excess_allowance_pct",
         "risk_wel_enforcer_threshold",
     ]

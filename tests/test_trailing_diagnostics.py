@@ -173,6 +173,7 @@ def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monk
     assert "Entry" in rendered
     assert "Close" in rendered
     assert "Config Inputs" in rendered
+    assert "total_wallet_exposure_limit=2" in rendered
     assert "set <key> <value>" in rendered
 
     assert execute_command(state, "set current_price 99999") is False
