@@ -1199,6 +1199,128 @@ def test_fee_policy_sanity_replaces_absurd_reported_fee_with_fallback():
     assert meta["fee_original_quality"] == fem.FEE_QUALITY_EXACT
 
 
+def test_fee_policy_sums_coalesced_raw_bybit_notional_before_sanity_check():
+    payload = {
+        "symbol": "ZEC/USDT:USDT",
+        "qty": 4.07,
+        "price": 552.0312776412776,
+        "fees": {"currency": "USDT", "cost": 0.44935346, "rate": 0.0002},
+        "raw": [
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "44.1448",
+                        "execQty": "0.08",
+                        "execFee": "0.00882896",
+                    }
+                },
+            },
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "872.7604",
+                        "execQty": "1.58",
+                        "execFee": "0.17455208",
+                    }
+                },
+            },
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "1329.8621",
+                        "execQty": "2.41",
+                        "execFee": "0.26597242",
+                    }
+                },
+            },
+        ],
+    }
+
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(
+        payload,
+        fee_pct_fallback=0.0002,
+        fee_pct_sanity_abs_max=0.001,
+    )
+
+    assert fee_paid == pytest.approx(-0.44935346)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+    assert meta["fee_notional"] == pytest.approx(2246.7673)
+    assert meta["fee_ratio"] == pytest.approx(-0.0002)
+
+
+def test_fee_policy_rechecks_degraded_cached_bybit_fee_from_raw_entries():
+    cached = {
+        "id": "exec-a+exec-b+exec-c",
+        "timestamp": 1_778_769_802_245,
+        "datetime": "2026-05-14T14:43:22.245Z",
+        "symbol": "ZEC/USDT:USDT",
+        "side": "sell",
+        "qty": -4.07,
+        "price": 552.0312776412776,
+        "pnl": 20.0,
+        "fee_paid": -0.00882896,
+        "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+        "fee_source": fem.FEE_SOURCE_FALLBACK_PCT,
+        "fee_quality": fem.FEE_QUALITY_SANITY_REPLACED,
+        "fee_currency": "USDT",
+        "fee_notional": 44.1448,
+        "fee_ratio": -0.0002,
+        "pnl_status": "complete",
+        "fees": {"currency": "USDT", "cost": 0.44935346, "rate": 0.0002},
+        "pb_order_type": "close_grid_long",
+        "position_side": "long",
+        "client_order_id": "0xabc",
+        # This is the stale multiplier shape seen in copied Bybit caches; it
+        # was inferred from the first raw child against the aggregate qty.
+        "c_mult": 0.01964814068639863,
+        "raw": [
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "44.1448",
+                        "execQty": "0.08",
+                        "execFee": "0.00882896",
+                    }
+                },
+            },
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "872.7604",
+                        "execQty": "1.58",
+                        "execFee": "0.17455208",
+                    }
+                },
+            },
+            {
+                "source": "fetch_my_trades",
+                "data": {
+                    "info": {
+                        "execValue": "1329.8621",
+                        "execQty": "2.41",
+                        "execFee": "0.26597242",
+                    }
+                },
+            },
+        ],
+    }
+
+    event = FillEvent.from_dict(cached)
+
+    assert event.fee_paid == pytest.approx(-0.44935346)
+    assert event.fee_source == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert event.fee_quality == fem.FEE_QUALITY_EXACT
+    assert event.fee_notional == pytest.approx(2246.7673)
+    assert event.fee_ratio == pytest.approx(-0.0002)
+    assert event.c_mult == pytest.approx(1.0)
+
+
 @pytest.mark.asyncio
 async def test_fee_policy_warning_dedupes_and_logs_original_sanity_ratio(
     tmp_path: Path, caplog
