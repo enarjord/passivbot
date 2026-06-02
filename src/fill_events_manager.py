@@ -472,8 +472,11 @@ def _normalize_fee_paid_from_payload(
     fallback_reason = FEE_FALLBACK_REASON_NONE
 
     payload_fee_source = str(payload.get("fee_source") or "")
+    payload_fee_quality = str(payload.get("fee_quality") or "")
+    recheck_existing_fee = payload_fee_quality == FEE_QUALITY_SANITY_REPLACED and bool(entries)
     trusted_fee_paid = (
         "fee_paid" in payload
+        and not recheck_existing_fee
         and (
             (payload_fee_source and payload_fee_source != FEE_SOURCE_NONE)
             or str(payload.get("pnl_contract") or "") == PNL_CONTRACT_CURRENT
@@ -640,12 +643,14 @@ def _is_synthetic_pnl_source(source: object) -> bool:
 
 
 def _raw_quote_value(payload: Dict[str, object]) -> float:
+    total = 0.0
     for raw in _normalize_raw_field(payload.get("raw")):
         data = raw.get("data") if isinstance(raw, dict) else raw
         if not isinstance(data, dict):
             continue
         info = data.get("info")
         info = info if isinstance(info, dict) else {}
+        item_value = 0.0
         for source in (data, info):
             for key in (
                 "cost",
@@ -661,8 +666,12 @@ def _raw_quote_value(payload: Dict[str, object]) -> float:
                 except Exception:
                     value = 0.0
                 if value > 0.0:
-                    return value
-    return 0.0
+                    item_value = value
+                    break
+            if item_value > 0.0:
+                break
+        total += item_value
+    return total
 
 
 def _payload_contract_multiplier(payload: Dict[str, object]) -> float:
@@ -670,21 +679,41 @@ def _payload_contract_multiplier(payload: Dict[str, object]) -> float:
         explicit = float(payload.get("c_mult") or payload.get("contract_size") or 0.0)
     except Exception:
         explicit = 0.0
-    if explicit > 0.0:
-        return explicit
-
     try:
         qty_abs = abs(float(payload.get("qty") or payload.get("amount") or 0.0))
         price = float(payload.get("price") or 0.0)
     except Exception:
-        return 1.0
+        return explicit if explicit > 0.0 else 1.0
     denominator = qty_abs * price
     if denominator <= 0.0:
-        return 1.0
+        return explicit if explicit > 0.0 else 1.0
     quote_value = _raw_quote_value(payload)
-    if quote_value <= 0.0:
-        return 1.0
-    return quote_value / denominator
+    if quote_value > 0.0:
+        inferred = quote_value / denominator
+        if inferred > 0.0 and (
+            explicit <= 0.0 or _should_override_explicit_c_mult_from_raw(payload)
+        ):
+            return inferred
+    return explicit if explicit > 0.0 else 1.0
+
+
+def _should_override_explicit_c_mult_from_raw(payload: Dict[str, object]) -> bool:
+    """Repair stale multipliers inferred from the first child of a Bybit grouped fill."""
+    if "+" not in str(payload.get("id") or ""):
+        return False
+    bybit_trade_rows = 0
+    for raw in _normalize_raw_field(payload.get("raw")):
+        if not isinstance(raw, dict) or raw.get("source") != "fetch_my_trades":
+            continue
+        data = raw.get("data")
+        if not isinstance(data, dict):
+            continue
+        info = data.get("info")
+        if not isinstance(info, dict):
+            continue
+        if info.get("execValue") is not None and info.get("execQty") is not None:
+            bybit_trade_rows += 1
+    return bybit_trade_rows > 1
 
 
 def _market_contract_size(api: object, *, symbol: str = "", market_id: str = "") -> float:
