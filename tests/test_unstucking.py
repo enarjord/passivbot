@@ -167,6 +167,34 @@ def test_unstucking_respects_effective_wel_threshold():
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+def test_unstucking_prefers_effective_excess_allowance_over_raw():
+    position = _build_position(
+        side="long",
+        position_size=3.0,
+        position_price=100.0,
+        current_price=105.0,
+        ema_band_upper=100.0,
+        wallet_exposure_limit=0.2,
+        risk_we_excess_allowance_pct=10.0,
+        unstuck_threshold=0.8,
+        unstuck_close_pct=0.1,
+        qty_step=0.001,
+        price_step=0.01,
+    )
+    position["effective_we_excess_allowance_pct"] = 0.0
+
+    result = pbr.calc_unstucking_close_py(1000.0, 100.0, 0.0, [position])
+
+    assert result is not None
+    idx, side_code, qty, price, order_type_id = result
+    assert idx == 0
+    assert qty < 0.0
+    assert math.isclose(qty, -0.19, rel_tol=1e-9)
+    assert math.isclose(price, 105.0)
+    assert order_type_id == pbr.order_type_snake_to_id("close_unstuck_long")
+
+
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
 def test_unstucking_respects_effective_wel_threshold_short():
     balance = 1000.0
     wel = 0.2

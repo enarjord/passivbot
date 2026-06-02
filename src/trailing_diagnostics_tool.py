@@ -24,6 +24,7 @@ ENTRY_CONFIG_KEYS = [
     "entry_trailing_threshold_we_weight",
     "entry_trailing_threshold_volatility_weight",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
 ]
 
@@ -33,6 +34,7 @@ CLOSE_CONFIG_KEYS = [
     "close_trailing_retracement_pct",
     "close_trailing_threshold_pct",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
     "risk_wel_enforcer_threshold",
 ]
@@ -90,6 +92,7 @@ WIZARD_CORE_KEYS = [
     "m1_log_range_ema",
     *TRAILING_EXTREMA_KEYS,
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
     "entry_trailing_threshold_pct",
     "entry_trailing_retracement_pct",

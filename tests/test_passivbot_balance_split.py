@@ -2721,12 +2721,32 @@ def test_effective_min_cost_filter_uses_snapped_balance():
     bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
     bot.live_value = lambda key: key == "filter_by_min_effective_cost"
     bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
     bot.bp = lambda pside, key, symbol=None: (
         0.5 if key == "entry_initial_qty_pct" else 0.0
     )
 
     # Passes only when snapped balance is used:
     # 100 * 1.0 * 0.5 = 50 >= 40; raw path would fail (10 * 1.0 * 0.5 = 5).
+    assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
+
+
+def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.balance = 100.0
+    bot.effective_min_cost = {"BTC/USDT:USDT": 40.0}
+    bot.config = {"live": {"strategy_kind": "ema_anchor"}, "bot": {"long": {}}}
+    bot.live_value = lambda key: key == "filter_by_min_effective_cost"
+    bot.get_wallet_exposure_limit = lambda pside, symbol=None: 1.0
+    bot.bp = lambda pside, key, symbol=None: (
+        0.0
+        if key == "risk_we_excess_allowance_pct"
+        else (_ for _ in ()).throw(KeyError(key))
+    )
+    bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
+    bot._strategy_params_to_rust_dict = lambda pside, symbol=None: {"base_qty_pct": 0.5}
+    monkeypatch.setattr(passivbot_module, "normalize_strategy_kind", lambda value: "ema_anchor")
+
     assert bot.effective_min_cost_is_low_enough("long", "BTC/USDT:USDT") is True
 
 

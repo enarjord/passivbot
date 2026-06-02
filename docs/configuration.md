@@ -405,7 +405,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.
 - **inactive_coin_candle_ttl_minutes**: How long 1m candles for inactive symbols may stay in RAM before the live bot refreshes them. Lower values keep inactive symbols fresher at the cost of more network/disk churn.
 - **filter_by_min_effective_cost**: If `true`, disallows coins where
-  `balance * WE_limit * strategy_initial_sizing_fraction < min_effective_cost`.
+  `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
   `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_pct`.

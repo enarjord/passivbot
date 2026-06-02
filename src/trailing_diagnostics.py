@@ -19,6 +19,7 @@ ENTRY_CONFIG_KEYS = [
     "entry_weight_volatility_1m",
     "entry_we_weight",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
 ]
 
@@ -31,6 +32,7 @@ CLOSE_CONFIG_KEYS = [
     "close_weight_volatility_1h",
     "close_weight_volatility_1m",
     "wallet_exposure_limit",
+    "total_wallet_exposure_limit",
     "risk_we_excess_allowance_pct",
     "risk_wel_enforcer_threshold",
 ]
@@ -556,7 +558,7 @@ def build_trailing_inputs_from_snapshot(
     bot_cfg = config.get("bot", {})
     if not isinstance(bot_cfg, Mapping) or not isinstance(bot_cfg.get(pside), Mapping):
         raise KeyError(f"config missing bot.{pside} section")
-    side_cfg = bot_cfg[pside]
+    side_cfg = flatten_shared_bot_side(bot_cfg[pside])
     out: dict[str, Any] = {
         "symbol": symbol,
         "pside": pside,

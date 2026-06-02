@@ -545,7 +545,7 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "wallet_exposure_limit"): 0.2,
                 ("long", "risk_we_excess_allowance_pct"): 0.5,
                 ("short", "risk_we_excess_allowance_pct"): 0.5,
-                ("long", "total_wallet_exposure_limit"): 1.7,
+                ("long", "total_wallet_exposure_limit"): 0.24,
                 ("short", "total_wallet_exposure_limit"): 0.0,
                 ("long", "ema_span_0"): 10.0,
                 ("long", "ema_span_1"): 20.0,
@@ -742,10 +742,10 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wallet_exposure"] == pytest.approx(0.1)
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wel_ratio"] == pytest.approx(0.5)
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["wele_ratio"] == pytest.approx(
-        0.1 / 0.3
+        0.1 / 0.24
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["twel_ratio"] == pytest.approx(
-        0.1 / 1.7
+        0.1 / 0.24
     )
     assert snapshot["positions"]["BTC/USDT:USDT"]["long"]["price_action_distance"] == pytest.approx(
         -0.005
@@ -762,6 +762,9 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
         100900.0
     )
     assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["order_type"] == "entry_trailing_normal_long"
+    assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["limit_cap"] == pytest.approx(
+        0.24
+    )
     assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["threshold_met"] is False
     assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["entry"]["retracement_met"] is True
     assert snapshot["trailing"]["BTC/USDT:USDT"]["long"]["close"]["order_type"] == "close_trailing_long"

@@ -43,7 +43,7 @@ initial_price(pside) =
 
 initial_qty(balance) =
     max(min_qty,
-        balance * wel_base * entry_initial_qty_pct / initial_price)
+        balance * wel_allowed * entry_initial_qty_pct / initial_price)
 
 effective_entry_threshold =
     entry.threshold_base_pct * entry_threshold_multiplier
@@ -60,7 +60,7 @@ next_entry_qty(last_fill_qty) =
 ```
 
 * Re-entry orders are generated until the wallet exposure implied by the next order would exceed
-  `wel_base` (plus safeguards).
+  `wel_allowed` (base WEL plus the TWEL-capped excess allowance, plus safeguards).
 * `entry.double_down_factor > 0` multiplies each successive re-entry quantity; values
   `< 1` still increase size if the preceding fill was larger than the remaining gap to the
   exposure cap.

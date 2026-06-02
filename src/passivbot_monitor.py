@@ -975,6 +975,9 @@ def _build_monitor_trailing_entry_payload(
         "risk_we_excess_allowance_pct",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
+    inputs["total_wallet_exposure_limit"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    )
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
@@ -1028,6 +1031,9 @@ def _build_monitor_trailing_close_payload(
         "risk_wel_enforcer_threshold",
     ):
         inputs[key] = float(self.bp(pside, key, symbol))
+    inputs["total_wallet_exposure_limit"] = float(
+        self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
+    )
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None

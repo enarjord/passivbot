@@ -7014,6 +7014,28 @@ class Passivbot:
             and self.bot_value(pside, "n_positions") > 0.0
         )
 
+    def _strategy_initial_sizing_fraction(self, pside: str, symbol: str | None = None) -> float:
+        """Return the active strategy's initial sizing fraction."""
+        config = getattr(self, "config", None)
+        if not isinstance(config, dict):
+            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+        bot_cfg = config.get("bot")
+        if not isinstance(bot_cfg, dict) or not isinstance(bot_cfg.get(pside), dict):
+            return float(self.bp(pside, "entry_initial_qty_pct", symbol))
+        live_cfg = config.get("live")
+        strategy_kind = normalize_strategy_kind(
+            live_cfg.get("strategy_kind") if isinstance(live_cfg, dict) else None
+        )
+        strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if strategy_kind == "ema_anchor":
+            return float(strategy_cfg["base_qty_pct"])
+        if strategy_kind == "trailing_martingale":
+            entry_cfg = strategy_cfg.get("entry")
+            if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
+                raise KeyError(f"missing required strategy key {pside}.entry.initial_qty_pct")
+            return float(entry_cfg["initial_qty_pct"])
+        raise ValueError(f"unsupported strategy kind {strategy_kind!r}")
+
     def effective_min_cost_is_low_enough(self, pside, symbol):
         """Check whether the symbol meets the effective minimum cost requirement."""
         if not self.live_value("filter_by_min_effective_cost"):
@@ -7028,9 +7050,13 @@ class Passivbot:
             )
         allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
-        return self.get_hysteresis_snapped_balance() * effective_limit * self.bp(
-            pside, "entry_initial_qty_pct", symbol
-        ) >= self.effective_min_cost.get(symbol, float("inf"))
+        initial_sizing_fraction = self._strategy_initial_sizing_fraction(pside, symbol)
+        return (
+            self.get_hysteresis_snapped_balance()
+            * effective_limit
+            * initial_sizing_fraction
+            >= self.effective_min_cost.get(symbol, float("inf"))
+        )
 
     def get_hysteresis_snapped_balance(self) -> float:
         """Return hysteresis-snapped balance used for sizing."""
