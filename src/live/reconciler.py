@@ -261,6 +261,46 @@ def order_identity_fingerprint(order: dict, pb_type: str) -> Optional[dict]:
     }
 
 
+def _record_status_rank(status: str) -> int:
+    return {
+        "submitted": 0,
+        "legacy": 1,
+        "create_error_ambiguous": 2,
+        "open_snapshot_confirmed": 3,
+        "acknowledged": 4,
+    }.get(str(status or ""), 0)
+
+
+def _records_refer_to_same_order(a: dict, b: dict) -> bool:
+    a_exchange_id = str(a.get("exchange_id") or "")
+    b_exchange_id = str(b.get("exchange_id") or "")
+    if a_exchange_id and b_exchange_id and a_exchange_id == b_exchange_id:
+        return True
+    a_custom_id = str(a.get("canonical_custom_id") or "")
+    b_custom_id = str(b.get("canonical_custom_id") or "")
+    if a_custom_id and b_custom_id and a_custom_id == b_custom_id:
+        return True
+    if (a_exchange_id and b_exchange_id) or (a_custom_id and b_custom_id):
+        return False
+    a_fingerprint = a.get("fingerprint")
+    b_fingerprint = b.get("fingerprint")
+    return bool(a_fingerprint and b_fingerprint and a_fingerprint == b_fingerprint)
+
+
+def _merge_emitted_order_record(existing: dict, incoming: dict) -> dict:
+    merged = dict(existing)
+    for key, value in incoming.items():
+        if value not in (None, "", []):
+            merged[key] = value
+    if existing.get("timestamp") not in (None, ""):
+        merged["timestamp"] = int(existing["timestamp"])
+    if _record_status_rank(existing.get("status")) > _record_status_rank(
+        incoming.get("status")
+    ):
+        merged["status"] = existing.get("status")
+    return merged
+
+
 def build_emitted_order_record(
     bot, order: dict, emitted_ts: int, *, status: str = "acknowledged"
 ) -> Optional[dict]:
@@ -282,6 +322,14 @@ def build_emitted_order_record(
         "status": str(status or "acknowledged"),
     }
     record["fingerprint"] = order_identity_fingerprint(order, record["pb_type"])
+    if record["fingerprint"]:
+        record.update(record["fingerprint"])
+    order_ts = order.get("timestamp") if isinstance(order, dict) else None
+    if order_ts not in (None, ""):
+        try:
+            record["order_timestamp"] = int(float(order_ts))
+        except (TypeError, ValueError):
+            pass
     if not (
         record["exchange_id"] or record["canonical_custom_id"] or record["fingerprint"]
     ):
@@ -322,11 +370,12 @@ def prune_emitted_order_custom_ids(bot, now_ts: int) -> None:
     ambiguous_cutoff_ts = now_ts - _pb_const(
         "FOREIGN_PASSIVBOT_AMBIGUOUS_CREATE_LOOKBACK_MS"
     )
+    short_lived_statuses = {"submitted", "create_error_ambiguous"}
     kept = []
     for record in emitted_order_records(bot):
         cutoff_ts = (
             ambiguous_cutoff_ts
-            if record.get("status") == "create_error_ambiguous"
+            if record.get("status") in short_lived_statuses
             else acknowledged_cutoff_ts
         )
         if int(record.get("timestamp", 0)) >= cutoff_ts:
@@ -363,7 +412,12 @@ def record_emitted_order_custom_id(
         return
     if not hasattr(bot, "orders_emitted_to_exchange"):
         bot.orders_emitted_to_exchange = []
-    emitted_order_records(bot).append(record)
+    records = emitted_order_records(bot)
+    for idx, existing in enumerate(records):
+        if _records_refer_to_same_order(existing, record):
+            records[idx] = _merge_emitted_order_record(existing, record)
+            return
+    records.append(record)
 
 
 def foreign_passivbot_detection_key(
@@ -398,6 +452,7 @@ def order_matches_recent_emitted_record(
         record_exchange_id = record.get("exchange_id") or ""
         if exchange_id and record_exchange_id and exchange_id == record_exchange_id:
             consumed_record_indices.add(idx)
+            adopt_open_order_as_emitted_record(bot, idx, order, order_ts)
             return True
         record_custom_id = record.get("canonical_custom_id") or ""
         if (
@@ -406,6 +461,7 @@ def order_matches_recent_emitted_record(
             and canonical_custom_id == record_custom_id
         ):
             consumed_record_indices.add(idx)
+            adopt_open_order_as_emitted_record(bot, idx, order, order_ts)
             return True
         if exchange_id and record_exchange_id:
             continue
@@ -421,8 +477,68 @@ def order_matches_recent_emitted_record(
             <= _pb_const("FOREIGN_PASSIVBOT_FINGERPRINT_MATCH_MS")
         ):
             consumed_record_indices.add(idx)
+            adopt_open_order_as_emitted_record(bot, idx, order, order_ts)
             return True
     return False
+
+
+def adopt_open_order_as_emitted_record(
+    bot, record_idx: int, order: dict, order_ts: int
+) -> None:
+    """Upgrade a submitted/ambiguous record once an open-order snapshot confirms it."""
+    records = emitted_order_records(bot)
+    if record_idx < 0 or record_idx >= len(records):
+        return
+    incoming = build_emitted_order_record(
+        bot, order, order_ts, status="open_snapshot_confirmed"
+    )
+    if incoming is None:
+        return
+    records[record_idx] = _merge_emitted_order_record(records[record_idx], incoming)
+
+
+def emitted_order_match_diagnostics(
+    bot, order: dict, custom_id: str, pb_type: str, order_ts: int
+) -> str:
+    """Return compact diagnostics for an unmatched Passivbot-marked open order."""
+    exchange_id = extract_order_exchange_id(order)
+    canonical_custom_id = canonical_passivbot_custom_id(custom_id)
+    fingerprint = order_identity_fingerprint(order, pb_type)
+    records = emitted_order_records(bot)
+    status_counts: dict[str, int] = {}
+    same_exchange_id = False
+    same_custom_id = False
+    same_fingerprint = False
+    for record in records:
+        status = str(record.get("status") or "unknown")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        record_exchange_id = str(record.get("exchange_id") or "")
+        record_custom_id = str(record.get("canonical_custom_id") or "")
+        if exchange_id and record_exchange_id and exchange_id == record_exchange_id:
+            same_exchange_id = True
+        if (
+            canonical_custom_id
+            and record_custom_id
+            and canonical_custom_id == record_custom_id
+        ):
+            same_custom_id = True
+        if fingerprint and record.get("fingerprint") == fingerprint:
+            same_fingerprint = True
+    status_summary = ",".join(
+        f"{status}:{count}" for status, count in sorted(status_counts.items())
+    )
+    reduce_only = extract_order_reduce_only(order)
+    qty = extract_order_float(order, ("qty", "amount", "size"))
+    price = extract_order_float(order, ("price",))
+    pside = order.get("position_side") or order.get("positionSide")
+    return (
+        f"reason=unmatched_passivbot_custom_id order_id={exchange_id or ''} "
+        f"side={order.get('side') or ''} pside={pside or ''} qty={qty} price={price} "
+        f"reduce_only={reduce_only} order_ts={ts_to_date(order_ts)} "
+        f"emitted_records={len(records)} statuses={status_summary or 'none'} "
+        f"match_id={same_exchange_id} match_custom_id={same_custom_id} "
+        f"match_fingerprint={same_fingerprint}"
+    )
 
 
 async def stop_for_foreign_passivbot_orders(
@@ -508,13 +624,17 @@ async def detect_foreign_passivbot_orders(bot, open_orders: list[dict]) -> None:
         return
     passivbot_cls = _pb_attr("Passivbot")
     for order, pb_type, custom_id, order_ts in new_detections:
+        diagnostics = emitted_order_match_diagnostics(
+            bot, order, custom_id, pb_type, order_ts
+        )
         logging.error(
             "[safety] detected foreign Passivbot order candidate | symbol=%s type=%s "
-            "custom_id=%s ts=%s",
+            "custom_id=%s ts=%s | %s",
             passivbot_cls._log_symbol(order.get("symbol")),
             pb_type,
             shorten_custom_id(custom_id),
             ts_to_date(order_ts),
+            diagnostics,
         )
     if len(bot.foreign_passivbot_seen) >= _pb_const(
         "FOREIGN_PASSIVBOT_MAX_UNIQUE_PER_WINDOW"
