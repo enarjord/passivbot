@@ -189,6 +189,9 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     )
     for order in orders:
         bot.add_to_recent_order_executions(order)
+        passivbot_cls._record_emitted_order_custom_id(
+            bot, order, emitted_ts=emitted_ts, status="submitted"
+        )
         bot.log_order_action(
             order,
             "posting order",

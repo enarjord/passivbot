@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 import passivbot_rust as pbr
 
@@ -86,6 +88,7 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
     assert record["custom_id"] == custom_id
     assert record["canonical_custom_id"] == "0x0004-aaaa"
     assert record["pb_type"] == "entry_grid_normal_long"
+    assert record["status"] == "acknowledged"
     assert record["fingerprint"] == {
         "symbol": "BTC/USDT:USDT",
         "side": "buy",
@@ -274,6 +277,50 @@ async def test_detect_foreign_passivbot_orders_ignores_manual_and_prestart_order
 
     assert bot.foreign_passivbot_seen == {}
     assert bot.orders_emitted_to_exchange == []
+    assert bot.stop_signal_received is False
+
+
+@pytest.mark.asyncio
+async def test_detect_foreign_passivbot_orders_accepts_submitted_order_missing_create_ack():
+    import passivbot as pb_mod
+
+    bot = _make_detection_bot(now_ts=2_000_000, start_ts=1_000_000)
+    custom_id = _pb_custom_id("close_grid_long", "bitget-missing-ack")
+    submitted = {
+        "symbol": "TON/USDT:USDT",
+        "side": "sell",
+        "position_side": "long",
+        "qty": 196.0,
+        "price": 2.0186,
+        "reduce_only": True,
+        "custom_id": custom_id,
+    }
+    pb_mod.Passivbot._record_emitted_order_custom_id(
+        bot, submitted, emitted_ts=1_990_000, status="submitted"
+    )
+    fetched_open = [
+        {
+            "id": "1445750250516676621",
+            "symbol": "TON/USDT:USDT",
+            "side": "sell",
+            "position_side": "long",
+            "qty": 196.0,
+            "price": 2.0186,
+            "reduceOnly": True,
+            "timestamp": 1_990_500,
+            "custom_id": f"Passivbot#{custom_id}",
+        }
+    ]
+
+    await pb_mod.Passivbot._detect_foreign_passivbot_orders(bot, fetched_open)
+
+    assert bot.foreign_passivbot_seen == {}
+    assert len(bot.orders_emitted_to_exchange) == 1
+    record = bot.orders_emitted_to_exchange[0]
+    assert record["exchange_id"] == "1445750250516676621"
+    assert record["canonical_custom_id"] == "0x0007-bitget-missing-ack"
+    assert record["status"] == "open_snapshot_confirmed"
+    assert record["order_timestamp"] == 1_990_500
     assert bot.stop_signal_received is False
 
 
@@ -468,6 +515,43 @@ async def test_detect_foreign_passivbot_orders_rejects_conflicting_custom_id_des
     await pb_mod.Passivbot._detect_foreign_passivbot_orders(bot, fetched_open)
 
     assert len(bot.foreign_passivbot_seen) == 1
+    assert bot.stop_signal_received is False
+
+
+@pytest.mark.asyncio
+async def test_detect_foreign_passivbot_orders_logs_unmatched_order_diagnostics(caplog):
+    import passivbot as pb_mod
+
+    bot = _make_detection_bot(now_ts=2_000_000, start_ts=1_000_000)
+    custom_id = _pb_custom_id("entry_grid_normal_long", "foreign-hl")
+    fetched_open = [
+        {
+            "id": "453338148239",
+            "symbol": "XMR/USDC:USDC",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 0.265,
+            "price": 333.97,
+            "reduceOnly": False,
+            "timestamp": 1_990_500,
+            "custom_id": custom_id,
+        }
+    ]
+
+    with caplog.at_level(logging.ERROR):
+        await pb_mod.Passivbot._detect_foreign_passivbot_orders(bot, fetched_open)
+
+    assert len(bot.foreign_passivbot_seen) == 1
+    assert "order_id=453338148239" in caplog.text
+    assert "side=buy" in caplog.text
+    assert "pside=long" in caplog.text
+    assert "qty=0.265" in caplog.text
+    assert "price=333.97" in caplog.text
+    assert "reduce_only=False" in caplog.text
+    assert "emitted_records=0" in caplog.text
+    assert "match_id=False" in caplog.text
+    assert "match_custom_id=False" in caplog.text
+    assert "match_fingerprint=False" in caplog.text
     assert bot.stop_signal_received is False
 
 
