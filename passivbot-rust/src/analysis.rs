@@ -5,6 +5,8 @@ use std::time::Instant;
 
 const MS_PER_DAY: u64 = 86_400_000;
 const MS_PER_HOUR: u64 = 3_600_000;
+const LOSS_PROFIT_RATIO_CAP: f64 = 1_000.0;
+const LOSS_PROFIT_RATIO_EPS: f64 = 1e-12;
 const OMEGA_RATIO_CAP: f64 = 1_000.0;
 const OMEGA_RATIO_EPS: f64 = 1e-12;
 
@@ -427,6 +429,25 @@ fn calc_omega_ratio(gains_sum: f64, losses_sum: f64) -> f64 {
     }
 }
 
+fn calc_loss_profit_ratio(loss_sum: f64, profit_sum: f64) -> f64 {
+    if profit_sum <= LOSS_PROFIT_RATIO_EPS {
+        if loss_sum > LOSS_PROFIT_RATIO_EPS {
+            LOSS_PROFIT_RATIO_CAP
+        } else {
+            1.0
+        }
+    } else {
+        let ratio = loss_sum / profit_sum;
+        if ratio.is_finite() {
+            ratio.min(LOSS_PROFIT_RATIO_CAP)
+        } else if loss_sum > LOSS_PROFIT_RATIO_EPS {
+            LOSS_PROFIT_RATIO_CAP
+        } else {
+            1.0
+        }
+    }
+}
+
 fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
     if values.is_empty() {
         return 0.0;
@@ -742,11 +763,7 @@ fn analyze_backtest_basic(
             (profit, loss + fill.pnl.abs())
         }
     });
-    let loss_profit_ratio = if total_profit == 0.0 {
-        f64::INFINITY
-    } else {
-        total_loss / total_profit
-    };
+    let loss_profit_ratio = calc_loss_profit_ratio(total_loss, total_profit);
 
     let (long_profit, long_loss, short_profit, short_loss) =
         fills
@@ -764,16 +781,8 @@ fn analyze_backtest_basic(
                     (lp, ll, sp, sl + fill.pnl.abs())
                 }
             });
-    let loss_profit_ratio_long = if long_profit == 0.0 {
-        1.0
-    } else {
-        long_loss / long_profit
-    };
-    let loss_profit_ratio_short = if short_profit == 0.0 {
-        1.0
-    } else {
-        short_loss / short_profit
-    };
+    let loss_profit_ratio_long = calc_loss_profit_ratio(long_loss, long_profit);
+    let loss_profit_ratio_short = calc_loss_profit_ratio(short_loss, short_profit);
 
     // Calculate position durations and position_unchanged_hours_max
     let mut positions_opened: HashMap<String, u64> = HashMap::new(); // Tracks position open time
@@ -2023,6 +2032,45 @@ mod tests {
 
         assert_eq!(analysis.omega_ratio, OMEGA_RATIO_CAP);
         assert!(analysis.omega_ratio.is_finite());
+    }
+
+    #[test]
+    fn loss_profit_ratio_caps_losing_only_backtests() {
+        let timestamps = vec![0, MS_PER_DAY, MS_PER_DAY * 2];
+        let equities = vec![100.0, 95.0, 90.0];
+        let exposures_series: Vec<f64> = vec![];
+        let fills = vec![make_trade_fill(
+            0,
+            timestamps[0],
+            "BTC",
+            -10.0,
+            -0.1,
+            0.0,
+            100.0,
+            true,
+        )];
+
+        let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &exposures_series);
+
+        assert_eq!(analysis.loss_profit_ratio, LOSS_PROFIT_RATIO_CAP);
+        assert!(analysis.loss_profit_ratio.is_finite());
+        assert_eq!(analysis.loss_profit_ratio_long, LOSS_PROFIT_RATIO_CAP);
+        assert!(analysis.loss_profit_ratio_long.is_finite());
+    }
+
+    #[test]
+    fn loss_profit_ratio_keeps_no_pnl_backtests_neutral() {
+        let timestamps = vec![0, MS_PER_DAY, MS_PER_DAY * 2];
+        let equities = vec![100.0, 100.0, 100.0];
+        let exposures_series: Vec<f64> = vec![];
+        let fills = vec![];
+
+        let analysis = analyze_backtest_basic(&fills, &equities, &timestamps, &exposures_series);
+
+        assert_eq!(analysis.loss_profit_ratio, 1.0);
+        assert!(analysis.loss_profit_ratio.is_finite());
+        assert_eq!(analysis.loss_profit_ratio_long, 1.0);
+        assert_eq!(analysis.loss_profit_ratio_short, 1.0);
     }
 
     #[test]

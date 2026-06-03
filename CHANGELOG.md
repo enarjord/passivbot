@@ -8,6 +8,9 @@ All notable user-facing changes will be documented in this file.
   budget of `500` while auto-selecting the finest compatible reference-direction
   grid, so adding objectives no longer drops the per-generation population
   because of Das-Dennis grid jumps.
+- Capped loss/profit-ratio analysis metrics at a finite value for losing-only
+  backtests while keeping no-PnL runs neutral, preventing optimizer scoring on
+  `loss_profit_ratio` from failing after JSON/Python metric aggregation.
 - Capped `risk_we_excess_allowance_pct` by the side's `total_wallet_exposure_limit`
   before per-position sizing, WEL enforcement, unstuck, threshold weighting, and
   min-effective-cost projections use it, so `n_positions = 1` no longer allows
