@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool ohlcvs-doctor` to audit v2 OHLCV chunk caches and
+  rebuild `caches/ohlcvs/catalog.sqlite` metadata from copied `data/` chunks.
 - Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
   account-state or candle fetches are logged, counted, and routed through the
   existing restart/backoff path instead of silently exiting without countdown.
