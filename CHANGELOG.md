@@ -19,6 +19,8 @@ All notable user-facing changes will be documented in this file.
   converted back to gross close-fill PnL before reconciliation, and
   legacy/missing-contract caches are repaired when safe or quarantined and
   rebuilt automatically from exchange fills on startup.
+- Added `passivbot tool ohlcvs-doctor` to audit v2 OHLCV chunk caches and
+  rebuild `caches/ohlcvs/catalog.sqlite` metadata from copied `data/` chunks.
 - Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
   account-state or candle fetches are logged, counted, and routed through the
   existing restart/backoff path instead of silently exiting without countdown.

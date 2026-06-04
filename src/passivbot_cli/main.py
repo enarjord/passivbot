@@ -93,6 +93,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",
         requires_full=True,
     ),
+    "ohlcvs-doctor": CommandSpec(
+        "tools.ohlcvs_doctor",
+        "audit and repair v2 OHLCV catalog metadata (requires full install)",
+        requires_full=True,
+    ),
     "migrate-historical-data": CommandSpec(
         "tools.migrate_historical_data",
         "migrate historical data layout (requires full install)",
