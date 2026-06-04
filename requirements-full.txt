@@ -1,4 +1,5 @@
-matplotlib==3.8.4
+matplotlib==3.8.4; python_version < "3.14"
+matplotlib==3.10.9; python_version >= "3.14"
 colorama==0.4.6
 pyecharts==1.9.1
 deap==1.4.3
@@ -9,6 +10,7 @@ msgpack==1.1.0
 plotly==6.0.1
 dash==2.18.2
 dash-bootstrap-components==1.6.0
-psutil==5.9.8
+psutil==5.9.8; python_version < "3.14"
+psutil==7.2.2; python_version >= "3.14"
 requests==2.32.3
 dictdiffer==0.9.0
