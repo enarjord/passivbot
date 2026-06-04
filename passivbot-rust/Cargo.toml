@@ -4,8 +4,9 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = ["extension-module"]
+default = ["extension-module", "abi3-py312"]
 extension-module = ["pyo3/extension-module"]
+abi3-py312 = ["pyo3/abi3-py312"]
 
 [lib]
 name = "passivbot_rust"
