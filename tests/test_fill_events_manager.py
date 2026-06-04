@@ -1631,13 +1631,158 @@ async def test_doctor_reports_unsupported_legacy_cache_without_raising(tmp_path:
     report = await manager.run_doctor(auto_repair=True)
 
     assert report["legacy_contract"] is True
-    assert report["unsupported_legacy_contract"] is True
-    assert report["repaired"] is False
-    assert report["action"] == "rebuild_cache"
-    assert "startup auto-migration" in report["message"]
+    assert report["unsupported_legacy_contract"] is False
+    assert report["repaired"] is True
+    assert report["action"] == "quarantine_legacy_files"
+    assert report["legacy_files_quarantined"] == 1
+    assert report["backup_path"]
     assert report["anomaly_events"] == 1
     assert report["anomaly_examples"] == ["legacy-bitget-entry"]
-    assert report["anomaly_events_after"] == 1
+    assert report["anomaly_events_after"] == 0
+    assert FillEventCache(cache_dir).load() == []
+
+
+@pytest.mark.asyncio
+async def test_doctor_quarantines_only_legacy_files_for_mixed_current_cache(tmp_path: Path):
+    cache_dir = tmp_path / "mixed_legacy_contract"
+    cache_dir.mkdir()
+    legacy_payload = [
+        {
+            "id": "legacy-hl-entry",
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "ETH/USDC:USDC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+            "fees": {"currency": "USDC", "cost": 0.01},
+            "pb_order_type": "entry_grid_long",
+            "position_side": "long",
+            "client_order_id": "cid-legacy",
+            "raw": [],
+        }
+    ]
+    current_payload = [
+        {
+            "id": "current-hl-entry",
+            "source_ids": ["current-hl-entry"],
+            "timestamp": 1_700_086_400_000,
+            "datetime": "",
+            "symbol": "ETH/USDC:USDC",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+            "fee_paid": -0.01,
+            "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+            "fee_source": fem.FEE_SOURCE_REPORTED_QUOTE,
+            "fee_quality": fem.FEE_QUALITY_EXACT,
+            "fee_currency": "USDC",
+            "fee_conversion_source": "same_currency",
+            "fee_notional": 100.0,
+            "fee_ratio": -0.0001,
+            "fees": {"currency": "USDC", "cost": 0.01},
+            "pb_order_type": "entry_grid_long",
+            "position_side": "long",
+            "client_order_id": "cid-current",
+            "raw": [],
+        }
+    ]
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(legacy_payload), encoding="utf-8")
+    (cache_dir / "2023-11-15.json").write_text(json.dumps(current_payload), encoding="utf-8")
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    report = await manager.run_doctor(auto_repair=True)
+
+    assert report["repaired"] is True
+    assert report["action"] == "quarantine_legacy_files"
+    assert report["legacy_files_quarantined"] == 1
+    assert not (cache_dir / "2023-11-14.json").exists()
+    assert (cache_dir / "2023-11-15.json").exists()
+    backup = Path(str(report["backup_path"]))
+    assert (backup / "2023-11-14.json").exists()
+    assert [ev.id for ev in FillEventCache(cache_dir).load()] == ["current-hl-entry"]
+
+
+@pytest.mark.asyncio
+async def test_ensure_loaded_persists_repaired_hyperliquid_fee_notional(tmp_path: Path):
+    cache_dir = tmp_path / "stale_hyperliquid_current"
+    cache_dir.mkdir()
+    stale_payload = [
+        {
+            "id": "tid-a+tid-b",
+            "source_ids": ["tid-a", "tid-b"],
+            "timestamp": 1_700_000_000_000,
+            "datetime": "",
+            "symbol": "SUI/USDC:USDC",
+            "side": "sell",
+            "qty": -335.6,
+            "price": 1.0846,
+            "pnl": -9.796164,
+            "fee_paid": -0.021344928,
+            "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+            "fee_source": fem.FEE_SOURCE_FALLBACK_PCT,
+            "fee_quality": fem.FEE_QUALITY_SANITY_REPLACED,
+            "fee_currency": "USDC",
+            "fee_conversion_source": "same_currency",
+            "fee_notional": 106.72464,
+            "fee_ratio": -0.0002,
+            "pnl_status": "complete",
+            "pnl_source": fem.PNL_SOURCE_AUTHORITATIVE,
+            "fees": {"currency": "USDC", "cost": 0.163796},
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "c_mult": 1.0,
+            "raw": [
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "cost": 106.72464,
+                        "fee": {"currency": "USDC", "cost": 0.048026},
+                    },
+                },
+                {
+                    "source": "fetch_my_trades",
+                    "data": {
+                        "cost": 257.26712,
+                        "fee": {"currency": "USDC", "cost": 0.11577},
+                    },
+                },
+            ],
+        }
+    ]
+    (cache_dir / "2023-11-14.json").write_text(json.dumps(stale_payload), encoding="utf-8")
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="default",
+        fetcher=_StaticFetcher([]),
+        cache_path=cache_dir,
+    )
+
+    await manager.ensure_loaded()
+
+    repaired_payload = json.loads((cache_dir / "2023-11-14.json").read_text(encoding="utf-8"))
+    repaired = repaired_payload[0]
+    assert repaired["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert repaired["fee_quality"] == fem.FEE_QUALITY_EXACT
+    assert repaired["fee_paid"] == pytest.approx(-0.163796)
+    assert repaired["fee_notional"] == pytest.approx(363.99176)
+    assert repaired["fee_ratio"] == pytest.approx(-0.00044999919778403776)
 
 
 @pytest.mark.asyncio

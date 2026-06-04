@@ -8177,7 +8177,8 @@ class Passivbot:
                     doctor_mode or "auto",
                 )
                 if report.get("repaired", False):
-                    pass
+                    if doctor_action == "quarantine_legacy_files":
+                        await rebuild_fill_cache_from_lookback()
                 elif self.exchange == "kucoin" and "degraded_events_after" in report:
                     logging.warning(
                         "[fills-doctor] startup KuCoin repair left %s degraded fill(s); continuing with current cache for refresh/enrichment",

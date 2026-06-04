@@ -1606,6 +1606,54 @@ class FillEventCache:
         self._metadata = None
         return str(quarantine_path)
 
+    def quarantine_legacy_record_files(
+        self, *, reason: str = "legacy_pnl_contract"
+    ) -> Dict[str, object]:
+        """Move only daily files containing legacy-contract records aside."""
+        legacy_files: List[Path] = []
+        for path in self._data_files():
+            try:
+                with path.open("r", encoding="utf-8") as fh:
+                    payload = json.load(fh) or []
+            except Exception as exc:
+                logger.warning(
+                    "[fills-doctor] could not inspect fill cache file for legacy contract repair | path=%s error=%s",
+                    path,
+                    exc,
+                )
+                continue
+            if not isinstance(payload, list):
+                continue
+            if any(
+                isinstance(raw, dict)
+                and str(raw.get("pnl_contract") or "") != PNL_CONTRACT_CURRENT
+                for raw in payload
+            ):
+                legacy_files.append(path)
+
+        if not legacy_files:
+            return {"backup_path": None, "moved_files": []}
+
+        safe_reason = "".join(
+            ch if ch.isalnum() or ch in ("-", "_") else "_" for ch in str(reason or "legacy")
+        ).strip("_") or "legacy"
+        stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        quarantine_path = self.root.with_name(f"{self.root.name}.{safe_reason}.{stamp}")
+        counter = 1
+        while quarantine_path.exists():
+            quarantine_path = self.root.with_name(
+                f"{self.root.name}.{safe_reason}.{stamp}.{counter}"
+            )
+            counter += 1
+        quarantine_path.mkdir(parents=True, exist_ok=False)
+        moved: List[str] = []
+        for path in legacy_files:
+            target = quarantine_path / path.name
+            shutil.move(str(path), str(target))
+            moved.append(path.name)
+        self._metadata = None
+        return {"backup_path": str(quarantine_path), "moved_files": moved}
+
     def save(self, events: Sequence[FillEvent]) -> None:
         day_map: Dict[str, List[FillEvent]] = defaultdict(list)
         for event in events:
@@ -3254,8 +3302,10 @@ class FillEventsManager:
                 apply_hyperliquid_raw_psize_overrides(payload)
                 synthesized_days = self._synthesize_missing_pnls(payload)
                 self._events = [FillEvent.from_dict(ev) for ev in payload]
-                if synthesized_days:
-                    self.cache.save_days(self._events_for_days(self._events, synthesized_days))
+                normalized_days = {_day_key(ev.timestamp) for ev in self._events}
+                if normalized_days:
+                    self.cache.save_days(self._events_for_days(self._events, normalized_days))
+                if synthesized_days or normalized_days:
                     self.cache.update_metadata_from_events(self._events)
 
             logger.debug(
@@ -3923,6 +3973,38 @@ class FillEventsManager:
                 }
             )
             if auto_repair:
+                quarantine = self.cache.quarantine_legacy_record_files(
+                    reason="legacy_pnl_contract"
+                )
+                moved_files = list(quarantine.get("moved_files") or [])
+                if moved_files:
+                    self._loaded = False
+                    self._events = []
+                    await self.ensure_loaded()
+                    report.update(
+                        {
+                            "repaired": True,
+                            "unsupported_legacy_contract": False,
+                            "action": "quarantine_legacy_files",
+                            "backup_path": quarantine.get("backup_path"),
+                            "legacy_files_quarantined": len(moved_files),
+                            "legacy_file_examples": moved_files[:5],
+                            "anomaly_events_after": 0,
+                            "anomaly_examples_after": [],
+                            "message": (
+                                "legacy fill-event cache files were quarantined; current "
+                                "contract files were preserved and startup can rebuild the "
+                                "configured lookback from exchange fills"
+                            ),
+                        }
+                    )
+                    logger.warning(
+                        "[fills-doctor] quarantined %d legacy fill cache file(s) | backup=%s examples=%s",
+                        len(moved_files),
+                        quarantine.get("backup_path"),
+                        ",".join(moved_files[:5]),
+                    )
+                    return report
                 report["anomaly_events_after"] = anomaly_events
                 report["anomaly_examples_after"] = examples
             logger.warning("[fills-doctor] %s", report["message"])
