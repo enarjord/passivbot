@@ -113,8 +113,10 @@ def test_analyze_applies_limits_and_writes_outputs(sample_pareto_dir: Path, tmp_
     assert (out_dir / "params.csv").exists()
     assert (out_dir / "metrics.csv").exists()
     assert (out_dir / "correlations.csv").exists()
+    assert (out_dir / "metric_correlations.csv").exists()
     assert (out_dir / "summary.json").exists()
     assert payload["correlations"]
+    assert payload["metric_correlations"]
 
 
 def test_analyze_default_show_rows_is_50():
@@ -142,3 +144,58 @@ def test_format_analysis_keeps_correlations_sorted_by_strength():
     text = format_analysis(payload, show=50, corr_limit=2)
 
     assert text.index("z_param") < text.index("a_param")
+
+
+def test_format_analysis_shows_only_visible_metric_correlations():
+    def metric_summary(name: str) -> dict[str, object]:
+        return {
+            "group": "metric",
+            "name": name,
+            "count": 3,
+            "missing": 0,
+            "min": 1.0,
+            "max": 3.0,
+            "range": 2.0,
+            "mean": 2.0,
+            "median": 2.0,
+            "std": 1.0,
+            "p05": 1.1,
+            "p25": 1.5,
+            "p75": 2.5,
+            "p95": 2.9,
+            "iqr": 1.0,
+            "unique_count": 3,
+            "min_file": "a.json",
+            "max_file": "c.json",
+        }
+
+    payload = {
+        "pareto_dir": "pareto",
+        "loaded_count": 3,
+        "retained_count": 3,
+        "scoring_metrics": [],
+        "metrics": [
+            metric_summary("a_metric"),
+            metric_summary("b_metric"),
+            metric_summary("z_hidden_metric"),
+        ],
+        "params": [],
+        "correlations": [],
+        "metric_correlations": [
+            {"metric_a": "a_metric", "metric_b": "b_metric", "corr": -0.95, "abs_corr": 0.95, "count": 3},
+            {
+                "metric_a": "a_metric",
+                "metric_b": "z_hidden_metric",
+                "corr": 0.99,
+                "abs_corr": 0.99,
+                "count": 3,
+            },
+        ],
+    }
+
+    text = format_analysis(payload, show=2, corr_limit=10)
+
+    assert "Metric/Metric Correlations" in text
+    assert "a_metric" in text
+    assert "b_metric" in text
+    assert "z_hidden_metric" not in text

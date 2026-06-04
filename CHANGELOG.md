@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added a Metric/Metric Correlations table to `passivbot tool pareto-analyze`,
+  limited to metrics already shown in Metric Distributions, and wrote the full
+  selected metric-correlation set to `metric_correlations.csv` when using
+  `--output-dir`.
 - Changed pymoo NSGA-III `population_size: null` to use a default population
   budget of `500` while auto-selecting the finest compatible reference-direction
   grid, so adding objectives no longer drops the per-generation population

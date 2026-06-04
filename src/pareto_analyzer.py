@@ -321,7 +321,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=str,
         default=None,
-        help="Write params.csv, metrics.csv, correlations.csv, summary.json, and optional plots here.",
+        help=(
+            "Write params.csv, metrics.csv, correlations.csv, metric_correlations.csv, "
+            "summary.json, and optional plots here."
+        ),
     )
     parser.add_argument(
         "--plots",
@@ -427,6 +430,37 @@ def compute_correlations(
             if math.isfinite(corr):
                 rows.append({"param": param, "metric": metric, "corr": corr, "abs_corr": abs(corr), "count": int(mask.sum())})
     return sorted(rows, key=lambda item: (-float(item["abs_corr"]), str(item["param"]), str(item["metric"])))
+
+
+def compute_metric_correlations(
+    *,
+    metric_maps: Sequence[Mapping[str, float]],
+    metric_names: Sequence[str],
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    for idx, metric_a in enumerate(metric_names):
+        x = _series_array([], metric_maps, metric_a)
+        for metric_b in metric_names[idx + 1 :]:
+            y = _series_array([], metric_maps, metric_b)
+            mask = np.isfinite(x) & np.isfinite(y)
+            if int(mask.sum()) < 3:
+                continue
+            x_valid = x[mask]
+            y_valid = y[mask]
+            if float(np.std(x_valid)) <= 0.0 or float(np.std(y_valid)) <= 0.0:
+                continue
+            corr = float(np.corrcoef(x_valid, y_valid)[0, 1])
+            if math.isfinite(corr):
+                rows.append(
+                    {
+                        "metric_a": metric_a,
+                        "metric_b": metric_b,
+                        "corr": corr,
+                        "abs_corr": abs(corr),
+                        "count": int(mask.sum()),
+                    }
+                )
+    return sorted(rows, key=lambda item: (-float(item["abs_corr"]), str(item["metric_a"]), str(item["metric_b"])))
 
 
 def _write_csv(path: Path, rows: Sequence[Mapping[str, Any]]) -> None:
@@ -563,6 +597,10 @@ def analyze_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         param_names=param_names,
         metric_names=metric_names,
     )
+    metric_correlations = compute_metric_correlations(
+        metric_maps=metric_maps,
+        metric_names=[summary.name for summary in metric_summaries],
+    )
 
     output_dir_arg = getattr(args, "output_dir", None)
     output_dir = Path(output_dir_arg).expanduser() if output_dir_arg else None
@@ -574,6 +612,7 @@ def analyze_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         _write_csv(output_dir / "params.csv", [summary.to_dict() for summary in param_summaries])
         _write_csv(output_dir / "metrics.csv", [summary.to_dict() for summary in metric_summaries])
         _write_csv(output_dir / "correlations.csv", correlations)
+        _write_csv(output_dir / "metric_correlations.csv", metric_correlations)
         if getattr(args, "plots", False):
             written_plots = _plot_outputs(
                 output_dir=output_dir,
@@ -597,6 +636,7 @@ def analyze_from_args(args: argparse.Namespace) -> Dict[str, Any]:
         "params": [summary.to_dict() for summary in param_summaries],
         "metrics": [summary.to_dict() for summary in metric_summaries],
         "correlations": correlations,
+        "metric_correlations": metric_correlations,
         "output_dir": str(output_dir) if output_dir is not None else None,
         "plots": written_plots,
     }
@@ -624,6 +664,24 @@ def format_analysis(payload: Mapping[str, Any], *, show: int, corr_limit: int) -
         lines.extend(["", "Metric Distributions"])
         rows = _summary_rows(metric_summaries, limit=show)
         lines.extend(_render_table(["metric", "n", "miss", "uniq", "min", "p25", "median", "mean", "p75", "max", "std"], rows))
+        visible_metric_names = {row[0] for row in rows}
+        metric_correlations = [
+            item
+            for item in payload.get("metric_correlations", []) or []
+            if str(item["metric_a"]) in visible_metric_names and str(item["metric_b"]) in visible_metric_names
+        ][: max(0, int(corr_limit))]
+        if metric_correlations:
+            lines.extend(["", "Metric/Metric Correlations"])
+            corr_rows = [
+                [
+                    str(item["metric_a"]),
+                    str(item["metric_b"]),
+                    _format_number(float(item["corr"])),
+                    str(item["count"]),
+                ]
+                for item in metric_correlations
+            ]
+            lines.extend(_render_table(["metric_a", "metric_b", "corr", "n"], corr_rows))
     if param_summaries:
         lines.extend(["", "Config Parameter Distributions"])
         rows = _summary_rows(param_summaries, limit=show)

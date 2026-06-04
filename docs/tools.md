@@ -75,7 +75,8 @@ passivbot tool pareto-transform optimize_results/.../all_results.bin --out summa
 python3 src/pareto_store.py optimize_results/.../pareto/
 ```
 
-`passivbot tool pareto-analyze` inspects a Pareto front's config and metric distributions.
+`passivbot tool pareto-analyze` inspects a Pareto front's config and metric distributions,
+including the strongest metric-to-metric correlations among the displayed metrics.
 `passivbot tool pareto-analysis` is an alias for the same command. `passivbot tool
 pareto-compress` selects a compact representative subset from a front, and
 `passivbot tool merge-paretos` merges Pareto fronts into starting configs.
