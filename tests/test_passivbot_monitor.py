@@ -119,6 +119,10 @@ async def test_execute_orders_parent_records_order_opened_event():
     class FakeBot:
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
+        _log_market_execution_notice = pb_mod.Passivbot._log_market_execution_notice
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()

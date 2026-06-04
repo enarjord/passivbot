@@ -356,6 +356,7 @@
         "balance_hysteresis_snap_pct": 0.01,
         "balance_override": null,
         "candle_lock_timeout_seconds": 10,
+        "custom_endpoints_path": null,
         "defer_broad_candle_warmup": true,
         "enable_archive_candle_fetch": false,
         "execution_delay_seconds": 2,
