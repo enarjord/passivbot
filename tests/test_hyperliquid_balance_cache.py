@@ -664,6 +664,7 @@ async def test_hyperliquid_refresh_and_log_user_abstraction_logs_initial_and_cha
 def _make_probe_bot(HyperliquidBot):
     bot = HyperliquidBot.__new__(HyperliquidBot)
     bot.quote = "USDC"
+    bot.coin_overrides = {}
     bot.balance_override = None
     bot.balance_hysteresis_snap_pct = 0.02
     bot.previous_hysteresis_balance = 51.194323
@@ -761,7 +762,13 @@ async def test_refresh_authoritative_state_staged_hyperliquid_publishes_final_ba
 ):
     HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
     bot = _make_probe_bot(HyperliquidBot)
-    bot.config = {"live": {}}
+    bot.config = {
+        "live": {},
+        "bot": {
+            "long": {"risk_entry_cooldown_minutes": 0.0},
+            "short": {"risk_entry_cooldown_minutes": 0.0},
+        },
+    }
     bot.exchange = "hyperliquid"
     bot.active_symbols = []
     bot.positions = {}

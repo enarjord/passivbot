@@ -156,11 +156,19 @@ class TestConfigAdapter:
 
     def test_get_strategy_spec_exposes_trailing_martingale_metadata(self):
         spec = get_strategy_spec("trailing_martingale")
+        template = get_template_config()
+        bot_template = template["bot"]
 
         assert spec["strategy_kind"] == "trailing_martingale"
-        assert spec["defaults"]["long"]["ema_span_0"] == 770.0
-        assert spec["defaults"]["short"]["entry_threshold_base_pct"] == 0.025
-        assert spec["optimize_bounds"]["long_ema_span_0"] == [200.0, 1440.0, 10.0]
+        assert spec["defaults"]["long"]["ema_span_0"] == bot_template["long"][
+            "strategy"
+        ]["trailing_martingale"]["ema_span_0"]
+        assert spec["defaults"]["short"]["entry_threshold_base_pct"] == bot_template[
+            "short"
+        ]["strategy"]["trailing_martingale"]["entry"]["threshold_base_pct"]
+        assert spec["optimize_bounds"]["long_ema_span_0"] == template["optimize"][
+            "bounds"
+        ]["long"]["strategy"]["trailing_martingale"]["ema_span_0"]
         assert any(
             param["config_path"] == ["strategy", "long", "ema_span_0"]
             and param["legacy_config_paths"] == []

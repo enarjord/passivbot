@@ -904,7 +904,7 @@ async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(tmp_path,
         log_text = (run_dir / "fake_live.log").read_text(encoding="utf-8")
         assert "[fills] refresh: events=3 (+1)" in log_text
         assert "initial_entry_boot" in log_text
-        assert log_text.count("id=10") == 1
+        assert sum("[fill]" in line and " id=10" in line for line in log_text.splitlines()) == 1
 
         cache = FillEventCache(cache_dir)
         cached_ids = [str(event.id) for event in cache.load()]

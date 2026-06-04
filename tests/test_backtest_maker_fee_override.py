@@ -238,6 +238,7 @@ def test_log_backtest_execution_settings_emits_summary(caplog):
 
 def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):
     config = _base_config()
+    config["backtest"]["candle_interval_minutes"] = 1
     mss = _base_mss()
     hlcvs = np.array([[[101.0, 99.0, 100.0, 1.0]]], dtype=np.float64)
     btc_usd_prices = np.array([20000.0], dtype=np.float64)
