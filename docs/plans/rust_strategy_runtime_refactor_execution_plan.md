@@ -41,7 +41,7 @@ Current health-gate task:
 
 ## Branch
 
-- `refactor/rust-strategy-runtime-plan`
+- `v8`
 
 ## Baseline
 

@@ -1,7 +1,7 @@
 # Backtester Performance Optimization Checklist
 
 This is the implementation checklist for speeding up the refactored Rust backtester on
-`refactor/rust-strategy-runtime-plan`.
+`v8`.
 
 It is intentionally performance-focused. Unless an explicit correctness bug is found, every pass
 must preserve backtest outputs exactly.
@@ -287,7 +287,7 @@ For each optimization commit, record:
 
 ## Current Status
 
-- Pass 0 baseline recorded on `refactor/rust-strategy-runtime-plan`
+- Pass 0 baseline recorded on the v8 runtime branch
 - Pass 1 partial (EMA slot indices complete)
 - Pass 2 not started
 - Pass 3 partial (dense backtest state complete)

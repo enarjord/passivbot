@@ -1,6 +1,6 @@
 # V8 Trading Logic Cleanup Checklist
 
-Working target for `refactor/rust-strategy-runtime-plan`.
+Working target for `v8`.
 
 ## Core behavior
 
