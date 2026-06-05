@@ -34,7 +34,10 @@ Optimizer selector contract:
   or agent instructions.
 - When `--fine_tune_params` is combined with `--start`, the starting configs are anchor configs:
   non-tuned optimizer-bound bot params are fixed from the selected anchor, while the fine-tune
-  selectors remain tunable. Without `--fine_tune_params`, `--start` remains seed-only.
+  selectors remain tunable. Base-config policy fields, including boolean toggles such as
+  `bot.<side>.hsl.enabled`, still win over anchors. Anchor and seed values outside
+  `optimize.bounds` are clamped into bounds with aggregated source/key logging. Without
+  `--fine_tune_params`, `--start` remains seed-only.
 
 Timeframe-specific EMA spans use explicit horizon suffixes in canonical config names. Use `_1m`
 for 1-minute candle inputs and `_1h` for 1-hour candle inputs, for example

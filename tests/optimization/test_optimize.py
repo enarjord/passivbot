@@ -1041,17 +1041,23 @@ class TestIndividualToConfig:
                 "anchors": [
                     {
                         "source": "anchor0.json",
-                        "bot": {
+                        "seed_bot": {
                             "long": {"param1": 0.11, "param2": 0.22},
                             "short": {"param1": 0.33, "param2": 0.44},
                         },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.22}
+                        ],
                     },
                     {
                         "source": "anchor1.json",
-                        "bot": {
+                        "seed_bot": {
                             "long": {"param1": 0.55, "param2": 0.66},
                             "short": {"param1": 0.77, "param2": 0.88},
                         },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.66}
+                        ],
                     },
                 ],
                 "fixed_keys": ["long_param2"],
@@ -1064,7 +1070,7 @@ class TestIndividualToConfig:
 
         assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
         assert result["bot"]["long"]["param2"] == pytest.approx(0.66)
-        assert result["bot"]["short"]["param1"] == pytest.approx(0.77)
+        assert result["bot"]["short"]["param1"] == pytest.approx(0.3)
         assert result["backtest"]["start_date"] == "2024-01-01"
         assert result["_optimizer_anchor"]["id"] == 1
         assert result["_optimizer_anchor"]["source"] == "anchor1.json"
@@ -1095,7 +1101,7 @@ class TestIndividualToConfig:
                 "anchors": [
                     {
                         "source": "anchor0.json",
-                        "bot": {
+                        "seed_bot": {
                             "long": {
                                 "n_positions": 1.0,
                                 "param1": 0.1,
@@ -1104,10 +1110,13 @@ class TestIndividualToConfig:
                             },
                             "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
                         },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.2}
+                        ],
                     },
                     {
                         "source": "anchor1.json",
-                        "bot": {
+                        "seed_bot": {
                             "long": {
                                 "n_positions": 1.0,
                                 "param1": 0.3,
@@ -1116,6 +1125,9 @@ class TestIndividualToConfig:
                             },
                             "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
                         },
+                        "fixed_values": [
+                            {"key": "long_param2", "path": ["bot", "long", "param2"], "value": 0.4}
+                        ],
                     },
                 ],
                 "fixed_keys": ["long_param2"],
@@ -1824,7 +1836,7 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param2"] == [0.7, 0.7]
         assert config["optimize"]["bounds"]["long_param3"] == [0.9, 0.9]
 
-    def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path):
+    def test_starting_configs_become_anchors_when_fine_tuning(self, tmp_path, caplog):
         config = {
             "live": {"strategy_kind": "trailing_martingale"},
             "optimize": {
@@ -1841,6 +1853,7 @@ class TestApplyFineTuneBounds:
             },
             "bot": {
                 "long": {
+                    "hsl": {"enabled": True},
                     "n_positions": 1.0,
                     "param1": 0.1,
                     "param2": 0.2,
@@ -1852,13 +1865,14 @@ class TestApplyFineTuneBounds:
         }
         anchors_dir = tmp_path / "anchors"
         anchors_dir.mkdir()
-        for idx, values in enumerate(((0.11, 0.22, 0.33), (0.44, 0.55, 0.66))):
+        for idx, values in enumerate(((0.11, 8.0, 0.33), (0.44, 9.0, 0.66))):
             (anchors_dir / f"anchor_{idx}.json").write_text(
                 json.dumps(
                     {
                         "live": {"strategy_kind": "trailing_martingale"},
                         "bot": {
                             "long": {
+                                "hsl": {"enabled": False},
                                 "n_positions": 1.0,
                                 "param1": values[0],
                                 "param2": values[1],
@@ -1871,6 +1885,7 @@ class TestApplyFineTuneBounds:
                 )
             )
 
+        caplog.set_level(logging.WARNING)
         install_anchored_fine_tune_plan(config, ["long.param1", "long.param3"], str(anchors_dir))
         shape = build_optimization_shape(config)
         result = individual_to_config([1.0, 0.9], lambda x, y, z: y, [], config)
@@ -1878,9 +1893,14 @@ class TestApplyFineTuneBounds:
         assert config["optimize"]["bounds"]["long_param2"] == [0.0, 1.0]
         assert [key for key, _ in shape.key_paths] == [ANCHOR_GENE_KEY, "long_param1"]
         assert result["bot"]["long"]["param1"] == pytest.approx(0.9)
-        assert result["bot"]["long"]["param2"] == pytest.approx(0.55)
+        assert result["bot"]["long"]["param2"] == pytest.approx(1.0)
         assert result["bot"]["long"]["param3"] == pytest.approx(0.66)
+        assert result["bot"]["long"]["hsl"]["enabled"] is True
         assert result["_optimizer_anchor"]["id"] == 1
+        assert "optimizer anchor fixed values clamped to optimize bounds | count=2" in caplog.text
+        assert "anchor_0.json" in caplog.text
+        assert "anchor_1.json" in caplog.text
+        assert "key=long_param2" in caplog.text
 
     def test_anchored_seed_stream_uses_validated_anchors_only(self, tmp_path):
         config = {
@@ -1929,6 +1949,48 @@ class TestApplyFineTuneBounds:
 
         assert raw_count == 2
         assert sorted(individual[0] for individual in streamed) == [0, 1]
+
+    def test_starting_seed_values_are_clamped_to_base_bounds_with_logging(self, caplog):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_n_positions": [1.0, 1.0],
+                    "long_param1": [0.0, 1.0],
+                    "long_total_wallet_exposure_limit": [1.0, 1.0],
+                    "short_n_positions": [0.0, 0.0],
+                    "short_total_wallet_exposure_limit": [0.0, 0.0],
+                },
+            },
+            "bot": {
+                "long": {
+                    "n_positions": 1.0,
+                    "param1": 0.2,
+                    "total_wallet_exposure_limit": 1.0,
+                },
+                "short": {"n_positions": 0.0, "total_wallet_exposure_limit": 0.0},
+            },
+        }
+        seed = deepcopy(config)
+        seed["bot"]["long"]["param1"] = 4.2
+        seed["_starting_config_source"] = "seed.json"
+        shape = build_optimization_shape(config)
+
+        caplog.set_level(logging.WARNING)
+        individuals, raw_count = configs_to_individuals_streaming(
+            [seed],
+            shape.bounds,
+            6,
+            optimization_shape=shape,
+        )
+
+        idx = [key for key, _ in shape.key_paths].index("long_param1")
+        assert raw_count == 1
+        assert len(individuals) == 1
+        assert individuals[0][idx] == pytest.approx(1.0)
+        assert "optimizer starting config value clamped to optimize bounds | count=1" in caplog.text
+        assert "source=seed.json" in caplog.text
+        assert "key=long_param1" in caplog.text
 
 
 class TestExtractConfigs:

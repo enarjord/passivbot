@@ -101,8 +101,11 @@ def _build_anchored_optimizer_vector_config(
     anchor = anchors[anchor_id]
     config = deepcopy(template)
     config.pop(ANCHOR_PLAN_KEY, None)
-    if isinstance(anchor.get("bot"), dict):
-        config["bot"] = deepcopy(anchor["bot"])
+    for item in anchor.get("fixed_values") or []:
+        path = tuple(item.get("path") or ())
+        if not path:
+            continue
+        _set_path(config, path, deepcopy(item.get("value")))
     for value, path in zip(vector[1:], key_paths):
         _set_path(config, path, value)
     config["_optimizer_anchor"] = {

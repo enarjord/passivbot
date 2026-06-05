@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
+  `optimize.bounds` are clamped with aggregated source/key logging, while base-config runtime
+  policy fields such as HSL/unstuck boolean toggles now win over anchor configs.
 - Added a Metric/Metric Correlations table to `passivbot tool pareto-analyze`,
   limited to metrics already shown in Metric Distributions, and wrote the full
   selected metric-correlation set to `metric_correlations.csv` when using

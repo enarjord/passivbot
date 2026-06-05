@@ -64,7 +64,7 @@ import asyncio
 import argparse
 import multiprocessing
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from cli_utils import (
     add_help_all_argument,
     build_command_parser,
@@ -175,11 +175,16 @@ from metrics_schema import build_scenario_metrics, flatten_metric_stats
 from optimization.bounds import (
     Bound,
     enforce_bounds,
+    round_to_sig_digits,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.backend_shared import cancel_pending_async_results, drain_async_results
 from optimization.backends import get_backend_runner
-from optimization.config_adapter import get_optimization_key_paths, resolve_optimization_bound_path
+from optimization.config_adapter import (
+    extract_bounds_tuple_list_from_config,
+    get_optimization_key_paths,
+    resolve_optimization_bound_path,
+)
 from optimization.warmup import (
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
@@ -808,6 +813,113 @@ def ea_mu_plus_lambda_stream(
     return population, logbook
 
 
+def _get_path_value(config: dict, path) -> object:
+    target = config
+    for part in path:
+        target = target[part]
+    return target
+
+
+def _format_bound_for_log(bound: Bound) -> str:
+    if bound.step is None:
+        return f"[{bound.low}, {bound.high}]"
+    return f"[{bound.low}, {bound.high}, step={bound.step}]"
+
+
+def _clamp_seed_value(value, bound: Bound, sig_digits: int | None):
+    if bound.is_stepped:
+        return bound.quantize(float(value))
+    rounded = float(value) if sig_digits is None else round_to_sig_digits(float(value), sig_digits)
+    return bound.high if rounded > bound.high else bound.low if rounded < bound.low else rounded
+
+
+def _format_clamp_samples(counter: Counter, *, limit: int = 3) -> str:
+    parts = []
+    for value, count in counter.most_common(limit):
+        parts.append(f"{value} ({count}x)" if count > 1 else str(value))
+    remaining = sum(counter.values()) - sum(count for _value, count in counter.most_common(limit))
+    if remaining > 0:
+        parts.append(f"+{remaining} more")
+    return ", ".join(parts)
+
+
+def _record_seed_bounds_adjustment(
+    *,
+    source: str,
+    bound_key: str,
+    path,
+    original,
+    adjusted,
+    bound: Bound,
+    context: str,
+    collector: dict | None = None,
+) -> None:
+    try:
+        original_float = float(original)
+        adjusted_float = float(adjusted)
+    except (TypeError, ValueError):
+        if original == adjusted:
+            return
+    else:
+        if bound.low <= original_float <= bound.high:
+            return
+        if math.isclose(original_float, adjusted_float, rel_tol=0.0, abs_tol=1e-12):
+            return
+    bounds_repr = _format_bound_for_log(bound)
+    path_repr = ".".join(path)
+    key = (context, bound_key, path_repr, bounds_repr, str(adjusted))
+    if collector is None:
+        collector = {}
+        emit_now = True
+    else:
+        emit_now = False
+    bucket = collector.setdefault(
+        key,
+        {
+            "count": 0,
+            "values": Counter(),
+            "sources": [],
+            "source_set": set(),
+        },
+    )
+    bucket["count"] += 1
+    bucket["values"][str(original)] += 1
+    if source not in bucket["source_set"]:
+        bucket["source_set"].add(source)
+        if len(bucket["sources"]) < 3:
+            bucket["sources"].append(source)
+    if emit_now:
+        _flush_seed_bounds_adjustments(collector)
+
+
+def _flush_seed_bounds_adjustments(collector: dict | None) -> None:
+    if not collector:
+        return
+    for (context, bound_key, path_repr, bounds_repr, adjusted), bucket in sorted(collector.items()):
+        count = int(bucket["count"])
+        source_examples = ", ".join(bucket["sources"])
+        source_count = len(bucket["source_set"])
+        if source_count > len(bucket["sources"]):
+            source_examples = f"{source_examples}, +{source_count - len(bucket['sources'])} more"
+        values = _format_clamp_samples(bucket["values"])
+        plural = "values" if count != 1 else "value"
+        source_label = "sources" if source_count != 1 else "source"
+        logging.warning(
+            "optimizer %s %s clamped to optimize bounds | count=%d | key=%s | path=%s | "
+            "values=%s | bounds=%s | clamped=%s | %s=%s",
+            context,
+            plural,
+            count,
+            bound_key,
+            path_repr,
+            values,
+            bounds_repr,
+            adjusted,
+            source_label,
+            source_examples,
+        )
+
+
 def individual_to_config(individual, optimizer_overrides, overrides_list, template, key_paths=None):
     """
     assume individual is already bound enforced (or will be after)
@@ -827,6 +939,9 @@ def config_to_individual(
     key_paths=None,
     optimization_shape: OptimizationShape | None = None,
     anchor_id: int | None = None,
+    clamp_context: str | None = None,
+    source: str = "<memory>",
+    clamp_collector: dict | None = None,
 ):
     if optimization_shape is not None:
         bounds = optimization_shape.bounds
@@ -844,11 +959,27 @@ def config_to_individual(
         for part in path:
             target = target[part]
         values.append(target)
-    return enforce_bounds(
+    enforced = enforce_bounds(
         values,
         bounds,
         sig_digits,
     )
+    if clamp_context:
+        for original, adjusted, bound, key_path in zip(values, enforced, bounds, key_paths):
+            bound_key, path = key_path
+            if path == (ANCHOR_GENE_KEY,) or path == [ANCHOR_GENE_KEY]:
+                continue
+            _record_seed_bounds_adjustment(
+                source=source,
+                bound_key=bound_key,
+                path=path,
+                original=original,
+                adjusted=adjusted,
+                bound=bound,
+                context=clamp_context,
+                collector=clamp_collector,
+            )
+    return enforced
 
 
 def validate_array(arr, name, allow_nan=True):
@@ -1828,6 +1959,14 @@ def install_anchored_fine_tune_plan(
 
     anchors = []
     base_strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+    base_key_paths = get_optimization_key_paths(config)
+    key_path_by_key = {key: path for key, path in base_key_paths}
+    bound_by_key = {
+        key: bound
+        for (key, _path), bound in zip(base_key_paths, extract_bounds_tuple_list_from_config(config))
+    }
+    sig_digits = config.get("optimize", {}).get("round_to_n_significant_digits", 6)
+    clamp_collector = {}
     for raw_anchor in iter_starting_configs(starting_configs_path):
         try:
             anchor_cfg = _build_starting_seed_config(raw_anchor)
@@ -1839,27 +1978,52 @@ def install_anchored_fine_tune_plan(
                     "starting config strategy_kind "
                     f"{anchor_strategy_kind!r} does not match base {base_strategy_kind!r}"
                 )
+            source = (
+                raw_anchor.get("_starting_config_source", "<memory>")
+                if isinstance(raw_anchor, dict)
+                else "<memory>"
+            )
+            fixed_values = []
+            for key in fixed_keys:
+                path = key_path_by_key.get(key)
+                bound = bound_by_key.get(key)
+                if path is None or bound is None:
+                    continue
+                anchor_path = resolve_optimization_bound_path(anchor_cfg, key) or path
+                original = _get_path_value(anchor_cfg, anchor_path)
+                adjusted = _clamp_seed_value(original, bound, sig_digits)
+                _record_seed_bounds_adjustment(
+                    source=source,
+                    bound_key=key,
+                    path=path,
+                    original=original,
+                    adjusted=adjusted,
+                    bound=bound,
+                    context="anchor fixed",
+                    collector=clamp_collector,
+                )
+                fixed_values.append({"key": key, "path": list(path), "value": adjusted})
             anchors.append(
                 {
-                    "source": raw_anchor.get("_starting_config_source", "<memory>")
-                    if isinstance(raw_anchor, dict)
-                    else "<memory>",
-                    "bot": deepcopy(anchor_cfg["bot"]),
+                    "source": source,
+                    "seed_bot": deepcopy(anchor_cfg["bot"]),
+                    "fixed_values": fixed_values,
                 }
             )
         except Exception as exc:
             logging.warning("failed to use starting config as fine-tune anchor: %s", exc)
+    _flush_seed_bounds_adjustments(clamp_collector)
     if not anchors:
         raise ValueError(
             "anchored fine-tune requires at least one valid starting config from "
             f"{starting_configs_path!r}"
         )
-    base_key_paths = get_optimization_key_paths(config)
     key_paths = [path for key, path in base_key_paths if key in tunable_keys]
     config[ANCHOR_PLAN_KEY] = {
         "anchors": anchors,
         "fixed_keys": fixed_keys,
         "key_paths": [list(path) for path in key_paths],
+        "strategy_kind": base_strategy_kind,
         "tunable_keys": tunable_keys,
     }
     logging.info(
@@ -1969,7 +2133,10 @@ def iter_anchored_fine_tune_seed_configs(config: dict):
         return
     for anchor in anchor_plan.get("anchors") or []:
         yield {
-            "bot": deepcopy(anchor["bot"]),
+            "bot": deepcopy(anchor.get("seed_bot") or {}),
+            "live": {"strategy_kind": anchor_plan.get("strategy_kind")}
+            if anchor_plan.get("strategy_kind")
+            else {},
             "_starting_config_source": anchor.get("source", "<memory>"),
         }
 
@@ -2006,6 +2173,7 @@ def configs_to_individuals_streaming(
         and optimization_shape.key_paths[0][0] == ANCHOR_GENE_KEY
     )
     anchor_count = 0
+    clamp_collector = {}
     for cfg in cfgs:
         raw_count += 1
         try:
@@ -2017,12 +2185,18 @@ def configs_to_individuals_streaming(
                 key_paths=key_paths,
                 optimization_shape=optimization_shape,
                 anchor_id=anchor_count if anchored_shape else None,
+                clamp_context="starting config",
+                source=cfg.get("_starting_config_source", "<memory>")
+                if isinstance(cfg, dict)
+                else "<memory>",
+                clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
             if anchored_shape:
                 anchor_count += 1
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
+    _flush_seed_bounds_adjustments(clamp_collector)
     return list(inds), raw_count
 
 

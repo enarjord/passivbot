@@ -314,6 +314,13 @@ This fixes only the active long strategy's close subtree plus long HSL bounds.
 Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one effective
 fixed-parameter set before bounds are collapsed.
 
+When `--fine_tune_params` is combined with `--start`, the base optimizer config remains the run
+policy. Anchor configs provide values only for optimizer-bound bot parameters that are fixed by the
+anchor plan; boolean toggles and other non-bound runtime policy fields such as
+`bot.long.hsl.enabled` continue to come from the base config or explicit runtime overrides. Seed and
+anchor values outside `optimize.bounds` are clamped into bounds during seed loading and logged in
+aggregate with counts, source examples, key/path, original value samples, bound, and clamped value.
+
 `optimize.fixed_runtime_overrides` is different: it overrides runtime config values only during
 optimize evaluations, without changing the stored/live config value. This is useful for
 operator-risk settings such as:

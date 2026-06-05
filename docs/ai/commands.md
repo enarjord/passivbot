@@ -44,7 +44,8 @@ passivbot optimize path/to/config.json -t path/to/anchor_configs -ft long.forage
 
 When `-ft/--fine-tune-params` and `-t/--start` are used together, the start configs are
 fine-tune anchors: non-tuned optimizer-bound bot params are fixed from the selected anchor and
-only the fine-tune selectors are optimized.
+only the fine-tune selectors are optimized. Runtime policy from the base config still wins, and
+seed/anchor values outside `optimize.bounds` are clamped with aggregated source/key logging.
 
 ## Rust
 
