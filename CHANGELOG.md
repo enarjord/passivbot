@@ -95,6 +95,9 @@ All notable user-facing changes will be documented in this file.
 - Reduced suite-optimizer seed-evaluation memory pressure by passing lazy-sliced coin
   columns to Rust as active indices instead of materializing per-worker HLCV coin-subset
   copies.
+- Fixed live Hyperliquid `xyz:*` stock-perp EMA reads during off-hours/no-trade
+  tails by allowing stock-perp-only flat zero-volume tail candles from the last
+  real close, while preserving fail-loud behavior when no real candle seed exists.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
   `optimize.bounds` are clamped with aggregated source/key logging, while base-config runtime
   policy fields such as HSL/unstuck boolean toggles now win over anchor configs.

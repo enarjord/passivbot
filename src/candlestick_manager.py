@@ -5400,6 +5400,7 @@ class CandlestickManager:
         tf: Optional[str] = None,
         force_refetch_gaps: bool = False,
         fill_leading_gaps: bool = False,
+        fill_trailing_gaps: Optional[bool] = None,
         skip_historical_gap_fill: bool = False,
         max_lookback_candles: Optional[int] = None,
         allow_remote_fetch: bool = True,
@@ -5416,6 +5417,9 @@ class CandlestickManager:
           before fetching, forcing a retry of all gaps regardless of retry count
         - If `fill_leading_gaps` is True: synthesize zero-candles even before the
           first real data point (useful for EMA calculation)
+        - If `fill_trailing_gaps` is set: override the default open-tail policy.
+          By default, open tails ending at the latest finalized candle are not
+          synthesized.
         - If `skip_historical_gap_fill` is True: do not attempt to fetch/fill gaps
           in historical data older than 1 day. Useful for live bot warmup where
           recent data is sufficient and filling old gaps wastes time.
@@ -6411,13 +6415,17 @@ class CandlestickManager:
                     else:
                         data_for_gaps = seed_candle
 
+        trailing_fill = bool(end_ts < latest_finalized)
+        if fill_trailing_gaps is not None:
+            trailing_fill = bool(fill_trailing_gaps)
+
         result = self.standardize_gaps(
             data_for_gaps,
             start_ts=start_ts,
             end_ts=end_ts,
             strict=strict,
             fill_leading_gaps=fill_leading_gaps,
-            fill_trailing_gaps=end_ts < latest_finalized,
+            fill_trailing_gaps=trailing_fill,
             assume_sorted=True,
             symbol=symbol,
         )
@@ -6573,6 +6581,15 @@ class CandlestickManager:
                 / np.maximum(np.asarray(arr["l"], dtype=np.float64), 1e-12)
             )
         raise KeyError(f"Unknown EMA metric_key {metric_key!r}")
+
+    @staticmethod
+    def _is_stock_perp_symbol(symbol: str) -> bool:
+        try:
+            from tradfi_data import is_stock_perp_symbol
+
+            return bool(is_stock_perp_symbol(str(symbol)))
+        except Exception:
+            return False
 
     async def get_projected_open_tail_ema_metrics(
         self,
@@ -6737,6 +6754,7 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
+            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
         )
         if arr.size == 0:
             return float("nan")
@@ -6973,6 +6991,7 @@ class CandlestickManager:
             max_age_ms=max_age_ms,
             timeframe=out_tf,
             allow_remote_fetch=allow_remote_fetch,
+            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
         )
         if arr.size == 0:
             return float("nan")
@@ -7044,6 +7063,7 @@ class CandlestickManager:
             strict=True if period_ms == ONE_MIN_MS else False,
             timeframe=out_tf,
             max_lookback_candles=window_candles,
+            fill_trailing_gaps=self._is_stock_perp_symbol(symbol),
         )
         if raw.size == 0:
             for metric_key in missing:
