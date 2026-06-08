@@ -1,4 +1,4 @@
-from config.metrics import resolve_metric_value
+from config.metrics import canonicalize_metric_name, resolve_metric_value
 from config.scoring import default_objective_goal, normalize_scoring_entries
 
 
@@ -47,6 +47,14 @@ def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("strategy_eq_recovery_days_mean_worst_1pct") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_max") == "min"
     assert default_objective_goal("peak_recovery_days_strategy_eq") == "min"
+
+
+def test_hard_stop_panic_close_drawdown_metrics_are_shared():
+    metric = "hard_stop_panic_close_loss_drawdown_pct_mean"
+
+    assert canonicalize_metric_name(metric) == metric
+    assert canonicalize_metric_name(f"usd_{metric}") == metric
+    assert resolve_metric_value({metric: 0.125}, metric) == 0.125
 
 
 def test_peak_recovery_days_strategy_eq_normalizes_to_recovery_max_alias():

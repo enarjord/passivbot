@@ -927,6 +927,9 @@ pub struct Analysis {
     pub hard_stop_trigger_drawdown_mean: f64,
     pub hard_stop_panic_close_loss_sum: f64,
     pub hard_stop_panic_close_loss_max: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_min: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_mean: f64,
+    pub hard_stop_panic_close_loss_drawdown_pct_max: f64,
     pub hard_stop_flatten_time_minutes_mean: f64,
     pub hard_stop_post_restart_retrigger_pct: f64,
 }
@@ -1109,6 +1112,9 @@ impl Default for Analysis {
             hard_stop_trigger_drawdown_mean: 0.0,
             hard_stop_panic_close_loss_sum: 0.0,
             hard_stop_panic_close_loss_max: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_min: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_mean: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_max: 0.0,
             hard_stop_flatten_time_minutes_mean: 0.0,
             hard_stop_post_restart_retrigger_pct: 0.0,
         }

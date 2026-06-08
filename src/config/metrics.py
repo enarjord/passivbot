@@ -158,6 +158,9 @@ SHARED_METRICS = {
     "hard_stop_trigger_drawdown_mean",
     "hard_stop_panic_close_loss_sum",
     "hard_stop_panic_close_loss_max",
+    "hard_stop_panic_close_loss_drawdown_pct_min",
+    "hard_stop_panic_close_loss_drawdown_pct_mean",
+    "hard_stop_panic_close_loss_drawdown_pct_max",
     "hard_stop_flatten_time_minutes_mean",
     "hard_stop_post_restart_retrigger_pct",
 }

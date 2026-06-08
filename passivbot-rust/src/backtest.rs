@@ -456,6 +456,8 @@ struct HardStopPsideRuntime {
     equity_at_halt: f64,
     last_restart_ts_ms: Option<u64>,
     no_restart_peak_strategy_equity: f64,
+    panic_close_event_loss_usd: f64,
+    panic_close_event_start_equity_usd: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -503,6 +505,9 @@ pub struct HardStopMetrics {
     pub trigger_drawdown_mean: f64,
     pub panic_close_loss_sum: f64,
     pub panic_close_loss_max: f64,
+    pub panic_close_loss_drawdown_pct_min: f64,
+    pub panic_close_loss_drawdown_pct_mean: f64,
+    pub panic_close_loss_drawdown_pct_max: f64,
     pub flatten_time_minutes_mean: f64,
     pub post_restart_retrigger_pct: f64,
 }
@@ -659,6 +664,10 @@ pub struct Backtest<'a> {
     hard_stop_trigger_drawdown_count: u32,
     hard_stop_panic_close_loss_sum: f64,
     hard_stop_panic_close_loss_max: f64,
+    hard_stop_panic_close_loss_drawdown_pct_sum: f64,
+    hard_stop_panic_close_loss_drawdown_pct_min: f64,
+    hard_stop_panic_close_loss_drawdown_pct_max: f64,
+    hard_stop_panic_close_loss_drawdown_pct_count: u32,
     hard_stop_flatten_time_minutes_sum: f64,
     hard_stop_flatten_time_minutes_max: f64,
     hard_stop_flatten_time_count: u32,
@@ -2166,6 +2175,10 @@ impl<'a> Backtest<'a> {
             hard_stop_trigger_drawdown_count: 0,
             hard_stop_panic_close_loss_sum: 0.0,
             hard_stop_panic_close_loss_max: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_sum: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_min: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_max: 0.0,
+            hard_stop_panic_close_loss_drawdown_pct_count: 0,
             hard_stop_flatten_time_minutes_sum: 0.0,
             hard_stop_flatten_time_minutes_max: 0.0,
             hard_stop_flatten_time_count: 0,
@@ -3142,6 +3155,7 @@ impl<'a> Backtest<'a> {
         self.hard_stop_drawdown_samples_pside[pside].push(step.drawdown_raw);
         self.hard_stop_drawdown_ema_samples_pside[pside].push(drawdown_ema);
         self.hard_stop_drawdown_score_samples_pside[pside].push(step.drawdown_score);
+        let mut finalize_panic_close_loss_drawdown_pct = false;
         let runtime = &mut self.hard_stop_pside[pside];
         let prev_tier = runtime.tier;
         runtime.tier = step.tier;
@@ -3197,6 +3211,7 @@ impl<'a> Backtest<'a> {
                     self.hard_stop_trigger_drawdown_sum += stop_drawdown_raw;
                     self.hard_stop_trigger_drawdown_count =
                         self.hard_stop_trigger_drawdown_count.saturating_add(1);
+                    finalize_panic_close_loss_drawdown_pct = true;
                     if let Some(red_start_ts_ms) = runtime.current_red_start_ms {
                         let flatten_minutes =
                             stop_snapshot.timestamp_ms.saturating_sub(red_start_ts_ms) as f64
@@ -3251,6 +3266,9 @@ impl<'a> Backtest<'a> {
         } else {
             runtime.flat_confirmations = 0;
             runtime.pending_stop = None;
+        }
+        if finalize_panic_close_loss_drawdown_pct {
+            self.finalize_hard_stop_panic_close_loss_drawdown_pct(pside);
         }
         self.refresh_global_hard_stop_tier();
         Ok(())
@@ -3327,18 +3345,11 @@ impl<'a> Backtest<'a> {
         );
     }
 
-    fn update_equities(&mut self, k: usize) {
-        // Start with the “running totals” in our Balance struct
+    fn current_usd_equity_at(&self, k: usize) -> f64 {
         let mut equity_usd = self.balance.usd_total_balance;
-        let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
-        let mut equity_btc = self.balance.btc_total_balance;
 
-        // Add the unrealized PNL of all positions
         for (idx, position) in self.positions.long.iter().enumerate() {
-            if position.size == 0.0 {
-                continue;
-            }
-            if !self.coin_is_valid_at(idx, k) {
+            if position.size == 0.0 || !self.coin_is_valid_at(idx, k) {
                 continue;
             }
             let current_price = self.hlcvs_value(k, idx, CLOSE);
@@ -3352,14 +3363,10 @@ impl<'a> Backtest<'a> {
                 self.exchange_params_list[idx].c_mult,
             );
             equity_usd += upnl;
-            equity_btc += upnl / btc_price;
         }
 
         for (idx, position) in self.positions.short.iter().enumerate() {
-            if position.size == 0.0 {
-                continue;
-            }
-            if !self.coin_is_valid_at(idx, k) {
+            if position.size == 0.0 || !self.coin_is_valid_at(idx, k) {
                 continue;
             }
             let current_price = self.hlcvs_value(k, idx, CLOSE);
@@ -3373,8 +3380,58 @@ impl<'a> Backtest<'a> {
                 self.exchange_params_list[idx].c_mult,
             );
             equity_usd += upnl;
-            equity_btc += upnl / btc_price;
         }
+
+        equity_usd
+    }
+
+    fn record_hard_stop_panic_close_loss(&mut self, pside: usize, k: usize, net_pnl: f64) {
+        let panic_loss = (-net_pnl).max(0.0);
+        self.hard_stop_panic_close_loss_sum += panic_loss;
+        self.hard_stop_panic_close_loss_max = self.hard_stop_panic_close_loss_max.max(panic_loss);
+
+        if self.hard_stop_pside[pside]
+            .panic_close_event_start_equity_usd
+            .is_none()
+        {
+            let start_equity = self.current_usd_equity_at(k).max(f64::EPSILON);
+            self.hard_stop_pside[pside].panic_close_event_start_equity_usd = Some(start_equity);
+        }
+        self.hard_stop_pside[pside].panic_close_event_loss_usd += panic_loss;
+    }
+
+    fn finalize_hard_stop_panic_close_loss_drawdown_pct(&mut self, pside: usize) {
+        let (event_loss, start_equity) = {
+            let runtime = &mut self.hard_stop_pside[pside];
+            let event_loss = runtime.panic_close_event_loss_usd;
+            let start_equity = runtime.panic_close_event_start_equity_usd.take();
+            runtime.panic_close_event_loss_usd = 0.0;
+            (event_loss, start_equity)
+        };
+        let Some(start_equity) = start_equity else {
+            return;
+        };
+        let drawdown_pct = (event_loss / start_equity.max(f64::EPSILON)).max(0.0);
+        if self.hard_stop_panic_close_loss_drawdown_pct_count == 0 {
+            self.hard_stop_panic_close_loss_drawdown_pct_min = drawdown_pct;
+        } else {
+            self.hard_stop_panic_close_loss_drawdown_pct_min = self
+                .hard_stop_panic_close_loss_drawdown_pct_min
+                .min(drawdown_pct);
+        }
+        self.hard_stop_panic_close_loss_drawdown_pct_sum += drawdown_pct;
+        self.hard_stop_panic_close_loss_drawdown_pct_max = self
+            .hard_stop_panic_close_loss_drawdown_pct_max
+            .max(drawdown_pct);
+        self.hard_stop_panic_close_loss_drawdown_pct_count = self
+            .hard_stop_panic_close_loss_drawdown_pct_count
+            .saturating_add(1);
+    }
+
+    fn update_equities(&mut self, k: usize) {
+        let equity_usd = self.current_usd_equity_at(k);
+        let btc_price = self.btc_usd_prices[k].max(f64::EPSILON);
+        let equity_btc = equity_usd / btc_price;
 
         // Finally push the results into the Equities struct
         let timestamp_ms = self.first_timestamp_ms + (k as u64) * self.interval_ms;
@@ -3536,6 +3593,9 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[LONG] += pnl + fee_paid;
         self.record_rolling_pnl(k, pnl + fee_paid);
+        if matches!(close_fill.order_type, OrderType::ClosePanicLong) {
+            self.record_hard_stop_panic_close_loss(LONG, k, pnl + fee_paid);
+        }
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3551,12 +3611,6 @@ impl<'a> Backtest<'a> {
             balance_before,
             balance_after,
         );
-        if matches!(close_fill.order_type, OrderType::ClosePanicLong) {
-            let panic_loss = (-(pnl + fee_paid)).max(0.0);
-            self.hard_stop_panic_close_loss_sum += panic_loss;
-            self.hard_stop_panic_close_loss_max =
-                self.hard_stop_panic_close_loss_max.max(panic_loss);
-        }
 
         let current_pprice = current_position.price;
         if new_psize == 0.0 {
@@ -3637,6 +3691,9 @@ impl<'a> Backtest<'a> {
         self.pnl_cumsum_max_net = self.pnl_cumsum_max_net.max(self.pnl_cumsum_running_net);
         self.pnl_cumsum_running_net_pside[SHORT] += pnl + fee_paid;
         self.record_rolling_pnl(k, pnl + fee_paid);
+        if matches!(order.order_type, OrderType::ClosePanicShort) {
+            self.record_hard_stop_panic_close_loss(SHORT, k, pnl + fee_paid);
+        }
         let balance_before = self.snapshot_balance();
         self.update_balance(k, pnl, fee_paid);
         let balance_after = self.snapshot_balance();
@@ -3652,12 +3709,6 @@ impl<'a> Backtest<'a> {
             balance_before,
             balance_after,
         );
-        if matches!(order.order_type, OrderType::ClosePanicShort) {
-            let panic_loss = (-(pnl + fee_paid)).max(0.0);
-            self.hard_stop_panic_close_loss_sum += panic_loss;
-            self.hard_stop_panic_close_loss_max =
-                self.hard_stop_panic_close_loss_max.max(panic_loss);
-        }
 
         let current_pprice = current_position.price;
         if new_psize == 0.0 {
@@ -4815,6 +4866,13 @@ impl<'a> Backtest<'a> {
         } else {
             0.0
         };
+        let panic_close_loss_drawdown_pct_mean =
+            if self.hard_stop_panic_close_loss_drawdown_pct_count > 0 {
+                self.hard_stop_panic_close_loss_drawdown_pct_sum
+                    / self.hard_stop_panic_close_loss_drawdown_pct_count as f64
+            } else {
+                0.0
+            };
         let post_restart_retrigger_pct = if self.hard_stop_n_restarts > 0 {
             self.hard_stop_restart_retrigger_count as f64 / self.hard_stop_n_restarts as f64
         } else {
@@ -4875,6 +4933,9 @@ impl<'a> Backtest<'a> {
             trigger_drawdown_mean,
             panic_close_loss_sum: self.hard_stop_panic_close_loss_sum,
             panic_close_loss_max: self.hard_stop_panic_close_loss_max,
+            panic_close_loss_drawdown_pct_min: self.hard_stop_panic_close_loss_drawdown_pct_min,
+            panic_close_loss_drawdown_pct_mean,
+            panic_close_loss_drawdown_pct_max: self.hard_stop_panic_close_loss_drawdown_pct_max,
             flatten_time_minutes_mean,
             post_restart_retrigger_pct,
         }
@@ -6656,6 +6717,24 @@ mod tests {
         bt.hard_stop_n_restarts = 2;
         bt.hard_stop_n_restarts_pside[LONG] = 1;
         bt.hard_stop_n_restarts_pside[SHORT] = 1;
+        bt.balance.usd_total_balance = 100.0;
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 2.0,
+        };
+        bt.record_hard_stop_panic_close_loss(LONG, 0, -9.9);
+        assert!(
+            (bt.hard_stop_pside[LONG]
+                .panic_close_event_start_equity_usd
+                .unwrap()
+                - 99.0)
+                .abs()
+                < 1e-12
+        );
+        bt.finalize_hard_stop_panic_close_loss_drawdown_pct(LONG);
+        bt.hard_stop_pside[SHORT].panic_close_event_start_equity_usd = Some(200.0);
+        bt.hard_stop_pside[SHORT].panic_close_event_loss_usd = 30.0;
+        bt.finalize_hard_stop_panic_close_loss_drawdown_pct(SHORT);
 
         let hs_metrics = bt.hard_stop_metrics();
         let strategy_metrics = bt.strategy_equity_metrics_for_analysis();
@@ -6699,6 +6778,13 @@ mod tests {
         assert!((hs_metrics.restarts_per_year - 182.625).abs() < 1e-12);
         assert!((hs_metrics.restarts_per_year_long - 182.625).abs() < 1e-12);
         assert_eq!(hs_metrics.restarts_per_year_short, 0.0);
+        assert!(
+            (hs_metrics.panic_close_loss_drawdown_pct_min - 0.1).abs() < 1e-12,
+            "{}",
+            hs_metrics.panic_close_loss_drawdown_pct_min
+        );
+        assert!((hs_metrics.panic_close_loss_drawdown_pct_mean - 0.125).abs() < 1e-12);
+        assert!((hs_metrics.panic_close_loss_drawdown_pct_max - 0.15).abs() < 1e-12);
     }
 
     #[test]

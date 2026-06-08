@@ -241,17 +241,20 @@ Useful global HSL backtest metrics include:
 4. `hard_stop_restarts_per_year`
 5. `hard_stop_restarts_per_year_long`
 6. `hard_stop_restarts_per_year_short`
-5. `hard_stop_time_in_yellow_pct`
-6. `hard_stop_time_in_orange_pct`
-7. `hard_stop_time_in_red_pct`
-8. `hard_stop_duration_minutes_mean`
-9. `hard_stop_duration_minutes_max`
-10. `hard_stop_trigger_drawdown_mean`
-11. `hard_stop_panic_close_loss_sum`
-12. `hard_stop_panic_close_loss_max`
-13. `hard_stop_flatten_time_minutes_mean`
-14. `hard_stop_post_restart_retrigger_pct`
-15. `hard_stop_halt_to_restart_equity_loss_pct`
+7. `hard_stop_time_in_yellow_pct`
+8. `hard_stop_time_in_orange_pct`
+9. `hard_stop_time_in_red_pct`
+10. `hard_stop_duration_minutes_mean`
+11. `hard_stop_duration_minutes_max`
+12. `hard_stop_trigger_drawdown_mean`
+13. `hard_stop_panic_close_loss_sum`
+14. `hard_stop_panic_close_loss_max`
+15. `hard_stop_panic_close_loss_drawdown_pct_min`
+16. `hard_stop_panic_close_loss_drawdown_pct_mean`
+17. `hard_stop_panic_close_loss_drawdown_pct_max`
+18. `hard_stop_flatten_time_minutes_mean`
+19. `hard_stop_post_restart_retrigger_pct`
+20. `hard_stop_halt_to_restart_equity_loss_pct`
 
 ## Interpreting HSL Metrics
 

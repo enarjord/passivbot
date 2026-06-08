@@ -1519,6 +1519,12 @@ fn run_backtest_core<'py>(
         analysis_usd.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
         analysis_usd.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
         analysis_usd.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_min =
+            hs.panic_close_loss_drawdown_pct_min;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_mean =
+            hs.panic_close_loss_drawdown_pct_mean;
+        analysis_usd.hard_stop_panic_close_loss_drawdown_pct_max =
+            hs.panic_close_loss_drawdown_pct_max;
         analysis_usd.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_usd.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_usd.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
@@ -1605,6 +1611,12 @@ fn run_backtest_core<'py>(
         analysis_btc.hard_stop_trigger_drawdown_mean = hs.trigger_drawdown_mean;
         analysis_btc.hard_stop_panic_close_loss_sum = hs.panic_close_loss_sum;
         analysis_btc.hard_stop_panic_close_loss_max = hs.panic_close_loss_max;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_min =
+            hs.panic_close_loss_drawdown_pct_min;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_mean =
+            hs.panic_close_loss_drawdown_pct_mean;
+        analysis_btc.hard_stop_panic_close_loss_drawdown_pct_max =
+            hs.panic_close_loss_drawdown_pct_max;
         analysis_btc.hard_stop_flatten_time_minutes_mean = hs.flatten_time_minutes_mean;
         analysis_btc.hard_stop_post_restart_retrigger_pct = hs.post_restart_retrigger_pct;
         analysis_btc.drawdown_worst_strategy_eq = strategy.overall.drawdown_worst_strategy_eq;
