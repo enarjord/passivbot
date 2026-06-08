@@ -1373,7 +1373,7 @@ class SuiteEvaluator:
         Returns (hlcvs_view, btc_view, coin_indices).
 
         Only applies TIME slicing here (creates views, O(1) memory).
-        Coin subsetting is deferred to build_backtest_payload which does it efficiently.
+        Coin subsetting is passed through as active indices for Rust.
         """
         master_spec = ctx.master_hlcvs_specs[exchange]
         master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
@@ -1399,7 +1399,7 @@ class SuiteEvaluator:
             else:
                 btc_view = master_btc
 
-        # Return coin_indices to let build_backtest_payload handle subsetting in one step
+        # Return coin_indices so Rust can address the active columns without a Python copy.
         return hlcvs_view, btc_view, coin_indices
 
     def _uses_lazy_slicing(self, ctx: ScenarioEvalContext, exchange: str) -> bool:
@@ -1543,7 +1543,7 @@ class SuiteEvaluator:
                 # Get data arrays - either from lazy slicing or cached SharedMemory
                 if self._uses_lazy_slicing(ctx, exchange):
                     # Get time-sliced VIEW (O(1) memory) + coin indices
-                    # Coin subsetting happens inside build_backtest_payload (single copy)
+                    # Coin subsetting is passed to Rust as active indices.
                     hlcvs_data, btc_data, coin_indices = self._get_lazy_slice_data(ctx, exchange)
                 else:
                     self._ensure_context_attachment(ctx, exchange)
