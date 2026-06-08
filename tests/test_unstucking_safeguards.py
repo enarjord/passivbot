@@ -10,6 +10,11 @@ from utils import utc_ms
 def _make_mock_pbr():
     module = types.ModuleType("passivbot_rust")
 
+    def _get_strategy_kinds():
+        return ["trailing_martingale"]
+
+    module.get_strategy_kinds = _get_strategy_kinds
+
     class _EquityHardStopRollingPeak:
         def __init__(self):
             self._peaks = []
@@ -189,24 +194,37 @@ def _make_mock_pbr():
     module.compute_ideal_orders_json = lambda *_args, **_kwargs: "{}"
 
     def _get_strategy_spec(strategy_kind="trailing_martingale"):
-        from config.strategy import get_strategy_defaults, get_strategy_param_keys, normalize_strategy_kind
-
-        normalized = normalize_strategy_kind(strategy_kind)
+        normalized = str(strategy_kind or "trailing_martingale").strip().lower()
+        if normalized != "trailing_martingale":
+            raise ValueError(f"unsupported strategy kind {strategy_kind!r}")
         parameters = []
         for pside in ("long", "short"):
-            for key in get_strategy_param_keys(normalized):
-                parts = [part for part in key.split(".") if part]
+            for name in ("ema_span_0", "ema_span_1"):
                 parameters.append(
                     {
-                        "name": f"{pside}_{'_'.join(parts)}",
-                        "optimize_key": f"{pside}_{'_'.join(parts)}",
-                        "config_path": ["strategy", pside, *parts],
+                        "bounds": [1.0, 1440.0, 1.0],
+                        "config_path": ["strategy", pside, name],
+                        "default": 1.0,
+                        "legacy_config_paths": [],
+                        "mirror_from": None,
+                        "name": name,
+                        "optimize_key": f"{pside}_{name}",
+                        "side": pside,
                     }
                 )
         return {
-            "kind": normalized,
+            "defaults": {
+                "long": {"ema_span_0": 1.0, "ema_span_1": 1.0},
+                "short": {"ema_span_0": 1.0, "ema_span_1": 1.0},
+            },
+            "optimize_bounds": {
+                "long_ema_span_0": [1.0, 1440.0, 1.0],
+                "long_ema_span_1": [1.0, 1440.0, 1.0],
+                "short_ema_span_0": [1.0, 1440.0, 1.0],
+                "short_ema_span_1": [1.0, 1440.0, 1.0],
+            },
             "parameters": parameters,
-            "defaults": get_strategy_defaults(normalized),
+            "strategy_kind": normalized,
         }
 
     module.get_strategy_spec = _get_strategy_spec

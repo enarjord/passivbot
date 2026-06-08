@@ -9560,6 +9560,7 @@ class Passivbot:
         panic_flatten_events: List[Dict[str, Any]] = []
         missing_price_symbols: set[str] = set()
         realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
+        realized_pnl_coin_pside_running: Dict[str, Dict[str, float]] = {}
         actual_pside_flat = {
             pside: not any(
                 size > 1e-12
@@ -9625,6 +9626,10 @@ class Passivbot:
                 realized_delta = evt["pnl"] + evt.get("fee", 0.0)
                 balance += realized_delta
                 realized_pnl_pside_running[evt["pside"]] += realized_delta
+                symbol_realized = realized_pnl_coin_pside_running.setdefault(
+                    evt["symbol"], {"long": 0.0, "short": 0.0}
+                )
+                symbol_realized[evt["pside"]] += realized_delta
                 if "panic" in str(evt.get("pb_order_type") or ""):
                     panic_fill_count += 1
                     after_psize = _safe_float(evt.get("psize"), math.nan)
@@ -9662,6 +9667,7 @@ class Passivbot:
                 event_idx += 1
             upnl = 0.0
             upnl_by_pside = {"long": 0.0, "short": 0.0}
+            upnl_by_coin_pside: Dict[str, Dict[str, float]] = {}
             for symbol in list(active_symbols):
                 price = price_lookup.get(symbol, {}).get(minute)
                 if price is None:
@@ -9687,6 +9693,10 @@ class Passivbot:
                     )
                     upnl += pside_upnl
                     upnl_by_pside[pside] += pside_upnl
+                    symbol_upnl = upnl_by_coin_pside.setdefault(
+                        symbol, {"long": 0.0, "short": 0.0}
+                    )
+                    symbol_upnl[pside] += pside_upnl
             if minute >= record_start_minute:
                 timeline.append(
                     {
@@ -9699,6 +9709,20 @@ class Passivbot:
                         "unrealized_pnl_short": upnl_by_pside["short"],
                         "realized_pnl_long": realized_pnl_pside_running["long"],
                         "realized_pnl_short": realized_pnl_pside_running["short"],
+                        "unrealized_pnl_by_coin_pside": {
+                            sym: {
+                                "long": float(values["long"]),
+                                "short": float(values["short"]),
+                            }
+                            for sym, values in sorted(upnl_by_coin_pside.items())
+                        },
+                        "realized_pnl_by_coin_pside": {
+                            sym: {
+                                "long": float(values["long"]),
+                                "short": float(values["short"]),
+                            }
+                            for sym, values in sorted(realized_pnl_coin_pside_running.items())
+                        },
                         "is_flat": len(active_symbols) == 0,
                         "is_flat_long": not any(
                             positions.get(sym, {}).get("long", {}).get("size", 0.0)
