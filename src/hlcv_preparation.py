@@ -203,6 +203,10 @@ def _has_tradfi_provider_config() -> bool:
         return False
 
 
+def _has_stock_perp_calendar_context(ohlcv_source_dir: Optional[str] = None) -> bool:
+    return _has_tradfi_provider_config() or bool(ohlcv_source_dir)
+
+
 class HLCVManager:
     """Backtest-oriented OHLCV manager using CandlestickManager for fetching/caching."""
 
@@ -243,7 +247,7 @@ class HLCVManager:
         self.force_refetch_gaps = bool(force_refetch_gaps)
         self.cm: Optional[CandlestickManager] = None
         self.ohlcv_source_dir = str(ohlcv_source_dir) if ohlcv_source_dir else None
-        self.tradfi_for_stock_perps = _has_tradfi_provider_config()
+        self.tradfi_for_stock_perps = _has_stock_perp_calendar_context(self.ohlcv_source_dir)
 
     def update_date_range(self, new_start_date=None, new_end_date=None):
         if new_start_date is not None:
@@ -3493,7 +3497,9 @@ async def prepare_hlcvs_internal(
     global_end_time = float("-inf")
     await om.load_markets()
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-    tradfi_for_stock_perps = _has_tradfi_provider_config()
+    tradfi_for_stock_perps = _has_stock_perp_calendar_context(
+        config.get("backtest", {}).get("ohlcv_source_dir")
+    )
 
     progress = ProgressTracker(len(coins), f"{exchange} fetching candles")
     progress.maybe_log(force=True)
@@ -3893,7 +3899,9 @@ async def _prepare_hlcvs_combined_impl(
     minimum_coin_age_days = float(require_live_value(config, "minimum_coin_age_days"))
     interval_ms = 60_000
     min_coin_age_ms = 1000 * 60 * 60 * 24 * minimum_coin_age_days
-    tradfi_for_stock_perps = _has_tradfi_provider_config()
+    tradfi_for_stock_perps = _has_stock_perp_calendar_context(
+        config.get("backtest", {}).get("ohlcv_source_dir")
+    )
     first_timestamps_unified = await get_first_timestamps_unified(coins)
 
     per_coin_warmups = compute_per_coin_warmup_minutes(config)
