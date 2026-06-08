@@ -1031,27 +1031,9 @@ class Passivbot:
         self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
         self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
         self._equity_hard_stop = {
-            pside: {
-                "runtime": pbr.EquityHardStopRuntime(),
-                "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
-                "halted": False,
-                "no_restart_latched": False,
-                "last_metrics": None,
-                "last_red_progress": None,
-                "red_flat_confirmations": 0,
-                "pending_red_since_ms": None,
-                "cooldown_until_ms": None,
-                "pending_stop_event": None,
-                "last_stop_event": None,
-                "last_status_log_ms": 0,
-                "last_cooldown_log_ms": 0,
-                "cooldown_intervention_active": False,
-                "cooldown_repanic_reset_pending": False,
-                "last_cooldown_intervention_log_ms": 0,
-                "cooldown_unresolved_residue": False,
-            }
-            for pside in ("long", "short")
+            pside: self._equity_hard_stop_make_state() for pside in ("long", "short")
         }
+        self._equity_hard_stop_coin = {"long": {}, "short": {}}
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -2186,20 +2168,34 @@ class Passivbot:
     _equity_hard_stop_runtime_initialized = pb_hsl._equity_hard_stop_runtime_initialized
     _equity_hard_stop_runtime_red_latched = pb_hsl._equity_hard_stop_runtime_red_latched
     _equity_hard_stop_runtime_tier = pb_hsl._equity_hard_stop_runtime_tier
+    _equity_hard_stop_make_state = pb_hsl._equity_hard_stop_make_state
+    _hsl_coin_state = pb_hsl._hsl_coin_state
     _equity_hard_stop_fill_pside = staticmethod(pb_hsl._equity_hard_stop_fill_pside)
     _calc_upnl_sum_strict = pb_hsl._calc_upnl_sum_strict
     _equity_hard_stop_fee_cost = staticmethod(pb_hsl._equity_hard_stop_fee_cost)
+    _equity_hard_stop_fill_symbol = staticmethod(pb_hsl._equity_hard_stop_fill_symbol)
+    _equity_hard_stop_fill_timestamp_ms = staticmethod(
+        pb_hsl._equity_hard_stop_fill_timestamp_ms
+    )
+    _equity_hard_stop_event_value = staticmethod(pb_hsl._equity_hard_stop_event_value)
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
+    _equity_hard_stop_coin_realized_pnl_peak_last = (
+        pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
+    )
     _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
+    _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
     _equity_hard_stop_format_remaining_time = staticmethod(
         pb_hsl._equity_hard_stop_format_remaining_time
     )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_compute_coin_stop_event = (
+        pb_hsl._equity_hard_stop_compute_coin_stop_event
+    )
     _equity_hard_stop_infer_replay_contract = (
         pb_hsl._equity_hard_stop_infer_replay_contract
     )
@@ -2223,8 +2219,17 @@ class Passivbot:
     )
     _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
+    _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
+    _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
+    _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
     _equity_hard_stop_set_red_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
+    )
+    _equity_hard_stop_set_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_set_coin_runtime_forced_mode
+    )
+    _equity_hard_stop_clear_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_clear_coin_runtime_forced_mode
     )
     _equity_hard_stop_clear_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_clear_runtime_forced_modes
@@ -2235,9 +2240,15 @@ class Passivbot:
     _equity_hard_stop_count_blocking_open_orders = (
         pb_hsl._equity_hard_stop_count_blocking_open_orders
     )
+    _equity_hard_stop_has_open_position_symbol = pb_hsl._equity_hard_stop_has_open_position_symbol
+    _equity_hard_stop_count_blocking_open_orders_symbol = (
+        pb_hsl._equity_hard_stop_count_blocking_open_orders_symbol
+    )
     _equity_hard_stop_log_red_progress = pb_hsl._equity_hard_stop_log_red_progress
     _equity_hard_stop_finalize_red_stop = pb_hsl._equity_hard_stop_finalize_red_stop
+    _equity_hard_stop_finalize_coin_red_stop = pb_hsl._equity_hard_stop_finalize_coin_red_stop
     _equity_hard_stop_run_red_supervisor = pb_hsl._equity_hard_stop_run_red_supervisor
+    _equity_hard_stop_run_coin_red_supervisor = pb_hsl._equity_hard_stop_run_coin_red_supervisor
     _apply_equity_hard_stop_orange_overlay = (
         pb_hsl._apply_equity_hard_stop_orange_overlay
     )

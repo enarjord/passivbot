@@ -1895,9 +1895,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<String>())
             .transpose()?
             .unwrap_or_else(|| "unified".to_string());
-        if signal_mode != "pside" && signal_mode != "unified" {
+        if signal_mode != "coin" && signal_mode != "pside" && signal_mode != "unified" {
             return Err(PyValueError::new_err(format!(
-                "{key}.signal_mode must be one of {{pside, unified}}, got {:?}",
+                "{key}.signal_mode must be one of {{coin, pside, unified}}, got {:?}",
                 signal_mode
             )));
         }
