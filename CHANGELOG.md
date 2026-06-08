@@ -5,7 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - Added HSL `coin` signal mode, which tracks per-coin realized drawdown plus current UPnL
-  against the configured slot budget and panic-closes only the affected `coin+pside`.
+  against the configured slot budget and panic-closes only the affected `coin+pside`. Live
+  uses configured `n_positions`; backtests use configured `n_positions` in fixed-WEL mode and
+  the effective tradability-aware denominator when `dynamic_wel_by_tradability=true`.
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:
   min, mean, and max loss as a fraction of equity before each panic-close episode.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside

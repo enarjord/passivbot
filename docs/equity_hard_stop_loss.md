@@ -53,7 +53,7 @@ Use `pside` when:
 1. realized net PnL is tracked per `coin+pside` inside `live.pnls_max_lookback_days`
 2. the peak realized cumsum in that window is compared to `last_realized_cumsum + current_upnl`
 3. the resulting drawdown is divided by `balance * total_wallet_exposure_limit / config.n_positions`
-4. `config.n_positions` is used directly, not runtime effective position count, so adding/removing active symbols does not silently change HSL sensitivity
+4. live uses `config.n_positions` directly, not runtime effective position count, so adding/removing active symbols does not silently change HSL sensitivity
 5. RED affects only the stopped `coin+pside`; other coins on the same `pside` continue normally
 
 Use `coin` when one symbol should be stopped because it has high adverse UPnL or has recently realized heavy losses through unstuck/WEL enforcement, while unrelated symbols should keep trading.
@@ -89,7 +89,7 @@ of a rebased strategy-equity curve:
 peak_realized = max(realized_pnl_cumsum for coin+pside inside lookback)
 last_realized = last(realized_pnl_cumsum for coin+pside inside lookback)
 drawdown_usd = max(0.0, peak_realized - (last_realized + current_upnl))
-slot_budget = balance * total_wallet_exposure_limit / max(1, config.n_positions)
+slot_budget = balance * total_wallet_exposure_limit / config.n_positions
 drawdown_raw = drawdown_usd / slot_budget
 ```
 
@@ -227,6 +227,7 @@ Important backtest details:
 3. Backtests export both:
    - operational HSL telemetry under `hard_stop_*`
    - collateral-agnostic strategy-equity risk metrics under `*_strategy_eq`
+4. In `coin` signal mode, fixed-denominator backtests use configured `n_positions` like live. When `backtest.dynamic_wel_by_tradability=true`, coin-HSL uses the same effective tradability-aware `n_positions` as the simulated entry budget.
 
 Main optimizer-facing strategy-equity risk metrics:
 

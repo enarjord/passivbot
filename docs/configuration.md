@@ -182,7 +182,8 @@ Signal mode:
 3. `live.hsl_signal_mode = "coin"`
    - each `coin+pside` controller uses realized PnL drawdown inside `live.pnls_max_lookback_days` plus current UPnL
    - RED panic-closes only the affected `coin+pside`
-   - denominator is `balance * total_wallet_exposure_limit / config.n_positions`; runtime effective position count and WE-excess allowance are intentionally not included
+   - live denominator is `balance * total_wallet_exposure_limit / config.n_positions`; runtime effective position count and WE-excess allowance are intentionally not included
+   - backtests use configured `n_positions` when `backtest.dynamic_wel_by_tradability=false`, and the effective tradability-aware denominator when it is `true`
 
 Backtest-specific note:
 

@@ -1034,6 +1034,7 @@ class Passivbot:
             pside: self._equity_hard_stop_make_state() for pside in ("long", "short")
         }
         self._equity_hard_stop_coin = {"long": {}, "short": {}}
+        self._equity_hard_stop_coin_initialized = False
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -4920,14 +4921,19 @@ class Passivbot:
                     break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if any(
-                        self._equity_hard_stop_runtime_red_latched(pside)
-                        and not self._hsl_state(pside)["halted"]
-                        for pside in self._hsl_psides()
-                        if self._equity_hard_stop_enabled(pside)
-                    ):
-                        await self._equity_hard_stop_run_red_supervisor()
-                        continue
+                    if self._equity_hard_stop_signal_mode() == "coin":
+                        if self._equity_hard_stop_coin_red_active():
+                            await self._equity_hard_stop_run_coin_red_supervisor()
+                            continue
+                    else:
+                        if any(
+                            self._equity_hard_stop_runtime_red_latched(pside)
+                            and not self._hsl_state(pside)["halted"]
+                            for pside in self._hsl_psides()
+                            if self._equity_hard_stop_enabled(pside)
+                        ):
+                            await self._equity_hard_stop_run_red_supervisor()
+                            continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
