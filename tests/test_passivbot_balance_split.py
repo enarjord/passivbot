@@ -93,6 +93,62 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
 
+@pytest.mark.asyncio
+async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monkeypatch):
+    managers = []
+
+    class _LegacyManager:
+        def __init__(self, **_kwargs):
+            self._events = []
+            self.refresh_calls = []
+            self.history_scope = None
+            self.quarantine_reason = None
+            managers.append(self)
+
+        async def ensure_loaded(self):
+            raise passivbot_module.FillEventCacheContractError("legacy contract")
+
+        async def run_doctor(self, *, auto_repair: bool = False):
+            assert auto_repair is True
+            return {
+                "legacy_contract": True,
+                "unsupported_legacy_contract": True,
+                "action": "rebuild_cache",
+                "anomaly_events": 1,
+                "repaired": False,
+            }
+
+        def quarantine_cache_for_rebuild(self, *, reason: str):
+            self.quarantine_reason = reason
+            return "/tmp/fills.backup"
+
+        async def refresh(self, *, start_ms=None, end_ms=None):
+            self.refresh_calls.append((start_ms, end_ms))
+
+        def set_history_scope(self, scope: str):
+            self.history_scope = scope
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "hyperliquid"
+    bot.user = "vps_user"
+    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+    bot._pnls_initialized = False
+    bot.get_exchange_time = lambda: 1_700_086_400_000
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _LegacyManager)
+
+    await Passivbot.init_pnls(bot)
+
+    manager = managers[0]
+    assert bot._pnls_initialized is True
+    assert manager.quarantine_reason == "legacy_pnl_contract"
+    assert manager.refresh_calls == [(1_700_000_000_000, None)]
+    assert manager.history_scope == "window"
+
+
 def _counted_staged_account_refresh_bot(
     *,
     balance: float = 100.0,
@@ -2691,8 +2747,8 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     bot.balance_raw = 200.0
     bot._pnls_manager = types.SimpleNamespace(
         get_events=lambda: [
-            types.SimpleNamespace(pnl=10.0),
-            types.SimpleNamespace(pnl=-4.0),
+            types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
+            types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
         ]
     )
 
@@ -2723,6 +2779,8 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
     assert out["short"] == pytest.approx(0.0)
     assert len(calls) == 1
     assert calls[0][0] == pytest.approx(200.0)  # raw balance
+    assert calls[0][2] == pytest.approx(9.0)
+    assert calls[0][3] == pytest.approx(4.5)
 
 
 def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
@@ -2778,6 +2836,7 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     import passivbot as pb_mod
 
     class FakeBot:
+        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 120.0  # snapped
         balance_raw = 175.0  # raw
@@ -2850,12 +2909,98 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_orchestrator_snapshot_payload_includes_market_order_slippage(monkeypatch):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        config = {"backtest": {"market_order_slippage_pct": 0.0015}}
+        positions = {}
+        balance = 120.0
+        balance_raw = 175.0
+        PB_modes = {}
+        effective_min_cost = {}
+        _config_hedge_mode = False
+        hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_market_hints
+        )
+        _build_monitor_runtime_unstuck_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        )
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            values = {
+                "max_realized_loss_pct": 1.0,
+                "filter_by_min_effective_cost": False,
+                "market_orders_allowed": True,
+                "market_order_near_touch_threshold": 0.001,
+            }
+            return values.get(key, False)
+
+        def _log_realized_loss_gate_blocks(self, out, idx_to_symbol):
+            return None
+
+        def _log_ema_gating(self, ideal_orders, m1_close_emas, last_prices, symbols):
+            return None
+
+        def _to_executable_orders(self, ideal_orders, last_prices):
+            return ideal_orders, []
+
+        def _finalize_reduce_only_orders(self, ideal_orders_f, last_prices):
+            return ideal_orders_f
+
+        def get_raw_balance(self):
+            return float(self.balance_raw)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+    snapshot = {
+        "symbols": [],
+        "last_prices": {},
+        "m1_close_emas": {},
+        "m1_volume_emas": {},
+        "m1_log_range_emas": {},
+        "h1_log_range_emas": {},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    captured = {}
+
+    def fake_compute(json_str):
+        captured["input"] = json.loads(json_str)
+        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    await method(FakeBot(), snapshot, return_snapshot=False)
+
+    assert captured["input"]["global"]["market_orders_allowed"] is True
+    assert captured["input"]["global"]["market_order_near_touch_threshold"] == pytest.approx(
+        0.001
+    )
+    assert captured["input"]["global"]["market_order_slippage_pct"] == pytest.approx(0.0015)
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch):
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
 
     class FakeBot:
+        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 120.0
         balance_raw = 175.0

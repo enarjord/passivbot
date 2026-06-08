@@ -37,11 +37,15 @@ from candlestick_manager import (
     synthesize_1m_from_higher_tf,
 )
 from fill_events_manager import (
+    FillEventCacheContractError,
     FillEventsManager,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
+    fee_policy_kwargs_from_config,
+    fill_event_net_pnl,
     fill_event_pnl_pending,
+    signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
@@ -1039,6 +1043,9 @@ class Passivbot:
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
+    def _orchestrator_market_order_slippage_pct(self) -> float:
+        return float(require_config_value(self.config, "backtest.market_order_slippage_pct"))
+
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
@@ -1204,23 +1211,11 @@ class Passivbot:
         if fill is None:
             return 0.0
         if isinstance(fill, dict):
-            fee_obj = fill.get("fee")
-            if isinstance(fee_obj, dict):
-                return float(fee_obj.get("cost", 0.0) or 0.0)
-            if isinstance(fee_obj, (int, float, str)):
-                return float(fee_obj or 0.0)
-            fees_obj = fill.get("fees")
-        else:
-            fees_obj = getattr(fill, "fees", None)
-        if isinstance(fees_obj, dict):
-            return float(fees_obj.get("cost", 0.0) or 0.0)
-        if isinstance(fees_obj, (list, tuple)):
-            total = 0.0
-            for item in fees_obj:
-                if isinstance(item, dict):
-                    total += float(item.get("cost", 0.0) or 0.0)
-            return total
-        return 0.0
+            return signed_fee_paid_from_payload(fill)
+        fee_paid = getattr(fill, "fee_paid", None)
+        if fee_paid is not None:
+            return float(fee_paid or 0.0)
+        return signed_fee_paid_from_payload({"fees": getattr(fill, "fees", None)})
 
     def _equity_hard_stop_realized_pnl_now(self) -> float:
         if self._pnls_manager is None:
@@ -2550,8 +2545,8 @@ class Passivbot:
             events, context="unstuck allowance logging realized PnL"
         )
 
-        pnls_cumsum = np.array([ev.pnl for ev in events]).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = float(pnls_cumsum.max()), float(
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), float(
             pnls_cumsum[-1]
         )
 
@@ -6986,7 +6981,7 @@ class Passivbot:
                 round(float(getattr(ev, "price", 0.0) or 0.0), 12),
                 round(float(getattr(ev, "pnl", 0.0) or 0.0), 12),
                 str(getattr(ev, "pnl_status", "complete") or "complete").lower(),
-                round(float(getattr(ev, "fee", 0.0) or 0.0), 12),
+                round(float(getattr(ev, "fee_paid", 0.0) or 0.0), 12),
             )
 
         return tuple(_event_key(ev) for ev in events)
@@ -7946,21 +7941,81 @@ class Passivbot:
                 user=self.user,
                 fetcher=fetcher,
                 cache_path=cache_path,
+                **fee_policy_kwargs_from_config(self.config),
             )
 
-            # Load cached events
-            await self._pnls_manager.ensure_loaded()
-
-            # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
             doctor_mode = (
                 str(os.getenv("PASSIVBOT_FILL_EVENTS_DOCTOR", "")).strip().lower()
             )
-            if self.exchange == "bybit":
-                if doctor_mode not in ("0", "false", "off", "disable", "disabled"):
-                    auto_repair = doctor_mode not in ("check", "scan", "detect")
-                    report = await self._pnls_manager.run_doctor(
-                        auto_repair=auto_repair
+            doctor_disabled = doctor_mode in (
+                "0",
+                "false",
+                "off",
+                "disable",
+                "disabled",
+            )
+
+            async def rebuild_fill_cache_from_lookback() -> None:
+                lookback = parse_pnls_max_lookback_days(
+                    self.live_value("pnls_max_lookback_days"),
+                    field_name="live.pnls_max_lookback_days",
+                )
+                age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+                start_ms = None if age_limit is None else int(age_limit)
+                logging.warning(
+                    "[fills] rebuilding fill-event cache after legacy contract quarantine | start=%s scope=%s",
+                    ts_to_date(start_ms)[:19] if start_ms is not None else "all",
+                    "all" if lookback.is_all else "window",
+                )
+                await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
+                self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
+
+            # Load cached events
+            try:
+                await self._pnls_manager.ensure_loaded()
+            except FillEventCacheContractError:
+                if doctor_disabled:
+                    raise
+                report = await self._pnls_manager.run_doctor(auto_repair=True)
+                doctor_action = str(report.get("action") or "")
+                if (
+                    not doctor_action
+                    and self.exchange == "kucoin"
+                    and "degraded_events_after" in report
+                ):
+                    doctor_action = "continue_with_degraded_kucoin_repairs"
+                logging.info(
+                    "[fills-doctor] startup legacy cache report anomalies=%s repaired=%s action=%s mode=%s",
+                    report.get("anomaly_events", 0),
+                    report.get("repaired", False),
+                    doctor_action,
+                    doctor_mode or "auto",
+                )
+                if report.get("repaired", False):
+                    if doctor_action == "quarantine_legacy_files":
+                        await rebuild_fill_cache_from_lookback()
+                elif self.exchange == "kucoin" and "degraded_events_after" in report:
+                    logging.warning(
+                        "[fills-doctor] startup KuCoin repair left %s degraded fill(s); continuing with current cache for refresh/enrichment",
+                        report.get("degraded_events_after", 0),
                     )
+                else:
+                    quarantine_path = self._pnls_manager.quarantine_cache_for_rebuild(
+                        reason="legacy_pnl_contract"
+                    )
+                    logging.warning(
+                        "[fills] quarantined legacy fill-event cache for rebuild | exchange=%s user=%s backup=%s",
+                        self.exchange,
+                        self.user,
+                        quarantine_path or "none",
+                    )
+                    await rebuild_fill_cache_from_lookback()
+
+            # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
+            if self.exchange == "bybit":
+                if not doctor_disabled:
+                    auto_repair = doctor_mode not in ("check", "scan", "detect")
+                    report = await self._pnls_manager.run_doctor(auto_repair=auto_repair)
                     logging.info(
                         "[fills-doctor] startup report anomalies=%s repaired=%s mode=%s",
                         report.get("anomaly_events", 0),
@@ -8224,7 +8279,13 @@ class Passivbot:
                 tags=("error", "exchange"),
                 payload={"source": "update_pnls"},
             )
-            logging.error("[fills] Failed to update FillEventsManager: %s", e)
+            logging.error(
+                "[fills] Failed to update FillEventsManager | error_type=%s status=%s code=%s error=%s",
+                type(e).__name__,
+                getattr(e, "status", "-"),
+                getattr(e, "code", "-"),
+                e,
+            )
             if self.logging_level >= 2:
                 traceback.print_exc()
             raise
@@ -8290,12 +8351,16 @@ class Passivbot:
 
         # Track fills and PnL for health summary
         self._health_fills += len(new_events)
-        self._health_pnl += sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+        )
 
         if len(new_events) > 20:
             # Truncate to summary
             pending_count = sum(1 for ev in new_events if fill_event_pnl_pending(ev))
-            total_pnl = sum(ev.pnl for ev in new_events if not fill_event_pnl_pending(ev))
+            total_pnl = sum(
+                fill_event_net_pnl(ev) for ev in new_events if not fill_event_pnl_pending(ev)
+            )
             pnl_sign = "+" if total_pnl >= 0 else ""
             pending_suffix = f", pnl_pending={pending_count}" if pending_count else ""
             logging.info(
@@ -8324,7 +8389,9 @@ class Passivbot:
         """Log realized-PnL enrichment for already seen close fills."""
         if not events:
             return
-        self._health_pnl += sum(ev.pnl for ev in events if not fill_event_pnl_pending(ev))
+        self._health_pnl += sum(
+            fill_event_net_pnl(ev) for ev in events if not fill_event_pnl_pending(ev)
+        )
         for event in sorted(events, key=lambda e: e.timestamp):
             logging.info(
                 "[fill] enriched realized pnl for previously pending fill | %s",
@@ -8343,8 +8410,8 @@ class Passivbot:
             events, context="unstuck allowance realized PnL"
         )
 
-        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
-        pnls_cumsum_max, pnls_cumsum_last = pnls_cumsum.max(), pnls_cumsum[-1]
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
+        pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
         out = {}
         balance_raw = self.get_raw_balance()
         for pside in ["long", "short"]:
@@ -8366,7 +8433,7 @@ class Passivbot:
         return out
 
     def _get_realized_pnl_cumsum_stats(self) -> dict[str, float]:
-        """Return gross realized pnl cumsum peak/current from FillEventsManager history."""
+        """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
         events = self._get_effective_pnl_events()
@@ -8375,8 +8442,8 @@ class Passivbot:
         self._assert_no_pending_pnl_events(
             events, context="realized loss gate PnL cumsum"
         )
-        pnls_cumsum = np.array([float(ev.pnl) for ev in events], dtype=float).cumsum()
-        return {"max": float(pnls_cumsum.max()), "last": float(pnls_cumsum[-1])}
+        pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
+        return {"max": max(0.0, float(pnls_cumsum.max())), "last": float(pnls_cumsum[-1])}
 
     def _log_realized_loss_gate_blocks(
         self, out: dict, idx_to_symbol: dict[int, str]
@@ -8854,18 +8921,7 @@ class Passivbot:
                 if price <= 0.0:
                     continue
                 pnl_val = _safe_float(fill.get("pnl", 0.0), 0.0)
-                fee_cost = 0.0
-                fee_obj = fill.get("fee")
-                if isinstance(fee_obj, dict):
-                    fee_cost = _safe_float(fee_obj.get("cost", 0.0), 0.0)
-                elif isinstance(fee_obj, (int, float, str)):
-                    fee_cost = _safe_float(fee_obj, 0.0)
-                elif isinstance(fill.get("fees"), (list, tuple)):
-                    fee_cost = sum(
-                        _safe_float(x.get("cost", 0.0), 0.0)
-                        for x in fill["fees"]
-                        if isinstance(x, dict)
-                    )
+                fee_paid = signed_fee_paid_from_payload(fill)
                 side = str(fill.get("side", "")).lower()
                 action = _determine_action(pside, side, qty_signed, fill.get("action"))
                 out.append(
@@ -8877,7 +8933,8 @@ class Passivbot:
                         "price": price,
                         "action": action,
                         "pnl": pnl_val,
-                        "fee": fee_cost,
+                        "fee": fee_paid,
+                        "fee_paid": fee_paid,
                         "pb_order_type": str(fill.get("pb_order_type") or "").lower(),
                         "c_mult": float(self.c_mults.get(symbol, 1.0)),
                     }
@@ -10199,6 +10256,9 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
+                "market_order_slippage_pct": Passivbot._orchestrator_market_order_slippage_pct(
+                    self
+                ),
                 "panic_close_market": bool(
                     any(
                         Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
@@ -11176,6 +11236,9 @@ class Passivbot:
                 "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
+                ),
+                "market_order_slippage_pct": Passivbot._orchestrator_market_order_slippage_pct(
+                    self
                 ),
                 "panic_close_market": bool(
                     any(

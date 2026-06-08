@@ -214,6 +214,29 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.fee_pct_fallback": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.fee_pct_sanity_abs_max": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
+    "live.fee_conversion_max_age_ms": {
+        "owner": "live",
+        "consumed_by": {"live"},
+        "cli_exposed_on": {"live"},
+    },
     "live.max_realized_loss_pct": {
         "owner": "live",
         "consumed_by": {"live", "backtest", "optimize"},
@@ -945,6 +968,41 @@ RESERVED_CLI_ARGS = {
         },
         "help": "Maximum realized loss percentage allowed before trading is halted.",
     },
+    "live.fee_pct_fallback": {
+        "visible": ["--fee-pct-fallback"],
+        "hidden": ["--live.fee_pct_fallback", "--live_fee_pct_fallback"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "Fallback fill fee percentage used when reported fee data cannot be converted to quote currency.",
+    },
+    "live.fee_pct_sanity_abs_max": {
+        "visible": ["--fee-pct-sanity-abs-max"],
+        "hidden": ["--live.fee_pct_sanity_abs_max", "--live_fee_pct_sanity_abs_max"],
+        "type": float,
+        "metavar": "FLOAT",
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "Absolute fee/notional sanity threshold; outliers are replaced with live.fee_pct_fallback.",
+    },
+    "live.fee_conversion_max_age_ms": {
+        "visible": ["--fee-conversion-max-age-ms"],
+        "hidden": ["--live.fee_conversion_max_age_ms", "--live_fee_conversion_max_age_ms"],
+        "type": int,
+        "metavar": "INT",
+        "commands": {"live"},
+        "group": {"live": "Behavior"},
+        "help": "Maximum age difference allowed when using ticker data to convert non-quote fee tokens.",
+    },
     "live.pnls_max_lookback_days": {
         "visible": ["--pnls-max-lookback-days", "-pmld"],
         "hidden": ["--live.pnls_max_lookback_days", "--live_pnls_max_lookback_days"],
@@ -1235,6 +1293,9 @@ def _classify_live_argument(full_name: str, help_all: bool) -> Optional[str]:
     }
     behavior = {
         "live.filter_by_min_effective_cost",
+        "live.fee_conversion_max_age_ms",
+        "live.fee_pct_fallback",
+        "live.fee_pct_sanity_abs_max",
         "live.forced_mode_long",
         "live.forced_mode_short",
         "live.hedge_mode",
