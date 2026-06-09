@@ -1088,6 +1088,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
 ):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
+    bot.config.pop("backtest", None)
     bot.exchange = "bybit"
     bot.user_info["exchange"] = "bybit"
     symbol = _set_basic_state(bot)
@@ -1171,6 +1172,8 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
 
     await bot.calc_ideal_orders_orchestrator()
 
+    assert "backtest" not in bot.config
+    assert "market_order_slippage_pct" not in captured["input"]["global"]
     assert call_order == ["ema_bundle", "market_snapshot"]
     assert snapshot_calls == [([symbol], 5_000)]
     assert cm_calls == []

@@ -47,6 +47,9 @@ All notable user-facing changes will be documented in this file.
 - Fixed live bots so non-shutdown `asyncio.CancelledError` failures from CCXT
   account-state or candle fetches are logged, counted, and routed through the
   existing restart/backoff path instead of silently exiting without countdown.
+- Fixed live orchestrator order calculation so live bots no longer require
+  `backtest.market_order_slippage_pct`; backtest-only market slippage remains
+  confined to backtest simulation.
 - Backtest and optimizer runs now automatically clean stale `caches/ohlcvs/materialized/`
   scratch payloads while preserving materialized directories locked by active processes.
 - `live.custom_endpoints_path` is now part of the canonical config schema, so normalized
