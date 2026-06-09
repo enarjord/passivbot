@@ -34,20 +34,22 @@ Success means:
 - Do not treat broad `pytest` success as sufficient if the Rust extension freshness check or
   backtest smoke path has not been exercised.
 
-## Current Known Evidence
+## Historical Known Evidence
 
-- Current branch tip reviewed: `15ac8094 Fix v8 full suite test expectations`.
-- `HEAD` matched `origin/v8` after fetch during review.
-- `git diff --check origin/master...HEAD` passed at the current tip; the older
-  `src/config/param_paths.py` blank-EOF hygiene blocker is resolved.
+- Previous reviewed branch tip: `15ac8094 Fix v8 full suite test expectations`.
+- At that review point, `HEAD` matched `origin/v8` after fetch.
+- `git diff --check origin/master...HEAD` passed at that reviewed tip; the older
+  `src/config/param_paths.py` blank-EOF hygiene blocker was resolved there.
 - The installed `passivbot_rust` extension must still be rebuilt for this checkout before Python
   tests that read Rust-owned strategy metadata are meaningful.
 - Latest review smoke after rebuilding the Rust extension verified:
   - `passivbot_rust.get_strategy_kinds()` returned `("trailing_martingale", "ema_anchor")`.
   - `tests/test_config_pipeline.py`, `tests/test_config_utils_helpers.py`, and
     `tests/test_passivbot_version.py` passed.
-- Before merging, re-run the primary contract suite below because the branch has advanced since the
-  earlier `229 passed, 14 warnings` contract-test snapshot.
+- This section is historical evidence, not a current merge-readiness certification. Before merging,
+  refresh `origin/v8` and re-run the primary contract suite below because the branch may have
+  advanced since both the `15ac8094` smoke and the earlier `229 passed, 14 warnings`
+  contract-test snapshot.
 
 ## Pass Sequence
 
