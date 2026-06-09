@@ -184,22 +184,27 @@ async def test_prepare_hlcvs_combined_impl_uses_ohlcv_source_for_volume_normaliz
             return ex, candle_df.copy(), 2, 0, 500.0
         return None
 
-    async def fake_compute_exchange_volume_ratios(
+    def fake_compute_exchange_volume_ratios_from_candidates(
         exchanges_with_data,
-        _valid_coins,
-        _start_date,
-        _end_date,
-        om_map,
+        valid_coins,
+        candidates_by_coin,
+        _start_ts,
+        _end_ts,
     ):
         # This is the key behavior under test:
         # market_settings_sources should not force bybit into normalization exchange set.
         assert exchanges_with_data == ["binance"]
-        assert set(om_map.keys()) == {"binance"}
+        assert valid_coins == ["BTC"]
+        assert set(candidates_by_coin) == {"BTC"}
         return {}
 
     monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_get_first_timestamps_unified)
     monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch_data_for_coin_and_exchange)
-    monkeypatch.setattr(hp, "compute_exchange_volume_ratios", fake_compute_exchange_volume_ratios)
+    monkeypatch.setattr(
+        hp,
+        "compute_exchange_volume_ratios_from_candidates",
+        fake_compute_exchange_volume_ratios_from_candidates,
+    )
 
     config = {
         "backtest": {"gap_tolerance_ohlcvs_minutes": 120},
