@@ -266,6 +266,16 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.hsl_signal_mode": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
@@ -1021,6 +1031,20 @@ RESERVED_CLI_ARGS = {
             "optimize": "Backtest Runtime",
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
+    },
+    "live.hsl_signal_mode": {
+        "visible": ["--hsl-signal-mode"],
+        "hidden": ["--live.hsl_signal_mode", "--live_hsl_signal_mode"],
+        "type": normalize_hsl_signal_mode,
+        "metavar": "MODE",
+        "choices": tuple(HSL_SIGNAL_MODES),
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "HSL signal mode: unified, pside, or coin.",
     },
     "live.time_in_force": {
         "visible": ["--time-in-force", "-tif"],

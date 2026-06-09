@@ -67,6 +67,25 @@ def test_hsl_signal_mode_accepts_coin():
     assert normalize_hsl_signal_mode("coin") == "coin"
 
 
+@pytest.mark.parametrize(
+    "flag",
+    ["--hsl-signal-mode", "--live.hsl_signal_mode", "--live_hsl_signal_mode"],
+)
+def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
+    parser = argparse.ArgumentParser()
+    allowed_keys = add_config_arguments(
+        parser,
+        project_template_config_for_cli(get_template_config(), "backtest"),
+        command="backtest",
+    )
+    args = parser.parse_args([flag, "coin"])
+    config = get_template_config()
+
+    update_config_with_args(config, args, allowed_keys=allowed_keys)
+
+    assert config["live"]["hsl_signal_mode"] == "coin"
+
+
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
     loaded = load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
 

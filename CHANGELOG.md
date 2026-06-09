@@ -11,6 +11,13 @@ All notable user-facing changes will be documented in this file.
 - Hardened HSL `coin` restart reconstruction and backtest artifacts: live replay now restores
   active RED panic state from per-coin history, and coin-mode backtests emit side strategy-equity
   and drawdown series with one sample per bar.
+- Fixed backtest HSL setup so enabling HSL on one side no longer implicitly enables the disabled
+  opposite side through the common HSL config.
+- Hardened live coin-HSL restart when open-position history lacks per-coin timeline PnL:
+  replay skips missing optional history, logs it, and still evaluates current exchange UPnL so
+  required panic modes can be applied.
+- Exposed `live.hsl_signal_mode` on the backtest/optimize CLI as `--hsl-signal-mode`,
+  so HSL signal mode can be changed without editing the config file.
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:
   min, mean, and max loss as a fraction of equity before each panic-close episode.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
