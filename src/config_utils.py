@@ -279,25 +279,25 @@ FIELD_RUNTIME_RULES = {
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
-    "bot.long.hsl_enabled": {
-        "visible": ["--bot.long.hsl_enabled"],
-        "hidden": ["--bot_long_hsl_enabled"],
+    "bot.long.hsl.enabled": {
+        "visible": ["--bot.long.hsl.enabled"],
+        "hidden": ["--bot.long.hsl_enabled", "--bot_long_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.long.hsl_enabled for this optimize run.",
+        "help": "Override bot.long.hsl.enabled for this optimize run.",
     },
-    "bot.short.hsl_enabled": {
-        "visible": ["--bot.short.hsl_enabled"],
-        "hidden": ["--bot_short_hsl_enabled"],
+    "bot.short.hsl.enabled": {
+        "visible": ["--bot.short.hsl.enabled"],
+        "hidden": ["--bot.short.hsl_enabled", "--bot_short_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.short.hsl_enabled for this optimize run.",
+        "help": "Override bot.short.hsl.enabled for this optimize run.",
     },
-    "bot.long.hsl_orange_tier_mode": {
-        "visible": ["--bot.long.hsl_orange_tier_mode"],
-        "hidden": ["--bot_long_hsl_orange_tier_mode"],
+    "bot.long.hsl.orange_tier_mode": {
+        "visible": ["--bot.long.hsl.orange_tier_mode"],
+        "hidden": ["--bot.long.hsl_orange_tier_mode", "--bot_long_hsl_orange_tier_mode"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
@@ -308,11 +308,11 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         ],
-        "help": "Override bot.long.hsl_orange_tier_mode for this optimize run.",
+        "help": "Override bot.long.hsl.orange_tier_mode for this optimize run.",
     },
-    "bot.short.hsl_orange_tier_mode": {
-        "visible": ["--bot.short.hsl_orange_tier_mode"],
-        "hidden": ["--bot_short_hsl_orange_tier_mode"],
+    "bot.short.hsl.orange_tier_mode": {
+        "visible": ["--bot.short.hsl.orange_tier_mode"],
+        "hidden": ["--bot.short.hsl_orange_tier_mode", "--bot_short_hsl_orange_tier_mode"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
@@ -323,25 +323,31 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         ],
-        "help": "Override bot.short.hsl_orange_tier_mode for this optimize run.",
+        "help": "Override bot.short.hsl.orange_tier_mode for this optimize run.",
     },
-    "bot.long.hsl_panic_close_order_type": {
-        "visible": ["--bot.long.hsl_panic_close_order_type"],
-        "hidden": ["--bot_long_hsl_panic_close_order_type"],
+    "bot.long.hsl.panic_close_order_type": {
+        "visible": ["--bot.long.hsl.panic_close_order_type"],
+        "hidden": [
+            "--bot.long.hsl_panic_close_order_type",
+            "--bot_long_hsl_panic_close_order_type",
+        ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.long.hsl_panic_close_order_type for this optimize run.",
+        "help": "Override bot.long.hsl.panic_close_order_type for this optimize run.",
     },
-    "bot.short.hsl_panic_close_order_type": {
-        "visible": ["--bot.short.hsl_panic_close_order_type"],
-        "hidden": ["--bot_short_hsl_panic_close_order_type"],
+    "bot.short.hsl.panic_close_order_type": {
+        "visible": ["--bot.short.hsl.panic_close_order_type"],
+        "hidden": [
+            "--bot.short.hsl_panic_close_order_type",
+            "--bot_short_hsl_panic_close_order_type",
+        ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.short.hsl_panic_close_order_type for this optimize run.",
+        "help": "Override bot.short.hsl.panic_close_order_type for this optimize run.",
     },
 }
 
