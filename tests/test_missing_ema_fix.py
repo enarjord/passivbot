@@ -78,7 +78,6 @@ async def test_missing_ema_raises_from_snapshot(monkeypatch):
         pytest.skip("passivbot module not importable in test environment")
 
     class FakeBot:
-        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 1000.0
         PB_modes = {}
@@ -132,7 +131,6 @@ async def test_missing_ema_raises_from_snapshot_with_return(monkeypatch):
         pytest.skip("passivbot module not importable in test environment")
 
     class FakeBot:
-        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 1000.0
         PB_modes = {}

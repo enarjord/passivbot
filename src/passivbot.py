@@ -1043,9 +1043,6 @@ class Passivbot:
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
-    def _orchestrator_market_order_slippage_pct(self) -> float:
-        return float(require_config_value(self.config, "backtest.market_order_slippage_pct"))
-
     def bot_value(self, pside: str, key: str):
         return require_config_value(self.config, f"bot.{pside}.{key}")
 
@@ -10256,9 +10253,6 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "market_order_slippage_pct": Passivbot._orchestrator_market_order_slippage_pct(
-                    self
-                ),
                 "panic_close_market": bool(
                     any(
                         Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
@@ -11236,9 +11230,6 @@ class Passivbot:
                 "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
-                ),
-                "market_order_slippage_pct": Passivbot._orchestrator_market_order_slippage_pct(
-                    self
                 ),
                 "panic_close_market": bool(
                     any(

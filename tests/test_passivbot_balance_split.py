@@ -28,6 +28,7 @@ sys.modules.setdefault(
 
 from passivbot import Passivbot
 import passivbot as passivbot_module
+from config import get_template_config, prepare_config
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from market_snapshot import MarketSnapshot
 from planning_snapshot import (
@@ -2836,7 +2837,6 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     import passivbot as pb_mod
 
     class FakeBot:
-        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 120.0  # snapped
         balance_raw = 175.0  # raw
@@ -2909,11 +2909,13 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_orchestrator_snapshot_payload_includes_market_order_slippage(monkeypatch):
+async def test_orchestrator_snapshot_payload_does_not_require_backtest_config(monkeypatch):
     import passivbot as pb_mod
 
     class FakeBot:
-        config = {"backtest": {"market_order_slippage_pct": 0.0015}}
+        config = prepare_config(
+            get_template_config(), verbose=False, target="live", runtime="live"
+        )
         positions = {}
         balance = 120.0
         balance_raw = 175.0
@@ -2984,13 +2986,15 @@ async def test_orchestrator_snapshot_payload_includes_market_order_slippage(monk
     monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
 
     method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
-    await method(FakeBot(), snapshot, return_snapshot=False)
+    bot = FakeBot()
+    assert "backtest" not in bot.config
+    await method(bot, snapshot, return_snapshot=False)
 
     assert captured["input"]["global"]["market_orders_allowed"] is True
     assert captured["input"]["global"]["market_order_near_touch_threshold"] == pytest.approx(
         0.001
     )
-    assert captured["input"]["global"]["market_order_slippage_pct"] == pytest.approx(0.0015)
+    assert "market_order_slippage_pct" not in captured["input"]["global"]
 
 
 @pytest.mark.asyncio
@@ -3000,7 +3004,6 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
     symbol = "BTC/USDT:USDT"
 
     class FakeBot:
-        config = {"backtest": {"market_order_slippage_pct": 0.0005}}
         positions = {}
         balance = 120.0
         balance_raw = 175.0
