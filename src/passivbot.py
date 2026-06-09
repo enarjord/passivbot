@@ -2218,11 +2218,30 @@ class Passivbot:
     _equity_hard_stop_initialize_from_history = (
         pb_hsl._equity_hard_stop_initialize_from_history
     )
+    _equity_hard_stop_initialize_coin_from_history = (
+        pb_hsl._equity_hard_stop_initialize_coin_from_history
+    )
     _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
     _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
     _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
     _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
+    _equity_hard_stop_apply_coin_metrics_sample = (
+        pb_hsl._equity_hard_stop_apply_coin_metrics_sample
+    )
+    _equity_hard_stop_coin_needs_panic_supervision = (
+        pb_hsl._equity_hard_stop_coin_needs_panic_supervision
+    )
+    _equity_hard_stop_coin_red_active = pb_hsl._equity_hard_stop_coin_red_active
+    _equity_hard_stop_handle_coin_position_during_cooldown = (
+        pb_hsl._equity_hard_stop_handle_coin_position_during_cooldown
+    )
+    _equity_hard_stop_log_coin_cooldown_status = (
+        pb_hsl._equity_hard_stop_log_coin_cooldown_status
+    )
+    _equity_hard_stop_prime_coin_runtime_for_replay = (
+        pb_hsl._equity_hard_stop_prime_coin_runtime_for_replay
+    )
     _equity_hard_stop_activate_coin_red_from_metrics = (
         pb_hsl._equity_hard_stop_activate_coin_red_from_metrics
     )
@@ -2836,7 +2855,11 @@ class Passivbot:
                 return
             if self._equity_hard_stop_enabled():
                 boot_stage = "equity_hard_stop_initialize_from_history"
-                await self._equity_hard_stop_initialize_from_history()
+                if self._equity_hard_stop_signal_mode() == "coin":
+                    boot_stage = "equity_hard_stop_initialize_coin_from_history"
+                    await self._equity_hard_stop_initialize_coin_from_history()
+                else:
+                    await self._equity_hard_stop_initialize_from_history()
                 if self.stop_signal_received:
                     self._monitor_emit_stop(
                         "startup_aborted",
@@ -4865,7 +4888,10 @@ class Passivbot:
             or not self._equity_hard_stop_enabled(pside)
             for pside in self._hsl_psides()
         ):
-            await self._equity_hard_stop_initialize_from_history()
+            if self._equity_hard_stop_signal_mode() == "coin":
+                await self._equity_hard_stop_initialize_coin_from_history()
+            else:
+                await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
             try:
                 loop_start_ms = utc_ms()
