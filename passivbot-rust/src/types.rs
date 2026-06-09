@@ -5,6 +5,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::{Py, PyResult, Python};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashSet;
 use strum_macros::{Display, EnumIter, EnumString};
 
 /// Canonical metadata describing one coin/contract entry inside a unified HLCV tensor.
@@ -60,6 +61,7 @@ pub struct HlcvsMeta {
     pub warmup_minutes_requested: u64,
     pub warmup_minutes_provided: u64,
     pub coins: Vec<CoinMeta>,
+    pub active_coin_indices: Option<Vec<usize>>,
 }
 
 /// Represents a fully-qualified HLCV tensor and its associated metadata.  The NumPy arrays are
@@ -102,11 +104,70 @@ impl HlcvsBundle {
         let n_timesteps = shape[0];
         let n_coins = shape[1];
         if n_coins != self.meta.coins.len() {
-            return Err(PyValueError::new_err(format!(
-                "coin metadata length ({}) does not match hlcvs coin dimension ({})",
-                self.meta.coins.len(),
-                n_coins
-            )));
+            let active_indices = self.meta.active_coin_indices.as_ref().ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "coin metadata length ({}) does not match hlcvs coin dimension ({})",
+                    self.meta.coins.len(),
+                    n_coins
+                ))
+            })?;
+            if active_indices.len() != self.meta.coins.len() {
+                return Err(PyValueError::new_err(format!(
+                    "active_coin_indices length ({}) does not match coin metadata length ({})",
+                    active_indices.len(),
+                    self.meta.coins.len()
+                )));
+            }
+            let mut seen = HashSet::with_capacity(active_indices.len());
+            for (idx, &col) in active_indices.iter().enumerate() {
+                if col >= n_coins {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} exceeds hlcvs coin dimension {}",
+                        col, n_coins
+                    )));
+                }
+                if !seen.insert(col) {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} appears more than once",
+                        col
+                    )));
+                }
+                if self.meta.coins[idx].index != col {
+                    return Err(PyValueError::new_err(format!(
+                        "coin metadata index ({}) does not match active coin index ({}) at position {}",
+                        self.meta.coins[idx].index, col, idx
+                    )));
+                }
+            }
+        } else if let Some(active_indices) = &self.meta.active_coin_indices {
+            if active_indices.len() != self.meta.coins.len() {
+                return Err(PyValueError::new_err(format!(
+                    "active_coin_indices length ({}) does not match coin metadata length ({})",
+                    active_indices.len(),
+                    self.meta.coins.len()
+                )));
+            }
+            let mut seen = HashSet::with_capacity(active_indices.len());
+            for (idx, &col) in active_indices.iter().enumerate() {
+                if col >= n_coins {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} exceeds hlcvs coin dimension {}",
+                        col, n_coins
+                    )));
+                }
+                if !seen.insert(col) {
+                    return Err(PyValueError::new_err(format!(
+                        "active coin index {} appears more than once",
+                        col
+                    )));
+                }
+                if self.meta.coins[idx].index != col {
+                    return Err(PyValueError::new_err(format!(
+                        "coin metadata index ({}) does not match active coin index ({}) at position {}",
+                        self.meta.coins[idx].index, col, idx
+                    )));
+                }
+            }
         }
 
         let timestamps_ref = self.timestamps.bind(py);
