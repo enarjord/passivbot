@@ -88,10 +88,21 @@ def _entry_optimize_bounds(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     return bounds
 
 
+def _side_enablement_values(side_config: Mapping[str, Any]) -> tuple[Any, Any]:
+    n_positions_raw = side_config.get("n_positions")
+    exposure_limit_raw = side_config.get("total_wallet_exposure_limit")
+    risk = side_config.get("risk")
+    if isinstance(risk, Mapping):
+        if n_positions_raw is None:
+            n_positions_raw = risk.get("n_positions")
+        if exposure_limit_raw is None:
+            exposure_limit_raw = risk.get("total_wallet_exposure_limit")
+    return n_positions_raw, exposure_limit_raw
+
+
 def _side_is_enabled(side_config: Mapping[str, Any]) -> bool:
     try:
-        n_positions_raw = side_config.get("n_positions")
-        exposure_limit_raw = side_config.get("total_wallet_exposure_limit")
+        n_positions_raw, exposure_limit_raw = _side_enablement_values(side_config)
         if n_positions_raw is None or exposure_limit_raw is None:
             return False
         n_positions = float(n_positions_raw)
@@ -306,8 +317,44 @@ def _parse_bound(raw: Any) -> tuple[float, float, float | None] | None:
     return low, high, step
 
 
-def _merge_bounds(fronts: Sequence[LoadedFront]) -> dict[str, list[int | float]]:
-    observed: dict[str, list[tuple[float, float, float | None]]] = {}
+def _iter_bound_items(raw: Mapping[str, Any], prefix: tuple[str, ...] = ()):
+    for key, value in raw.items():
+        path = (*prefix, str(key))
+        if isinstance(value, Mapping):
+            yield from _iter_bound_items(value, path)
+        else:
+            yield path, value
+
+
+def _bounds_are_nested(bounds: Mapping[str, Any]) -> bool:
+    return any(isinstance(bounds.get(side), Mapping) for side in SIDES)
+
+
+def _bound_side(path: tuple[str, ...]) -> str | None:
+    if not path:
+        return None
+    if path[0] in SIDES:
+        return path[0]
+    key = path[0]
+    for side in SIDES:
+        if key.startswith(f"{side}_"):
+            return side
+    return None
+
+
+def _set_nested_bound(target: dict[str, Any], path: tuple[str, ...], value: list[int | float]) -> None:
+    current = target
+    for key in path[:-1]:
+        child = current.setdefault(key, {})
+        if not isinstance(child, dict):
+            raise ValueError(f"Cannot merge optimize bound path through scalar key {key!r}")
+        current = child
+    current[path[-1]] = value
+
+
+def _merge_bounds(fronts: Sequence[LoadedFront]) -> dict[str, Any]:
+    observed: dict[tuple[str, ...], list[tuple[float, float, float | None]]] = {}
+    use_nested_output = False
     for front in fronts:
         for candidate in front.candidates:
             bot = _entry_bot(candidate.entry)
@@ -318,26 +365,32 @@ def _merge_bounds(fronts: Sequence[LoadedFront]) -> dict[str, list[int | float]]
             }
             if not enabled_sides:
                 continue
-            for key, raw_bound in _entry_optimize_bounds(candidate.entry).items():
-                if key.startswith("long_") and "long" not in enabled_sides:
-                    continue
-                if key.startswith("short_") and "short" not in enabled_sides:
+            bounds = _entry_optimize_bounds(candidate.entry)
+            use_nested_output = use_nested_output or _bounds_are_nested(bounds)
+            for path, raw_bound in _iter_bound_items(bounds):
+                side = _bound_side(path)
+                if side is not None and side not in enabled_sides:
                     continue
                 parsed = _parse_bound(raw_bound)
                 if parsed is None:
                     continue
-                observed.setdefault(str(key), []).append(parsed)
+                observed.setdefault(path, []).append(parsed)
 
-    merged: dict[str, list[int | float]] = {}
-    for key in sorted(observed):
-        values = observed[key]
+    merged: dict[str, Any] = {}
+    for path in sorted(observed):
+        if not path:
+            continue
+        values = observed[path]
         low = min(item[0] for item in values)
         high = max(item[1] for item in values)
         steps = [item[2] for item in values if item[2] is not None]
         payload: list[int | float] = [_clean_number(low), _clean_number(high)]
         if steps:
             payload.append(_clean_number(min(steps)))
-        merged[key] = payload
+        if use_nested_output:
+            _set_nested_bound(merged, path, payload)
+        else:
+            merged[path[0]] = payload
     return merged
 
 
