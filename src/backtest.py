@@ -336,6 +336,7 @@ def _build_coin_metadata_entries(
     last_valid_indices,
     warmup_minutes,
     trade_start_indices,
+    coin_column_indices=None,
 ):
     entries = []
     for idx, coin in enumerate(coins_order):
@@ -352,7 +353,11 @@ def _build_coin_metadata_entries(
             taker_fee = entry.get("taker")
         entries.append(
             {
-                "index": idx,
+                "index": (
+                    int(coin_column_indices[idx])
+                    if coin_column_indices is not None
+                    else idx
+                ),
                 "symbol": symbol,
                 "coin": coin_shorthand,
                 "exchange": entry_exchange,
@@ -397,18 +402,19 @@ def _build_hlcvs_bundle(
     *,
     coin_indices: list[int] | None = None,
 ) -> pbr.HlcvsBundle:
-    subset_positions = None
+    active_coin_indices = None
     if coin_indices is not None:
         if len(coin_indices) != len(coins_order):
             raise ValueError(
                 f"coin_indices length ({len(coin_indices)}) does not match coins ({len(coins_order)})"
             )
-        subset_positions = [int(idx) for idx in coin_indices]
         n_coins = int(hlcvs.shape[1])
-        if len(subset_positions) == n_coins and subset_positions == list(
-            range(n_coins)
-        ):
-            subset_positions = None
+        active_coin_indices = [int(idx) for idx in coin_indices]
+        if len(set(active_coin_indices)) != len(active_coin_indices):
+            raise ValueError("coin_indices must not contain duplicates")
+        for idx in active_coin_indices:
+            if idx < 0 or idx >= n_coins:
+                raise ValueError(f"coin index {idx} outside hlcvs coin dimension {n_coins}")
 
     def _rss_mb() -> float | None:
         try:
@@ -432,14 +438,10 @@ def _build_hlcvs_bundle(
             os.getpid(),
             getattr(hlcvs, "shape", None),
             len(coins_order),
-            subset_positions is not None,
+            active_coin_indices is not None,
             f"{rss_before:.1f}" if rss_before is not None else "na",
         )
-    if subset_positions is not None:
-        hlcvs_view = hlcvs[:, subset_positions, :]
-        hlcvs_arr = np.ascontiguousarray(hlcvs_view, dtype=np.float64)
-    else:
-        hlcvs_arr = _as_c_contiguous_native_array(hlcvs, np.float64)
+    hlcvs_arr = _as_c_contiguous_native_array(hlcvs, np.float64)
     btc_arr = _as_c_contiguous_native_array(btc_usd_prices, np.float64)
     if timestamps is None:
         timestamps_arr = np.arange(hlcvs_arr.shape[0], dtype=np.int64)
@@ -453,8 +455,11 @@ def _build_hlcvs_bundle(
         last_valid_indices,
         warmup_minutes,
         trade_start_indices,
+        coin_column_indices=active_coin_indices,
     )
     bundle_meta = {**bundle_meta_base, "coins": coin_meta_entries}
+    if active_coin_indices is not None:
+        bundle_meta["active_coin_indices"] = active_coin_indices
     rss_after = _rss_mb()
     if hasattr(logger, "trace"):
         logger.trace(
@@ -708,7 +713,7 @@ def build_backtest_payload(
     )
 
     if coin_indices is not None:
-        backtest_params["active_coin_indices"] = list(range(len(coins_order)))
+        backtest_params["active_coin_indices"] = [int(idx) for idx in coin_indices]
 
     return BacktestPayload(
         bundle=bundle,
@@ -847,15 +852,17 @@ def subset_backtest_payload(
             if idx < 0 or idx >= len(coins_meta):
                 raise ValueError(f"Coin index {idx} outside valid range.")
 
+    source_columns = [int(coins_meta[pos].get("index", pos)) for pos in selected_positions]
     hlcvs_np = np.asarray(payload.bundle.hlcvs)
     subset_hlcvs = np.ascontiguousarray(
-        hlcvs_np[:, selected_positions, :], dtype=np.float64
+        hlcvs_np[:, source_columns, :], dtype=np.float64
     )
     btc_np = _as_c_contiguous_native_array(payload.bundle.btc_usd, np.float64)
     ts_np = _as_c_contiguous_native_array(payload.bundle.timestamps, np.int64)
 
     new_meta = deepcopy(bundle_meta)
     new_meta["coins"] = []
+    new_meta.pop("active_coin_indices", None)
     for new_idx, pos in enumerate(selected_positions):
         coin_entry = deepcopy(coins_meta[pos])
         coin_entry["index"] = new_idx
@@ -879,6 +886,7 @@ def subset_backtest_payload(
     ]:
         if key in new_backtest_params and isinstance(new_backtest_params[key], list):
             new_backtest_params[key] = _select(new_backtest_params[key])
+    new_backtest_params.pop("active_coin_indices", None)
 
     return BacktestPayload(
         bundle=new_bundle,

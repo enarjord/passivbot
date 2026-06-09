@@ -370,6 +370,10 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
             .map_err(|_| PyValueError::new_err("coin metadata entries must be dicts"))?;
         coins.push(parse_coin_meta(coin_dict, idx)?);
     }
+    let active_coin_indices = match dict.get_item("active_coin_indices")? {
+        Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
+        _ => None,
+    };
 
     Ok(HlcvsMeta {
         requested_start_timestamp_ms: requested,
@@ -377,6 +381,7 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
         warmup_minutes_requested: warm_req,
         warmup_minutes_provided: warm_prov,
         coins,
+        active_coin_indices,
     })
 }
 
@@ -497,6 +502,9 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
         coins.append(coin_meta_to_dict(py, entry)?)?;
     }
     dict.set_item("coins", coins)?;
+    if let Some(active_coin_indices) = &meta.active_coin_indices {
+        dict.set_item("active_coin_indices", active_coin_indices)?;
+    }
     Ok(dict)
 }
 

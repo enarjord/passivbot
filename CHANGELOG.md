@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:
   min, mean, and max loss as a fraction of equity before each panic-close episode.
+- Reduced suite-optimizer seed-evaluation memory pressure by passing lazy-sliced coin
+  columns to Rust as active indices instead of materializing per-worker HLCV coin-subset
+  copies.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
   `optimize.bounds` are clamped with aggregated source/key logging, while base-config runtime
   policy fields such as HSL/unstuck boolean toggles now win over anchor configs.
