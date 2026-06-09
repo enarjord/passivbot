@@ -8,6 +8,9 @@ All notable user-facing changes will be documented in this file.
   against the configured slot budget and panic-closes only the affected `coin+pside`. Live
   uses configured `n_positions`; backtests use configured `n_positions` in fixed-WEL mode and
   the effective tradability-aware denominator when `dynamic_wel_by_tradability=true`.
+- Hardened HSL `coin` restart reconstruction and backtest artifacts: live replay now restores
+  active RED panic state from per-coin history, and coin-mode backtests emit side strategy-equity
+  and drawdown series with one sample per bar.
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:
   min, mean, and max loss as a fraction of equity before each panic-close episode.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside

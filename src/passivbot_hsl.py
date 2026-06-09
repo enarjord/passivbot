@@ -814,8 +814,14 @@ def _equity_hard_stop_history_coin_value(
     key: str,
     symbol: str,
     pside: str,
+    *,
+    require_key: bool = False,
 ) -> float:
     if key not in row or row[key] is None:
+        if require_key:
+            raise ValueError(
+                f"get_balance_equity_history()['timeline'][] missing required coin HSL key: {key}"
+            )
         return 0.0
     by_symbol = row[key]
     if not isinstance(by_symbol, dict):
@@ -840,6 +846,58 @@ def _equity_hard_stop_history_coin_value(
             f"must be finite, got {value}"
         )
     return value
+
+
+def _equity_hard_stop_coin_stop_event_from_metrics(
+    pside: str,
+    symbol: str,
+    stop_event_ts_ms: int,
+    metrics: dict,
+    realized_pnl_total: Optional[float],
+) -> dict:
+    return {
+        "position_side": pside,
+        "symbol": symbol,
+        "signal_mode": "coin",
+        "stop_event_timestamp_ms": int(stop_event_ts_ms),
+        "balance": float(metrics["balance"]),
+        "slot_budget": float(metrics["slot_budget"]),
+        "realized_pnl_total": None if realized_pnl_total is None else float(realized_pnl_total),
+        "realized_pnl": float(metrics["realized_pnl"]),
+        "peak_realized_pnl": float(metrics["peak_realized_pnl"]),
+        "unrealized_pnl": float(metrics["unrealized_pnl"]),
+        "strategy_pnl": float(metrics["strategy_pnl"]),
+        "peak_strategy_pnl": float(metrics["peak_strategy_pnl"]),
+        "strategy_equity": float(metrics["strategy_equity"]),
+        "equity": float(metrics["equity"]),
+        "peak_strategy_equity": float(metrics["peak_strategy_equity"]),
+        "trigger_peak_strategy_equity": float(metrics["peak_strategy_equity"]),
+        "drawdown_raw": float(metrics["drawdown_raw"]),
+        "drawdown_ema": float(metrics["drawdown_ema"]),
+        "drawdown_score": float(metrics["drawdown_score"]),
+    }
+
+
+def _equity_hard_stop_activate_coin_red_from_metrics(
+    self,
+    pside: str,
+    symbol: str,
+    metrics: dict,
+    *,
+    realized_pnl_total: Optional[float],
+) -> None:
+    state = self._hsl_coin_state(pside, symbol)
+    if state["pending_red_since_ms"] is None:
+        state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
+    if state["pending_stop_event"] is None:
+        state["pending_stop_event"] = _equity_hard_stop_coin_stop_event_from_metrics(
+            pside,
+            symbol,
+            int(metrics["timestamp_ms"]),
+            metrics,
+            realized_pnl_total,
+        )
+    self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "panic")
 
 
 def _equity_hard_stop_prime_coin_runtime_for_replay(
@@ -1822,6 +1880,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "pside": pside,
                     "symbol": symbol,
                 }
+        require_coin_timeline_fields = bool(fill_events or latest_panic_by_coin_minute)
 
         balance = float(self.get_raw_balance())
         rows = 0
@@ -1859,7 +1918,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         else:
                             continue
                     abs_realized = _equity_hard_stop_history_coin_value(
-                        row, "realized_pnl_by_coin_pside", symbol, pside
+                        row,
+                        "realized_pnl_by_coin_pside",
+                        symbol,
+                        pside,
+                        require_key=require_coin_timeline_fields,
                     )
                     last_realized = abs_realized - reset_baseline_realized
                     realized_points.append((ts, last_realized))
@@ -1874,7 +1937,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     ]
                     peak_realized = max([0.0, *window_values])
                     current_upnl = _equity_hard_stop_history_coin_value(
-                        row, "unrealized_pnl_by_coin_pside", symbol, pside
+                        row,
+                        "unrealized_pnl_by_coin_pside",
+                        symbol,
+                        pside,
+                        require_key=require_coin_timeline_fields,
                     )
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, ts)
                     metrics = self._equity_hard_stop_apply_coin_metrics_sample(
@@ -1891,7 +1958,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     marker = latest_panic_by_coin_minute.get((pside, symbol, ts))
                     if marker is None:
                         if metrics["tier"] == "red":
-                            state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
+                            self._equity_hard_stop_activate_coin_red_from_metrics(
+                                pside,
+                                symbol,
+                                metrics,
+                                realized_pnl_total=(
+                                    float(row["realized_pnl"]) if "realized_pnl" in row else None
+                                ),
+                            )
                         continue
                     stop_ts = int(marker["timestamp"])
                     stop_drawdown_raw = float(metrics["drawdown_raw"])
@@ -1976,7 +2050,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     float(await self._calc_upnl_sum_strict(pside, symbol)),
                 )
                 if current_metrics["tier"] == "red":
-                    state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
+                    self._equity_hard_stop_activate_coin_red_from_metrics(
+                        pside,
+                        symbol,
+                        current_metrics,
+                        realized_pnl_total=float(self._equity_hard_stop_realized_pnl_now()),
+                    )
         self._equity_hard_stop_coin_initialized = True
         logging.info("[risk] HSL coin history reconstruction completed | rows=%d", rows)
     finally:

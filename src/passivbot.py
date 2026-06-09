@@ -2223,6 +2223,9 @@ class Passivbot:
     _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
     _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
     _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
+    _equity_hard_stop_activate_coin_red_from_metrics = (
+        pb_hsl._equity_hard_stop_activate_coin_red_from_metrics
+    )
     _equity_hard_stop_set_red_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
     )

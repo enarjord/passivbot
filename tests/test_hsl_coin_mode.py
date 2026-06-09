@@ -23,7 +23,10 @@ def bind_hsl_methods(bot):
         "_calc_upnl_sum_strict",
         "_equity_hard_stop_apply_coin_sample",
         "_equity_hard_stop_apply_coin_metrics_sample",
+        "_equity_hard_stop_activate_coin_red_from_metrics",
         "_equity_hard_stop_coin_realized_pnl_peak_last",
+        "_equity_hard_stop_coin_needs_panic_supervision",
+        "_equity_hard_stop_coin_red_active",
         "_equity_hard_stop_coin_symbols",
         "_equity_hard_stop_handle_coin_position_during_cooldown",
         "_equity_hard_stop_has_open_position_symbol",
@@ -91,6 +94,7 @@ def make_coin_bot(policy="panic"):
     bot.get_raw_balance = lambda: 100.0
     bot.get_exchange_time = lambda: 180_000
     bot.live_value = lambda key: bot.config["live"][key]
+    bot._equity_hard_stop_realized_pnl_now = lambda pside=None: 0.0
 
     def bot_value(pside, key):
         values = {
@@ -178,7 +182,14 @@ async def test_coin_hsl_history_replay_latches_red_without_panic_marker():
                 },
             ],
             "panic_flatten_events": [],
-            "fill_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "pnl": 0.0,
+                }
+            ],
         }
 
     bot.get_balance_equity_history = fake_history
@@ -188,7 +199,12 @@ async def test_coin_hsl_history_replay_latches_red_without_panic_marker():
     state = bot._hsl_coin_state("long", symbol)
     assert state["runtime"].red_latched() is True
     assert state["runtime"].tier() == "red"
-    assert state["pending_red_since_ms"] == 180_000
+    assert state["pending_red_since_ms"] == 120_000
+    assert state["pending_stop_event"] is not None
+    assert state["pending_stop_event"]["symbol"] == symbol
+    assert state["pending_stop_event"]["drawdown_raw"] == pytest.approx(0.8)
+    assert bot._runtime_forced_modes["long"][symbol] == "panic"
+    assert bot._equity_hard_stop_coin_red_active() is True
 
 
 @pytest.mark.asyncio
@@ -242,6 +258,38 @@ async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
     assert state["no_restart_latched"] is True
     assert state["cooldown_until_ms"] is None
     assert state["last_stop_event"]["drawdown_raw"] == pytest.approx(0.8)
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "pnl": 0.0,
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    with pytest.raises(ValueError, match="realized_pnl_by_coin_pside"):
+        await bot._equity_hard_stop_initialize_coin_from_history()
 
 
 @pytest.mark.asyncio
