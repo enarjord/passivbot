@@ -3426,6 +3426,7 @@ async def _prepare_hlcvs_combined_impl(
 
     chosen_data_per_coin = {}
     chosen_mss_per_coin = {}
+    chosen_candidates_per_coin: dict[str, tuple[CombinedExchangeCandidate, ...]] = {}
     candidate_report: list[dict] = []
 
     # Preload markets
@@ -3478,6 +3479,7 @@ async def _prepare_hlcvs_combined_impl(
 
         chosen_data_per_coin[result.coin] = result.best_df
         chosen_mss_per_coin[result.coin] = result.market_settings
+        chosen_candidates_per_coin[result.coin] = result.candidates
         progress.update()
 
     progress.log_done()
@@ -3493,10 +3495,7 @@ async def _prepare_hlcvs_combined_impl(
     valid_coins = sorted(chosen_data_per_coin.keys())
     n_coins = len(valid_coins)
 
-    start_date_for_volume_ratios = ts_to_date(
-        max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
-    )
-    end_date_for_volume_ratios = ts_to_date(global_end_time)
+    start_ts_for_volume_ratios = max(global_start_time, global_end_time - 1000 * 60 * 60 * 24 * 60)
 
     # Use OHLCV sources for volume ratio calculation, not market settings sources
     exchanges_with_data = sorted(
@@ -3507,13 +3506,12 @@ async def _prepare_hlcvs_combined_impl(
             ]
         )
     )
-    exchange_volume_ratios = await compute_exchange_volume_ratios(
+    exchange_volume_ratios = compute_exchange_volume_ratios_from_candidates(
         exchanges_with_data,
         valid_coins,
-        start_date_for_volume_ratios,
-        end_date_for_volume_ratios,
-        # om_dict keys are ccxt IDs (e.g. "binanceusdm"), but exchanges_with_data use standard names
-        {ex: om_dict[to_ccxt_exchange_id(ex)] for ex in exchanges_with_data},
+        chosen_candidates_per_coin,
+        int(start_ts_for_volume_ratios),
+        int(global_end_time),
     )
     exchanges_counts = defaultdict(int)
     for coin in chosen_mss_per_coin:
@@ -4311,9 +4309,103 @@ async def compute_exchange_volume_ratios(
     return averages
 
 
+def _daily_volume_dict_from_candidate_df(
+    df: pd.DataFrame,
+    *,
+    start_ts: int,
+    end_ts: int,
+) -> dict[int, float]:
+    if df is None or df.empty:
+        return {}
+    mask = (df["timestamp"] >= int(start_ts)) & (df["timestamp"] <= int(end_ts))
+    if "valid" in df.columns:
+        mask &= df["valid"].eq(True)
+    clipped = df.loc[mask, ["timestamp", "volume"]].dropna(subset=["volume"]).copy()
+    if clipped.empty:
+        return {}
+    clipped["day"] = clipped["timestamp"].astype(np.int64, copy=False) // 86_400_000
+    grouped = clipped.groupby("day", as_index=False)["volume"].sum()
+    return {
+        int(day): float(volume)
+        for day, volume in zip(grouped["day"].to_numpy(), grouped["volume"].to_numpy())
+    }
+
+
+def compute_exchange_volume_ratios_from_candidates(
+    exchanges: Sequence[str],
+    coins: Sequence[str],
+    candidates_by_coin: Dict[str, Sequence[CombinedExchangeCandidate]],
+    start_ts: int,
+    end_ts: int,
+) -> Dict[Tuple[str, str], float]:
+    ordered_exchanges = sorted({to_standard_exchange_name(ex) for ex in exchanges})
+    exchange_pairs: list[tuple[str, str]] = []
+    for i, ex0 in enumerate(ordered_exchanges):
+        for ex1 in ordered_exchanges[i + 1 :]:
+            exchange_pairs.append((ex0, ex1))
+
+    all_data: dict[str, dict[tuple[str, str], float]] = {}
+    for coin in coins:
+        candidate_map = {
+            to_standard_exchange_name(candidate.exchange): candidate
+            for candidate in candidates_by_coin.get(coin, ())
+        }
+        if not all(ex in candidate_map for ex in ordered_exchanges):
+            continue
+
+        daily_volumes = []
+        for ex in ordered_exchanges:
+            daily_dict = _daily_volume_dict_from_candidate_df(
+                candidate_map[ex].df,
+                start_ts=int(start_ts),
+                end_ts=int(end_ts),
+            )
+            if not daily_dict:
+                break
+            daily_volumes.append(daily_dict)
+        if len(daily_volumes) != len(ordered_exchanges):
+            continue
+
+        sets_of_days = [set(dv.keys()) for dv in daily_volumes]
+        common_days = set.intersection(*sets_of_days)
+        if not common_days:
+            continue
+
+        coin_data = {}
+        for ex0, ex1 in exchange_pairs:
+            i0 = ordered_exchanges.index(ex0)
+            i1 = ordered_exchanges.index(ex1)
+            sum0 = sum(daily_volumes[i0][day] for day in common_days)
+            sum1 = sum(daily_volumes[i1][day] for day in common_days)
+            ratio = (sum0 / sum1) if sum1 > 0 else 0.0
+            coin_data[(ex0, ex1)] = ratio
+
+        if coin_data:
+            all_data[coin] = coin_data
+
+    averages = {}
+    if not all_data:
+        return averages
+
+    used_pairs = set()
+    for coin in all_data:
+        for pair in all_data[coin]:
+            used_pairs.add(pair)
+
+    for pair in used_pairs:
+        ratios_for_pair = []
+        for coin in all_data:
+            if pair in all_data[coin]:
+                ratios_for_pair.append(all_data[coin][pair])
+        averages[pair] = float(np.mean(ratios_for_pair)) if ratios_for_pair else 0.0
+
+    return averages
+
+
 __all__ = [
     "HLCVManager",
     "prepare_hlcvs",
     "prepare_hlcvs_combined",
     "compute_exchange_volume_ratios",
+    "compute_exchange_volume_ratios_from_candidates",
 ]
