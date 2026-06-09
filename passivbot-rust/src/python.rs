@@ -2207,6 +2207,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             .map(|_| extract_forager_score_weights(dict))
             .transpose()?
             .unwrap_or_default(),
+        is_forced_active: extract_optional_bool(dict, "is_forced_active", false)?,
         ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
         ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled,

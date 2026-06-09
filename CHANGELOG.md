@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed suite backtests so scenario data preparation always includes the base
+  `live.approved_coins` universe even when other scenarios define explicit
+  coin subsets, and so `coin_overrides.<coin>.live.forced_mode_<side>=normal`
+  is carried into Rust backtests as a forced normal active slot.
 - Added HSL `coin` signal mode, which tracks per-coin realized drawdown plus current UPnL
   against the configured slot budget and panic-closes only the affected `coin+pside`. Live
   uses configured `n_positions`; backtests use configured `n_positions` in fixed-WEL mode and

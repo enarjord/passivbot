@@ -1281,6 +1281,19 @@ impl<'a> Backtest<'a> {
         writer.write_record(&record);
     }
 
+    fn forced_normal_mode(&self, idx: usize, pside: usize) -> Option<orchestrator::TradingMode> {
+        let side = match pside {
+            LONG => &self.bot_params[idx].long,
+            SHORT => &self.bot_params[idx].short,
+            _ => return None,
+        };
+        if side.is_forced_active {
+            Some(orchestrator::TradingMode::Normal)
+        } else {
+            None
+        }
+    }
+
     fn build_orchestrator_input_iter<I>(
         &mut self,
         k: usize,
@@ -1360,8 +1373,10 @@ impl<'a> Backtest<'a> {
                 let pos_long = self.positions.long[idx];
                 let pos_short = self.positions.short[idx];
 
-                let mut mode_long: Option<orchestrator::TradingMode> = None;
-                let mut mode_short: Option<orchestrator::TradingMode> = None;
+                let mut mode_long: Option<orchestrator::TradingMode> =
+                    self.forced_normal_mode(idx, LONG);
+                let mut mode_short: Option<orchestrator::TradingMode> =
+                    self.forced_normal_mode(idx, SHORT);
 
                 if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                     if k >= delist_timestamp {
@@ -1653,8 +1668,10 @@ impl<'a> Backtest<'a> {
             sym.short.runtime_budget = Some(self.runtime_budget[idx].short.clone());
 
             let valid_now = self.coin_is_valid_at(idx, k);
-            let mut mode_long: Option<orchestrator::TradingMode> = None;
-            let mut mode_short: Option<orchestrator::TradingMode> = None;
+            let mut mode_long: Option<orchestrator::TradingMode> =
+                self.forced_normal_mode(idx, LONG);
+            let mut mode_short: Option<orchestrator::TradingMode> =
+                self.forced_normal_mode(idx, SHORT);
 
             if let Some(delist_timestamp) = self.last_valid_timestamps[idx] {
                 if k >= delist_timestamp {
@@ -6039,6 +6056,71 @@ mod tests {
         bt.initialize_btc_collateral_if_needed(2);
         assert!((bt.balance.btc_cash_wallet - 4.5).abs() < 1e-12);
         assert!((bt.balance.usd_cash_wallet - 100.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn forced_active_coin_sets_orchestrator_normal_mode() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.is_forced_active = true;
+        bp_pair.short.n_positions = 1;
+        bp_pair.short.total_wallet_exposure_limit = 1.0;
+        bp_pair.short.wallet_exposure_limit = 1.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            forager_score_hysteresis_pct: 0.0,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        let input = bt.get_orchestrator_input_cached(1, None, None);
+        assert_eq!(
+            input.symbols[0].long.mode,
+            Some(orchestrator::TradingMode::Normal)
+        );
+        assert_eq!(input.symbols[0].short.mode, None);
     }
 
     #[test]

@@ -445,6 +445,8 @@ pub struct BotParams {
     #[serde(default)]
     pub forager_score_weights: ForagerScoreWeights,
     #[serde(default)]
+    pub is_forced_active: bool,
+    #[serde(default)]
     pub ema_span_0: f64,
     #[serde(default)]
     pub ema_span_1: f64,
@@ -512,6 +514,7 @@ impl Default for BotParams {
             _legacy_filter_volatility_drop_pct: 0.0,
             forager_volume_drop_pct: 0.0,
             forager_score_weights: ForagerScoreWeights::default(),
+            is_forced_active: false,
             ema_span_0: 0.0,
             ema_span_1: 0.0,
             hsl_enabled: default_hsl_enabled(),
