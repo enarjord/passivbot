@@ -1937,7 +1937,7 @@ def test_combined_valid_mask_conversion_avoids_pandas_downcast_warning():
     ]
 
 
-def test_exchange_volume_ratios_from_candidates_use_common_daily_volumes():
+def test_exchange_volume_ratios_from_candidates_use_common_timestamps():
     day0 = month_start_ts(2026, 4)
     day1 = day0 + 86_400_000
     day2 = day1 + 86_400_000
@@ -1981,6 +1981,72 @@ def test_exchange_volume_ratios_from_candidates_use_common_daily_volumes():
     )
 
     assert ratios[("binance", "bybit")] == pytest.approx(((30.0 / 60.0) + (100.0 / 50.0)) / 2.0)
+
+
+def test_exchange_volume_ratios_from_candidates_do_not_compare_partial_day_to_full_day():
+    day0 = month_start_ts(2026, 4)
+    full_day_timestamps = [day0 + i * 60_000 for i in range(1440)]
+
+    full_day_df = pd.DataFrame(
+        {
+            "timestamp": np.array(full_day_timestamps, dtype=np.int64),
+            "high": np.ones(1440, dtype=np.float64),
+            "low": np.ones(1440, dtype=np.float64),
+            "close": np.ones(1440, dtype=np.float64),
+            "volume": np.ones(1440, dtype=np.float64),
+            "valid": np.ones(1440, dtype=bool),
+        }
+    )
+    one_minute_df = pd.DataFrame(
+        {
+            "timestamp": np.array([day0], dtype=np.int64),
+            "high": [1.0],
+            "low": [1.0],
+            "close": [1.0],
+            "volume": [1.0],
+            "valid": [True],
+        }
+    )
+
+    ratios = hp.compute_exchange_volume_ratios_from_candidates(
+        exchanges=["binance", "bybit"],
+        coins=["BTC"],
+        candidates_by_coin={
+            "BTC": (
+                hp.CombinedExchangeCandidate(
+                    exchange="binanceusdm",
+                    df=full_day_df,
+                    coverage_count=len(full_day_df),
+                    gap_count=0,
+                    total_volume=float(full_day_df["volume"].sum()),
+                ),
+                hp.CombinedExchangeCandidate(
+                    exchange="bybit",
+                    df=one_minute_df,
+                    coverage_count=len(one_minute_df),
+                    gap_count=0,
+                    total_volume=float(one_minute_df["volume"].sum()),
+                ),
+            )
+        },
+        start_ts=day0,
+        end_ts=day0 + 1439 * 60_000,
+    )
+
+    assert ratios[("binance", "bybit")] == pytest.approx(1.0)
+
+
+def test_build_exchange_volume_ratio_map_fails_loudly_without_overlap_to_reference():
+    with pytest.raises(
+        ValueError,
+        match="cannot normalize volumes: no overlapping valid candidate candles",
+    ):
+        hp._build_exchange_volume_ratio_map(
+            exchange_volume_ratios={},
+            selected_exchanges=["binance", "bybit"],
+            reference_exchange="binance",
+            valid_coins=["ETH", "SOL"],
+        )
 
 
 @pytest.mark.asyncio

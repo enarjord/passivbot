@@ -3521,15 +3521,12 @@ async def _prepare_hlcvs_combined_impl(
         )
         exchanges_counts[ohlcv_exchange] += 1
     reference_exchange = sorted(exchanges_counts.items(), key=lambda x: x[1])[-1][0]
-    exchange_volume_ratios_mapped = defaultdict(dict)
-    if len(exchanges_counts) == 1:
-        exchange_volume_ratios_mapped[reference_exchange][reference_exchange] = 1.0
-    else:
-        for ex0, ex1 in exchange_volume_ratios:
-            exchange_volume_ratios_mapped[ex0][ex1] = 1 / exchange_volume_ratios[(ex0, ex1)]
-            exchange_volume_ratios_mapped[ex1][ex0] = exchange_volume_ratios[(ex0, ex1)]
-            exchange_volume_ratios_mapped[ex1][ex1] = 1.0
-            exchange_volume_ratios_mapped[ex0][ex0] = 1.0
+    exchange_volume_ratios_mapped = _build_exchange_volume_ratio_map(
+        exchange_volume_ratios,
+        exchanges_counts.keys(),
+        reference_exchange,
+        valid_coins=valid_coins,
+    )
 
     # Log volume normalization ratios (used to scale volumes when combining multi-exchange data)
     if len(exchanges_counts) > 1:
@@ -4309,7 +4306,7 @@ async def compute_exchange_volume_ratios(
     return averages
 
 
-def _daily_volume_dict_from_candidate_df(
+def _timestamp_volume_dict_from_candidate_df(
     df: pd.DataFrame,
     *,
     start_ts: int,
@@ -4323,11 +4320,12 @@ def _daily_volume_dict_from_candidate_df(
     clipped = df.loc[mask, ["timestamp", "volume"]].dropna(subset=["volume"]).copy()
     if clipped.empty:
         return {}
-    clipped["day"] = clipped["timestamp"].astype(np.int64, copy=False) // 86_400_000
-    grouped = clipped.groupby("day", as_index=False)["volume"].sum()
+    grouped = clipped.groupby("timestamp", as_index=False)["volume"].sum()
     return {
-        int(day): float(volume)
-        for day, volume in zip(grouped["day"].to_numpy(), grouped["volume"].to_numpy())
+        int(timestamp): float(volume)
+        for timestamp, volume in zip(
+            grouped["timestamp"].to_numpy(), grouped["volume"].to_numpy()
+        )
     }
 
 
@@ -4350,35 +4348,31 @@ def compute_exchange_volume_ratios_from_candidates(
             to_standard_exchange_name(candidate.exchange): candidate
             for candidate in candidates_by_coin.get(coin, ())
         }
-        if not all(ex in candidate_map for ex in ordered_exchanges):
-            continue
 
-        daily_volumes = []
-        for ex in ordered_exchanges:
-            daily_dict = _daily_volume_dict_from_candidate_df(
+        timestamp_volumes = {}
+        for ex in sorted(set(ordered_exchanges).intersection(candidate_map)):
+            volume_by_timestamp = _timestamp_volume_dict_from_candidate_df(
                 candidate_map[ex].df,
                 start_ts=int(start_ts),
                 end_ts=int(end_ts),
             )
-            if not daily_dict:
-                break
-            daily_volumes.append(daily_dict)
-        if len(daily_volumes) != len(ordered_exchanges):
-            continue
-
-        sets_of_days = [set(dv.keys()) for dv in daily_volumes]
-        common_days = set.intersection(*sets_of_days)
-        if not common_days:
-            continue
+            if volume_by_timestamp:
+                timestamp_volumes[ex] = volume_by_timestamp
 
         coin_data = {}
         for ex0, ex1 in exchange_pairs:
-            i0 = ordered_exchanges.index(ex0)
-            i1 = ordered_exchanges.index(ex1)
-            sum0 = sum(daily_volumes[i0][day] for day in common_days)
-            sum1 = sum(daily_volumes[i1][day] for day in common_days)
-            ratio = (sum0 / sum1) if sum1 > 0 else 0.0
-            coin_data[(ex0, ex1)] = ratio
+            if ex0 not in timestamp_volumes or ex1 not in timestamp_volumes:
+                continue
+            pair_common_timestamps = set(timestamp_volumes[ex0]).intersection(
+                timestamp_volumes[ex1]
+            )
+            if not pair_common_timestamps:
+                continue
+            sum0 = sum(timestamp_volumes[ex0][timestamp] for timestamp in pair_common_timestamps)
+            sum1 = sum(timestamp_volumes[ex1][timestamp] for timestamp in pair_common_timestamps)
+            if sum0 <= 0.0 or sum1 <= 0.0:
+                continue
+            coin_data[(ex0, ex1)] = sum0 / sum1
 
         if coin_data:
             all_data[coin] = coin_data
@@ -4400,6 +4394,77 @@ def compute_exchange_volume_ratios_from_candidates(
         averages[pair] = float(np.mean(ratios_for_pair)) if ratios_for_pair else 0.0
 
     return averages
+
+
+def _find_exchange_volume_scale_factor(
+    adjacency: dict[str, dict[str, float]],
+    source_exchange: str,
+    target_exchange: str,
+) -> Optional[float]:
+    if source_exchange == target_exchange:
+        return 1.0
+    queue: list[tuple[str, float]] = [(source_exchange, 1.0)]
+    seen = {source_exchange}
+    while queue:
+        exchange, factor = queue.pop(0)
+        for next_exchange, next_factor in adjacency.get(exchange, {}).items():
+            if next_exchange in seen:
+                continue
+            combined_factor = factor * next_factor
+            if next_exchange == target_exchange:
+                return combined_factor
+            seen.add(next_exchange)
+            queue.append((next_exchange, combined_factor))
+    return None
+
+
+def _build_exchange_volume_ratio_map(
+    exchange_volume_ratios: Dict[Tuple[str, str], float],
+    selected_exchanges: Sequence[str],
+    reference_exchange: str,
+    *,
+    valid_coins: Sequence[str] | None = None,
+) -> defaultdict[str, dict[str, float]]:
+    exchanges = sorted({to_standard_exchange_name(ex) for ex in selected_exchanges})
+    reference_exchange = to_standard_exchange_name(reference_exchange)
+    exchange_volume_ratios_mapped: defaultdict[str, dict[str, float]] = defaultdict(dict)
+    for ex in exchanges:
+        exchange_volume_ratios_mapped[ex][ex] = 1.0
+
+    adjacency: dict[str, dict[str, float]] = defaultdict(dict)
+    for (raw_ex0, raw_ex1), raw_ratio in exchange_volume_ratios.items():
+        ex0 = to_standard_exchange_name(raw_ex0)
+        ex1 = to_standard_exchange_name(raw_ex1)
+        ratio = float(raw_ratio)
+        if ex0 not in exchanges or ex1 not in exchanges:
+            continue
+        if not np.isfinite(ratio) or ratio <= 0.0:
+            continue
+        # Stored ratio is volume(ex0) / volume(ex1). Scale factors are target/source.
+        adjacency[ex0][ex1] = 1.0 / ratio
+        adjacency[ex1][ex0] = ratio
+
+    missing_exchanges = []
+    for ex in exchanges:
+        factor = _find_exchange_volume_scale_factor(adjacency, ex, reference_exchange)
+        if factor is None:
+            missing_exchanges.append(ex)
+            continue
+        exchange_volume_ratios_mapped[ex][reference_exchange] = factor
+
+    if missing_exchanges:
+        available_pairs = sorted(
+            f"{to_standard_exchange_name(ex0)}:{to_standard_exchange_name(ex1)}"
+            for ex0, ex1 in exchange_volume_ratios
+        )
+        raise ValueError(
+            "cannot normalize volumes: no overlapping valid candidate candles connecting "
+            f"exchange(s) {missing_exchanges} to reference {reference_exchange} "
+            f"(selected exchanges: {exchanges}; available ratio pairs: {available_pairs}; "
+            f"coins: {list(valid_coins or [])})"
+        )
+
+    return exchange_volume_ratios_mapped
 
 
 __all__ = [
