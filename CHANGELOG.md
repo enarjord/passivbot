@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live ignored-coin handling so ignored symbols are sent to the Rust
+  orchestrator as `graceful_stop`, preventing new initial entries after a
+  previously open ignored position becomes fully flat.
 - Canonicalized live fill-event accounting: cached fills now store gross `pnl`,
   signed quote-currency `fee_paid`, fee-quality metadata, and a
   `gross_pnl_quote_fee_best_effort_v2` cache contract. Non-quote fees are
