@@ -4,7 +4,7 @@
 
 :warning: **Used at one's own risk** :warning:
 
-Current development target on `feature/v8-strategy-runtime`: `v8.0.0`
+Current development target on `v8`: `v8.0.0`
 
 
 ## Overview

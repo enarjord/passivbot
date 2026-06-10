@@ -3,7 +3,7 @@
 ## Status
 
 This plan supersedes the earlier master-based draft and tracks the current
-`refactor/rust-strategy-runtime-plan` branch state.
+`v8` branch state.
 
 It uses the early EMA-anchor experiment only as the motivating example, not as the desired target
 architecture.

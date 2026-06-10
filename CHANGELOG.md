@@ -98,7 +98,7 @@ All notable user-facing changes will be documented in this file.
 - Final `caches/hlcvs_data/` caches now require valid manifests and old manifest-less final caches rebuild by default; explicit override datasets require valid manifests/checksums.
 - Added per-coin HLCV coverage metadata to materialized datasets, including requested range, valid start/end, leading/trailing missing minutes, internal gap counts/windows, and synthetic fill count/source.
 - Capped omega-ratio analysis metrics at a finite value when a backtest has positive returns with no losing days, and reports flat/no-movement windows as `0.0`, preventing optimizer scoring metrics from disappearing during JSON/Python aggregation.
-- `refactor/rust-strategy-runtime-plan` is versioned as the next major release, `v8.0.0`.
+- The `v8` branch is versioned as the next major release, `v8.0.0`.
 - Increased the pymoo NSGA3 auto reference-direction cap from `330` to `500`, giving 9-objective auto-population optimizer runs `495` reference directions instead of `165`.
 - Fixed v8 strategy min-effective-cost gating so live and backtest use the active strategy's initial sizing parameter instead of legacy flat `BotParams.entry_initial_qty_pct`.
 - Fixed flat shared bot keys to override grouped defaults during config canonicalization, and changed flat strategy coin overrides to fail loudly instead of being silently discarded.

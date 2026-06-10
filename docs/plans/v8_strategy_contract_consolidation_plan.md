@@ -1,6 +1,6 @@
 # V8 Strategy Contract Consolidation Plan
 
-This plan covers the highest-value follow-up work on `feature/v8-strategy-runtime`: make the v8
+This plan covers the highest-value follow-up work on `v8`: make the v8
 strategy/config/optimizer contract single-sourced, remove duplicated path-resolution logic, and add
 tests that prove the contract survives the full config and optimizer pipeline.
 
