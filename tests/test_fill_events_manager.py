@@ -1564,6 +1564,40 @@ def test_fill_event_cache_rejects_malformed_current_contract_record(tmp_path: Pa
         FillEventCache(cache_dir).load()
 
 
+def test_fill_event_cache_rejects_unreadable_current_contract_day(tmp_path: Path):
+    cache_dir = tmp_path / "fills"
+    cache_dir.mkdir()
+    (cache_dir / "metadata.json").write_text(
+        json.dumps({"pnl_contract": fem.PNL_CONTRACT_CURRENT}),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-01.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "good",
+                    "timestamp": 1_700_000_000_000,
+                    "datetime": "",
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "pb_order_type": "entry",
+                    "position_side": "long",
+                    "client_order_id": "cid",
+                    "pnl_contract": fem.PNL_CONTRACT_CURRENT,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    (cache_dir / "2026-02-02.json").write_text("{broken json", encoding="utf-8")
+
+    with pytest.raises(FillEventCacheContractError, match="unreadable"):
+        FillEventCache(cache_dir).load()
+
+
 @pytest.mark.asyncio
 async def test_fill_event_cache_rejects_legacy_missing_pnl_contract(tmp_path: Path):
     cache_dir = tmp_path / "legacy_contract"

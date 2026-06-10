@@ -8,6 +8,10 @@ All notable user-facing changes will be documented in this file.
   `live.approved_coins` universe even when other scenarios define explicit
   coin subsets, and so `coin_overrides.<coin>.live.forced_mode_<side>=normal`
   is carried into Rust backtests as a forced normal active slot.
+- Tightened fail-loud handling for live cancellations, current fill-event caches, and
+  single-exchange HLCV preparation: unexpected cancel failures now propagate through
+  restart/error handling, unreadable current fill-cache day files fail cache loading, and
+  per-coin HLCV fetch errors no longer silently shrink the requested backtest universe.
 - Added HSL `coin` signal mode, which tracks per-coin realized drawdown plus current UPnL
   against the configured slot budget and panic-closes only the affected `coin+pside`. Live
   uses configured `n_positions`; backtests use configured `n_positions` in fixed-WEL mode and
@@ -17,9 +21,9 @@ All notable user-facing changes will be documented in this file.
   and drawdown series with one sample per bar.
 - Fixed backtest HSL setup so enabling HSL on one side no longer implicitly enables the disabled
   opposite side through the common HSL config.
-- Hardened live coin-HSL restart when open-position history lacks per-coin timeline PnL:
-  replay skips missing optional history, logs it, and still evaluates current exchange UPnL so
-  required panic modes can be applied.
+- Hardened live coin-HSL restart replay so open positions and panic/cooldown history require
+  exchange-derived per-coin timeline PnL, panic-flatten markers are reconstructed per coin, and
+  active cooldown intervention/residue state survives restart.
 - Exposed `live.hsl_signal_mode` on the backtest/optimize CLI as `--hsl-signal-mode`,
   so HSL signal mode can be changed without editing the config file.
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:

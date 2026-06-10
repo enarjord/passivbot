@@ -1539,6 +1539,11 @@ class FillEventCache:
                     payload = json.load(fh) or []
             except Exception as exc:
                 logger.warning("[fills] cache load: failed to read %s (%s)", path, exc)
+                if not allow_legacy_contract:
+                    raise FillEventCacheContractError(
+                        f"fill-event cache file {path} is unreadable and cannot be used for "
+                        f"trading-critical accounting: {exc}"
+                    ) from exc
                 continue
             for raw in payload:
                 if (

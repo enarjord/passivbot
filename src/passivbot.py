@@ -7253,6 +7253,16 @@ class Passivbot:
             )
         )
 
+    def _ambiguous_cancel_success_result(self, order: dict) -> dict:
+        result = {
+            "status": "success",
+            "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+        }
+        for key in ("id", "symbol", "side", "position_side", "qty", "price", "reduce_only"):
+            if key in order:
+                result[key] = order[key]
+        return result
+
     def _request_authoritative_confirmation(
         self,
         surfaces: str | list[str] | set[str] | tuple[str, ...],
@@ -14053,11 +14063,10 @@ class Passivbot:
                     Passivbot._log_symbol(order.get("symbol", "?")),
                     order.get("id", "?")[:12],
                 )
-            else:
-                logging.error(f"error cancelling order {order} {e}")
-                print_async_exception(executed)
-                traceback.print_exc()
-            return {}
+                return self._ambiguous_cancel_success_result(order)
+            logging.error(f"error cancelling order {order} {e}")
+            print_async_exception(executed)
+            raise
 
     async def execute_cancellations(self, orders: [dict]) -> [dict]:
         """Execute a batch of cancellations using the helper pipeline."""
