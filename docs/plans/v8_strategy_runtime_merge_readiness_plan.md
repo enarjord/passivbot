@@ -1,6 +1,6 @@
 # V8 Strategy Runtime Merge Readiness Plan
 
-This plan covers the next highest-value pass on `feature/v8-strategy-runtime`.
+This plan covers the next highest-value pass on `v8`.
 
 The branch already contains the high-leverage v8 strategy/config/optimizer contract consolidation:
 Rust-owned strategy metadata, Python adapters in `src/config/strategy_spec.py`, centralized path
@@ -10,7 +10,7 @@ branch clean, verifiable, and reviewable for merge. It should not start a broad 
 
 ## Goal
 
-Make `feature/v8-strategy-runtime` merge-ready by removing known hygiene failures and validating
+Make `v8` merge-ready by removing known hygiene failures and validating
 that the current Rust/Python/config/optimizer contract works from a fresh checkout state.
 
 Success means:
@@ -34,30 +34,22 @@ Success means:
 - Do not treat broad `pytest` success as sufficient if the Rust extension freshness check or
   backtest smoke path has not been exercised.
 
-## Current Known Evidence
+## Historical Known Evidence
 
-- Current branch tip reviewed: `32bf02ef Consolidate v8 strategy config contract`.
-- `HEAD` matched `origin/feature/v8-strategy-runtime` after fetch during review.
-- Targeted contract tests passed after the repo-stamped Rust rebuild:
-
-```bash
-./venv/bin/python -m pytest \
-  tests/test_config_pipeline.py \
-  tests/optimization/test_config_adapter.py \
-  tests/optimization/test_optimize.py \
-  tests/test_suite_runner.py \
-  tests/optimization/test_optimizer_warmup.py \
-  tests/test_shared_bot.py
-```
-
-- Current result from that command: `229 passed, 14 warnings`.
-- The same tests failed before rebuild because the installed `passivbot_rust` was stale and lacked
-  `get_strategy_kinds`.
-- Confirmed hygiene blocker:
-
-```text
-src/config/param_paths.py:175: new blank line at EOF.
-```
+- Previous reviewed branch tip: `15ac8094 Fix v8 full suite test expectations`.
+- At that review point, `HEAD` matched `origin/v8` after fetch.
+- `git diff --check origin/master...HEAD` passed at that reviewed tip; the older
+  `src/config/param_paths.py` blank-EOF hygiene blocker was resolved there.
+- The installed `passivbot_rust` extension must still be rebuilt for this checkout before Python
+  tests that read Rust-owned strategy metadata are meaningful.
+- Latest review smoke after rebuilding the Rust extension verified:
+  - `passivbot_rust.get_strategy_kinds()` returned `("trailing_martingale", "ema_anchor")`.
+  - `tests/test_config_pipeline.py`, `tests/test_config_utils_helpers.py`, and
+    `tests/test_passivbot_version.py` passed.
+- This section is historical evidence, not a current merge-readiness certification. Before merging,
+  refresh `origin/v8` and re-run the primary contract suite below because the branch may have
+  advanced since both the `15ac8094` smoke and the earlier `229 passed, 14 warnings`
+  contract-test snapshot.
 
 ## Pass Sequence
 
@@ -68,17 +60,17 @@ Purpose: avoid reviewing stale local state.
 Commands:
 
 ```bash
-git fetch origin feature/v8-strategy-runtime
+git fetch origin v8
 git status --short --branch
 git rev-parse HEAD
-git rev-parse origin/feature/v8-strategy-runtime
+git rev-parse origin/v8
 git log --oneline -n 10
 ```
 
 Acceptance:
 
-- Local branch is still `feature/v8-strategy-runtime`.
-- `HEAD` matches `origin/feature/v8-strategy-runtime`, or any local-only commits are intentional
+- Local branch is still `v8`.
+- `HEAD` matches `origin/v8`, or any local-only commits are intentional
   and listed in the final report.
 - Untracked files are classified as unrelated, planned, or blockers.
 
@@ -93,7 +85,7 @@ Purpose: remove the known confirmed merge blocker before spending time on heavie
 
 Tasks:
 
-1. Remove the blank trailing EOF line in `src/config/param_paths.py`.
+1. Confirm the previously reported blank trailing EOF line in `src/config/param_paths.py` remains fixed.
 2. Run the whitespace/check gate.
 3. Inspect the diff to confirm no unrelated formatting churn.
 
@@ -107,7 +99,7 @@ git diff -- src/config/param_paths.py
 Acceptance:
 
 - `git diff --check origin/master...HEAD` exits cleanly.
-- The only code edit in this step is the EOF hygiene fix unless new hygiene failures are found.
+- No code edit is needed if the EOF hygiene issue remains fixed; otherwise fix only mechanical hygiene failures.
 
 Stop conditions:
 
@@ -316,7 +308,7 @@ At the end of the pass, provide:
 
 The pass is complete when:
 
-- The known `param_paths.py` EOF issue is fixed.
+- The previously reported `param_paths.py` EOF issue remains fixed.
 - All selected commands above are run or explicitly marked blocked with exact blocker evidence.
 - No validation step relies on a stale Rust extension.
 - The final report can say either "merge-ready" or "not merge-ready because ..." with concrete
