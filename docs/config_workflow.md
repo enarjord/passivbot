@@ -6,7 +6,7 @@ This is the recommended way to work with Passivbot configs on the current config
 
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_martingale_long_npos4.json` mirrors those defaults exactly.
-- New schema-authored configs should keep the top-level `config_version` field. Older configs without it are treated as legacy and migrated during load.
+- New V8 configs must keep the top-level `config_version: "v8.0.0"` field. V8 is a breaking schema; older or pre-v8 configs are not automatically converted to V8.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
