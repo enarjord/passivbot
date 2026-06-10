@@ -37,6 +37,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_has_open_position_symbol",
         "_equity_hard_stop_history_coin_value",
         "_equity_hard_stop_initialize_coin_from_history",
+        "_equity_hard_stop_infer_coin_replay_contract",
         "_equity_hard_stop_lookback_ms",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
@@ -392,22 +393,10 @@ async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_open_position_missing_history_uses_current_upnl_for_panic(caplog):
-    from passivbot import Passivbot
-
+async def test_coin_hsl_open_position_missing_history_requires_coin_timeline_fields():
     bot = make_coin_bot()
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
-    bot.fetched_positions = [
-        {"symbol": symbol, "position_side": "long", "price": 100.0, "size": 1.0}
-    ]
-    bot.c_mults = {symbol: 1.0}
-    bot._calc_upnl_sum_strict = MethodType(hsl._calc_upnl_sum_strict, bot)
-
-    async def get_live_last_prices(symbols, max_age_ms, context):
-        assert symbols == {symbol}
-        assert context == "hard_stop_upnl"
-        return {symbol: 20.0}
 
     async def fake_history(current_balance=None):
         return {
@@ -422,44 +411,17 @@ async def test_coin_hsl_open_position_missing_history_uses_current_upnl_for_pani
             "fill_events": [],
         }
 
-    bot._get_live_last_prices = get_live_last_prices
     bot.get_balance_equity_history = fake_history
-    bot.config_get = lambda path, symbol=None: None
-    bot.ineligible_symbols = {}
-    bot.markets_dict = {symbol: {"active": True}}
-    bot._orchestrator_mode_override = MethodType(Passivbot._orchestrator_mode_override, bot)
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="realized_pnl_by_coin_pside"):
         await bot._equity_hard_stop_initialize_coin_from_history()
-
-    state = bot._hsl_coin_state("long", symbol)
-    assert state["runtime"].red_latched() is True
-    assert state["runtime"].tier() == "red"
-    assert state["last_metrics"]["timestamp_ms"] == bot.get_exchange_time()
-    assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-80.0)
-    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.8)
-    assert state["pending_stop_event"] is not None
-    assert state["pending_stop_event"]["unrealized_pnl"] == pytest.approx(-80.0)
-    assert bot._runtime_forced_modes["long"][symbol] == "panic"
-    assert bot._orchestrator_mode_override("long", symbol) == "panic"
-    assert "evaluating current exchange UPnL only" in caplog.text
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_open_position_missing_history_below_red_stays_current_green(caplog):
-    from passivbot import Passivbot
-
+async def test_coin_hsl_open_position_empty_coin_history_requires_symbol_fields():
     bot = make_coin_bot()
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
-    bot.fetched_positions = [
-        {"symbol": symbol, "position_side": "long", "price": 100.0, "size": 1.0}
-    ]
-    bot.c_mults = {symbol: 1.0}
-    bot._calc_upnl_sum_strict = MethodType(hsl._calc_upnl_sum_strict, bot)
-
-    async def get_live_last_prices(symbols, max_age_ms, context):
-        return {symbol: 95.0}
 
     async def fake_history(current_balance=None):
         return {
@@ -468,30 +430,18 @@ async def test_coin_hsl_open_position_missing_history_below_red_stays_current_gr
                     "timestamp": 60_000,
                     "balance": 100.0,
                     "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
                 }
             ],
             "panic_flatten_events": [],
             "fill_events": [],
         }
 
-    bot._get_live_last_prices = get_live_last_prices
     bot.get_balance_equity_history = fake_history
-    bot.config_get = lambda path, symbol=None: None
-    bot.ineligible_symbols = {}
-    bot.markets_dict = {symbol: {"active": True}}
-    bot._orchestrator_mode_override = MethodType(Passivbot._orchestrator_mode_override, bot)
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="missing required coin HSL symbol"):
         await bot._equity_hard_stop_initialize_coin_from_history()
-
-    state = bot._hsl_coin_state("long", symbol)
-    assert state["runtime"].tier() == "green"
-    assert state["last_metrics"]["timestamp_ms"] == bot.get_exchange_time()
-    assert state["last_metrics"]["unrealized_pnl"] == pytest.approx(-5.0)
-    assert state["pending_stop_event"] is None
-    assert symbol not in bot._runtime_forced_modes["long"]
-    assert bot._orchestrator_mode_override("long", symbol) is None
-    assert "evaluating current exchange UPnL only" in caplog.text
 
 
 @pytest.mark.asyncio
@@ -526,6 +476,171 @@ async def test_coin_hsl_history_replay_requires_relevant_symbol_fields():
 
     with pytest.raises(ValueError, match="missing required coin HSL symbol"):
         await bot._equity_hard_stop_initialize_coin_from_history()
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_reconstructs_unresolved_panic_residue_on_restart():
+    bot = make_coin_bot(policy="normal")
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.get_exchange_time = lambda: 200_000
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": -80.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 121_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["cooldown_until_ms"] == 421_500
+    assert state["cooldown_unresolved_residue"] is True
+    assert state["cooldown_intervention_active"] is False
+    assert bot._runtime_forced_modes["long"][symbol] == "panic"
+
+    changed = await bot._equity_hard_stop_handle_coin_position_during_cooldown(
+        "long", symbol, 200_000
+    )
+    assert changed is False
+    assert state["halted"] is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_reconstructs_manual_cooldown_intervention_on_restart():
+    bot = make_coin_bot(policy="manual")
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": -80.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 100_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                },
+                {
+                    "timestamp": 130_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "pb_order_type": "entry_initial_normal_long",
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is True
+    assert state["cooldown_until_ms"] == 400_000
+    assert state["cooldown_unresolved_residue"] is False
+    assert state["cooldown_intervention_active"] is True
+    assert bot._runtime_forced_modes["long"][symbol] == "manual"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_reconstructs_normal_cooldown_intervention_as_override():
+    bot = make_coin_bot(policy="normal")
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.get_exchange_time = lambda: 180_000
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 180_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 100_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                },
+                {
+                    "timestamp": 130_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "pb_order_type": "entry_initial_normal_long",
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["cooldown_until_ms"] is None
+    assert symbol not in bot._runtime_forced_modes["long"]
 
 
 @pytest.mark.asyncio
