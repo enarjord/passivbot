@@ -100,32 +100,30 @@ class TestApplyConfigOverrides:
         _apply_config_overrides(config, {"bot.long.value": 2.0})
         assert config["bot"]["long"]["value"] == 2.0
 
-    def test_nested_override_creates_path(self):
+    def test_missing_intermediate_path_raises(self):
         config = {}
-        _apply_config_overrides(config, {"bot.long.value": 5.0})
-        assert config["bot"]["long"]["value"] == 5.0
+        with pytest.raises(KeyError, match="missing bot"):
+            _apply_config_overrides(config, {"bot.long.value": 5.0})
 
-    def test_override_creates_missing_dicts(self):
+    def test_missing_final_key_raises(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {"bot.short.param": 10})
-        assert config["bot"]["short"]["param"] == 10
+        with pytest.raises(KeyError, match="missing bot.short"):
+            _apply_config_overrides(config, {"bot.short.param": 10})
 
-    def test_non_string_keys_skipped(self):
+    def test_non_string_keys_raise(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {123: "value"})
-        assert config == {"bot": {}}
+        with pytest.raises(ValueError, match="dotted strings"):
+            _apply_config_overrides(config, {123: "value"})
 
-    def test_empty_dotted_path_creates_key(self):
-        # Empty string dotted path actually creates an empty-string key
+    def test_empty_dotted_path_raises(self):
         config = {"bot": {}}
-        _apply_config_overrides(config, {"": "value"})
-        # Empty path creates a key with empty string
-        assert config[""] == "value"
+        with pytest.raises(ValueError, match="must not be empty"):
+            _apply_config_overrides(config, {"": "value"})
 
-    def test_replaces_non_dict_intermediate_values(self):
+    def test_non_dict_intermediate_value_raises(self):
         config = {"bot": {"long": "not_a_dict"}}
-        _apply_config_overrides(config, {"bot.long.value": 3.0})
-        assert config["bot"]["long"]["value"] == 3.0
+        with pytest.raises(KeyError, match="bot.long is not a mapping"):
+            _apply_config_overrides(config, {"bot.long.value": 3.0})
 
     def test_bot_shared_paths_update_grouped_value_and_runtime_alias(self):
         config = {
@@ -169,6 +167,14 @@ class TestApplyConfigOverrides:
         assert config["bot"]["long"]["strategy"]["trailing_martingale"]["entry"][
             "threshold_base_pct"
         ] == pytest.approx(0.25)
+
+    def test_typo_override_path_raises_without_creating_key(self):
+        config = get_template_config()
+
+        with pytest.raises(KeyError, match="n_positons"):
+            _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
+
+        assert "n_positons" not in config["bot"]["long"]["risk"]
 
 
 class TestLiquidationHelpers:
@@ -720,6 +726,10 @@ class TestIndividualToConfig:
                 "long": {
                     "param1": 0.0,
                     "param2": 0.0,
+                    "hsl": {
+                        "red_threshold": 0.20,
+                        "no_restart_drawdown_threshold": 0.30,
+                    },
                     "hsl_red_threshold": 0.20,
                     "hsl_no_restart_drawdown_threshold": 0.30,
                 },
@@ -743,6 +753,8 @@ class TestIndividualToConfig:
 
         assert result["bot"]["long"]["hsl_red_threshold"] == pytest.approx(0.25)
         assert result["bot"]["long"]["hsl_no_restart_drawdown_threshold"] == pytest.approx(1.0)
+        assert result["bot"]["long"]["hsl"]["red_threshold"] == pytest.approx(0.25)
+        assert result["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(1.0)
         assert template == original_template
 
     def test_mirror_short_from_long_override(self):

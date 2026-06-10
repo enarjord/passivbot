@@ -600,6 +600,55 @@ async def test_binance_fetcher_income_only_events(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_binance_fetcher_trade_history_errors_are_not_income_only_events(monkeypatch):
+    """Trade-history outages must not be normalized as zero-qty income-only fills."""
+    ts = 1_700_000_000_000
+    income_events = [
+        {
+            "id": "income-only-outage",
+            "timestamp": ts,
+            "datetime": "2023-11-01T00:00:00Z",
+            "symbol": "SOL/USDT:USDT",
+            "side": "",
+            "qty": 0.0,
+            "price": 0.0,
+            "pnl": 12.5,
+            "fees": None,
+            "pb_order_type": "",
+            "position_side": "long",
+            "client_order_id": "",
+        }
+    ]
+
+    class FailingTradeAPI:
+        async def fetch_my_trades(self, *_args, **_kwargs):
+            raise RuntimeError("simulated trade-history outage")
+
+    fetcher = BinanceFetcher(
+        api=FailingTradeAPI(),
+        symbol_resolver=lambda sym: sym or "",
+        positions_provider=lambda: [],
+        open_orders_provider=lambda: [],
+    )
+
+    async def fake_fetch_income(self, *_args, **_kwargs):
+        return [dict(ev) for ev in income_events]
+
+    monkeypatch.setattr(
+        fetcher,
+        "_fetch_income",
+        types.MethodType(fake_fetch_income, fetcher),
+    )
+
+    with pytest.raises(RuntimeError, match="simulated trade-history outage"):
+        await fetcher.fetch(
+            since_ms=ts - 1,
+            until_ms=ts + 1,
+            detail_cache={},
+        )
+
+
+@pytest.mark.asyncio
 async def test_binance_fetcher_time_bounds_filtering(monkeypatch):
     """Test that events outside time bounds are filtered."""
     income_events = [

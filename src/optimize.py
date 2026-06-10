@@ -75,7 +75,7 @@ from cli_utils import (
 from config import compile_runtime_config, load_input_config, load_prepared_config, prepare_config
 from config.access import get_optional_config_value, require_config_value
 from config.limits import normalize_limit_entries, parse_limit_cli_entries
-from config.param_paths import resolve_bound_selectors, resolve_dotted_config_path
+from config.param_paths import resolve_bound_selectors, require_existing_config_path
 from config.shared_bot import (
     flatten_shared_bot_side,
     get_bot_group,
@@ -215,15 +215,11 @@ def _apply_config_overrides(config: Dict[str, Any], overrides: Dict[str, Any]) -
         return
     for dotted_path, value in overrides.items():
         if not isinstance(dotted_path, str):
-            continue
-        resolved_path = resolve_dotted_config_path(config, dotted_path)
-        if resolved_path is None:
-            continue
+            raise ValueError("Override keys must be dotted strings")
+        resolved_path = require_existing_config_path(config, dotted_path)
         parts = list(resolved_path)
         target = config
         for part in parts[:-1]:
-            if part not in target or not isinstance(target[part], dict):
-                target[part] = {}
             target = target[part]
         target[parts[-1]] = value
     bot_cfg = config.get("bot")

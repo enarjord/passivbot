@@ -144,6 +144,35 @@ def resolve_dotted_config_path(config: dict, selector_or_path: str) -> tuple[str
     return tuple(parts)
 
 
+def require_existing_config_path(config: dict, selector_or_path: str) -> tuple[str, ...]:
+    resolved = resolve_dotted_config_path(config, selector_or_path)
+    if resolved is None or not resolved or any(part == "" for part in resolved):
+        raise ValueError("Override paths must not be empty")
+
+    target = config
+    traversed: list[str] = []
+    for part in resolved[:-1]:
+        traversed.append(part)
+        dotted = ".".join(traversed)
+        if not isinstance(target, dict) or part not in target:
+            raise KeyError(
+                f"Unknown override path {selector_or_path!r}: missing {dotted}"
+            )
+        target = target[part]
+        if not isinstance(target, dict):
+            raise KeyError(
+                f"Unknown override path {selector_or_path!r}: {dotted} is not a mapping"
+            )
+
+    final_key = resolved[-1]
+    full_path = ".".join(resolved)
+    if not isinstance(target, dict) or final_key not in target:
+        raise KeyError(
+            f"Unknown override path {selector_or_path!r}: missing {full_path}"
+        )
+    return resolved
+
+
 def path_matches_selector(path: tuple[str, ...], selector_path: tuple[str, ...]) -> bool:
     if len(selector_path) > len(path):
         return False

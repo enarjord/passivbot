@@ -227,6 +227,47 @@ def test_apply_scenario_overrides_update_config():
     assert "bot.long.risk.n_positions" in paths
 
 
+def test_apply_scenario_rejects_unknown_override_path():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": [], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "bot": {
+            "long": {"risk": {"n_positions": 8}},
+            "short": {"risk": {"n_positions": 8}},
+        },
+    }
+    scenario = SuiteScenario(
+        label="override",
+        start_date=None,
+        end_date=None,
+        coins=["BTC"],
+        ignored_coins=[],
+        overrides={"bot.long.risk.n_positons": 3},
+    )
+
+    with pytest.raises(KeyError, match="n_positons"):
+        apply_scenario(
+            base_config,
+            scenario,
+            master_coins=["BTC"],
+            master_ignored=[],
+            available_exchanges=["binance"],
+            available_coins={"BTC"},
+            base_coin_sources={"BTC": "binance"},
+        )
+
+    assert "n_positons" not in base_config["bot"]["long"]["risk"]
+
+
 def test_apply_scenario_overrides_use_shared_canonical_path_resolver():
     base_config = {
         "backtest": {

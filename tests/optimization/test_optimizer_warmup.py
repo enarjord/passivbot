@@ -7,8 +7,11 @@ instead of the worst case the optimizer's search space can actually produce.
 
 from pathlib import Path
 
+import pytest
+
 from config_utils import get_template_config
 from optimization.warmup import (
+    _apply_config_overrides,
     compute_optimizer_backtest_warmup_minutes,
     compute_optimizer_per_coin_warmup_minutes,
     stamp_warmup_metadata,
@@ -98,6 +101,15 @@ def test_shared_optimizer_warmup_helper_uses_bounds_when_template_bot_exceeds_th
     assert warmup_map["__default__"] == 30
     assert "HYPE" not in warmup_map
     assert compute_optimizer_backtest_warmup_minutes(config) == 30
+
+
+def test_optimizer_warmup_fixed_runtime_override_rejects_unknown_path():
+    config = get_template_config()
+
+    with pytest.raises(KeyError, match="n_positons"):
+        _apply_config_overrides(config, {"bot.long.risk.n_positons": 7})
+
+    assert "n_positons" not in config["bot"]["long"]["risk"]
 
 
 def test_stamp_optimizer_warmup_respects_last_valid_index_cap():

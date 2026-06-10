@@ -2394,6 +2394,43 @@ async def test_refresh_authoritative_state_staged_does_not_publish_when_open_ord
 
 
 @pytest.mark.asyncio
+async def test_refresh_authoritative_state_staged_invalid_exchange_balance_raises_without_commit():
+    bot = Passivbot.__new__(Passivbot)
+    plan = {"balance", "positions", "open_orders", "fills"}
+    bot._authoritative_staged_refresh_plan = lambda: set(plan)
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "balance": float("nan"),
+            "positions": [{"symbol": "BTC/USDT:USDT"}],
+            "open_orders": [],
+            "pnls_ok": True,
+        }
+    )
+    bot.quote = "USDT"
+    bot.balance = 50.0
+    bot.balance_raw = 50.0
+    bot.balance_override = None
+    bot.previous_hysteresis_balance = 50.0
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot._exchange_reported_balance_raw = 50.0
+    bot._apply_open_orders_snapshot = AsyncMock()
+    bot._apply_positions_snapshot = MagicMock()
+    bot.handle_balance_update = AsyncMock()
+    bot._finalize_authoritative_refresh_consistency = MagicMock()
+
+    with pytest.raises(RuntimeError, match="invalid exchange balance fetch result"):
+        await bot._refresh_authoritative_state_staged()
+
+    bot._apply_open_orders_snapshot.assert_not_awaited()
+    bot._apply_positions_snapshot.assert_not_called()
+    bot.handle_balance_update.assert_not_awaited()
+    bot._finalize_authoritative_refresh_consistency.assert_not_called()
+    assert bot.balance == pytest.approx(50.0)
+    assert bot.balance_raw == pytest.approx(50.0)
+    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
+
+
+@pytest.mark.asyncio
 async def test_refresh_authoritative_state_staged_does_not_partially_commit_on_invalid_balance():
     bot = Passivbot.__new__(Passivbot)
     plan = {"balance", "positions", "open_orders", "fills"}
@@ -2587,7 +2624,18 @@ def test_apply_balance_snapshot_honors_override_and_retains_exchange_raw(caplog)
 
 
 @pytest.mark.asyncio
-async def test_update_balance_nan_keeps_previous_and_logs_warning(caplog):
+@pytest.mark.parametrize(
+    ("fetched_balance", "reason"),
+    [
+        (None, "none"),
+        ("not-a-number", "non-numeric"),
+        (float("nan"), "non-finite"),
+        (float("inf"), "non-finite"),
+    ],
+)
+async def test_update_balance_invalid_exchange_payload_raises_without_mutating(
+    fetched_balance, reason
+):
     bot = Passivbot.__new__(Passivbot)
     bot.quote = "USDT"
     bot.balance = 50.0
@@ -2595,39 +2643,15 @@ async def test_update_balance_nan_keeps_previous_and_logs_warning(caplog):
     bot.previous_hysteresis_balance = 50.0
 
     async def fake_fetch_balance():
-        return float("nan")
+        return fetched_balance
 
     bot.fetch_balance = fake_fetch_balance
 
-    with caplog.at_level(logging.WARNING):
-        ok = await bot.update_balance()
-    assert ok is False
+    with pytest.raises(RuntimeError, match=rf"invalid exchange balance fetch result \({reason}\)"):
+        await bot.update_balance()
     assert bot.balance == pytest.approx(50.0)
     assert bot.balance_raw == pytest.approx(50.0)
     assert bot.previous_hysteresis_balance == pytest.approx(50.0)
-    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
-
-
-@pytest.mark.asyncio
-async def test_update_balance_inf_keeps_previous_and_logs_warning(caplog):
-    bot = Passivbot.__new__(Passivbot)
-    bot.quote = "USDT"
-    bot.balance = 50.0
-    bot.balance_raw = 50.0
-    bot.previous_hysteresis_balance = 50.0
-
-    async def fake_fetch_balance():
-        return float("inf")
-
-    bot.fetch_balance = fake_fetch_balance
-
-    with caplog.at_level(logging.WARNING):
-        ok = await bot.update_balance()
-    assert ok is False
-    assert bot.balance == pytest.approx(50.0)
-    assert bot.balance_raw == pytest.approx(50.0)
-    assert bot.previous_hysteresis_balance == pytest.approx(50.0)
-    assert "non-finite balance fetch result; keeping previous balance" in caplog.text
 
 
 def test_accessor_fallback_when_balance_raw_absent():

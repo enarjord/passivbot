@@ -22,7 +22,7 @@ from config import load_prepared_config
 from config.access import require_config_value, require_live_value
 from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
-from config.param_paths import resolve_dotted_config_path
+from config.param_paths import require_existing_config_path
 from config.shared_bot import canonicalize_shared_bot_side
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
@@ -978,14 +978,10 @@ def _build_scenario_signature(
 def _apply_override(
     config: Dict[str, Any], dotted_path: str, value: Any, tracker: ConfigTransformTracker
 ) -> None:
-    resolved = resolve_dotted_config_path(config, dotted_path)
-    if resolved is None:
-        raise ValueError("Override paths must not be empty")
+    resolved = require_existing_config_path(config, dotted_path)
     parts = list(resolved)
     target = config
     for part in parts[:-1]:
-        if part not in target or not isinstance(target[part], dict):
-            target[part] = {}
         target = target[part]
     final_key = parts[-1]
     previous = target.get(final_key)

@@ -37,8 +37,6 @@ async def refresh_authoritative_state_staged(bot) -> bool:
 
     if "positions" in plan and fetched_positions in [None, False]:
         return False
-    if "balance" in plan and fetched_balance in [None, False]:
-        return False
     if "open_orders" in plan and fetched_open_orders in [None, False]:
         return False
     if "fills" in plan and not pnls_ok:

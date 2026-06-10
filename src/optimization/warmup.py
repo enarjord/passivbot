@@ -5,7 +5,7 @@ from copy import deepcopy
 from typing import Sequence
 
 from config.bot import normalize_forager_score_weights
-from config.param_paths import resolve_dotted_config_path
+from config.param_paths import require_existing_config_path
 from config.shared_bot import flatten_shared_bot_side
 from optimizer_overrides import optimizer_overrides
 from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
@@ -31,15 +31,11 @@ def _apply_config_overrides(config: dict, overrides: dict) -> None:
         return
     for dotted_path, value in overrides.items():
         if not isinstance(dotted_path, str):
-            continue
-        resolved = resolve_dotted_config_path(config, dotted_path)
-        if resolved is None:
-            continue
+            raise ValueError("Override keys must be dotted strings")
+        resolved = require_existing_config_path(config, dotted_path)
         parts = list(resolved)
         target = config
         for part in parts[:-1]:
-            if part not in target or not isinstance(target[part], dict):
-                target[part] = {}
             target = target[part]
         target[parts[-1]] = value
     _refresh_shared_bot_runtime_aliases(config)

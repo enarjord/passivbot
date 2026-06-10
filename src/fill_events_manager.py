@@ -2539,14 +2539,13 @@ class BinanceFetcher(BaseFetcher):
                 raise asyncio.CancelledError("shutdown requested during Binance trade refresh")
             try:
                 trades = await task
-            except RateLimitExceeded as exc:  # pragma: no cover - depends on live API
-                logger.warning(
-                    "BinanceFetcher.fetch: rate-limited fetching trades for %s (%s)", symbol, exc
-                )
-                trades = []
             except Exception as exc:
+                for pending in trade_tasks.values():
+                    if pending is not task and not pending.done():
+                        pending.cancel()
+                await asyncio.gather(*trade_tasks.values(), return_exceptions=True)
                 logger.error("BinanceFetcher.fetch: error fetching trades for %s (%s)", symbol, exc)
-                trades = []
+                raise
             for trade in trades:
                 event = self._normalize_trade(trade)
                 cached = detail_cache.get(event["id"])
@@ -2943,7 +2942,9 @@ class BinanceFetcher(BaseFetcher):
                 self._note_unsupported_symbol(ccxt_symbol)
                 return []
             logger.error("BinanceFetcher._fetch_symbol_trades: error %s (%s)", ccxt_symbol, exc)
-            return []
+            raise RuntimeError(
+                f"Binance trade-history fetch failed for {ccxt_symbol}: {exc}"
+            ) from exc
 
     def _normalize_income(
         self, entry: Dict[str, object], *, income_type: str = "REALIZED_PNL"

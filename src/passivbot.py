@@ -9997,7 +9997,9 @@ class Passivbot:
 
         exchange_balance_raw = None
         exchange_balance_error = "none" if balance_raw is None else None
-        if balance_raw is not None:
+        if isinstance(balance_raw, bool):
+            exchange_balance_error = "non-numeric"
+        elif balance_raw is not None:
             try:
                 exchange_balance_raw = float(balance_raw)
             except (TypeError, ValueError):
@@ -10009,6 +10011,8 @@ class Passivbot:
 
         if self.balance_override is not None:
             try:
+                if isinstance(self.balance_override, bool):
+                    raise ValueError("boolean balance override")
                 balance_raw = float(self.balance_override)
             except (TypeError, ValueError):
                 logging.warning(
@@ -10031,19 +10035,13 @@ class Passivbot:
             }
         else:
             if exchange_balance_raw is None:
-                if exchange_balance_error == "none":
-                    logging.warning(
-                        "balance fetch returned None; keeping previous balance"
-                    )
-                elif exchange_balance_error == "non-numeric":
-                    logging.warning(
-                        "non-numeric balance fetch result; keeping previous balance"
-                    )
-                else:
-                    logging.warning(
-                        "non-finite balance fetch result; keeping previous balance"
-                    )
-                return None
+                exchange = getattr(self, "exchange", "unknown")
+                user = getattr(self, "user", "unknown")
+                quote = getattr(self, "quote", "unknown")
+                raise RuntimeError(
+                    "invalid exchange balance fetch result "
+                    f"({exchange_balance_error}) for {exchange}/{user}/{quote}: {balance_raw!r}"
+                )
             balance_raw = exchange_balance_raw
             if self.previous_hysteresis_balance is None:
                 previous_hysteresis_balance = balance_raw
@@ -10221,10 +10219,7 @@ class Passivbot:
         """
         balance_override = getattr(self, "balance_override", None)
         if balance_override is not None:
-            balance_raw = float(balance_override)
-            if not self._balance_override_logged:
-                logging.info("Using balance override: %.6f", balance_raw)
-                self._balance_override_logged = True
+            balance_raw = self.get_raw_balance()
         else:
             if not hasattr(self, "fetch_balance"):
                 logging.debug("update_balance: no fetch_balance implemented")
