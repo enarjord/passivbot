@@ -3041,6 +3041,7 @@ async def prepare_hlcvs_internal(
     async def fetch_coin_data(coin: str, sem: asyncio.Semaphore):
         """Fetch and validate data for a single coin. Returns (coin, data, data_bounds) or None."""
         async with sem:  # Rate limiting
+            fetch_stage = "validation"
             try:
                 adjusted_start_ts = int(effective_start_ts)
                 is_stock_perp_coin = coin.startswith("xyz:")
@@ -3064,16 +3065,8 @@ async def prepare_hlcvs_internal(
                 if minimum_coin_age_days > 0.0 and not (
                     is_stock_perp_coin and tradfi_for_stock_perps
                 ):
-                    try:
-                        first_ts = await om.get_first_timestamp(coin)
-                    except Exception as e:
-                        _pct_log(
-                            "error",
-                            progress.pct(),
-                            f"error with get_first_timestamp for {coin} {e}. Skipping",
-                        )
-                        traceback.print_exc()
-                        return None
+                    fetch_stage = "get_first_timestamp"
+                    first_ts = await om.get_first_timestamp(coin)
 
                     if first_ts >= end_ts:
                         _pct_log(
@@ -3108,6 +3101,7 @@ async def prepare_hlcvs_internal(
                         adjusted_start_ts = int(new_adjusted_start_ts)
 
                 # Fetch OHLCV data
+                fetch_stage = "get_ohlcvs"
                 om.update_date_range(adjusted_start_ts)
                 df = await om.get_ohlcvs(coin)
                 data = df[["timestamp", "high", "low", "close", "volume"]].values
@@ -3134,9 +3128,8 @@ async def prepare_hlcvs_internal(
             except HlcvsDataIntegrityError:
                 raise
             except Exception as e:
-                _pct_log("error", progress.pct(), f"error with get_ohlcvs for {coin} {e}. Skipping")
-                traceback.print_exc()
-                return None
+                _pct_log("error", progress.pct(), f"error with {fetch_stage} for {coin} {e}")
+                raise RuntimeError(f"{exchange} {fetch_stage} failed for {coin}: {e}") from e
 
     # Parallelize coin fetching with rate limiting.
     # Bybit is more sensitive to bursts; keep concurrency lower to reduce timeouts.
@@ -3152,7 +3145,9 @@ async def prepare_hlcvs_internal(
 
         if isinstance(result, HlcvsDataIntegrityError):
             raise result
-        if result is None or isinstance(result, Exception):
+        if isinstance(result, Exception):
+            raise result
+        if result is None:
             progress.update()
             continue
 

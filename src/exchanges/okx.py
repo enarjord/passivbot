@@ -184,7 +184,7 @@ class OKXBot(CCXTBot):
             # 51400 = order already cancelled or filled - not an error
             if '"sCode":"51400"' in str(e):
                 logging.info(f"Order already cancelled/filled: {e}")
-                return {}
+                return self._ambiguous_cancel_success_result(order)
             raise
 
     def _build_order_params(self, order: dict) -> dict:

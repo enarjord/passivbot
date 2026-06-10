@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Tightened fail-loud handling for live cancellations, current fill-event caches, and
+  single-exchange HLCV preparation: unexpected cancel failures now propagate through
+  restart/error handling, unreadable current fill-cache day files fail cache loading, and
+  per-coin HLCV fetch errors no longer silently shrink the requested backtest universe.
 - Added HSL backtest metrics for per-event panic-close realized-loss drawdown severity:
   min, mean, and max loss as a fraction of equity before each panic-close episode.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside

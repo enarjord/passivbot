@@ -647,6 +647,97 @@ async def test_prepare_hlcvs_internal_raises_on_non_contiguous_coin_data(
         )
 
 
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_raises_on_coin_fetch_failure(
+    sample_config, monkeypatch
+):
+    class FakeManager:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return True
+
+        def update_date_range(self, start_ts):
+            self.start_ts = start_ts
+
+        async def get_ohlcvs(self, coin):
+            if coin == "BAD":
+                raise RuntimeError("simulated fetch outage")
+            return pd.DataFrame(
+                {
+                    "timestamp": [0, 60_000],
+                    "high": [101.0, 102.0],
+                    "low": [99.0, 100.0],
+                    "close": [100.0, 101.0],
+                    "volume": [10.0, 11.0],
+                }
+            )
+
+        def get_market_specific_settings(self, coin):
+            return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
+
+    monkeypatch.setattr(
+        hp,
+        "get_first_timestamps_unified",
+        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
+    )
+
+    with pytest.raises(RuntimeError, match="get_ohlcvs failed for BAD"):
+        await hp.prepare_hlcvs_internal(
+            sample_config,
+            ["BAD", "GOOD"],
+            "binance",
+            0,
+            0,
+            60_000,
+            FakeManager(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_raises_on_first_timestamp_failure(
+    sample_config, monkeypatch
+):
+    sample_config["live"]["minimum_coin_age_days"] = 1.0
+
+    class FakeManager:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return True
+
+        async def get_first_timestamp(self, coin):
+            raise RuntimeError("simulated timestamp outage")
+
+        def update_date_range(self, start_ts):
+            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
+
+        async def get_ohlcvs(self, coin):
+            raise AssertionError("get_ohlcvs should not run after first timestamp failure")
+
+        def get_market_specific_settings(self, coin):
+            return {"exchange": "binance", "symbol": f"{coin}/USDT:USDT"}
+
+    monkeypatch.setattr(
+        hp,
+        "get_first_timestamps_unified",
+        AsyncMock(return_value={"BAD": 0, "GOOD": 0}),
+    )
+
+    with pytest.raises(RuntimeError, match="get_first_timestamp failed for BAD"):
+        await hp.prepare_hlcvs_internal(
+            sample_config,
+            ["BAD", "GOOD"],
+            "binance",
+            0,
+            0,
+            60_000,
+            FakeManager(),
+        )
+
+
 # ============================================================================
 # Test Class: Error Handling
 # ============================================================================

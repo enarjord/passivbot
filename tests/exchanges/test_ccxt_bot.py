@@ -455,10 +455,27 @@ class TestCCXTBotExecuteCancellation:
                 {"id": "abc123def456", "symbol": "SUI/USDT:USDT"}
             )
 
-        assert result == {}
+        assert result["id"] == "abc123def456"
+        assert result["symbol"] == "SUI/USDT:USDT"
+        assert result["status"] == "success"
+        assert result["_passivbot_cancel_requires_full_authoritative_confirmation"] is True
         assert "cancel skipped" in caplog.text
         assert "order likely already filled or cancelled" in caplog.text
         assert not any(record.levelname == "ERROR" for record in caplog.records)
+
+    @pytest.mark.asyncio
+    async def test_unexpected_cancel_error_propagates(self):
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.exchange = "bybit"
+        bot.cca = MagicMock()
+        bot.cca.cancel_order = AsyncMock(side_effect=Exception("simulated network outage"))
+
+        with pytest.raises(Exception, match="simulated network outage"):
+            await bot.execute_cancellation(
+                {"id": "abc123def456", "symbol": "SUI/USDT:USDT"}
+            )
 
     def test_cross_only_blocks_isolated_only_symbol_for_entries(self, caplog):
         from exchanges.ccxt_bot import CCXTBot
