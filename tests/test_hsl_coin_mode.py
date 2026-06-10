@@ -28,6 +28,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_apply_coin_sample",
         "_equity_hard_stop_apply_coin_metrics_sample",
         "_equity_hard_stop_activate_coin_red_from_metrics",
+        "_equity_hard_stop_coin_active_pside",
         "_equity_hard_stop_coin_realized_pnl_peak_last",
         "_equity_hard_stop_coin_needs_panic_supervision",
         "_equity_hard_stop_coin_red_active",
@@ -163,6 +164,96 @@ def test_coin_hsl_slot_budget_rejects_zero_n_positions():
 
     with pytest.raises(ValueError, match="n_positions"):
         bot._equity_hard_stop_apply_coin_sample("long", "A", 60_000, 100.0, -1.0)
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.hsl["short"]["enabled"] = True
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+
+    def bot_value(pside, key):
+        values = {
+            "long": {"n_positions": 2, "total_wallet_exposure_limit": 2.0},
+            "short": {"n_positions": 3, "total_wallet_exposure_limit": 0.0},
+        }
+        return values[pside][key]
+
+    bot.bot_value = bot_value
+
+    out = await bot._equity_hard_stop_check_coin()
+
+    assert set(out) == {f"long:{symbol}"}
+    assert symbol in bot._equity_hard_stop_coin["long"]
+    assert bot._equity_hard_stop_coin["short"] == {}
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_skips_enabled_side_with_zero_budget():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.hsl["short"]["enabled"] = True
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+
+    def bot_value(pside, key):
+        values = {
+            "long": {"n_positions": 2, "total_wallet_exposure_limit": 2.0},
+            "short": {"n_positions": 3, "total_wallet_exposure_limit": 0.0},
+        }
+        return values[pside][key]
+
+    bot.bot_value = bot_value
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert symbol in bot._equity_hard_stop_coin["long"]
+    assert bot._equity_hard_stop_coin["short"] == {}
+
+
+@pytest.mark.parametrize(
+    "n_positions,total_wallet_exposure_limit,match",
+    [
+        (-1, 1.0, "n_positions"),
+        (float("nan"), 1.0, "n_positions"),
+        (0.4, 1.0, "round to > 0"),
+        (1, -1.0, "total_wallet_exposure_limit"),
+        (1, float("inf"), "total_wallet_exposure_limit"),
+    ],
+)
+def test_coin_hsl_active_side_rejects_invalid_budget_config(
+    n_positions, total_wallet_exposure_limit, match
+):
+    bot = make_coin_bot()
+
+    def bot_value(pside, key):
+        values = {
+            "n_positions": n_positions,
+            "total_wallet_exposure_limit": total_wallet_exposure_limit,
+        }
+        return values[key]
+
+    bot.bot_value = bot_value
+
+    with pytest.raises(ValueError, match=match):
+        bot._equity_hard_stop_coin_active_pside("long")
 
 
 @pytest.mark.asyncio

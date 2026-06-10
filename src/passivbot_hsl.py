@@ -75,6 +75,30 @@ def _hsl_coin_state(self, pside: str, symbol: str) -> dict[str, Any]:
     return pside_states[symbol]
 
 
+def _equity_hard_stop_coin_active_pside(self, pside: str) -> bool:
+    if not self._equity_hard_stop_enabled(pside):
+        return False
+    n_positions_raw = float(self.bot_value(pside, "n_positions"))
+    if not math.isfinite(n_positions_raw) or n_positions_raw < 0.0:
+        raise ValueError(
+            f"coin HSL n_positions must be finite and >= 0 for {pside}, got {n_positions_raw}"
+        )
+    n_positions = int(round(n_positions_raw))
+    if n_positions <= 0:
+        if n_positions_raw == 0.0:
+            return False
+        raise ValueError(
+            f"coin HSL n_positions must round to > 0 for {pside}, got {n_positions_raw}"
+        )
+    total_wallet_exposure_limit = float(self.bot_value(pside, "total_wallet_exposure_limit"))
+    if not math.isfinite(total_wallet_exposure_limit) or total_wallet_exposure_limit < 0.0:
+        raise ValueError(
+            "coin HSL total_wallet_exposure_limit must be finite and >= 0 for "
+            f"{pside}, got {total_wallet_exposure_limit}"
+        )
+    return total_wallet_exposure_limit > 0.0
+
+
 def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
     signal_mode = self._equity_hard_stop_signal_mode()
     out = {}
@@ -1918,7 +1942,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         balance = float(self.get_raw_balance())
         rows = 0
         for pside in self._hsl_psides():
-            if not self._equity_hard_stop_enabled(pside):
+            if not self._equity_hard_stop_coin_active_pside(pside):
                 continue
             cfg = self.hsl[pside]
             cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
@@ -2303,7 +2327,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
     out = {}
     symbols = sorted(self._equity_hard_stop_coin_symbols())
     for pside in self._hsl_psides():
-        if not self._equity_hard_stop_enabled(pside):
+        if not self._equity_hard_stop_coin_active_pside(pside):
             continue
         for symbol in symbols:
             state = self._hsl_coin_state(pside, symbol)
