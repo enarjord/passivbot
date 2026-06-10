@@ -2253,6 +2253,7 @@ impl<'a> Backtest<'a> {
                 self.initialize_btc_collateral_if_needed(k);
                 self.update_open_orders_all(k);
             }
+            self.force_close_delisted_positions(k);
             if self.equity_tracking_active {
                 self.update_equities(k);
                 if self.check_and_apply_liquidation(k) {
@@ -3965,6 +3966,63 @@ impl<'a> Backtest<'a> {
         }
     }
 
+    fn force_close_delisted_positions(&mut self, k: usize) {
+        for idx in 0..self.n_coins {
+            if self.last_valid_timestamps.get(idx).copied().flatten() != Some(k) {
+                continue;
+            }
+            if !self.coin_is_valid_at(idx, k) {
+                continue;
+            }
+
+            let mut closed_any = false;
+            let long_size = self.positions.long[idx].size;
+            if long_size > 0.0 {
+                let close_qty = -long_size;
+                if let Some(price) = self.market_fill_price_for_qty(k, idx, close_qty) {
+                    let order = Order {
+                        qty: close_qty,
+                        price,
+                        order_type: OrderType::ClosePanicLong,
+                    };
+                    let exec = OrderFillExecution {
+                        price,
+                        fee_rate: self.backtest_params.taker_fee,
+                        liquidity: "taker",
+                    };
+                    self.did_fill_long[idx] = true;
+                    self.process_close_fill_long(k, idx, &order, exec);
+                    closed_any = true;
+                }
+            }
+
+            let short_size = self.positions.short[idx].size;
+            if short_size < 0.0 {
+                let close_qty = -short_size;
+                if let Some(price) = self.market_fill_price_for_qty(k, idx, close_qty) {
+                    let order = Order {
+                        qty: close_qty,
+                        price,
+                        order_type: OrderType::ClosePanicShort,
+                    };
+                    let exec = OrderFillExecution {
+                        price,
+                        fee_rate: self.backtest_params.taker_fee,
+                        liquidity: "taker",
+                    };
+                    self.did_fill_short[idx] = true;
+                    self.process_close_fill_short(k, idx, &order, exec);
+                    closed_any = true;
+                }
+            }
+
+            if closed_any {
+                self.open_orders.long[idx] = OpenOrderBundle::default();
+                self.open_orders.short[idx] = OpenOrderBundle::default();
+            }
+        }
+    }
+
     #[inline(always)]
     fn hard_stop_cfg_pside(&self, pside: usize) -> &BotParams {
         match pside {
@@ -4067,22 +4125,26 @@ impl<'a> Backtest<'a> {
         upnl
     }
 
-    fn market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
-        if !self.coin_is_tradeable_at(idx, k) {
-            return None;
-        }
+    fn market_fill_price_for_qty(&self, k: usize, idx: usize, qty: f64) -> Option<f64> {
         let close_price = self.hlcvs_value(k, idx, CLOSE).max(f64::EPSILON);
         let price_step = self.exchange_params_list[idx].price_step.max(f64::EPSILON);
         let slippage_pct = self.backtest_params.market_order_slippage_pct.max(0.0);
-        if order.qty > 0.0 {
+        if qty > 0.0 {
             let slipped = close_price * (1.0 + slippage_pct);
             Some(round_up(slipped, price_step).max(price_step))
-        } else if order.qty < 0.0 {
+        } else if qty < 0.0 {
             let slipped = close_price * (1.0 - slippage_pct);
             Some(round_dn(slipped, price_step).max(price_step))
         } else {
             None
         }
+    }
+
+    fn market_fill_price(&self, k: usize, idx: usize, order: &Order) -> Option<f64> {
+        if !self.coin_is_tradeable_at(idx, k) {
+            return None;
+        }
+        self.market_fill_price_for_qty(k, idx, order.qty)
     }
 
     fn order_uses_market_execution(&self, order: &BacktestOrder) -> bool {
@@ -5778,6 +5840,102 @@ mod tests {
 
         assert_ne!(bt.positions.long[0].size, 0.0);
         assert!(bt.fills.is_empty());
+    }
+
+    #[test]
+    fn delisted_open_positions_are_realized_on_last_valid_candle() {
+        let n_timesteps = 1_505;
+        let mut hlcvs = Array3::<f64>::zeros((n_timesteps, 1, 4));
+        for k in 0..n_timesteps {
+            hlcvs[[k, 0, HIGH]] = 90.0;
+            hlcvs[[k, 0, LOW]] = 90.0;
+            hlcvs[[k, 0, CLOSE]] = 90.0;
+            hlcvs[[k, 0, VOLUME]] = 1.0;
+        }
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0; n_timesteps]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.short.n_positions = 1;
+        bp_pair.short.total_wallet_exposure_limit = 1.0;
+        bp_pair.short.wallet_exposure_limit = 1.0;
+        bp_pair.short.ema_span_0 = 10.0;
+        bp_pair.short.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.0,
+            taker_fee: 0.001,
+            coins: vec!["DELIST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![30],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+        bt.positions.long[0] = Position {
+            size: 1.0,
+            price: 100.0,
+        };
+        bt.positions.short[0] = Position {
+            size: -1.0,
+            price: 100.0,
+        };
+
+        let (fills, _) = bt.run().unwrap();
+
+        assert_eq!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.positions.short[0].size, 0.0);
+        let close_long = fills
+            .iter()
+            .find(|fill| fill.order_type == OrderType::ClosePanicLong)
+            .expect("expected delisting panic close fill");
+        assert_eq!(close_long.index, 30);
+        assert_eq!(close_long.fill_qty, -1.0);
+        assert_eq!(close_long.fill_price, 90.0);
+        assert!(close_long.pnl < 0.0);
+        assert!(close_long.fee_paid < 0.0);
+
+        let close_short = fills
+            .iter()
+            .find(|fill| fill.order_type == OrderType::ClosePanicShort)
+            .expect("expected delisting panic short close fill");
+        assert_eq!(close_short.index, 30);
+        assert_eq!(close_short.fill_qty, 1.0);
+        assert_eq!(close_short.fill_price, 90.0);
+        assert!(close_short.pnl > 0.0);
+        assert!(close_short.fee_paid < 0.0);
     }
 
     #[test]

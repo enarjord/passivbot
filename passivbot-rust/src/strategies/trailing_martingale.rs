@@ -30,6 +30,13 @@ fn would_fill_next_candle(low: f64, high: f64, qty: f64, price: f64) -> bool {
     }
 }
 
+#[inline]
+fn any_order_would_fill_next_candle(low: f64, high: f64, orders: &[Order]) -> bool {
+    orders
+        .iter()
+        .any(|order| would_fill_next_candle(low, high, order.qty, order.price))
+}
+
 pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> GeneratedOrders {
     let mut generated = GeneratedOrders::default();
     let params = match request.strategy_params {
@@ -161,26 +168,21 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         request.position,
                         request.trailing,
                     );
-                    let expand_closes = next.tradable
-                        && would_fill_next_candle(
-                            next.low,
-                            next.high,
-                            next_close.qty,
-                            next_close.price,
+                    if next.tradable {
+                        let closes = calc_closes_long(
+                            request.exchange,
+                            request.state,
+                            request.bot_params,
+                            &runtime_context,
+                            &close_params,
+                            request.position,
+                            request.trailing,
                         );
-                    if expand_closes {
-                        extend_nonzero(
-                            &mut generated.closes,
-                            calc_closes_long(
-                                request.exchange,
-                                request.state,
-                                request.bot_params,
-                                &runtime_context,
-                                &close_params,
-                                request.position,
-                                request.trailing,
-                            ),
-                        );
+                        if any_order_would_fill_next_candle(next.low, next.high, &closes) {
+                            extend_nonzero(&mut generated.closes, closes);
+                        } else {
+                            push_if_nonzero(&mut generated.closes, next_close);
+                        }
                     } else {
                         push_if_nonzero(&mut generated.closes, next_close);
                     }
@@ -318,26 +320,21 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
                         request.position,
                         request.trailing,
                     );
-                    let expand_closes = next.tradable
-                        && would_fill_next_candle(
-                            next.low,
-                            next.high,
-                            next_close.qty,
-                            next_close.price,
+                    if next.tradable {
+                        let closes = calc_closes_short(
+                            request.exchange,
+                            request.state,
+                            request.bot_params,
+                            &runtime_context,
+                            &close_params,
+                            request.position,
+                            request.trailing,
                         );
-                    if expand_closes {
-                        extend_nonzero(
-                            &mut generated.closes,
-                            calc_closes_short(
-                                request.exchange,
-                                request.state,
-                                request.bot_params,
-                                &runtime_context,
-                                &close_params,
-                                request.position,
-                                request.trailing,
-                            ),
-                        );
+                        if any_order_would_fill_next_candle(next.low, next.high, &closes) {
+                            extend_nonzero(&mut generated.closes, closes);
+                        } else {
+                            push_if_nonzero(&mut generated.closes, next_close);
+                        }
                     } else {
                         push_if_nonzero(&mut generated.closes, next_close);
                     }
@@ -359,4 +356,156 @@ pub fn generate_orders(side: StrategySide, request: StrategyRequest<'_>) -> Gene
         }
     }
     generated
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::strategies::{
+        NextStepHint, TrailingMartingaleCloseParams, TrailingMartingaleParams,
+    };
+    use crate::types::{
+        BotParams, ExchangeParams, OrderBook, Position, RuntimeBudgetState, StateParams,
+        TrailingPriceBundle,
+    };
+
+    fn recursive_close_request<'a>(
+        exchange: &'a ExchangeParams,
+        state: &'a StateParams,
+        bot: &'a BotParams,
+        params: &'a StrategyParams,
+        position: &'a Position,
+        trailing: &'a TrailingPriceBundle,
+        next_low: f64,
+        next_high: f64,
+    ) -> StrategyRequest<'a> {
+        StrategyRequest {
+            wants_entries: false,
+            wants_closes: true,
+            exchange,
+            state,
+            bot_params: bot,
+            strategy_params: params,
+            runtime_budget: RuntimeBudgetState {
+                configured_wallet_exposure_limit: 1.0,
+                effective_wallet_exposure_limit: 1.0,
+                configured_n_positions: 1,
+                effective_n_positions: 1,
+            },
+            position,
+            trailing,
+            next_candle: Some(NextStepHint {
+                low: next_low,
+                high: next_high,
+                tradable: true,
+            }),
+            peek: None,
+        }
+    }
+
+    #[test]
+    fn next_candle_close_peek_expands_when_any_long_close_rung_would_fill() {
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 10_000.0,
+            order_book: OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            risk_wel_enforcer_enabled: false,
+            risk_wel_enforcer_threshold: 0.0,
+            ..Default::default()
+        };
+        let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
+            close: TrailingMartingaleCloseParams {
+                qty_pct: 0.1,
+                threshold_base_pct: 0.01,
+                threshold_we_weight: 0.01,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let position = Position {
+            size: 100.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle::default();
+
+        let generated = generate_orders(
+            StrategySide::Long,
+            recursive_close_request(
+                &exchange, &state, &bot, &params, &position, &trailing, 0.0, 101.55,
+            ),
+        );
+
+        assert_eq!(generated.closes.len(), 10);
+        assert_eq!(generated.closes[0].price, 101.1);
+        assert_eq!(generated.closes[9].price, 102.0);
+    }
+
+    #[test]
+    fn next_candle_close_peek_expands_when_any_short_close_rung_would_fill() {
+        let exchange = ExchangeParams {
+            qty_step: 0.01,
+            price_step: 0.01,
+            min_qty: 0.0,
+            min_cost: 0.0,
+            c_mult: 1.0,
+            ..Default::default()
+        };
+        let state = StateParams {
+            balance: 10_000.0,
+            order_book: OrderBook {
+                ask: 100.0,
+                bid: 100.0,
+            },
+            ..Default::default()
+        };
+        let bot = BotParams {
+            wallet_exposure_limit: 1.0,
+            total_wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 0.0,
+            risk_wel_enforcer_enabled: false,
+            risk_wel_enforcer_threshold: 0.0,
+            ..Default::default()
+        };
+        let params = StrategyParams::TrailingMartingale(TrailingMartingaleParams {
+            close: TrailingMartingaleCloseParams {
+                qty_pct: 0.1,
+                threshold_base_pct: 0.01,
+                threshold_we_weight: 0.01,
+                ..Default::default()
+            },
+            ..Default::default()
+        });
+        let position = Position {
+            size: -100.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle::default();
+
+        let generated = generate_orders(
+            StrategySide::Short,
+            recursive_close_request(
+                &exchange, &state, &bot, &params, &position, &trailing, 98.05, 200.0,
+            ),
+        );
+
+        assert_eq!(generated.closes.len(), 10);
+        assert_eq!(generated.closes[0].price, 98.9);
+        assert_eq!(generated.closes[9].price, 98.0);
+    }
 }

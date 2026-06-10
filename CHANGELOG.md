@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed v8 backtests so delisted open positions are realized at the last valid candle, and
+  next-candle close-ladder peeking expands recursive close grids when any ladder rung can fill.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and
