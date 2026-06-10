@@ -59,6 +59,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         config.get("optimize", {}).get("fixed_runtime_overrides", {}),
     )
     config = optimizer_overrides(overrides_list or [], config, None)
+    _refresh_shared_bot_runtime_aliases(config)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         if not isinstance(pside_cfg, dict):

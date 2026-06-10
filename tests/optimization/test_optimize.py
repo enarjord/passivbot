@@ -797,6 +797,13 @@ class TestIndividualToConfig:
                     },
                 },
                 "short": {
+                    "n_positions": 7,
+                    "total_wallet_exposure_limit": 0.12,
+                    "forager_score_weights": {
+                        "volume": 0.9,
+                        "ema_readiness": 0.05,
+                        "volatility": 0.05,
+                    },
                     "risk": {
                         "n_positions": 3,
                         "total_wallet_exposure_limit": 0.25,
@@ -879,6 +886,20 @@ class TestIndividualToConfig:
         assert (
             result["bot"]["short"]["strategy"]["ema_anchor"]
             == result["bot"]["long"]["strategy"]["ema_anchor"]
+        )
+        assert (
+            result["bot"]["short"]["n_positions"]
+            == result["bot"]["short"]["risk"]["n_positions"]
+            == result["bot"]["long"]["risk"]["n_positions"]
+        )
+        assert (
+            result["bot"]["short"]["total_wallet_exposure_limit"]
+            == result["bot"]["short"]["risk"]["total_wallet_exposure_limit"]
+            == result["bot"]["long"]["risk"]["total_wallet_exposure_limit"]
+        )
+        assert (
+            result["bot"]["short"]["forager_score_weights"]
+            == result["bot"]["long"]["forager"]["score_weights"]
         )
 
     def test_mirror_short_from_long_override_supports_trailing_martingale(self):
