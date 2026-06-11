@@ -29,8 +29,8 @@ def _make_fill(**kwargs):
     "trade_side, side, pos_mode, expected",
     [
         ("open", "buy", "hedge_mode", ("buy", "long")),
-        ("close", "buy", "hedge_mode", ("sell", "long")),
-        ("close", "sell", "hedge_mode", ("buy", "long")),
+        ("close", "buy", "hedge_mode", ("buy", "short")),
+        ("close", "sell", "hedge_mode", ("sell", "long")),
         ("reduce_close_long", "sell", "hedge_mode", ("sell", "long")),
         ("reduce_close_short", "buy", "hedge_mode", ("buy", "short")),
         ("burst_close_long", "sell", "hedge_mode", ("sell", "long")),

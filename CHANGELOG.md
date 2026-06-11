@@ -11,6 +11,10 @@ All notable user-facing changes will be documented in this file.
 - Tightened optimizer fail-loud behavior: non-finite scenario metrics now invalidate the
   candidate instead of scoring as zero, median limit stats are emitted, malformed
   `optimize.limits` fail config loading, and fatal optimizer exceptions exit non-zero.
+- Fixed fill-event attribution edge cases: Bitget hedge-mode bare close fills now map
+  buy closes to shorts and sell closes to longs, fill normalization no longer falls back
+  to raw client ids or long-side defaults on helper import failures, and Bybit refreshes
+  avoid double-counting overlapping coalesced execution ids.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

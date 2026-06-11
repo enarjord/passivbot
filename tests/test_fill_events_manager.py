@@ -2043,6 +2043,10 @@ async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
+def test_fill_events_manager_custom_id_decode_does_not_return_raw_id():
+    assert custom_id_to_snake("external-order-without-passivbot-marker") == "unknown"
+
+
 @pytest.mark.asyncio
 async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     fills = [
@@ -2105,6 +2109,57 @@ async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     assert api.detail_calls, "Expected detail endpoint to be called"
     assert len(batches) == 1
     assert [ev["id"] for ev in batches[0]] == ["tid-1", "tid-2"]
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetcher_maps_hedge_bare_close_sides(monkeypatch):
+    fills = [
+        [
+            {
+                "tradeId": "tid-close-short",
+                "orderId": "oid-close-short",
+                "cTime": "1000",
+                "symbol": "BTCUSDT",
+                "tradeSide": "close",
+                "posMode": "hedge_mode",
+                "side": "buy",
+                "baseVolume": "0.1",
+                "price": "10",
+                "profit": "1",
+            },
+            {
+                "tradeId": "tid-close-long",
+                "orderId": "oid-close-long",
+                "cTime": "1001",
+                "symbol": "BTCUSDT",
+                "tradeSide": "close",
+                "posMode": "hedge_mode",
+                "side": "sell",
+                "baseVolume": "0.1",
+                "price": "10",
+                "profit": "1",
+            },
+        ]
+    ]
+    api = _FakeBitgetAPI(fills)
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    fetcher = BitgetFetcher(api, symbol_resolver=resolver)
+
+    events = await fetcher.fetch(
+        since_ms=500,
+        until_ms=2000,
+        detail_cache={
+            "tid-close-short": ("client-short", "close_grid_short"),
+            "tid-close-long": ("client-long", "close_grid_long"),
+        },
+    )
+
+    by_id = {event["id"]: event for event in events}
+    assert by_id["tid-close-short"]["side"] == "buy"
+    assert by_id["tid-close-short"]["position_side"] == "short"
+    assert by_id["tid-close-long"]["side"] == "sell"
+    assert by_id["tid-close-long"]["position_side"] == "long"
 
 
 @pytest.mark.asyncio
@@ -2858,6 +2913,73 @@ async def test_bybit_fetcher_deduplicates_duplicate_exec_ids_before_coalescing()
     event = events[0]
     assert event["qty"] == pytest.approx(0.06)
     assert event["side"] == "sell"
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_replaces_bybit_source_id_subsets_without_double_count(
+    tmp_path: Path,
+):
+    ts = 1_770_000_000_000
+
+    def event_payload(event_id: str, source_ids: List[str], qty: float) -> Dict[str, object]:
+        return {
+            "id": event_id,
+            "source_ids": source_ids,
+            "timestamp": ts,
+            "datetime": "2026-02-28T00:00:00",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "qty": qty,
+            "price": 100.0,
+            "pnl": -1.0,
+            "fees": {"currency": "USDT", "cost": 0.01},
+            "pb_order_type": "close_auto_reduce_wel_long",
+            "position_side": "long",
+            "client_order_id": "0xabc",
+            "raw": [],
+        }
+
+    # A richer fetched coalesced event replaces cached singleton source coverage.
+    cache_path = tmp_path / "fills_bybit_source_overlap_superset"
+    FillEventCache(cache_path).save(
+        [FillEvent.from_dict(event_payload("exec-a", ["exec-a"], -0.4))]
+    )
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher(
+            [event_payload("exec-a+exec-b", ["exec-a", "exec-b"], 1.0)]
+        ),
+        cache_path=cache_path,
+    )
+
+    await manager.refresh(start_ms=ts - 1_000, end_ms=ts + 1_000)
+
+    events = manager.get_events()
+    assert len(events) == 1
+    assert events[0].id == "exec-a+exec-b"
+    assert events[0].source_ids == ["exec-a", "exec-b"]
+    assert events[0].qty == pytest.approx(-1.0)
+
+    # A partial fetched event is skipped when the cache already has richer coverage.
+    cache_path = tmp_path / "fills_bybit_source_overlap_subset"
+    FillEventCache(cache_path).save(
+        [FillEvent.from_dict(event_payload("exec-a+exec-b", ["exec-a", "exec-b"], -1.0))]
+    )
+    manager = FillEventsManager(
+        exchange="bybit",
+        user="u",
+        fetcher=_StaticFetcher([event_payload("exec-a", ["exec-a"], 0.4)]),
+        cache_path=cache_path,
+    )
+
+    await manager.refresh(start_ms=ts - 1_000, end_ms=ts + 1_000)
+
+    events = manager.get_events()
+    assert len(events) == 1
+    assert events[0].id == "exec-a+exec-b"
+    assert events[0].source_ids == ["exec-a", "exec-b"]
+    assert events[0].qty == pytest.approx(-1.0)
 
 
 @pytest.mark.asyncio

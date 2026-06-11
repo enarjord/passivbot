@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import re
 import shutil
 import tempfile
 import time
@@ -29,7 +30,9 @@ from importlib import import_module
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple, TypedDict
 
+import passivbot_rust as pbr
 from ccxt.base.errors import RateLimitExceeded
+from bitget_normalization import deduce_side_pside
 from config import load_input_config, prepare_config
 
 try:
@@ -42,6 +45,8 @@ from procedures import load_user_info
 from pure_funcs import ensure_millis
 
 logger = logging.getLogger(__name__)
+_TYPE_MARKER_RE = re.compile(r"0x([0-9a-fA-F]{4})", re.IGNORECASE)
+_LEADING_HEX4_RE = re.compile(r"^(?:0x)?([0-9a-fA-F]{4})", re.IGNORECASE)
 
 # Throttle state for spammy warnings
 _pnl_discrepancy_last_log: Dict[str, float] = {}  # exchange:user -> last log time
@@ -4263,12 +4268,25 @@ class FillEventsManager:
             ev.id: (ev.client_order_id, ev.pb_order_type) for ev in self._events if ev.client_order_id
         }
         updated_map: Dict[str, FillEvent] = {ev.id: ev for ev in self._events}
-        source_ids_index: Dict[Tuple[str, ...], set[str]] = defaultdict(set)
+        source_id_index: Dict[str, set[str]] = defaultdict(set)
         for ev in self._events:
             if ev.source_ids:
-                source_ids_index[tuple(ev.source_ids)].add(ev.id)
+                for source_id in ev.source_ids:
+                    source_id_index[str(source_id)].add(ev.id)
         added_ids: set[str] = set()
         all_days_persisted: set[str] = set()
+
+        def _drop_indexed_event(event_id: str) -> FillEvent | None:
+            existing = updated_map.pop(event_id, None)
+            if existing is None:
+                return None
+            for source_id in existing.source_ids or []:
+                indexed = source_id_index.get(str(source_id))
+                if indexed is not None:
+                    indexed.discard(event_id)
+                    if not indexed:
+                        source_id_index.pop(str(source_id), None)
+            return existing
 
         def handle_batch(batch: List[Dict[str, object]]) -> None:
             ensure_qty_signage(batch)
@@ -4284,13 +4302,25 @@ class FillEventsManager:
                         exc,
                     )
                     continue
-                source_key = tuple(event.source_ids) if event.source_ids else tuple()
+                source_ids = {str(source_id) for source_id in event.source_ids or [] if source_id}
                 replaced_ids: set[str] = set()
-                if source_key and source_key in source_ids_index:
-                    replaced_ids = {eid for eid in source_ids_index[source_key] if eid != event.id}
+                if source_ids:
+                    overlapping_ids: set[str] = set()
+                    for source_id in source_ids:
+                        overlapping_ids.update(source_id_index.get(source_id, set()))
+                    overlapping_ids.discard(event.id)
+                    existing_source_ids: set[str] = set()
+                    for existing_id in overlapping_ids:
+                        existing = updated_map.get(existing_id)
+                        if existing is not None:
+                            existing_source_ids.update(str(x) for x in existing.source_ids or [] if x)
+                    if overlapping_ids and not existing_source_ids <= source_ids:
+                        continue
+                    replaced_ids = overlapping_ids
                     for replaced_id in replaced_ids:
-                        updated_map.pop(replaced_id, None)
-                    source_ids_index[source_key] = {event.id}
+                        replaced = _drop_indexed_event(replaced_id)
+                        if replaced is not None:
+                            days_touched.add(_day_key(replaced.timestamp))
                 prev = updated_map.get(event.id)
                 if prev is not None and event.timestamp < prev.timestamp:
                     continue
@@ -4306,9 +4336,18 @@ class FillEventsManager:
                     merged["pnl_source"] = prev.pnl_source
                     merged["pnl_synthetic_reason"] = prev.pnl_synthetic_reason
                     event = FillEvent.from_dict(merged)
+                if prev is not None:
+                    for source_id in prev.source_ids or []:
+                        indexed = source_id_index.get(str(source_id))
+                        if indexed is not None:
+                            indexed.discard(event.id)
+                            if not indexed:
+                                source_id_index.pop(str(source_id), None)
+                    days_touched.add(_day_key(prev.timestamp))
                 updated_map[event.id] = event
-                if source_key:
-                    source_ids_index[source_key].add(event.id)
+                if source_ids:
+                    for source_id in source_ids:
+                        source_id_index[source_id].add(event.id)
                 if prev is None and not replaced_ids:
                     added_ids.add(event.id)
                 day = _day_key(event.timestamp)
@@ -6769,25 +6808,23 @@ class OkxFetcher(BaseFetcher):
         }
 
 
+def _try_decode_type_id_from_custom_id(client_oid: str) -> int | None:
+    custom_id = str(client_oid or "")
+    match = _TYPE_MARKER_RE.search(custom_id)
+    if match:
+        return int(match.group(1), 16)
+    match = _LEADING_HEX4_RE.match(custom_id)
+    if match:
+        return int(match.group(1), 16)
+    return None
+
+
 def custom_id_to_snake(client_oid: str) -> str:
-    """Placeholder import shim; real implementation lives in passivbot."""
-    try:
-        from passivbot import custom_id_to_snake as _real
-
-        return _real(client_oid)
-    except Exception:
-        return client_oid or ""
-
-
-def deduce_side_pside(elm: dict) -> Tuple[str, str]:
-    """Import helper from exchanges.bitget when available."""
-    try:
-        from exchanges.bitget import deduce_side_pside as _real
-
-        return _real(elm)
-    except Exception:
-        side = str(elm.get("side", "buy")).lower()
-        return side or "buy", "long"
+    """Translate a Passivbot custom id marker into a snake_case order type name."""
+    type_id = _try_decode_type_id_from_custom_id(client_oid)
+    if type_id is None:
+        return "unknown"
+    return str(pbr.order_type_id_to_snake(type_id))
 
 
 # ---------------------------------------------------------------------------
