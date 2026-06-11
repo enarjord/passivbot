@@ -39,6 +39,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_initialize_coin_from_history",
         "_equity_hard_stop_infer_coin_replay_contract",
         "_equity_hard_stop_lookback_ms",
+        "_equity_hard_stop_log_transition",
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
@@ -393,7 +394,7 @@ async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_open_position_missing_history_requires_coin_timeline_fields():
+async def test_coin_hsl_open_position_missing_history_uses_current_sample():
     bot = make_coin_bot()
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
@@ -413,12 +414,15 @@ async def test_coin_hsl_open_position_missing_history_requires_coin_timeline_fie
 
     bot.get_balance_equity_history = fake_history
 
-    with pytest.raises(ValueError, match="realized_pnl_by_coin_pside"):
-        await bot._equity_hard_stop_initialize_coin_from_history()
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["last_metrics"]["timestamp_ms"] == 180_000
+    assert state["last_metrics"]["tier"] == "green"
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_open_position_empty_coin_history_requires_symbol_fields():
+async def test_coin_hsl_open_position_empty_coin_history_uses_current_sample():
     bot = make_coin_bot()
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
@@ -440,8 +444,55 @@ async def test_coin_hsl_open_position_empty_coin_history_requires_symbol_fields(
 
     bot.get_balance_equity_history = fake_history
 
-    with pytest.raises(ValueError, match="missing required coin HSL symbol"):
-        await bot._equity_hard_stop_initialize_coin_from_history()
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["last_metrics"]["timestamp_ms"] == 180_000
+    assert state["last_metrics"]["tier"] == "green"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_allows_leading_rows_before_first_fill():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "pnl": 0.0,
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["last_metrics"]["timestamp_ms"] == 180_000
+    assert state["last_metrics"]["tier"] == "green"
 
 
 @pytest.mark.asyncio
@@ -662,3 +713,31 @@ async def test_coin_hsl_check_preserves_cooldown_policy_forced_mode(policy, expe
     await bot._equity_hard_stop_check_coin()
 
     assert bot._runtime_forced_modes["long"][symbol] == expected_mode
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_check_tp_only_orange_skips_flat_symbols():
+    bot = make_coin_bot()
+    open_symbol = "A"
+    flat_symbol = "B"
+    bot.positions = {
+        open_symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}},
+        flat_symbol: {"long": {"size": 0.0, "price": 0.0}, "short": {"size": 0.0}},
+    }
+
+    async def calc_upnl(pside=None, symbol=None):
+        return -40.0
+
+    bot._calc_upnl_sum_strict = calc_upnl
+    bot._equity_hard_stop_prime_coin_runtime_for_replay("long", open_symbol, 180_000)
+    bot._equity_hard_stop_prime_coin_runtime_for_replay("long", flat_symbol, 180_000)
+
+    out = await bot._equity_hard_stop_check_coin()
+
+    assert out[f"long:{open_symbol}"]["tier"] == "orange"
+    assert out[f"long:{flat_symbol}"]["tier"] == "orange"
+    assert (
+        bot._runtime_forced_modes["long"][open_symbol]
+        == "tp_only_with_active_entry_cancellation"
+    )
+    assert flat_symbol not in bot._runtime_forced_modes["long"]

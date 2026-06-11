@@ -1952,6 +1952,17 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         lookback_start_ms = None if lookback_ms is None else now_ms - int(lookback_ms)
         symbols = set(self.positions.keys())
         required_replay_pairs: set[tuple[str, str]] = set()
+        required_replay_start_ts: dict[tuple[str, str], int] = {}
+
+        def remember_required_replay_start(
+            pside: str, symbol: str, ts_ms: int
+        ) -> None:
+            replay_ts = int(math.floor(int(ts_ms) / 60_000) * 60_000)
+            key = (pside, symbol)
+            prev = required_replay_start_ts.get(key)
+            if prev is None or replay_ts < prev:
+                required_replay_start_ts[key] = replay_ts
+
         for symbol, slots in (self.positions or {}).items():
             if not isinstance(slots, dict):
                 continue
@@ -1965,8 +1976,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 continue
             symbol = _equity_hard_stop_fill_symbol(event)
             if symbol:
+                pside = _equity_hard_stop_fill_pside(event)
                 symbols.add(symbol)
-                required_replay_pairs.add((_equity_hard_stop_fill_pside(event), symbol))
+                required_replay_pairs.add((pside, symbol))
+                remember_required_replay_start(pside, symbol, ts)
         for row in timeline:
             if not isinstance(row, dict):
                 continue
@@ -1996,6 +2009,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 continue
             symbols.add(symbol)
             required_replay_pairs.add((pside, symbol))
+            remember_required_replay_start(pside, symbol, minute_ts)
             key = (pside, symbol, minute_ts)
             prev = latest_panic_by_coin_minute.get(key)
             if prev is None or stop_ts >= int(prev["timestamp"]):
@@ -2037,6 +2051,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 reset_baseline_realized = 0.0
                 applied_rows = 0
                 require_coin_timeline_fields = (pside, symbol) in required_replay_pairs
+                required_start_ts = required_replay_start_ts.get((pside, symbol))
+                seen_coin_timeline_fields = False
                 for row in timeline:
                     if not isinstance(row, dict):
                         continue
@@ -2066,19 +2082,27 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     has_unrealized = _equity_hard_stop_history_coin_has_value(
                         row, "unrealized_pnl_by_coin_pside", symbol, pside
                     )
-                    if not require_coin_timeline_fields and not (has_realized or has_unrealized):
-                        continue
+                    row_has_coin_fields = has_realized or has_unrealized
                     require_coin_timeline_value = (
-                        require_coin_timeline_fields or has_realized or has_unrealized
+                        (
+                            require_coin_timeline_fields
+                            and required_start_ts is not None
+                            and ts >= required_start_ts
+                        )
+                        or seen_coin_timeline_fields
+                        or row_has_coin_fields
                     )
+                    if not require_coin_timeline_value:
+                        continue
                     abs_realized = _equity_hard_stop_history_coin_value(
                         row,
                         "realized_pnl_by_coin_pside",
                         symbol,
                         pside,
-                        require_key=require_coin_timeline_fields,
+                        require_key=require_coin_timeline_value,
                         require_value=require_coin_timeline_value,
                     )
+                    seen_coin_timeline_fields = True
                     last_realized = abs_realized - reset_baseline_realized
                     realized_points.append((ts, last_realized))
                     start_ms = None if lookback_ms is None else ts - int(lookback_ms)
@@ -2096,7 +2120,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         "unrealized_pnl_by_coin_pside",
                         symbol,
                         pside,
-                        require_key=require_coin_timeline_fields,
+                        require_key=require_coin_timeline_value,
                         require_value=require_coin_timeline_value,
                     )
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, ts)
@@ -2551,13 +2575,14 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     self._equity_hard_stop_clear_coin_runtime_forced_mode(pside, symbol)
             if metrics["tier"] == "orange":
                 target = str(self.hsl[pside]["orange_tier_mode"])
-                self._equity_hard_stop_set_coin_runtime_forced_mode(
-                    pside,
-                    symbol,
-                    "graceful_stop"
-                    if target == "graceful_stop"
-                    else "tp_only_with_active_entry_cancellation",
-                )
+                if target == "graceful_stop":
+                    self._equity_hard_stop_set_coin_runtime_forced_mode(
+                        pside, symbol, "graceful_stop"
+                    )
+                elif self._equity_hard_stop_has_open_position_symbol(pside, symbol):
+                    self._equity_hard_stop_set_coin_runtime_forced_mode(
+                        pside, symbol, "tp_only_with_active_entry_cancellation"
+                    )
             out[f"{pside}:{symbol}"] = metrics
     return out if out else None
 
