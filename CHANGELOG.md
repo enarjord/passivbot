@@ -23,6 +23,8 @@ All notable user-facing changes will be documented in this file.
   loudly instead of defaulting fills to the long side.
 - Backtests now reject heterogeneous per-coin maker/taker fees unless the matching
   global `backtest.*_fee_override` is set, avoiding silent first-coin fee selection.
+- Suite backtests and optimizer suites now reject asymmetric per-side approved/ignored
+  coin lists instead of silently converting them to a long/short union.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

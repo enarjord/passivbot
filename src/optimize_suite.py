@@ -30,6 +30,7 @@ from suite_runner import (
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
+    validate_suite_side_coin_lists,
     _prepare_dataset_subset,
     _compute_slice_indices,
     _normalize_date_to_ts,
@@ -71,6 +72,7 @@ async def prepare_suite_contexts(
     for exchange in base_exchanges:
         await load_markets(exchange, verbose=False)
     await format_approved_ignored_coins(config, base_exchanges, verbose=False)
+    validate_suite_side_coin_lists(config)
 
     base_start = require_config_value(config, "backtest.start_date")
     base_end = require_config_value(config, "backtest.end_date")

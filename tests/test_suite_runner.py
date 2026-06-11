@@ -188,6 +188,39 @@ def test_apply_scenario_records_transform_log():
     assert any(change["path"] == "backtest.start_date" for change in entry["details"]["changes"])
 
 
+def test_apply_scenario_rejects_asymmetric_side_coin_lists():
+    base_config = {
+        "backtest": {
+            "start_date": "2021-01-01",
+            "end_date": "2021-01-31",
+            "coins": {},
+            "cache_dir": {},
+            "exchanges": ["binance"],
+        },
+        "live": {
+            "approved_coins": {"long": ["BTC"], "short": ["ETH"]},
+            "ignored_coins": {"long": [], "short": []},
+        },
+    }
+    scenario = SuiteScenario(
+        label="scenario_a",
+        start_date=None,
+        end_date=None,
+        coins=["BTC", "ETH"],
+        ignored_coins=[],
+    )
+
+    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+        apply_scenario(
+            base_config,
+            scenario,
+            master_coins=["BTC", "ETH"],
+            master_ignored=[],
+            available_exchanges=["binance"],
+            available_coins={"BTC", "ETH"},
+        )
+
+
 def test_apply_scenario_overrides_update_config():
     base_config = {
         "backtest": {

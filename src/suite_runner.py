@@ -180,6 +180,38 @@ def _flatten_coin_list(value: Any) -> List[str]:
     return []
 
 
+def _normalized_coin_set(value: Any) -> set[str]:
+    out: set[str] = set()
+    if isinstance(value, str):
+        value = [value]
+    for entry in value or []:
+        coin = symbol_to_coin(str(entry), verbose=False)
+        if coin:
+            out.add(coin)
+    return out
+
+
+def validate_suite_side_coin_lists(config: Dict[str, Any]) -> None:
+    live = config.get("live", {}) if isinstance(config, dict) else {}
+    if not isinstance(live, dict):
+        return
+    for field in ("approved_coins", "ignored_coins"):
+        value = live.get(field)
+        if not isinstance(value, dict):
+            continue
+        long_coins = _normalized_coin_set(value.get("long", []))
+        short_coins = _normalized_coin_set(value.get("short", []))
+        if long_coins == short_coins:
+            continue
+        long_only = sorted(long_coins - short_coins)
+        short_only = sorted(short_coins - long_coins)
+        raise ValueError(
+            f"suite mode does not support asymmetric live.{field}; "
+            f"long_only={long_only} short_only={short_only}. "
+            f"Make live.{field}.long and live.{field}.short identical for suite runs."
+        )
+
+
 def _coerce_exchange_list(value: Any) -> Optional[List[str]]:
     if value is None:
         return None
@@ -792,6 +824,7 @@ def apply_scenario(
         )
     backtest_section = cfg.setdefault("backtest", {})
     live_section = cfg.setdefault("live", {})
+    validate_suite_side_coin_lists(cfg)
 
     new_start = scenario.start_date or backtest_section.get("start_date")
     if new_start != backtest_section.get("start_date"):
@@ -1574,6 +1607,7 @@ async def run_backtest_suite_async(
     suite_output_root: Optional[Path] = None,
 ) -> SuiteSummary:
     base_exchanges = require_config_value(config, "backtest.exchanges")
+    validate_suite_side_coin_lists(config)
 
     base_coins = _flatten_coin_list(require_live_value(config, "approved_coins"))
     base_ignored = _flatten_coin_list(require_live_value(config, "ignored_coins"))

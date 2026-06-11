@@ -80,3 +80,36 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     )
 
     assert [ctx.label for ctx in contexts] == ["base", "long_only", "short_only"]
+
+
+@pytest.mark.asyncio
+async def test_prepare_suite_contexts_rejects_asymmetric_side_coin_lists(monkeypatch):
+    config = get_template_config()
+    config["backtest"]["start_date"] = "2024-01-01"
+    config["backtest"]["end_date"] = "2024-01-02"
+    config["backtest"]["exchanges"] = ["binance"]
+    config["backtest"]["suite_enabled"] = True
+    config["backtest"]["scenarios"] = [{"label": "base"}]
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": ["ETH"]}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+
+    async def fake_load_markets(_exchange, verbose=False):
+        return {}
+
+    async def fake_format_approved_ignored_coins(_config, _exchanges, verbose=False):
+        return None
+
+    monkeypatch.setattr(optimize_suite, "load_markets", fake_load_markets)
+    monkeypatch.setattr(
+        optimize_suite,
+        "format_approved_ignored_coins",
+        fake_format_approved_ignored_coins,
+    )
+
+    suite_cfg = optimize_suite.extract_suite_config(config, suite_override=None)
+    with pytest.raises(ValueError, match="asymmetric live.approved_coins"):
+        await optimize_suite.prepare_suite_contexts(
+            config,
+            suite_cfg,
+            shared_array_manager=_NoSharedArrayManager(),
+        )
