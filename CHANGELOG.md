@@ -19,6 +19,8 @@ All notable user-facing changes will be documented in this file.
   masquerading as an empty page that can persist a false trailing-unavailable gap.
 - Fixed live HSL no-restart latching to preserve the persistent stop-episode peak
   across auto-restart cooldowns and restart history replay, matching v8 backtest behavior.
+- Tightened Bitget fill normalization so ambiguous side/position-side payloads fail
+  loudly instead of defaulting fills to the long side.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

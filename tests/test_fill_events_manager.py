@@ -2048,6 +2048,30 @@ def test_fill_events_manager_custom_id_decode_does_not_return_raw_id():
 
 
 @pytest.mark.asyncio
+async def test_bitget_fetcher_rejects_ambiguous_side_payload(monkeypatch):
+    fills = [
+        [
+            {
+                "tradeId": "tid-ambiguous",
+                "orderId": "oid-ambiguous",
+                "cTime": "1000",
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "baseVolume": "0.1",
+                "price": "10",
+                "profit": "0",
+            }
+        ]
+    ]
+    api = _FakeBitgetAPI(fills)
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    fetcher = BitgetFetcher(api, symbol_resolver=resolver)
+
+    with pytest.raises(ValueError, match="cannot infer Bitget fill side/position_side"):
+        await fetcher.fetch(since_ms=500, until_ms=2000, detail_cache={})
+
+
+@pytest.mark.asyncio
 async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     fills = [
         [
@@ -2056,6 +2080,8 @@ async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
                 "orderId": "oid-1",
                 "cTime": "1000",
                 "symbol": "BTCUSDT",
+                "tradeSide": "open",
+                "posMode": "hedge_mode",
                 "side": "buy",
                 "baseVolume": "0.1",
                 "price": "10",
@@ -2066,6 +2092,8 @@ async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
                 "orderId": "oid-1",
                 "cTime": "1500",
                 "symbol": "BTCUSDT",
+                "tradeSide": "close",
+                "posMode": "hedge_mode",
                 "side": "sell",
                 "baseVolume": "0.1",
                 "price": "11",
@@ -2171,6 +2199,8 @@ async def test_bitget_fetcher_preserves_signed_fee_detail(monkeypatch):
                 "orderId": "oid-fee",
                 "cTime": "1000",
                 "symbol": "XLMUSDT",
+                "tradeSide": "open",
+                "posMode": "hedge_mode",
                 "side": "buy",
                 "baseVolume": "174",
                 "price": "0.22375",
@@ -2212,6 +2242,8 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
             "orderId": "oid-new-1",
             "cTime": str(210 * day),
             "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
             "side": "buy",
             "baseVolume": "0.1",
             "price": "10",
@@ -2222,6 +2254,8 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
             "orderId": "oid-new-2",
             "cTime": str(209 * day),
             "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
             "side": "sell",
             "baseVolume": "0.1",
             "price": "11",
@@ -2234,6 +2268,8 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
             "orderId": "oid-gap",
             "cTime": str(150 * day),
             "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
             "side": "buy",
             "baseVolume": "0.05",
             "price": "9",
@@ -2246,6 +2282,8 @@ async def test_bitget_fetcher_paginates_across_sparse_history(monkeypatch):
             "orderId": "oid-old",
             "cTime": str(20 * day),
             "symbol": "BTCUSDT",
+            "tradeSide": "open",
+            "posMode": "hedge_mode",
             "side": "sell",
             "baseVolume": "0.2",
             "price": "8",
@@ -2299,6 +2337,8 @@ async def test_bitget_fetcher_handles_empty_batches(monkeypatch):
                 "orderId": "oid-gap-old",
                 "cTime": str(15 * day),
                 "symbol": "BTCUSDT",
+                "tradeSide": "open",
+                "posMode": "hedge_mode",
                 "side": "buy",
                 "baseVolume": "0.1",
                 "price": "10",
@@ -2339,6 +2379,8 @@ async def test_bitget_fetcher_reuses_detail_cache(monkeypatch):
                 "orderId": "oid-3",
                 "cTime": "3000",
                 "symbol": "ETHUSDT",
+                "tradeSide": "open",
+                "posMode": "hedge_mode",
                 "side": "buy",
                 "baseVolume": "1",
                 "price": "100",

@@ -51,10 +51,27 @@ def _make_fill(**kwargs):
         ("delivery_sell_single", "sell", "one_way_mode", ("sell", "short")),
         ("dte_sys_adl_buy_in_single_side_mode", "buy", "one_way_mode", ("buy", "long")),
         ("dte_sys_adl_sell_in_single_side_mode", "sell", "one_way_mode", ("sell", "short")),
-        ("unknown", "sell", "hedge_mode", ("sell", "long")),
-        ("unknown", "", "one_way_mode", ("buy", "long")),
+        ("unknown", "sell", "one_way_mode", ("sell", "short")),
     ],
 )
 def test_deduce_side_pside(trade_side, side, pos_mode, expected):
     payload = _make_fill(tradeSide=trade_side, side=side, posMode=pos_mode)
     assert deduce_side_pside(payload) == expected
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"tradeSide": "unknown", "side": "sell", "posMode": "hedge_mode"},
+        {"tradeSide": "unknown", "side": "", "posMode": "one_way_mode"},
+        {"tradeSide": "", "side": "buy", "posMode": ""},
+    ],
+)
+def test_deduce_side_pside_rejects_ambiguous_payload(payload):
+    with pytest.raises(ValueError, match="cannot infer Bitget fill side/position_side"):
+        deduce_side_pside(_make_fill(**payload))
+
+
+def test_deduce_side_pside_uses_explicit_position_side():
+    payload = _make_fill(tradeSide="close", side="", posMode="hedge_mode", posSide="short")
+    assert deduce_side_pside(payload) == ("buy", "short")
