@@ -2967,6 +2967,87 @@ async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatch):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        positions = {}
+        balance = 120.0
+        balance_raw = 175.0
+        PB_modes = {}
+        effective_min_cost = {}
+        _config_hedge_mode = False
+        hedge_mode = False
+        equity_hard_stop_loss = {"panic_close_order_type": "limit"}
+        config = {
+            "live": {},
+            "backtest": {"market_order_slippage_pct": 0.25},
+        }
+        _monitor_record_price_ticks = pb_mod.Passivbot._monitor_record_price_ticks
+        _build_monitor_runtime_market_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_market_hints
+        )
+        _build_monitor_runtime_unstuck_hints = (
+            pb_mod.Passivbot._build_monitor_runtime_unstuck_hints
+        )
+        _update_monitor_runtime_hints = pb_mod.Passivbot._update_monitor_runtime_hints
+
+        def config_get(self, keys):
+            return None
+
+        def _bot_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {}
+
+        def live_value(self, key):
+            return False
+
+        def _log_realized_loss_gate_blocks(self, out, idx_to_symbol):
+            return None
+
+        def _log_ema_gating(self, ideal_orders, m1_close_emas, last_prices, symbols):
+            return None
+
+        def _to_executable_orders(self, ideal_orders, last_prices):
+            return ideal_orders, []
+
+        def _finalize_reduce_only_orders(self, ideal_orders_f, last_prices):
+            return ideal_orders_f
+
+        def get_raw_balance(self):
+            return float(self.balance_raw)
+
+        def get_hysteresis_snapped_balance(self):
+            return float(self.balance)
+
+    snapshot = {
+        "symbols": [],
+        "last_prices": {},
+        "m1_close_emas": {},
+        "m1_volume_emas": {},
+        "m1_log_range_emas": {},
+        "h1_log_range_emas": {},
+        "unstuck_allowances": {"long": 0.0, "short": 0.0},
+        "realized_pnl_cumsum": {"max": 0.0, "last": 0.0},
+    }
+
+    captured = {}
+
+    def fake_compute(json_str):
+        captured["input"] = json.loads(json_str)
+        return json.dumps({"orders": [], "diagnostics": {"loss_gate_blocks": []}})
+
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    method = pb_mod.Passivbot.calc_ideal_orders_orchestrator_from_snapshot
+    await method(FakeBot(), snapshot, return_snapshot=False)
+
+    assert "market_order_slippage_pct" not in captured["input"]["global"]
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch):
     import passivbot as pb_mod
 

@@ -61,6 +61,14 @@ Close thresholds are additive so they can intentionally cross through break-even
 as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
 wallet-exposure modifier.
 
+## Live/Backtest Market Slippage Boundary
+
+`backtest.market_order_slippage_pct` is a backtest simulation knob only. Live orchestrator input
+must not read or forward it; live callers intentionally omit `market_order_slippage_pct` and rely
+on Rust's `0.0` serde default for live loss projections. Live market-order execution uses the
+current bid/ask snapshot plus exchange-side behavior, controlled by `live.market_orders_allowed`
+and `live.market_order_near_touch_threshold`.
+
 ## Close Recursion Contract
 
 Close orders are computed recursively when the close threshold depends on wallet exposure:

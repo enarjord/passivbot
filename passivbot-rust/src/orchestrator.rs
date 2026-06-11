@@ -283,6 +283,9 @@ mod core {
         pub market_orders_allowed: bool,
         #[serde(default = "default_market_order_near_touch_threshold")]
         pub market_order_near_touch_threshold: f64,
+        /// Synthetic backtest-only market fill slippage used for projected close PnL.
+        /// Live callers intentionally omit this field and use the serde default of 0.0;
+        /// live execution uses current bid/ask plus exchange-side market order behavior.
         #[serde(default)]
         pub market_order_slippage_pct: f64,
         #[serde(default)]

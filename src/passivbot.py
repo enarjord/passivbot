@@ -10778,6 +10778,9 @@ class Passivbot:
             "timestamp_ms": timestamp_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
+            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Rust defaults it to 0.0 for live loss projections; the backtest
+            # value is a simulation knob, not a live slippage cap.
             "global": {
                 "filter_by_min_effective_cost": bool(
                     self.live_value("filter_by_min_effective_cost")
@@ -12042,6 +12045,9 @@ class Passivbot:
             "timestamp_ms": now_ms,
             "balance": self.get_hysteresis_snapped_balance(),
             "balance_raw": self.get_raw_balance(),
+            # Deliberately omit backtest.market_order_slippage_pct in live.
+            # Rust defaults it to 0.0 for live loss projections; the backtest
+            # value is a simulation knob, not a live slippage cap.
             "global": {
                 "filter_by_min_effective_cost": bool(
                     self.live_value("filter_by_min_effective_cost")
