@@ -463,6 +463,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 pside: {
                     "runtime": pbr.EquityHardStopRuntime(),
                     "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
+                    "no_restart_peak_strategy_equity": 0.0,
                     "halted": False,
                     "no_restart_latched": False,
                     "last_metrics": None,
@@ -2631,6 +2632,72 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
+
+    stop_events = [
+        {
+            "stop_event_timestamp_ms": 1_700_000_000_000,
+            "equity": 104.0,
+            "peak_strategy_equity": 110.0,
+            "trigger_peak_strategy_equity": 110.0,
+            "drawdown_raw": 1.0 - 104.0 / 110.0,
+            "drawdown_ema": 0.05,
+            "drawdown_score": 0.05,
+        },
+        {
+            "stop_event_timestamp_ms": 1_700_000_120_000,
+            "equity": 86.0,
+            "peak_strategy_equity": 90.0,
+            "trigger_peak_strategy_equity": 90.0,
+            "drawdown_raw": 1.0 - 86.0 / 90.0,
+            "drawdown_ema": 0.04,
+            "drawdown_score": 0.04,
+        },
+    ]
+
+    async def fake_compute(pside, _ts):
+        assert pside == "long"
+        return stop_events.pop(0)
+
+    captured = []
+
+    def fake_write(pside, payload):
+        captured.append((pside, payload))
+        return f"/tmp/hs_latch_{len(captured)}.json"
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+
+    await bot._equity_hard_stop_finalize_red_stop("long")
+
+    assert _hsl_state(bot)["no_restart_latched"] is False
+    assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
+    assert captured[0][1]["no_restart_latched"] is False
+    assert captured[0][1]["no_restart_drawdown_raw"] == pytest.approx(
+        1.0 - 104.0 / 110.0
+    )
+
+    bot._equity_hard_stop_reset_after_restart("long")
+    await bot._equity_hard_stop_finalize_red_stop("long")
+
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is True
+    assert _hsl_state(bot)["cooldown_until_ms"] is None
+    assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
+    assert captured[1][1]["no_restart_latched"] is True
+    assert captured[1][1]["cooldown_until_ms"] is None
+    assert captured[1][1]["drawdown_raw"] == pytest.approx(1.0 - 86.0 / 90.0)
+    assert captured[1][1]["no_restart_drawdown_raw"] == pytest.approx(
+        1.0 - 86.0 / 110.0
+    )
+    assert captured[1][1]["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
+
+
+@pytest.mark.asyncio
 async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -2895,6 +2962,119 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(
     assert _hsl_state(bot)["runtime"].red_latched() is False
     assert _hsl_state(bot)["runtime"].tier() != "red"
     assert _hsl_state(bot)["pending_red_since_ms"] is None
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_across_replay_reset(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.04
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
+    bot.balance = 86.0
+    bot._live_values["execution_delay_seconds"] = 60.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 10.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 104.0,
+                    "realized_pnl": 4.0,
+                    "realized_pnl_long": 4.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 181_000,
+                    "balance": 90.0,
+                    "realized_pnl": -10.0,
+                    "realized_pnl_long": -10.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 241_000,
+                    "balance": 86.0,
+                    "realized_pnl": -14.0,
+                    "realized_pnl_long": -14.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                },
+            ]
+        }
+
+    captured = []
+
+    def fake_write(pside, payload):
+        captured.append((pside, payload))
+        return f"/tmp/hs_replay_persistent_{len(captured)}.json"
+
+    async def fake_upnl(*_args, **_kwargs):
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 250_000)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    assert bot.stop_signal_received is False
+    assert _hsl_state(bot)["halted"] is True
+    assert _hsl_state(bot)["no_restart_latched"] is True
+    assert _hsl_state(bot)["cooldown_until_ms"] is None
+    assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
+    assert len(captured) == 2
+    assert captured[0][1]["no_restart_latched"] is False
+    assert captured[0][1]["cooldown_until_ms"] == 181_000
+    assert captured[1][1]["no_restart_latched"] is True
+    assert captured[1][1]["cooldown_until_ms"] is None
+    assert captured[1][1]["drawdown_raw"] == pytest.approx(1.0 - 86.0 / 90.0)
+    assert captured[1][1]["no_restart_drawdown_raw"] == pytest.approx(
+        1.0 - 86.0 / 110.0
+    )
+    assert captured[1][1]["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
 
 
 @pytest.mark.asyncio

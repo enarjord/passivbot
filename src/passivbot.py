@@ -1034,6 +1034,7 @@ class Passivbot:
             pside: {
                 "runtime": pbr.EquityHardStopRuntime(),
                 "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
+                "no_restart_peak_strategy_equity": 0.0,
                 "halted": False,
                 "no_restart_latched": False,
                 "last_metrics": None,
@@ -2199,6 +2200,7 @@ class Passivbot:
         pb_hsl._equity_hard_stop_format_remaining_time
     )
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
+    _equity_hard_stop_record_no_restart_stop = pb_hsl._equity_hard_stop_record_no_restart_stop
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
     _equity_hard_stop_infer_replay_contract = (
         pb_hsl._equity_hard_stop_infer_replay_contract

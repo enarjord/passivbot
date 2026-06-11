@@ -299,6 +299,7 @@ def _equity_hard_stop_reset_state(self) -> None:
         state = self._hsl_state(pside)
         state["runtime"].reset()
         state["strategy_pnl_peak"].reset()
+        state["no_restart_peak_strategy_equity"] = 0.0
         state["halted"] = False
         state["no_restart_latched"] = False
         state["last_metrics"] = None
@@ -610,6 +611,8 @@ def _equity_hard_stop_build_latch_payload(
     drawdown_score: float,
     no_restart_latched: bool,
     cooldown_until_ms: Optional[int],
+    no_restart_peak_strategy_equity: Optional[float] = None,
+    no_restart_drawdown_raw: Optional[float] = None,
 ) -> dict:
     cfg = self.hsl[pside]
     return {
@@ -641,6 +644,14 @@ def _equity_hard_stop_build_latch_payload(
         "peak_strategy_equity": float(peak_strategy_equity),
         "trigger_peak_strategy_equity": float(trigger_peak_strategy_equity),
         "drawdown_raw": float(drawdown_raw),
+        "no_restart_peak_strategy_equity": float(
+            peak_strategy_equity
+            if no_restart_peak_strategy_equity is None
+            else no_restart_peak_strategy_equity
+        ),
+        "no_restart_drawdown_raw": float(
+            drawdown_raw if no_restart_drawdown_raw is None else no_restart_drawdown_raw
+        ),
         "drawdown_ema": float(drawdown_ema),
         "drawdown_score": float(drawdown_score),
         "no_restart_latched": bool(no_restart_latched),
@@ -649,6 +660,37 @@ def _equity_hard_stop_build_latch_payload(
         ),
         "cooldown_until_ms": None if cooldown_until_ms is None else int(cooldown_until_ms),
     }
+
+
+def _equity_hard_stop_record_no_restart_stop(
+    self, pside: str, stop_event: dict
+) -> tuple[float, float]:
+    state = self._hsl_state(pside)
+    equity = float(stop_event["equity"])
+    peak_strategy_equity = float(stop_event["peak_strategy_equity"])
+    if not math.isfinite(equity) or equity <= 0.0:
+        raise RuntimeError(f"invalid HSL[{pside}] stop equity for no-restart latch: {equity}")
+    if not math.isfinite(peak_strategy_equity) or peak_strategy_equity <= 0.0:
+        raise RuntimeError(
+            f"invalid HSL[{pside}] stop peak_strategy_equity for no-restart latch: {peak_strategy_equity}"
+        )
+    no_restart_peak_strategy_equity = max(
+        float(state.get("no_restart_peak_strategy_equity", 0.0) or 0.0),
+        peak_strategy_equity,
+        equity,
+    )
+    if (
+        not math.isfinite(no_restart_peak_strategy_equity)
+        or no_restart_peak_strategy_equity <= 0.0
+    ):
+        raise RuntimeError(
+            f"invalid HSL[{pside}] no_restart_peak_strategy_equity: {no_restart_peak_strategy_equity}"
+        )
+    state["no_restart_peak_strategy_equity"] = no_restart_peak_strategy_equity
+    no_restart_drawdown_raw = max(
+        0.0, 1.0 - equity / max(no_restart_peak_strategy_equity, 1e-12)
+    )
+    return float(no_restart_peak_strategy_equity), float(no_restart_drawdown_raw)
 
 
 async def _equity_hard_stop_compute_stop_event(self, pside: str, stop_event_ts_ms: int) -> dict:
@@ -1092,8 +1134,21 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 panic_flatten_marker = panic_flatten_events_by_key.get((pside, ts))
                 if panic_flatten_marker is not None:
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
+                    (
+                        no_restart_peak_strategy_equity,
+                        no_restart_drawdown_raw,
+                    ) = self._equity_hard_stop_record_no_restart_stop(
+                        pside,
+                        {
+                            "equity": float(current_metrics["strategy_equity"]),
+                            "peak_strategy_equity": float(current_metrics["peak_strategy_equity"]),
+                        },
+                    )
+                    no_restart_latched = bool(
+                        no_restart_drawdown_raw >= no_restart_drawdown_threshold
+                    )
                     cooldown_until_ms = None
-                    if stop_drawdown_raw < no_restart_drawdown_threshold and cooldown_ms > 0:
+                    if not no_restart_latched and cooldown_ms > 0:
                         cooldown_until_ms = int(panic_flatten_marker["timestamp"]) + cooldown_ms
                     payload = self._equity_hard_stop_build_latch_payload(
                         pside,
@@ -1110,20 +1165,26 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         drawdown_raw=float(current_metrics["drawdown_raw"]),
                         drawdown_ema=float(current_metrics["drawdown_ema"]),
                         drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
+                        no_restart_latched=no_restart_latched,
                         cooldown_until_ms=cooldown_until_ms,
+                        no_restart_peak_strategy_equity=no_restart_peak_strategy_equity,
+                        no_restart_drawdown_raw=no_restart_drawdown_raw,
                     )
                     state["last_stop_event"] = payload
                     state["halted"] = True
-                    state["no_restart_latched"] = bool(stop_drawdown_raw >= no_restart_drawdown_threshold)
+                    state["no_restart_latched"] = no_restart_latched
                     state["cooldown_until_ms"] = cooldown_until_ms
                     state["pending_red_since_ms"] = None
                     latch_path = self._equity_hard_stop_write_latch(pside, payload)
                     logging.critical(
-                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | stop_ts=%s drawdown_raw=%.6f no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s source=panic_fill_flatten",
+                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | "
+                        "stop_ts=%s drawdown_raw=%.6f no_restart_drawdown_raw=%.6f "
+                        "no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s "
+                        "source=panic_fill_flatten",
                         pside,
                         int(panic_flatten_marker["timestamp"]),
                         stop_drawdown_raw,
+                        no_restart_drawdown_raw,
                         state["no_restart_latched"],
                         cooldown_until_ms if cooldown_until_ms is not None else "none",
                         latch_path,
@@ -1135,8 +1196,21 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 is_flat = bool(row.get(f"is_flat_{pside}", False))
                 if pending_red and is_flat:
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
+                    (
+                        no_restart_peak_strategy_equity,
+                        no_restart_drawdown_raw,
+                    ) = self._equity_hard_stop_record_no_restart_stop(
+                        pside,
+                        {
+                            "equity": float(current_metrics["strategy_equity"]),
+                            "peak_strategy_equity": float(current_metrics["peak_strategy_equity"]),
+                        },
+                    )
+                    no_restart_latched = bool(
+                        no_restart_drawdown_raw >= no_restart_drawdown_threshold
+                    )
                     cooldown_until_ms = None
-                    if stop_drawdown_raw < no_restart_drawdown_threshold and cooldown_ms > 0:
+                    if not no_restart_latched and cooldown_ms > 0:
                         cooldown_until_ms = ts + cooldown_ms
                     payload = self._equity_hard_stop_build_latch_payload(
                         pside,
@@ -1153,20 +1227,25 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         drawdown_raw=float(current_metrics["drawdown_raw"]),
                         drawdown_ema=float(current_metrics["drawdown_ema"]),
                         drawdown_score=float(current_metrics["drawdown_score"]),
-                        no_restart_latched=bool(stop_drawdown_raw >= no_restart_drawdown_threshold),
+                        no_restart_latched=no_restart_latched,
                         cooldown_until_ms=cooldown_until_ms,
+                        no_restart_peak_strategy_equity=no_restart_peak_strategy_equity,
+                        no_restart_drawdown_raw=no_restart_drawdown_raw,
                     )
                     state["last_stop_event"] = payload
                     state["halted"] = True
-                    state["no_restart_latched"] = bool(stop_drawdown_raw >= no_restart_drawdown_threshold)
+                    state["no_restart_latched"] = no_restart_latched
                     state["cooldown_until_ms"] = cooldown_until_ms
                     state["pending_red_since_ms"] = None
                     latch_path = self._equity_hard_stop_write_latch(pside, payload)
                     logging.critical(
-                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | stop_ts=%s drawdown_raw=%.6f no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s",
+                        "[risk] HSL[%s] replay found finalized RED stop in exchange-derived history | "
+                        "stop_ts=%s drawdown_raw=%.6f no_restart_drawdown_raw=%.6f "
+                        "no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s",
                         pside,
                         ts,
                         stop_drawdown_raw,
+                        no_restart_drawdown_raw,
                         state["no_restart_latched"],
                         cooldown_until_ms if cooldown_until_ms is not None else "none",
                         latch_path,
@@ -1445,7 +1524,11 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
     cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
     no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-    no_restart_latched = bool(stop_event["drawdown_raw"] >= no_restart_drawdown_threshold)
+    (
+        no_restart_peak_strategy_equity,
+        no_restart_drawdown_raw,
+    ) = self._equity_hard_stop_record_no_restart_stop(pside, stop_event)
+    no_restart_latched = bool(no_restart_drawdown_raw >= no_restart_drawdown_threshold)
     cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
     cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
     payload = self._equity_hard_stop_build_latch_payload(
@@ -1465,6 +1548,8 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
         drawdown_score=float(stop_event["drawdown_score"]),
         no_restart_latched=no_restart_latched,
         cooldown_until_ms=cooldown_until_ms,
+        no_restart_peak_strategy_equity=no_restart_peak_strategy_equity,
+        no_restart_drawdown_raw=no_restart_drawdown_raw,
     )
     state["last_stop_event"] = payload
     state["halted"] = True
@@ -1484,6 +1569,7 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
                 "cooldown_until_ms": int(cooldown_until_ms),
                 "latch_path": str(latch_path),
                 "drawdown_raw": float(stop_event["drawdown_raw"]),
+                "no_restart_drawdown_raw": float(no_restart_drawdown_raw),
             },
             pside=pside,
             ts=stop_ts_ms,
@@ -1491,23 +1577,25 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
     if no_restart_latched or cooldown_until_ms is None:
         logging.critical(
             "[risk] HSL[%s] RED stop finalized (terminal) | stop_ts=%s strategy_equity=%.6f "
-            "peak_strategy_equity=%.6f drawdown_raw=%.6f "
+            "peak_strategy_equity=%.6f drawdown_raw=%.6f no_restart_drawdown_raw=%.6f "
             "no_restart_drawdown_threshold=%.6f latch=%s",
             pside,
             stop_ts_ms,
             stop_event["equity"],
             stop_event["peak_strategy_equity"],
             stop_event["drawdown_raw"],
+            no_restart_drawdown_raw,
             no_restart_drawdown_threshold,
             latch_path,
         )
         return
     logging.critical(
         "[risk] HSL[%s] RED stop finalized (auto-restart eligible) | stop_ts=%s "
-        "drawdown_raw=%.6f cooldown_until_ms=%s latch=%s",
+        "drawdown_raw=%.6f no_restart_drawdown_raw=%.6f cooldown_until_ms=%s latch=%s",
         pside,
         stop_ts_ms,
         stop_event["drawdown_raw"],
+        no_restart_drawdown_raw,
         cooldown_until_ms,
         latch_path,
     )
