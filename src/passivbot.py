@@ -9441,9 +9441,9 @@ class Passivbot:
                 action = "    new"
             elif new["size"] == 0.0:
                 action = " closed"
-            elif new["size"] > old["size"]:
+            elif abs(new["size"]) > abs(old["size"]):
                 action = "  added"
-            elif new["size"] < old["size"]:
+            elif abs(new["size"]) < abs(old["size"]):
                 action = "reduced"
             else:
                 action = "unknown"

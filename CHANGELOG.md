@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live `[pos]` logging so short position size increases are labeled as
+  `added` and short size decreases as `reduced`, matching exposure magnitude
+  instead of signed numeric ordering.
 - Fixed live ignored-coin handling so ignored symbols are sent to the Rust
   orchestrator as `graceful_stop`, preventing new initial entries after a
   previously open ignored position becomes fully flat.
