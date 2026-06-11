@@ -3288,6 +3288,7 @@ class Passivbot:
             "create_posted": 0,
             "cancel_ms": None,
             "create_ms": None,
+            "skipped_cancel": 0,
             "deferred_create": 0,
             "skipped_create": 0,
             "requested_confirmations": {},
@@ -3303,6 +3304,7 @@ class Passivbot:
         planned_create = int(wave.get("planned_create", 0) or 0)
         cancel_posted = int(wave.get("cancel_posted", 0) or 0)
         create_posted = int(wave.get("create_posted", 0) or 0)
+        skipped_cancel = int(wave.get("skipped_cancel", 0) or 0)
         deferred_create = int(wave.get("deferred_create", 0) or 0)
         skipped_create = int(wave.get("skipped_create", 0) or 0)
         symbols = list(wave.get("symbols") or [])
@@ -3311,6 +3313,7 @@ class Passivbot:
             planned_create,
             cancel_posted,
             create_posted,
+            skipped_cancel,
             deferred_create,
             skipped_create,
             tuple(symbols[:12]),
@@ -3330,6 +3333,8 @@ class Passivbot:
             timings.append(f"cancel_ms={int(wave['cancel_ms'])}")
         if wave.get("create_ms") is not None:
             timings.append(f"create_ms={int(wave['create_ms'])}")
+        if skipped_cancel:
+            timings.append(f"skipped_cancel={skipped_cancel}")
         if deferred_create:
             timings.append(f"deferred_create={deferred_create}")
         if skipped_create:

@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 import pytest
 from ccxt.base.errors import RateLimitExceeded
@@ -357,6 +358,78 @@ async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
     assert bot.cancel_called
     assert bot.config_symbols == ["ETH/USDT:USDT"]
     assert not bot.create_called
+
+
+@pytest.mark.asyncio
+async def test_execute_to_exchange_skips_all_order_mutations_when_balance_too_low(
+    caplog,
+):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        debug_mode = False
+        balance_threshold = 1.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+
+        def __init__(self):
+            self.cancel_called = False
+            self.create_called = False
+            self.config_called = False
+            self.execution_scheduled = False
+
+        async def execution_cycle(self):
+            return None
+
+        async def calc_orders_to_cancel_and_create(self):
+            return [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                }
+            ], [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 0.9,
+                    "qty": 1.0,
+                }
+            ]
+
+        def get_raw_balance(self):
+            return 0.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancel_called = True
+            return []
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_called = True
+            return set(symbols or [])
+
+        async def execute_orders_parent(self, orders):
+            self.create_called = True
+            return []
+
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot.execute_to_exchange(bot)
+
+    assert not bot.cancel_called
+    assert not bot.config_called
+    assert not bot.create_called
+    assert bot.execution_scheduled is True
+    assert any(
+        "not cancelling or creating orders" in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

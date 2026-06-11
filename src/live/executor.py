@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 import sys
 import traceback
 from collections import defaultdict
@@ -50,12 +51,30 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
         if key in seen:
             logging.debug("duplicate create candidate: %s", elm)
         seen.add(key)
+    low_balance = False
+    if not bot.debug_mode:
+        raw_balance = float(bot.get_raw_balance())
+        if not math.isfinite(raw_balance):
+            raise RuntimeError(
+                f"invalid raw balance for order execution: {raw_balance!r}"
+            )
+        balance_threshold = float(getattr(bot, "balance_threshold", 0.0) or 0.0)
+        low_balance = raw_balance < balance_threshold
+        if low_balance and (to_cancel or to_create):
+            if order_wave is not None:
+                order_wave["skipped_cancel"] += len(to_cancel)
+                order_wave["skipped_create"] += len(to_create)
+            logging.info(
+                "[balance] too low: %.2f %s; not cancelling or creating orders",
+                raw_balance,
+                bot.quote,
+            )
     if bot.debug_mode:
         if to_cancel:
             print(
                 f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}"
             )
-    else:
+    elif not low_balance:
         cancel_started_ms = _utc_ms()
         bot._order_wave_in_progress = order_wave
         try:
@@ -70,12 +89,8 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
             print(
                 f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}"
             )
-    elif bot.get_raw_balance() < bot.balance_threshold:
-        logging.info(
-            "[balance] too low: %.2f %s; not creating orders",
-            bot.get_raw_balance(),
-            bot.quote,
-        )
+    elif low_balance:
+        pass
     else:
         to_create_mod = []
         for order in to_create:

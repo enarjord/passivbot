@@ -25,6 +25,9 @@ All notable user-facing changes will be documented in this file.
   global `backtest.*_fee_override` is set, avoiding silent first-coin fee selection.
 - Suite backtests and optimizer suites now reject asymmetric per-side approved/ignored
   coin lists instead of silently converting them to a long/short union.
+- Live execution now skips both order cancellations and creations while the raw wallet
+  balance is below the configured threshold, avoiding entry-grid cancellation from a
+  transient near-zero balance snapshot.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and
