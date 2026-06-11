@@ -15,6 +15,8 @@ All notable user-facing changes will be documented in this file.
   buy closes to shorts and sell closes to longs, fill normalization no longer falls back
   to raw client ids or long-side defaults on helper import failures, and Bybit refreshes
   avoid double-counting overlapping coalesced execution ids.
+- Tightened OHLCV fetch failure handling so exhausted CCXT retries now fail instead of
+  masquerading as an empty page that can persist a false trailing-unavailable gap.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

@@ -2358,12 +2358,18 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
     symbol_dir = legacy_root / "binance" / "1m" / "ETH_USDT_USDT"
     symbol_dir.mkdir(parents=True, exist_ok=True)
     np.save(symbol_dir / "2026-04-01.npy", arr)
+    source_symbol_dir = legacy_root / "binance" / "1m" / "ETH_USDT:USDT"
+    source_symbol_dir.mkdir(parents=True, exist_ok=True)
+    np.save(source_symbol_dir / "2026-04-01.npy", arr)
     btc_dir = legacy_root / "binance" / "1m" / "BTC_USDT_USDT"
     btc_dir.mkdir(parents=True, exist_ok=True)
-    np.save(
-        btc_dir / "2026-04-01.npy",
-        np.array([(int(start_ts), 0.0, 50001.0, 49999.0, 50000.0, 100.0)], dtype=LEGACY_DTYPE),
+    btc_arr = np.array(
+        [(int(start_ts), 0.0, 50001.0, 49999.0, 50000.0, 100.0)], dtype=LEGACY_DTYPE
     )
+    np.save(btc_dir / "2026-04-01.npy", btc_arr)
+    btc_source_symbol_dir = legacy_root / "binance" / "1m" / "BTC_USDT:USDT"
+    btc_source_symbol_dir.mkdir(parents=True, exist_ok=True)
+    np.save(btc_source_symbol_dir / "2026-04-01.npy", btc_arr)
     with open(tmp_path / "caches" / "binance" / "first_timestamps.json", "w", encoding="utf-8") as f:
         json.dump({"ETH": int(start_ts), "BTC": int(start_ts)}, f)
 
@@ -2400,6 +2406,7 @@ async def test_try_prepare_hlcvs_v2_local_logs_start_before_work(monkeypatch, tm
             "gap_tolerance_ohlcvs_minutes": 120.0,
             "cm_debug_level": 0,
             "cm_progress_log_interval_seconds": 0.0,
+            "ohlcv_source_dir": str(legacy_root),
         },
         "live": {
             "approved_coins": {"long": ["ETH"], "short": []},

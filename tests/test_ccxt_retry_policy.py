@@ -1,6 +1,6 @@
 import pytest
 
-from candlestick_manager import CandlestickManager
+from candlestick_manager import CandlestickManager, OhlcvFetchError
 
 
 class RequestTimeout(Exception):
@@ -29,6 +29,19 @@ class CapturingExchange:
     async def fetch_ohlcv(self, symbol, timeframe, since, limit, params=None):
         self.params_seen = dict(params or {})
         return [[since, 1.0, 1.0, 1.0, 1.0, 0.0]]
+
+
+class PartialThenFailExchange:
+    id = "binanceusdm"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def fetch_ohlcv(self, symbol, timeframe, since, limit, params=None):
+        self.calls += 1
+        if self.calls == 1:
+            return [[since, 1.0, 1.0, 1.0, 1.0, 0.0]]
+        raise RequestTimeout("timed out")
 
 
 @pytest.mark.asyncio
@@ -66,16 +79,40 @@ async def test_non_bybit_keeps_default_retry_budget(tmp_path, monkeypatch):
         exchange=ex, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
     )
 
-    rows = await cm._ccxt_fetch_ohlcv_once(
-        "BTC/USDT:USDT",
-        since_ms=1643262960000,
-        limit=1000,
-        timeframe="1m",
+    with pytest.raises(OhlcvFetchError, match="exhausted retries"):
+        await cm._ccxt_fetch_ohlcv_once(
+            "BTC/USDT:USDT",
+            since_ms=1643262960000,
+            limit=1000,
+            timeframe="1m",
+        )
+
+    assert ex.calls == 5
+
+
+@pytest.mark.asyncio
+async def test_paginated_fetch_raises_instead_of_returning_partial_on_page_failure(
+    tmp_path, monkeypatch
+):
+    async def _nosleep(_):
+        return None
+
+    monkeypatch.setattr("candlestick_manager.asyncio.sleep", _nosleep)
+
+    ex = PartialThenFailExchange()
+    cm = CandlestickManager(
+        exchange=ex, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
     )
 
-    # Default behavior: 5 attempts -> still fails -> returns empty
-    assert rows == []
-    assert ex.calls == 5
+    with pytest.raises(OhlcvFetchError):
+        await cm._fetch_ohlcv_paginated(
+            "BTC/USDT:USDT",
+            1643262960000,
+            1643262960000 + 3 * 60_000,
+            timeframe="1m",
+        )
+
+    assert ex.calls == 6
 
 
 @pytest.mark.asyncio

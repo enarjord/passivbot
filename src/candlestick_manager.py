@@ -78,6 +78,12 @@ warnings.filterwarnings(
 ONE_MIN_MS = 60_000
 
 _LOCK_TIMEOUT_SECONDS = 10.0
+
+
+class OhlcvFetchError(RuntimeError):
+    """Raised when a remote OHLCV fetch exhausts retries without a successful response."""
+
+
 _LOCK_STALE_SECONDS = 180.0
 
 
@@ -3651,6 +3657,8 @@ class CandlestickManager:
         max_attempts = 9 if is_bybit else 5
         backoff = 1.0 if is_bybit else 0.5
         backoff_cap = 20.0 if is_bybit else 8.0
+        last_exc: Optional[Exception] = None
+        tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
         for attempt in range(max_attempts):
             self._raise_if_shutdown_requested("ccxt_fetch_ohlcv_once")
             # Wait for global rate limit backoff if one is active
@@ -3677,7 +3685,6 @@ class CandlestickManager:
                 if "bybit" in exid:
                     params.setdefault("category", "linear")
 
-                tf_norm = self._normalize_timeframe_arg(timeframe, tf, default=self._ccxt_timeframe)
                 await self._apply_remote_fetch_spacing(symbol=symbol, tf=tf_norm)
                 t0 = time.monotonic()
                 self._emit_remote_fetch(
@@ -3763,6 +3770,7 @@ class CandlestickManager:
                 )
                 return res or []
             except Exception as e:  # pragma: no cover - network not used in tests
+                last_exc = e
                 err_type = type(e).__name__
                 err_repr = repr(e)
                 elapsed_ms = int((time.monotonic() - t0) * 1000) if "t0" in locals() else None
@@ -3822,8 +3830,16 @@ class CandlestickManager:
                     )
                 ):
                     sleep_s = max(sleep_s, 2.0)
+                if attempt == max_attempts - 1:
+                    break
                 await self._sleep_interruptible(sleep_s, stage="ccxt_fetch_ohlcv_retry")
                 backoff = min(backoff * 2.0, backoff_cap)
+        if last_exc is not None:
+            raise OhlcvFetchError(
+                "ccxt OHLCV fetch exhausted retries "
+                f"exchange={self._ex_id} symbol={symbol} tf={tf_norm} "
+                f"since_ts={int(since_ms)} limit={int(limit)} attempts={max_attempts}"
+            ) from last_exc
         return []
 
     # ----- Array slicing helpers -----

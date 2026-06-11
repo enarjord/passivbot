@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from candlestick_manager import OhlcvFetchError
 from hlcv_preparation import (
     _dense_hlcv_frame_from_sparse_v2_range,
     _fetch_coin_range_into_v2_store,
@@ -339,6 +340,42 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
         resolved.valid,
         np.array([True, True, False, False, False, False]),
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_into_v2_store_does_not_persist_gaps_on_fetch_failure(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+
+    class FailingOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            raise OhlcvFetchError("ccxt OHLCV fetch exhausted retries")
+
+    with pytest.raises(OhlcvFetchError):
+        await _fetch_coin_range_into_v2_store(
+            om=FailingOhlcvManager(),
+            catalog=catalog,
+            store=store,
+            exchange="bybit",
+            coin="ETH",
+            symbol="ETH/USDT:USDT",
+            start_ts=start_ts,
+            end_ts=end_ts,
+        )
+
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "exception"
+    assert "OhlcvFetchError" in attempts[-1].note
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
 
 
 @pytest.mark.asyncio
