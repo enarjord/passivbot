@@ -21,6 +21,8 @@ All notable user-facing changes will be documented in this file.
   across auto-restart cooldowns and restart history replay, matching v8 backtest behavior.
 - Tightened Bitget fill normalization so ambiguous side/position-side payloads fail
   loudly instead of defaulting fills to the long side.
+- Backtests now reject heterogeneous per-coin maker/taker fees unless the matching
+  global `backtest.*_fee_override` is set, avoiding silent first-coin fee selection.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

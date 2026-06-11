@@ -374,6 +374,56 @@ def _build_coin_metadata_entries(
     return entries
 
 
+def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
+    entry = mss.get(coin, {}) if isinstance(mss, dict) else {}
+    if fee_kind == "maker":
+        raw_fee = entry.get("maker_fee", entry.get("maker"))
+    elif fee_kind == "taker":
+        raw_fee = entry.get("taker_fee", entry.get("taker"))
+    else:
+        raise ValueError(f"unsupported backtest fee kind {fee_kind!r}")
+    if raw_fee is None:
+        raise ValueError(f"missing {fee_kind} fee for backtest coin {coin}")
+    fee = float(raw_fee)
+    if not math.isfinite(fee):
+        raise ValueError(f"non-finite {fee_kind} fee for backtest coin {coin}: {raw_fee}")
+    return fee
+
+
+def _resolve_single_backtest_fee(
+    *,
+    coins: Sequence[str],
+    mss: dict,
+    fee_kind: str,
+    override_value: Any,
+) -> float:
+    if override_value is not None:
+        fee = float(override_value)
+        if not math.isfinite(fee):
+            raise ValueError(
+                f"backtest.{fee_kind}_fee_override must be finite, got {override_value}"
+            )
+        return fee
+    fees = [(coin, _market_fee_for_backtest(mss, coin, fee_kind)) for coin in coins]
+    if not fees:
+        raise ValueError(f"cannot resolve {fee_kind} fee without backtest coins")
+    reference = fees[0][1]
+    mismatches = [
+        (coin, fee)
+        for coin, fee in fees[1:]
+        if not math.isclose(fee, reference, rel_tol=0.0, abs_tol=1e-15)
+    ]
+    if mismatches:
+        preview = ", ".join(f"{coin}={fee:.12g}" for coin, fee in fees[:8])
+        suffix = f", +{len(fees) - 8} more" if len(fees) > 8 else ""
+        raise ValueError(
+            f"backtest.{fee_kind}_fee_override is required when selected coins have "
+            f"heterogeneous {fee_kind} fees; Rust backtests accept one global "
+            f"{fee_kind} fee. Fees: {preview}{suffix}"
+        )
+    return reference
+
+
 def _as_c_contiguous_native_array(arr, dtype):
     dtype = np.dtype(dtype)
     out = np.asarray(arr)
@@ -1950,16 +2000,18 @@ def prep_backtest_args(
         taker_fee_override = get_optional_config_value(
             config, "backtest.taker_fee_override", None
         )
-        if maker_fee_override is None:
-            maker_fee = mss[coins[0]]["maker"]
-        else:
-            maker_fee = float(maker_fee_override)
-        if taker_fee_override is None:
-            taker_fee = mss[coins[0]].get(
-                "taker_fee", mss[coins[0]].get("taker", 0.00055)
-            )
-        else:
-            taker_fee = float(taker_fee_override)
+        maker_fee = _resolve_single_backtest_fee(
+            coins=coins,
+            mss=mss,
+            fee_kind="maker",
+            override_value=maker_fee_override,
+        )
+        taker_fee = _resolve_single_backtest_fee(
+            coins=coins,
+            mss=mss,
+            fee_kind="taker",
+            override_value=taker_fee_override,
+        )
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "strategy_kind": strategy_kind,

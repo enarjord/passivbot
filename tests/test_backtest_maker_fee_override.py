@@ -1,6 +1,7 @@
 import logging
 
 import numpy as np
+import pytest
 
 import backtest as backtest_module
 from config_utils import get_template_config
@@ -34,6 +35,26 @@ def _base_mss():
     }
 
 
+def _multi_coin_config():
+    cfg = _base_config()
+    cfg["backtest"]["coins"] = {"binance": ["BTC/USDT:USDT", "ETH/USDT:USDT"]}
+    return cfg
+
+
+def _multi_coin_mss(*, eth_maker=0.0001, eth_taker=0.0005):
+    mss = _base_mss()
+    mss["ETH/USDT:USDT"] = {
+        "maker": eth_maker,
+        "taker": eth_taker,
+        "qty_step": 0.001,
+        "price_step": 0.1,
+        "min_qty": 0.001,
+        "min_cost": 10.0,
+        "c_mult": 1.0,
+    }
+    return mss
+
+
 def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     config = _base_config()
     mss = _base_mss()
@@ -56,6 +77,43 @@ def test_prep_backtest_args_uses_taker_fee_override_when_set():
     mss = _base_mss()
     _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["taker_fee"] == 0.0008
+
+
+def test_prep_backtest_args_rejects_heterogeneous_maker_fees_without_override():
+    config = _multi_coin_config()
+    mss = _multi_coin_mss(eth_maker=0.0002)
+
+    with pytest.raises(ValueError, match="maker_fee_override.*heterogeneous maker fees"):
+        prep_backtest_args(config, mss, "binance")
+
+
+def test_prep_backtest_args_rejects_heterogeneous_taker_fees_without_override():
+    config = _multi_coin_config()
+    mss = _multi_coin_mss(eth_taker=0.0007)
+
+    with pytest.raises(ValueError, match="taker_fee_override.*heterogeneous taker fees"):
+        prep_backtest_args(config, mss, "binance")
+
+
+def test_prep_backtest_args_rejects_missing_taker_fee_without_override():
+    config = _base_config()
+    mss = _base_mss()
+    del mss["BTC/USDT:USDT"]["taker"]
+
+    with pytest.raises(ValueError, match="missing taker fee"):
+        prep_backtest_args(config, mss, "binance")
+
+
+def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
+    config = _multi_coin_config()
+    config["backtest"]["maker_fee_override"] = 0.0003
+    config["backtest"]["taker_fee_override"] = 0.0009
+    mss = _multi_coin_mss(eth_maker=0.0002, eth_taker=0.0007)
+
+    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+
+    assert backtest_params["maker_fee"] == 0.0003
+    assert backtest_params["taker_fee"] == 0.0009
 
 
 def test_prep_backtest_args_passes_market_order_slippage_pct():
