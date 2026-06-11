@@ -6149,19 +6149,16 @@ class Passivbot:
             return last_position_changes
 
         events = self._pnls_manager.get_events()
-        for symbol in self.positions:
+        symbols = [symbol] if symbol is not None else list(self.positions)
+        for symbol in symbols:
+            if symbol not in self.positions:
+                continue
             for pside in ["long", "short"]:
                 if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
-                    last_position_changes[symbol][pside] = (
-                        utc_ms() - 1000 * 60 * 60 * 24 * 7
-                    )
                     for ev in reversed(events):
-                        try:
-                            if ev.symbol == symbol and ev.position_side == pside:
-                                last_position_changes[symbol][pside] = ev.timestamp
-                                break
-                        except Exception as e:
-                            logging.error(f"Error in get_last_position_changes: {e}")
+                        if ev.symbol == symbol and ev.position_side == pside:
+                            last_position_changes[symbol][pside] = int(ev.timestamp)
+                            break
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -6185,6 +6182,9 @@ class Passivbot:
         """
         if not hasattr(self, "trailing_prices"):
             self.trailing_prices = {}
+        unavailable_reasons: dict[str, set[str]] = defaultdict(set)
+        self._orchestrator_trailing_unavailable_symbols = set()
+        self._orchestrator_trailing_unavailable_reasons = {}
         last_position_changes = self.get_last_position_changes()
         symbols = (
             set(self.trailing_prices)
@@ -6192,22 +6192,42 @@ class Passivbot:
             | set(self.active_symbols)
         )
 
-        # Initialize containers for all symbols first
+        # Initialize missing containers without erasing the last known trailing bundle.
         for symbol in symbols:
-            self.trailing_prices[symbol] = {
-                "long": _trailing_bundle_default_dict(),
-                "short": _trailing_bundle_default_dict(),
-            }
+            self.trailing_prices.setdefault(symbol, {})
+            self.trailing_prices[symbol].setdefault(
+                "long", _trailing_bundle_default_dict()
+            )
+            self.trailing_prices[symbol].setdefault(
+                "short", _trailing_bundle_default_dict()
+            )
+
+        required_trailing: dict[str, set[str]] = defaultdict(set)
+        for symbol in symbols:
+            for pside in ("long", "short"):
+                if self.has_position(pside, symbol) and self.is_trailing(symbol, pside):
+                    required_trailing[symbol].add(pside)
+
+        for symbol, psides in required_trailing.items():
+            pside_changes = (
+                last_position_changes[symbol]
+                if symbol in last_position_changes
+                else {}
+            )
+            for pside in psides:
+                if pside not in pside_changes:
+                    unavailable_reasons["missing_position_change_anchor"].add(symbol)
 
         # Build concurrent fetches per symbol that has position changes
         fetch_plan = {}
-        for symbol in symbols:
-            if symbol not in last_position_changes:
+        for symbol, pside_changes in last_position_changes.items():
+            if symbol not in required_trailing:
                 continue
             # Determine earliest start among sides to avoid duplicate fetches
             starts = [
-                last_position_changes[symbol][ps]
-                for ps in last_position_changes[symbol]
+                pside_changes[pside]
+                for pside in pside_changes
+                if pside in required_trailing[symbol]
             ]
             if not starts:
                 continue
@@ -6226,19 +6246,26 @@ class Passivbot:
             try:
                 results[sym] = await task
             except Exception as e:
+                unavailable_reasons["candle_fetch_failed"].add(sym)
                 logging.debug("failed to fetch candles for trailing %s: %s", sym, e)
                 results[sym] = None
 
         # Compute trailing metrics per symbol/side
         for symbol, arr in results.items():
-            if arr is None or arr.size == 0:
+            if arr is None:
+                continue
+            if arr.size == 0:
+                unavailable_reasons["missing_trailing_candles"].add(symbol)
                 continue
             if symbol not in last_position_changes:
                 continue
             arr = np.sort(arr, order="ts")
             for pside, changed_ts in last_position_changes[symbol].items():
+                if pside not in required_trailing.get(symbol, set()):
+                    continue
                 mask = arr["ts"] > int(changed_ts)
                 if not np.any(mask):
+                    unavailable_reasons["missing_trailing_candles"].add(symbol)
                     continue
                 subset = arr[mask]
                 try:
@@ -6247,12 +6274,33 @@ class Passivbot:
                     )
                     self.trailing_prices[symbol][pside] = bundle
                 except Exception as e:
+                    unavailable_reasons["bundle_compute_failed"].add(symbol)
                     logging.debug(
                         "failed to compute trailing bundle for %s %s: %s",
                         symbol,
                         pside,
                         e,
                     )
+
+        unavailable_symbols = set()
+        unavailable_by_symbol: dict[str, list[str]] = defaultdict(list)
+        for reason, reason_symbols in sorted(unavailable_reasons.items()):
+            if not reason_symbols:
+                continue
+            unavailable_symbols.update(reason_symbols)
+            for symbol in sorted(reason_symbols):
+                unavailable_by_symbol[symbol].append(reason)
+            logging.warning(
+                "[trailing] trailing state unavailable reason=%s symbols=%s "
+                "action=mark_nontradable_until_fresh",
+                reason,
+                Passivbot._log_symbols(sorted(reason_symbols), limit=12),
+            )
+        self._orchestrator_trailing_unavailable_symbols = unavailable_symbols
+        self._orchestrator_trailing_unavailable_reasons = {
+            symbol: sorted(reasons)
+            for symbol, reasons in sorted(unavailable_by_symbol.items())
+        }
 
     def symbol_is_eligible(self, symbol):
         """Return True when the symbol passes exchange-specific eligibility rules."""
@@ -10695,6 +10743,9 @@ class Passivbot:
         m1_volume_emas = snapshot["m1_volume_emas"]
         m1_log_range_emas = snapshot["m1_log_range_emas"]
         h1_log_range_emas = snapshot["h1_log_range_emas"]
+        trailing_unavailable_symbols = set(
+            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
+        )
 
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
@@ -10835,7 +10886,9 @@ class Passivbot:
                             self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
                         ),
                     },
-                    "tradable": bool(active),
+                    "tradable": bool(
+                        active and symbol not in trailing_unavailable_symbols
+                    ),
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),
                     "emas": {
@@ -11933,6 +11986,9 @@ class Passivbot:
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
         )
+        trailing_unavailable_symbols = set(
+            getattr(self, "_orchestrator_trailing_unavailable_symbols", set())
+        )
 
         market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
         self._assert_staged_planner_preconditions(
@@ -12028,7 +12084,11 @@ class Passivbot:
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
 
             active = bool(self.markets_dict.get(symbol, {}).get("active", True))
-            tradable = bool(active and symbol not in ema_unavailable_symbols)
+            tradable = bool(
+                active
+                and symbol not in ema_unavailable_symbols
+                and symbol not in trailing_unavailable_symbols
+            )
             effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
             if effective_min_cost <= 0.0:
                 effective_min_cost = self._calc_effective_min_cost_at_price(

@@ -1,4 +1,5 @@
 import json
+import logging
 import sys
 import types
 
@@ -187,29 +188,69 @@ def _make_mock_pbr():
     )
     module.round_ = lambda value, step: value
     module.compute_ideal_orders_json = lambda *_args, **_kwargs: "{}"
+    module.trailing_bundle_default_py = lambda: (0.0, 0.0, 0.0, 0.0)
+
+    def _update_trailing_bundle_py(highs, lows, closes, bundle=None):
+        del bundle
+        if len(highs) == 0:
+            return module.trailing_bundle_default_py()
+        min_since_open = float(min(lows))
+        max_since_open = float(max(highs))
+        min_idx = min(range(len(lows)), key=lambda idx: lows[idx])
+        max_idx = max(range(len(highs)), key=lambda idx: highs[idx])
+        max_since_min = float(max(closes[min_idx:])) if len(closes[min_idx:]) else 0.0
+        min_since_max = float(min(lows[max_idx:])) if len(lows[max_idx:]) else 0.0
+        return (min_since_open, max_since_min, max_since_open, min_since_max)
+
+    module.update_trailing_bundle_py = _update_trailing_bundle_py
 
     def _get_strategy_spec(strategy_kind="trailing_martingale"):
-        from config.strategy import get_strategy_defaults, get_strategy_param_keys, normalize_strategy_kind
-
-        normalized = normalize_strategy_kind(strategy_kind)
+        normalized = str(strategy_kind or "trailing_martingale").strip().lower()
+        if normalized not in {"trailing_martingale", "ema_anchor"}:
+            raise ValueError(f"unsupported strategy kind {normalized!r}")
+        defaults = {
+            "ema_span_0": 1.0,
+            "ema_span_1": 2.0,
+            "entry_volatility_ema_span_1h": 0.0,
+            "entry_volatility_ema_span_1m": 60.0,
+            "entry_grid_spacing_pct": 0.0,
+            "entry_initial_qty_pct": 0.0,
+            "entry_grid_double_down_factor": 1.0,
+            "entry_weight_volatility_1h": 0.0,
+            "entry_weight_volatility_1m": 0.0,
+            "entry_we_weight": 0.0,
+            "entry_initial_ema_dist": 0.0,
+            "entry_trailing_double_down_factor": 0.0,
+            "entry_trailing_retracement_pct": 0.0,
+            "entry_trailing_threshold_pct": 0.0,
+            "entry.retracement_base_pct": 0.0,
+            "close_grid_qty_pct": 0.0,
+            "close_trailing_qty_pct": 0.0,
+            "close_trailing_retracement_pct": 0.0,
+            "close_trailing_threshold_pct": 0.0,
+            "close.retracement_base_pct": 0.0,
+        }
         parameters = []
         for pside in ("long", "short"):
-            for key in get_strategy_param_keys(normalized):
+            for key, default in defaults.items():
                 parts = [part for part in key.split(".") if part]
                 parameters.append(
                     {
+                        "side": pside,
                         "name": f"{pside}_{'_'.join(parts)}",
                         "optimize_key": f"{pside}_{'_'.join(parts)}",
                         "config_path": ["strategy", pside, *parts],
+                        "default": default,
+                        "bounds": [default, default],
                     }
                 )
         return {
             "kind": normalized,
             "parameters": parameters,
-            "defaults": get_strategy_defaults(normalized),
         }
 
     module.get_strategy_spec = _get_strategy_spec
+    module.get_strategy_kinds = lambda: ["trailing_martingale", "ema_anchor"]
 
     def _equity_hard_stop_step_py(
         *,
@@ -586,6 +627,21 @@ def _set_basic_state(bot, symbol="TEST/USDT"):
     return symbol
 
 
+class _DummyFillEvent:
+    def __init__(self, symbol: str, position_side: str, timestamp: int):
+        self.symbol = symbol
+        self.position_side = position_side
+        self.timestamp = timestamp
+
+
+class _DummyPnlsManager:
+    def __init__(self, events):
+        self._events = list(events)
+
+    def get_events(self):
+        return list(self._events)
+
+
 def test_entry_cooldown_delta_guard_bypasses_when_disabled():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -733,6 +789,124 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
     assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
+
+
+@pytest.mark.asyncio
+async def test_trailing_fetch_failure_preserves_bundle_and_marks_symbol_unavailable(caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    previous_bundle = {
+        "min_since_open": 95.0,
+        "max_since_min": 105.0,
+        "max_since_open": 110.0,
+        "min_since_max": 102.0,
+    }
+    bot.trailing_prices = {
+        symbol: {
+            "long": dict(previous_bundle),
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+    bot._pnls_manager = _DummyPnlsManager(
+        [_DummyFillEvent(symbol, "long", 120_000)]
+    )
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+
+    async def fail_get_candles(*args, **kwargs):
+        raise RuntimeError("remote down")
+
+    bot.cm.get_candles = fail_get_candles
+
+    caplog.set_level(logging.WARNING)
+    await bot.update_trailing_data()
+
+    assert bot.trailing_prices[symbol]["long"] == previous_bundle
+    assert bot._orchestrator_trailing_unavailable_symbols == {symbol}
+    assert any("[trailing]" in record.message for record in caplog.records)
+    assert any("candle_fetch_failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch, caplog):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot._pnls_manager = _DummyPnlsManager([])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    candle_calls = []
+
+    async def fake_get_candles(*args, **kwargs):
+        candle_calls.append((args, kwargs))
+        return _make_ohlcv_array([(180_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+
+    bot.cm.get_candles = fake_get_candles
+
+    caplog.set_level(logging.WARNING)
+    assert bot.get_last_position_changes() == {}
+
+    await bot.update_trailing_data()
+
+    assert candle_calls == []
+    assert bot._orchestrator_trailing_unavailable_symbols == {symbol}
+    assert any("missing_position_change_anchor" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    import passivbot_rust as pbr
+
+    bot.markets_dict = {symbol: {"active": True}}
+    bot.effective_min_cost = {symbol: 1.0}
+    bot.trailing_prices = {
+        symbol: {
+            "long": {
+                "min_since_open": 95.0,
+                "max_since_min": 105.0,
+                "max_since_open": 110.0,
+                "min_since_max": 102.0,
+            },
+            "short": {
+                "min_since_open": 0.0,
+                "max_since_min": 0.0,
+                "max_since_open": 0.0,
+                "min_since_max": 0.0,
+            },
+        }
+    }
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+
+    async def fake_load_bundle(self, symbols, modes):
+        m1_close = {symbol: {1.0: 100.0, 2.0: 100.0}}
+        m1_volume = {symbol: {10.0: 1_000.0}}
+        m1_log_range = {symbol: {10.0: 0.01}}
+        h1_log_range = {symbol: {10.0: 0.01}}
+        self._orchestrator_ema_unavailable_symbols = set()
+        return m1_close, m1_volume, m1_log_range, h1_log_range, {}, {}
+
+    captured = {}
+
+    def fake_compute(input_json: str) -> str:
+        captured["input"] = json.loads(input_json)
+        return '{"orders": [], "diagnostics": {"warnings": []}}'
+
+    monkeypatch.setattr(
+        bot, "_load_orchestrator_ema_bundle", types.MethodType(fake_load_bundle, bot)
+    )
+    monkeypatch.setattr(pbr, "compute_ideal_orders_json", fake_compute)
+    _stamp_staged_account_and_candles(bot)
+
+    await bot.calc_ideal_orders_orchestrator()
+
+    assert captured["input"]["symbols"][0]["tradable"] is False
 
 
 def _stamp_staged_account_and_candles(bot):

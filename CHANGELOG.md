@@ -6,6 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Fixed v8 backtests so delisted open positions are realized at the last valid candle, and
   next-candle close-ladder peeking expands recursive close grids when any ladder rung can fill.
+- Fixed live v8 trailing state handling so missing fill anchors or candle failures preserve
+  the last known trailing bundle and mark affected symbols non-tradable for the planning cycle.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and
