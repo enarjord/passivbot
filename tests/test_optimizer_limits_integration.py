@@ -191,3 +191,30 @@ def test_fill_gap_limit_honors_explicit_max_stat():
 
     assert pytest.approx(scores[0]) == (73.0 - 72.0) * 1e6
     assert pytest.approx(penalty) == (73.0 - 72.0) * 1e6
+
+
+def test_limit_can_use_median_stat_emitted_by_metric_schema():
+    limits = [
+        {
+            "metric": "fills_gap_p99_hours",
+            "penalize_if": "greater_than",
+            "value": 4.0,
+            "stat": "median",
+        },
+    ]
+    cfg = _make_config(limits, scoring=["adg"])
+    flat_stats = flatten_metric_stats(
+        build_scenario_metrics(
+            {
+                "binance": {"adg": 0.001, "fills_gap_p99_hours": 1.0},
+                "bybit": {"adg": 0.001, "fills_gap_p99_hours": 5.0},
+                "kucoin": {"adg": 0.001, "fills_gap_p99_hours": 100.0},
+            }
+        )["stats"]
+    )
+
+    assert flat_stats["fills_gap_p99_hours_median"] == 5.0
+    scores, penalty = Evaluator({}, {}, {}, cfg).calc_fitness(flat_stats)
+
+    assert pytest.approx(scores[0]) == (5.0 - 4.0) * 1e6
+    assert pytest.approx(penalty) == (5.0 - 4.0) * 1e6

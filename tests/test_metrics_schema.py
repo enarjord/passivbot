@@ -1,4 +1,31 @@
-from metrics_schema import merge_suite_payload
+import pytest
+
+from metrics_schema import (
+    MetricAggregationError,
+    build_scenario_metrics,
+    flatten_metric_stats,
+    merge_suite_payload,
+)
+
+
+def test_build_scenario_metrics_emits_median_stats():
+    payload = build_scenario_metrics(
+        {
+            "binance": {"adg": 1.0},
+            "bybit": {"adg": 3.0},
+        }
+    )
+
+    assert payload["stats"]["adg"]["median"] == 2.0
+    assert flatten_metric_stats(payload["stats"])["adg_median"] == 2.0
+
+
+def test_build_scenario_metrics_rejects_non_finite_metric_values():
+    with pytest.raises(
+        MetricAggregationError,
+        match="non-finite metric 'drawdown_worst'",
+    ):
+        build_scenario_metrics({"binance": {"drawdown_worst": float("nan")}})
 
 
 def test_merge_suite_payload_builds_structure():

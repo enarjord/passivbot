@@ -27,6 +27,7 @@ from optimize import (
     _clear_candidate_metrics,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
+    _optimizer_exit_code,
     _record_individual_result,
     _resolve_cli_limits_override,
     _set_candidate_metrics,
@@ -61,6 +62,13 @@ from config.schema import get_template_config
 
 def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
+
+
+def test_optimizer_exit_code_reports_fatal_failure():
+    assert _optimizer_exit_code(interrupted=False, failed=False) == 0
+    assert _optimizer_exit_code(interrupted=False, failed=True) == 1
+    assert _optimizer_exit_code(interrupted=True, failed=False) == 130
+    assert _optimizer_exit_code(interrupted=True, failed=True) == 130
 
 
 def test_candidate_metrics_sidecars_only_attach_to_objects():

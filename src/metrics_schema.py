@@ -6,49 +6,87 @@ from typing import Any, Dict, Iterable, Mapping
 
 import numpy as np
 
+from config.metrics import ANALYSIS_SHARED_KEYS, CURRENCY_METRICS, canonical_metric_name
+
 MetricStats = Dict[str, float]
 ScenarioMetrics = Dict[str, Dict[str, MetricStats]]
+KNOWN_ANALYSIS_METRICS = set(ANALYSIS_SHARED_KEYS) | set(CURRENCY_METRICS)
+
+
+class MetricAggregationError(ValueError):
+    """Raised when metric payloads cannot be safely aggregated for scoring."""
 
 
 def _is_number(value: Any) -> bool:
-    if isinstance(value, (int, float, np.floating)):
+    if isinstance(value, (int, float, np.integer, np.floating)):
         return np.isfinite(value)
     return False
 
 
+def _is_numeric_value(value: Any) -> bool:
+    return isinstance(value, (int, float, np.integer, np.floating))
+
+
+def _is_known_metric_key(key: Any) -> bool:
+    return canonical_metric_name(str(key)) in KNOWN_ANALYSIS_METRICS
+
+
 def _safe_float(value: Any) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return 0.0
+    if not _is_number(value):
+        raise MetricAggregationError(f"non-finite metric value {value!r}")
+    return float(value)
 
 
 def _build_stats(values: Iterable[float]) -> MetricStats:
     arr = np.asarray(list(values), dtype=float)
     if arr.size == 0:
-        return {"mean": 0.0, "min": 0.0, "max": 0.0, "std": 0.0}
+        raise MetricAggregationError("cannot build stats from an empty metric sample")
+    if not np.all(np.isfinite(arr)):
+        raise MetricAggregationError("cannot build stats from non-finite metric values")
     return {
         "mean": float(np.mean(arr)),
         "min": float(np.min(arr)),
         "max": float(np.max(arr)),
         "std": float(np.std(arr)),
+        "median": float(np.median(arr)),
     }
 
 
 def build_scenario_metrics(analyses: Mapping[str, Mapping[str, Any]]) -> Dict[str, Any]:
     """Combine per-exchange analysis dicts into structured scenario metrics."""
 
+    if not analyses:
+        raise MetricAggregationError("no analysis payloads available for scenario metrics")
+
     stats: Dict[str, MetricStats] = {}
     metric_names = set()
-    for analysis in analyses.values():
-        metric_names.update(analysis.keys())
+    for label, analysis in analyses.items():
+        if not isinstance(analysis, Mapping):
+            raise MetricAggregationError(
+                f"analysis payload for {label!r} must be a mapping, got {type(analysis).__name__}"
+            )
+        for metric, raw_value in analysis.items():
+            if _is_number(raw_value):
+                metric_names.add(metric)
+                continue
+            if _is_numeric_value(raw_value) or _is_known_metric_key(metric):
+                raise MetricAggregationError(
+                    f"non-finite metric {metric!r} for {label!r}: {raw_value!r}"
+                )
+    if not metric_names:
+        raise MetricAggregationError("analysis payloads contained no metrics")
 
     for metric in sorted(metric_names):
-        values = [
-            _safe_float(analysis.get(metric))
-            for analysis in analyses.values()
-            if _is_number(analysis.get(metric))
-        ]
+        values = []
+        for label, analysis in analyses.items():
+            if metric not in analysis:
+                continue
+            raw_value = analysis[metric]
+            if not _is_number(raw_value):
+                raise MetricAggregationError(
+                    f"non-finite metric {metric!r} for {label!r}: {raw_value!r}"
+                )
+            values.append(_safe_float(raw_value))
         stats[metric] = _build_stats(values)
 
     return {"stats": stats}
@@ -59,7 +97,7 @@ def flatten_metric_stats(stats: Mapping[str, MetricStats], *, prefix: str = "") 
 
     flattened: Dict[str, float] = {}
     for metric, values in stats.items():
-        for field in ("mean", "min", "max", "std"):
+        for field in ("mean", "min", "max", "std", "median"):
             key = f"{prefix}{metric}_{field}"
             flattened[key] = float(values.get(field, 0.0))
     return flattened

@@ -171,7 +171,7 @@ from suite_runner import (
     aggregate_metrics,
     build_suite_metrics_payload,
 )
-from metrics_schema import build_scenario_metrics, flatten_metric_stats
+from metrics_schema import MetricAggregationError, build_scenario_metrics, flatten_metric_stats
 from optimization.bounds import (
     Bound,
     enforce_bounds,
@@ -556,6 +556,14 @@ def _is_recoverable_backtest_candidate_error(exc: BaseException) -> bool:
             )
         )
     return False
+
+
+def _optimizer_exit_code(*, interrupted: bool, failed: bool) -> int:
+    if interrupted:
+        return 130
+    if failed:
+        return 1
+    return 0
 
 
 def _build_invalid_candidate_metrics(
@@ -1240,12 +1248,31 @@ class Evaluator:
             # Explicitly drop large intermediate arrays to keep worker RSS low.
             del fills
             del equities_array
-        scenario_metrics = build_scenario_metrics(analyses)
-        aggregate_stats = scenario_metrics.get("stats", {})
-        flat_stats = flatten_metric_stats(aggregate_stats)
-        objectives, total_penalty, raw_objectives = self.calc_fitness(
-            flat_stats, return_raw_objectives=True
-        )
+        try:
+            scenario_metrics = build_scenario_metrics(analyses)
+            aggregate_stats = scenario_metrics.get("stats", {})
+            flat_stats = flatten_metric_stats(aggregate_stats)
+            objectives, total_penalty, raw_objectives = self.calc_fitness(
+                flat_stats, return_raw_objectives=True
+            )
+        except MetricAggregationError as exc:
+            error = f"{exc.__class__.__name__}: {exc}"
+            logging.debug(
+                "Optimizer candidate invalid due to metric aggregation failure | hash=%s | error=%s",
+                individual_hash[:12],
+                error,
+            )
+            objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                self.config["optimize"]["scoring"],
+                error,
+                include_stats=True,
+            )
+            metrics_payload["liquidated"] = liquidated
+            _set_candidate_metrics(individual, metrics_payload)
+            actual_hash = calc_hash(individual)
+            if self.use_duplicate_guard:
+                self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+            return tuple(objectives), total_penalty, metrics_payload
         metrics_payload = {
             "stats": aggregate_stats,
             "objectives": raw_objectives,
@@ -1607,7 +1634,26 @@ class SuiteEvaluator:
                 del payload
 
             phase_start = _profile_start(profile_enabled)
-            combined_metrics = combine(analyses)
+            try:
+                combined_metrics = combine(analyses)
+            except MetricAggregationError as exc:
+                error = f"{exc.__class__.__name__}: {exc}"
+                logging.debug(
+                    "Optimizer suite candidate invalid due to metric aggregation failure | label=%s | error=%s",
+                    ctx.label,
+                    error,
+                )
+                objectives, total_penalty, metrics_payload = _build_invalid_candidate_metrics(
+                    self.base.config["optimize"]["scoring"],
+                    error,
+                    include_stats=False,
+                    include_suite_metrics=True,
+                )
+                metrics_payload["liquidated"] = liquidated
+                _set_candidate_metrics(individual, metrics_payload)
+                actual_hash = calc_hash(individual)
+                self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
+                return tuple(objectives), total_penalty, metrics_payload
             _profile_add(timings, "combine_metrics_ms", phase_start)
             stats = combined_metrics.get("stats", {})
             logging.debug(
@@ -2378,6 +2424,7 @@ async def main():
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
+    failed = False
     pool = None
     manager = None
     pool_terminated = False
@@ -2606,6 +2653,7 @@ async def main():
                 if "pool_state" in locals():
                     pool_state["terminated"] = True
     except Exception as e:
+        failed = True
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
@@ -2645,7 +2693,7 @@ async def main():
                 logging.exception("Failed to release shared memory")
 
         logging.info("Shutdown complete.")
-        sys.exit(130 if interrupted else 0)
+        sys.exit(_optimizer_exit_code(interrupted=interrupted, failed=failed))
 
 
 if __name__ == "__main__":

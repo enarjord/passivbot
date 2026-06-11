@@ -509,16 +509,14 @@ def test_load_config_preserves_canonical_optimize_limits(tmp_path):
     assert loaded["optimize"]["limits"] == cfg["optimize"]["limits"]
 
 
-def test_load_config_malformed_optimize_limits_falls_back_to_template(caplog, tmp_path):
+def test_load_config_malformed_optimize_limits_raises(tmp_path):
     cfg = get_template_config()
     cfg["optimize"]["limits"] = [{"metric": "adg_pnl", "value": 0}]
     path = tmp_path / "malformed_limits.json"
     path.write_text(json.dumps(cfg))
 
-    loaded = load_config(str(path), verbose=False)
-
-    assert loaded["optimize"]["limits"] == get_template_config()["optimize"]["limits"]
-    assert any("optimize.limits malformed or unsupported" in rec.message for rec in caplog.records)
+    with pytest.raises(ValueError, match="optimize.limits malformed or unsupported"):
+        load_config(str(path), verbose=False)
 
 
 def test_load_config_disabled_sparse_optimize_limits_are_normalized(caplog, tmp_path):

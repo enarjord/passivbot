@@ -8,6 +8,9 @@ All notable user-facing changes will be documented in this file.
   next-candle close-ladder peeking expands recursive close grids when any ladder rung can fill.
 - Fixed live v8 trailing state handling so missing fill anchors or candle failures preserve
   the last known trailing bundle and mark affected symbols non-tradable for the planning cycle.
+- Tightened optimizer fail-loud behavior: non-finite scenario metrics now invalidate the
+  candidate instead of scoring as zero, median limit stats are emitted, malformed
+  `optimize.limits` fail config loading, and fatal optimizer exceptions exit non-zero.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and
