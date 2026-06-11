@@ -847,6 +847,210 @@ async def test_hsl_replay_scenarios_run_end_to_end(
 
 @pytest.mark.asyncio
 @pytest.mark.fake_live
+async def test_coin_hsl_fake_live_panics_only_drawn_down_coin(tmp_path):
+    import passivbot_rust as pbr
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    user = f"fake_coin_hsl_selective_panic_{tmp_path.name}"
+    _cleanup_fake_user_state(user)
+    for safe_symbol in ("BTC_USDT_USDT", "XMR_USDT_USDT"):
+        latch_path = (
+            REPO_ROOT
+            / "caches"
+            / "equity_hard_stop"
+            / "fake"
+            / f"{user}_long_{safe_symbol}.json"
+        )
+        try:
+            latch_path.unlink()
+        except FileNotFoundError:
+            pass
+
+    scenario = {
+        "name": "coin_hsl_selective_panic",
+        "exchange": "fake",
+        "start_time": "2026-01-01T00:00:00Z",
+        "tick_interval_seconds": 60,
+        "boot_index": 1,
+        "run_initial_cycle": False,
+        "account": {
+            "balance": 1000.0,
+            "positions": [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "qty": 1.0,
+                    "price": 100.0,
+                },
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "qty": 10.0,
+                    "price": 100.0,
+                },
+            ],
+            "fills": [
+                {
+                    "id": "btc-entry",
+                    "order": "btc-entry",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "symbol": "BTC/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "amount": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "clientOrderId": "entry_btc_boot",
+                },
+                {
+                    "id": "xmr-entry",
+                    "order": "xmr-entry",
+                    "timestamp": "2026-01-01T00:00:00Z",
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "side": "buy",
+                    "amount": 10.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                    "clientOrderId": "entry_xmr_boot",
+                },
+            ],
+        },
+        "symbols": {
+            "BTC/USDT:USDT": {
+                "price_step": 0.1,
+                "qty_step": 0.001,
+                "min_qty": 0.001,
+                "min_cost": 5.0,
+                "maker_fee": 0.0,
+                "taker_fee": 0.0,
+            },
+            "XMR/USDT:USDT": {
+                "price_step": 0.1,
+                "qty_step": 0.001,
+                "min_qty": 0.001,
+                "min_cost": 5.0,
+                "maker_fee": 0.0,
+                "taker_fee": 0.0,
+            },
+        },
+        "timeline": [
+            {"t": 0, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 100.0}},
+            {"t": 1, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+            {"t": 2, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+            {"t": 3, "prices": {"BTC/USDT:USDT": 100.0, "XMR/USDT:USDT": 40.0}},
+        ],
+    }
+    scenario_path = tmp_path / "coin_hsl_selective_panic.hjson"
+    scenario_path.write_text(json.dumps(scenario), encoding="utf-8")
+
+    cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
+    cfg["live"]["hsl_signal_mode"] = "coin"
+    cfg["live"]["hsl_position_during_cooldown_policy"] = "panic"
+    cfg["live"]["pnls_max_lookback_days"] = 0.000001
+    cfg["live"]["approved_coins"]["long"] = ["BTC", "XMR"]
+    cfg["live"]["approved_coins"]["short"] = []
+    cfg["live"]["ignored_coins"]["long"] = []
+    cfg["live"]["ignored_coins"]["short"] = []
+    cfg["live"]["fake_scenario_path"] = str(scenario_path)
+    cfg["bot"]["long"]["hsl_enabled"] = True
+    cfg["bot"]["long"]["hsl_red_threshold"] = 0.05
+    cfg["bot"]["long"]["hsl_ema_span_minutes"] = 1.0
+    cfg["bot"]["long"]["hsl_cooldown_minutes_after_red"] = 30.0
+    cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 1.0
+    cfg["bot"]["long"]["hsl_panic_close_order_type"] = "market"
+    cfg["bot"]["long"]["n_positions"] = 2.0
+    cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["long"].setdefault("hsl", {})["enabled"] = True
+    cfg["bot"]["long"]["hsl"]["red_threshold"] = 0.05
+    cfg["bot"]["long"]["hsl"]["ema_span_minutes"] = 1.0
+    cfg["bot"]["long"]["hsl"]["cooldown_minutes_after_red"] = 30.0
+    cfg["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 1.0
+    cfg["bot"]["long"]["hsl"]["panic_close_order_type"] = "market"
+    cfg["bot"]["long"].setdefault("risk", {})["n_positions"] = 2.0
+    cfg["bot"]["long"]["risk"]["total_wallet_exposure_limit"] = 1.0
+    cfg["bot"]["short"]["hsl_enabled"] = False
+    cfg["bot"]["short"].setdefault("hsl", {})["enabled"] = False
+    cfg["bot"]["short"]["n_positions"] = 0.0
+    cfg["bot"]["short"]["total_wallet_exposure_limit"] = 0.0
+    cfg["bot"]["short"].setdefault("risk", {})["n_positions"] = 0.0
+    cfg["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    config_path = tmp_path / "coin_hsl_selective_panic.json"
+    config_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    try:
+        args = argparse.Namespace(
+            config=str(config_path),
+            scenario=str(scenario_path),
+            user=user,
+            max_steps=1,
+            output_dir=str(tmp_path),
+            log_level=1,
+            snapshot_each_step=True,
+        )
+        assert await _async_main(args) == 0
+
+        output_dirs = sorted(
+            path
+            for path in tmp_path.iterdir()
+            if path.is_dir() and (path / "remote_calls.json").exists()
+        )
+        assert len(output_dirs) == 1
+        run_dir = output_dirs[0]
+
+        fills = json.loads((run_dir / "fills.json").read_text(encoding="utf-8"))
+        remote_calls = json.loads((run_dir / "remote_calls.json").read_text(encoding="utf-8"))
+        positions = json.loads((run_dir / "positions.json").read_text(encoding="utf-8"))
+        hsl_trace = json.loads((run_dir / "hsl_trace.json").read_text(encoding="utf-8"))
+
+        panic_fills = [
+            fill
+            for fill in fills
+            if fill["symbol"] == "XMR/USDT:USDT"
+            and fill["position_side"] == "long"
+            and fill["side"] == "sell"
+            and fill.get("reduceOnly") is True
+        ]
+        assert len(panic_fills) == 1
+        assert float(panic_fills[0]["pnl"]) == pytest.approx(-600.0)
+
+        panic_orders = [
+            call
+            for call in remote_calls
+            if call.get("method") == "create_order"
+            and call.get("symbol") == "XMR/USDT:USDT"
+            and call.get("position_side") == "long"
+            and call.get("side") == "sell"
+            and call.get("order_type") == "market"
+            and call.get("reduce_only") is True
+        ]
+        assert len(panic_orders) == 1
+        btc_market_closes = [
+            call
+            for call in remote_calls
+            if call.get("method") == "create_order"
+            and call.get("symbol") == "BTC/USDT:USDT"
+            and call.get("position_side") == "long"
+            and call.get("order_type") == "market"
+            and call.get("reduce_only") is True
+        ]
+        assert btc_market_closes == []
+
+        by_symbol_side = {
+            (position["symbol"], position["position_side"]): float(position["size"])
+            for position in positions
+        }
+        assert by_symbol_side[("BTC/USDT:USDT", "long")] == pytest.approx(1.0)
+        assert by_symbol_side.get(("XMR/USDT:USDT", "long"), 0.0) == pytest.approx(0.0)
+        assert hsl_trace["long"]["halted"] is False
+    finally:
+        _cleanup_fake_user_state(user)
+
+
+@pytest.mark.asyncio
+@pytest.mark.fake_live
 async def test_fake_live_all_lookback_backfills_narrow_fill_cache_once(tmp_path, monkeypatch):
     import passivbot_rust as pbr
 

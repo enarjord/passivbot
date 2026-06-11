@@ -18,6 +18,7 @@ from suite_runner import (
     filter_coins_by_exchange_assignment,
     prepare_master_datasets,
     resolve_coin_sources,
+    _collect_union,
     _prepare_dataset_subset,
     _run_combined_dataset,
     summarize_scenario_metrics,
@@ -136,6 +137,15 @@ def test_apply_scenario_filters_unavailable_coins():
     assert coins == ["BTC"]
     assert cfg["live"]["approved_coins"]["long"] == ["BTC"]
     assert cfg["backtest"]["coin_sources"] == {"BTC": "binance"}
+
+
+def test_collect_union_keeps_base_approved_with_explicit_scenario_subsets():
+    master = _collect_union(
+        (["BTC", "ETH"], None, ["SOL"]),
+        fallback=["BTC", "OM"],
+    )
+
+    assert master == ["BTC", "ETH", "OM", "SOL"]
 
 
 def test_summarize_scenario_metrics_prefers_mean():

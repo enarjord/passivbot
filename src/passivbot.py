@@ -1031,28 +1031,10 @@ class Passivbot:
         self._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
         self._equity_hard_stop_cooldown_log_interval_ms = 60 * 1000
         self._equity_hard_stop = {
-            pside: {
-                "runtime": pbr.EquityHardStopRuntime(),
-                "strategy_pnl_peak": pbr.EquityHardStopRollingPeak(),
-                "no_restart_peak_strategy_equity": 0.0,
-                "halted": False,
-                "no_restart_latched": False,
-                "last_metrics": None,
-                "last_red_progress": None,
-                "red_flat_confirmations": 0,
-                "pending_red_since_ms": None,
-                "cooldown_until_ms": None,
-                "pending_stop_event": None,
-                "last_stop_event": None,
-                "last_status_log_ms": 0,
-                "last_cooldown_log_ms": 0,
-                "cooldown_intervention_active": False,
-                "cooldown_repanic_reset_pending": False,
-                "last_cooldown_intervention_log_ms": 0,
-                "cooldown_unresolved_residue": False,
-            }
-            for pside in ("long", "short")
+            pside: self._equity_hard_stop_make_state() for pside in ("long", "short")
         }
+        self._equity_hard_stop_coin = {"long": {}, "short": {}}
+        self._equity_hard_stop_coin_initialized = False
 
     _monitor_record_event = pb_monitor._monitor_record_event
     _monitor_record_error = pb_monitor._monitor_record_error
@@ -2187,14 +2169,25 @@ class Passivbot:
     _equity_hard_stop_runtime_initialized = pb_hsl._equity_hard_stop_runtime_initialized
     _equity_hard_stop_runtime_red_latched = pb_hsl._equity_hard_stop_runtime_red_latched
     _equity_hard_stop_runtime_tier = pb_hsl._equity_hard_stop_runtime_tier
+    _equity_hard_stop_make_state = pb_hsl._equity_hard_stop_make_state
+    _hsl_coin_state = pb_hsl._hsl_coin_state
     _equity_hard_stop_fill_pside = staticmethod(pb_hsl._equity_hard_stop_fill_pside)
     _calc_upnl_sum_strict = pb_hsl._calc_upnl_sum_strict
     _equity_hard_stop_fee_cost = staticmethod(pb_hsl._equity_hard_stop_fee_cost)
+    _equity_hard_stop_fill_symbol = staticmethod(pb_hsl._equity_hard_stop_fill_symbol)
+    _equity_hard_stop_fill_timestamp_ms = staticmethod(
+        pb_hsl._equity_hard_stop_fill_timestamp_ms
+    )
+    _equity_hard_stop_event_value = staticmethod(pb_hsl._equity_hard_stop_event_value)
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
+    _equity_hard_stop_coin_realized_pnl_peak_last = (
+        pb_hsl._equity_hard_stop_coin_realized_pnl_peak_last
+    )
     _equity_hard_stop_lookback_ms = pb_hsl._equity_hard_stop_lookback_ms
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
+    _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
     _equity_hard_stop_format_remaining_time = staticmethod(
         pb_hsl._equity_hard_stop_format_remaining_time
@@ -2202,8 +2195,14 @@ class Passivbot:
     _equity_hard_stop_build_latch_payload = pb_hsl._equity_hard_stop_build_latch_payload
     _equity_hard_stop_record_no_restart_stop = pb_hsl._equity_hard_stop_record_no_restart_stop
     _equity_hard_stop_compute_stop_event = pb_hsl._equity_hard_stop_compute_stop_event
+    _equity_hard_stop_compute_coin_stop_event = (
+        pb_hsl._equity_hard_stop_compute_coin_stop_event
+    )
     _equity_hard_stop_infer_replay_contract = (
         pb_hsl._equity_hard_stop_infer_replay_contract
+    )
+    _equity_hard_stop_infer_coin_replay_contract = (
+        pb_hsl._equity_hard_stop_infer_coin_replay_contract
     )
     _equity_hard_stop_log_cooldown_status = pb_hsl._equity_hard_stop_log_cooldown_status
     _equity_hard_stop_position_symbols = pb_hsl._equity_hard_stop_position_symbols
@@ -2223,10 +2222,42 @@ class Passivbot:
     _equity_hard_stop_initialize_from_history = (
         pb_hsl._equity_hard_stop_initialize_from_history
     )
+    _equity_hard_stop_initialize_coin_from_history = (
+        pb_hsl._equity_hard_stop_initialize_coin_from_history
+    )
     _equity_hard_stop_log_status = pb_hsl._equity_hard_stop_log_status
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
+    _equity_hard_stop_coin_active_pside = pb_hsl._equity_hard_stop_coin_active_pside
+    _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
+    _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
+    _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
+    _equity_hard_stop_apply_coin_metrics_sample = (
+        pb_hsl._equity_hard_stop_apply_coin_metrics_sample
+    )
+    _equity_hard_stop_coin_needs_panic_supervision = (
+        pb_hsl._equity_hard_stop_coin_needs_panic_supervision
+    )
+    _equity_hard_stop_coin_red_active = pb_hsl._equity_hard_stop_coin_red_active
+    _equity_hard_stop_handle_coin_position_during_cooldown = (
+        pb_hsl._equity_hard_stop_handle_coin_position_during_cooldown
+    )
+    _equity_hard_stop_log_coin_cooldown_status = (
+        pb_hsl._equity_hard_stop_log_coin_cooldown_status
+    )
+    _equity_hard_stop_prime_coin_runtime_for_replay = (
+        pb_hsl._equity_hard_stop_prime_coin_runtime_for_replay
+    )
+    _equity_hard_stop_activate_coin_red_from_metrics = (
+        pb_hsl._equity_hard_stop_activate_coin_red_from_metrics
+    )
     _equity_hard_stop_set_red_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_set_red_runtime_forced_modes
+    )
+    _equity_hard_stop_set_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_set_coin_runtime_forced_mode
+    )
+    _equity_hard_stop_clear_coin_runtime_forced_mode = (
+        pb_hsl._equity_hard_stop_clear_coin_runtime_forced_mode
     )
     _equity_hard_stop_clear_runtime_forced_modes = (
         pb_hsl._equity_hard_stop_clear_runtime_forced_modes
@@ -2237,9 +2268,15 @@ class Passivbot:
     _equity_hard_stop_count_blocking_open_orders = (
         pb_hsl._equity_hard_stop_count_blocking_open_orders
     )
+    _equity_hard_stop_has_open_position_symbol = pb_hsl._equity_hard_stop_has_open_position_symbol
+    _equity_hard_stop_count_blocking_open_orders_symbol = (
+        pb_hsl._equity_hard_stop_count_blocking_open_orders_symbol
+    )
     _equity_hard_stop_log_red_progress = pb_hsl._equity_hard_stop_log_red_progress
     _equity_hard_stop_finalize_red_stop = pb_hsl._equity_hard_stop_finalize_red_stop
+    _equity_hard_stop_finalize_coin_red_stop = pb_hsl._equity_hard_stop_finalize_coin_red_stop
     _equity_hard_stop_run_red_supervisor = pb_hsl._equity_hard_stop_run_red_supervisor
+    _equity_hard_stop_run_coin_red_supervisor = pb_hsl._equity_hard_stop_run_coin_red_supervisor
     _apply_equity_hard_stop_orange_overlay = (
         pb_hsl._apply_equity_hard_stop_orange_overlay
     )
@@ -2823,7 +2860,11 @@ class Passivbot:
                 return
             if self._equity_hard_stop_enabled():
                 boot_stage = "equity_hard_stop_initialize_from_history"
-                await self._equity_hard_stop_initialize_from_history()
+                if self._equity_hard_stop_signal_mode() == "coin":
+                    boot_stage = "equity_hard_stop_initialize_coin_from_history"
+                    await self._equity_hard_stop_initialize_coin_from_history()
+                else:
+                    await self._equity_hard_stop_initialize_from_history()
                 if self.stop_signal_received:
                     self._monitor_emit_stop(
                         "startup_aborted",
@@ -4857,7 +4898,10 @@ class Passivbot:
             or not self._equity_hard_stop_enabled(pside)
             for pside in self._hsl_psides()
         ):
-            await self._equity_hard_stop_initialize_from_history()
+            if self._equity_hard_stop_signal_mode() == "coin":
+                await self._equity_hard_stop_initialize_coin_from_history()
+            else:
+                await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
             try:
                 loop_start_ms = utc_ms()
@@ -4916,14 +4960,19 @@ class Passivbot:
                     break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
-                    if any(
-                        self._equity_hard_stop_runtime_red_latched(pside)
-                        and not self._hsl_state(pside)["halted"]
-                        for pside in self._hsl_psides()
-                        if self._equity_hard_stop_enabled(pside)
-                    ):
-                        await self._equity_hard_stop_run_red_supervisor()
-                        continue
+                    if self._equity_hard_stop_signal_mode() == "coin":
+                        if self._equity_hard_stop_coin_red_active():
+                            await self._equity_hard_stop_run_coin_red_supervisor()
+                            continue
+                    else:
+                        if any(
+                            self._equity_hard_stop_runtime_red_latched(pside)
+                            and not self._hsl_state(pside)["halted"]
+                            for pside in self._hsl_psides()
+                            if self._equity_hard_stop_enabled(pside)
+                        ):
+                            await self._equity_hard_stop_run_red_supervisor()
+                            continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
@@ -9608,27 +9657,33 @@ class Passivbot:
         panic_flatten_events: List[Dict[str, Any]] = []
         missing_price_symbols: set[str] = set()
         realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
-        actual_pside_flat = {
-            pside: not any(
-                size > 1e-12
-                for (sym, ps), (size, _price) in current_position_state.items()
-                if ps == pside
-            )
-            for pside in ("long", "short")
+        realized_pnl_coin_pside_running: Dict[str, Dict[str, float]] = {}
+        actual_symbol_pside_flat = {
+            (sym, ps): size <= 1e-12
+            for (sym, ps), (size, _price) in current_position_state.items()
         }
-        last_event_ts_by_pside = {
-            pside: max(
-                (evt["timestamp"] for evt in events if evt["pside"] == pside),
+        last_event_ts_by_symbol_pside = {
+            (evt["symbol"], evt["pside"]): max(
+                (
+                    candidate["timestamp"]
+                    for candidate in events
+                    if candidate["symbol"] == evt["symbol"] and candidate["pside"] == evt["pside"]
+                ),
                 default=None,
             )
-            for pside in ("long", "short")
+            for evt in events
         }
 
-        def _pside_is_flat(pside: str) -> bool:
-            return not any(
-                positions.get(sym, {}).get(pside, {}).get("size", 0.0) > 1e-12
-                for sym in positions
-            )
+        def _symbol_pside_is_flat(symbol: str, pside: str) -> bool:
+            symbol_positions = positions.get(symbol)
+            if not isinstance(symbol_positions, dict):
+                return True
+            pside_position = symbol_positions.get(pside)
+            if not isinstance(pside_position, dict):
+                return True
+            if "size" not in pside_position:
+                return True
+            return float(pside_position["size"]) <= 1e-12
 
         def _apply_event(evt: dict):
             slot = _ensure_slot(positions, evt["symbol"])[evt["pside"]]
@@ -9673,18 +9728,24 @@ class Passivbot:
                 realized_delta = evt["pnl"] + evt.get("fee", 0.0)
                 balance += realized_delta
                 realized_pnl_pside_running[evt["pside"]] += realized_delta
+                symbol_realized = realized_pnl_coin_pside_running.setdefault(
+                    evt["symbol"], {"long": 0.0, "short": 0.0}
+                )
+                symbol_realized[evt["pside"]] += realized_delta
                 if "panic" in str(evt.get("pb_order_type") or ""):
                     panic_fill_count += 1
                     after_psize = _safe_float(evt.get("psize"), math.nan)
-                    authoritative_flat_override = (
-                        actual_pside_flat.get(evt["pside"], False)
-                        and last_event_ts_by_pside.get(evt["pside"]) == evt["timestamp"]
+                    symbol_pside_key = (evt["symbol"], evt["pside"])
+                    authoritative_symbol_flat_override = (
+                        symbol_pside_key in actual_symbol_pside_flat
+                        and actual_symbol_pside_flat[symbol_pside_key]
+                        and last_event_ts_by_symbol_pside.get(symbol_pside_key) == evt["timestamp"]
                     )
-                    if authoritative_flat_override and (
+                    if authoritative_symbol_flat_override and (
                         not math.isfinite(after_psize) or after_psize > 1e-12
                     ):
                         logging.warning(
-                            "[risk] balance-equity replay trusting current flat %s state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
+                            "[risk] balance-equity replay trusting current flat %s symbol state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
                             evt["pside"],
                             evt["timestamp"],
                             (
@@ -9696,8 +9757,8 @@ class Passivbot:
                         )
                     if (
                         (math.isfinite(after_psize) and after_psize <= 1e-12)
-                        or authoritative_flat_override
-                        or _pside_is_flat(evt["pside"])
+                        or authoritative_symbol_flat_override
+                        or _symbol_pside_is_flat(evt["symbol"], evt["pside"])
                     ):
                         panic_flatten_events.append(
                             {
@@ -9710,6 +9771,7 @@ class Passivbot:
                 event_idx += 1
             upnl = 0.0
             upnl_by_pside = {"long": 0.0, "short": 0.0}
+            upnl_by_coin_pside: Dict[str, Dict[str, float]] = {}
             for symbol in list(active_symbols):
                 price = price_lookup.get(symbol, {}).get(minute)
                 if price is None:
@@ -9735,6 +9797,10 @@ class Passivbot:
                     )
                     upnl += pside_upnl
                     upnl_by_pside[pside] += pside_upnl
+                    symbol_upnl = upnl_by_coin_pside.setdefault(
+                        symbol, {"long": 0.0, "short": 0.0}
+                    )
+                    symbol_upnl[pside] += pside_upnl
             if minute >= record_start_minute:
                 timeline.append(
                     {
@@ -9747,6 +9813,20 @@ class Passivbot:
                         "unrealized_pnl_short": upnl_by_pside["short"],
                         "realized_pnl_long": realized_pnl_pside_running["long"],
                         "realized_pnl_short": realized_pnl_pside_running["short"],
+                        "unrealized_pnl_by_coin_pside": {
+                            sym: {
+                                "long": float(values["long"]),
+                                "short": float(values["short"]),
+                            }
+                            for sym, values in sorted(upnl_by_coin_pside.items())
+                        },
+                        "realized_pnl_by_coin_pside": {
+                            sym: {
+                                "long": float(values["long"]),
+                                "short": float(values["short"]),
+                            }
+                            for sym, values in sorted(realized_pnl_coin_pside_running.items())
+                        },
                         "is_flat": len(active_symbols) == 0,
                         "is_flat_long": not any(
                             positions.get(sym, {}).get("long", {}).get("size", 0.0)

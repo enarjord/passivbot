@@ -115,6 +115,47 @@ def test_build_backtest_payload_keeps_per_side_approved_coin_universe():
     assert payload.bot_params_list[coin4_idx]["short"]["wallet_exposure_limit"] != 0.0
 
 
+def test_build_backtest_payload_marks_normal_forced_coin_active():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["BTC", "OM"]}
+    config["live"]["approved_coins"] = {"long": ["BTC", "OM"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    config["bot"]["long"]["n_positions"] = 2
+    config["coin_overrides"] = {"OM": {"live": {"forced_mode_long": "normal"}}}
+    mss = {
+        coin: {
+            "qty_step": 0.001,
+            "price_step": 0.1,
+            "min_qty": 0.0,
+            "min_cost": 0.0,
+            "c_mult": 1.0,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        }
+        for coin in ["BTC", "OM"]
+    }
+    mss["__meta__"] = {
+        "requested_start_ts": int(start_ts),
+        "requested_start_date": "2021-01-01",
+        "warmup_minutes_requested": 0,
+    }
+    timestamps = np.arange(
+        start_ts, start_ts + n_minutes * 60_000, 60_000, dtype=np.int64
+    )
+    hlcvs = np.ones((n_minutes, 2, 4), dtype=np.float64)
+    btc_usd_prices = np.full(n_minutes, 20_000.0, dtype=np.float64)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+    om_idx = payload.backtest_params["coins"].index("OM")
+
+    assert payload.bot_params_list[om_idx]["long"]["is_forced_active"] is True
+    assert payload.bot_params_list[om_idx]["short"]["is_forced_active"] is False
+
+
 def test_build_backtest_payload_does_not_mutate_mss():
     """Pin the function as a pure consumer of `mss`. Covers the root cause
     of the re-entrance bug: callers that reuse `mss` across calls must see

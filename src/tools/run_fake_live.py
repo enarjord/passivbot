@@ -378,6 +378,19 @@ def _fake_active_red_psides(bot) -> List[str]:
     ]
 
 
+def _fake_all_hsl_psides_terminal_latched(bot) -> bool:
+    enabled_psides = [
+        pside for pside in bot._hsl_psides() if bot._equity_hard_stop_enabled(pside)
+    ]
+    if not enabled_psides:
+        return False
+    return all(
+        bool(bot._hsl_state(pside).get("halted", False))
+        and bool(bot._hsl_state(pside).get("no_restart_latched", False))
+        for pside in enabled_psides
+    )
+
+
 async def _run_fake_red_supervisor_step(bot) -> dict:
     active_red_psides = _fake_active_red_psides(bot)
     if not active_red_psides:
@@ -583,6 +596,8 @@ async def _run_fake_cycle(bot):
                 return await _run_fake_red_supervisor_step(bot)
             await bot._equity_hard_stop_run_red_supervisor()
             return {"red_supervisor": True}
+        if _fake_all_hsl_psides_terminal_latched(bot):
+            return {"terminal_hsl": True}
     refresh_authoritative = getattr(bot, "refresh_authoritative_state", None)
     if callable(refresh_authoritative) and not await refresh_authoritative():
         return {"updated": False}

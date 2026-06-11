@@ -179,6 +179,11 @@ Signal mode:
    - both are fed from the same combined account-level strategy signal
 2. `live.hsl_signal_mode = "pside"`
    - each `pside` controller uses its own realized/unrealized strategy PnL
+3. `live.hsl_signal_mode = "coin"`
+   - each `coin+pside` controller uses realized PnL drawdown inside `live.pnls_max_lookback_days` plus current UPnL
+   - RED panic-closes only the affected `coin+pside`
+   - live denominator is `balance * total_wallet_exposure_limit / config.n_positions`; runtime effective position count and WE-excess allowance are intentionally not included
+   - backtests use configured `n_positions` when `backtest.dynamic_wel_by_tradability=false`, and the effective tradability-aware denominator when it is `true`
 
 Backtest-specific note:
 
@@ -399,7 +404,7 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
   - `manual`: leave that position in `manual` mode while keeping the original cooldown running and blocking fresh initials.
   - `tp_only`: keep the original cooldown running, block new entries, and allow only close management on that `pside`.
   - `graceful_stop`: keep the original cooldown running and manage any existing position with `graceful_stop` semantics while still blocking fresh initials.
-- **hsl_signal_mode**: Selects whether HSL drawdown is tracked from one combined account-level strategy signal (`"unified"`, default) or independently per side (`"pside"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
+- **hsl_signal_mode**: Selects whether HSL drawdown is tracked from one combined account-level strategy signal (`"unified"`, default), independently per side (`"pside"`), or per `coin+pside` slot (`"coin"`). See [Equity Hard Stop Loss](equity_hard_stop_loss.md).
 - **max_memory_candles_per_symbol**: Maximum number of 1m candles retained in RAM per symbol. Older entries are trimmed once this cap is exceeded. Default is `200_000`.
 - **max_disk_candles_per_symbol_per_tf**: Maximum number of candles persisted on disk per symbol and timeframe. Oldest shards are pruned once the limit is hit (default `2_000_000`).
 - **candle_lock_timeout_seconds**: Seconds to wait when another process holds the CandlestickManager per-symbol candle fetch lock (default `10`). Increase when running many bots sharing the same cache directory to avoid spurious timeouts during slow API calls.

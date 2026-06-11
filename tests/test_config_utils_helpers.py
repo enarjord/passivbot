@@ -10,6 +10,7 @@ import pytest
 
 from cli_utils import build_command_parser, expand_help_all_argv, help_all_requested
 from config import load_input_config, prepare_config
+from config.coerce import normalize_hsl_signal_mode
 from config.project import project_config
 from config.runtime_compile import compile_runtime_config
 from config.validate import validate_config
@@ -60,6 +61,29 @@ def test_load_input_config_without_path_uses_schema_defaults():
     assert source == get_template_config()
     assert raw_snapshot == get_template_config()
     assert source["live"]["hsl_signal_mode"] == "unified"
+
+
+def test_hsl_signal_mode_accepts_coin():
+    assert normalize_hsl_signal_mode("coin") == "coin"
+
+
+@pytest.mark.parametrize(
+    "flag",
+    ["--hsl-signal-mode", "--live.hsl_signal_mode", "--live_hsl_signal_mode"],
+)
+def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
+    parser = argparse.ArgumentParser()
+    allowed_keys = add_config_arguments(
+        parser,
+        project_template_config_for_cli(get_template_config(), "backtest"),
+        command="backtest",
+    )
+    args = parser.parse_args([flag, "coin"])
+    config = get_template_config()
+
+    update_config_with_args(config, args, allowed_keys=allowed_keys)
+
+    assert config["live"]["hsl_signal_mode"] == "coin"
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
@@ -1134,7 +1158,7 @@ def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
     assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
     assert "--bot.long.entry_grid_inflation_enabled" not in help_text
-    assert "--bot.long.hsl_enabled" not in help_text
+    assert "--bot.long.hsl.enabled" not in help_text
     assert "--optimize_population_size" not in help_text
     assert "--optimize.bounds.long.strategy.trailing_martingale.close.threshold_base_pct" not in help_text
     assert "Optimize DEAP:" not in help_text
@@ -1155,12 +1179,12 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--hedge-mode Y/N, -hm Y/N" in help_text
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
-    assert "--bot.long.hsl_enabled Y/N" in help_text
-    assert "--bot.short.hsl_enabled Y/N" in help_text
-    assert "--bot.long.hsl_orange_tier_mode VALUE" in help_text
-    assert "--bot.short.hsl_orange_tier_mode VALUE" in help_text
-    assert "--bot.long.hsl_panic_close_order_type VALUE" in help_text
-    assert "--bot.short.hsl_panic_close_order_type VALUE" in help_text
+    assert "--bot.long.hsl.enabled Y/N" in help_text
+    assert "--bot.short.hsl.enabled Y/N" in help_text
+    assert "--bot.long.hsl.orange_tier_mode VALUE" in help_text
+    assert "--bot.short.hsl.orange_tier_mode VALUE" in help_text
+    assert "--bot.long.hsl.panic_close_order_type VALUE" in help_text
+    assert "--bot.short.hsl.panic_close_order_type VALUE" in help_text
 
 
 def test_live_default_help_shows_curated_groups():
@@ -1284,18 +1308,58 @@ def test_optimize_fixed_bot_runtime_overrides_parse():
 
     parsed = parser.parse_args(
         [
-            "--bot.short.hsl_enabled",
+            "--bot.short.hsl.enabled",
             "y",
-            "--bot.long.hsl_orange_tier_mode",
+            "--bot.long.hsl.orange_tier_mode",
             "tp_only",
-            "--bot.short.hsl_panic_close_order_type",
+            "--bot.short.hsl.panic_close_order_type",
             "market",
         ]
     )
 
-    assert getattr(parsed, "bot.short.hsl_enabled") is True
-    assert getattr(parsed, "bot.long.hsl_orange_tier_mode") == "tp_only"
-    assert getattr(parsed, "bot.short.hsl_panic_close_order_type") == "market"
+    assert getattr(parsed, "bot.short.hsl.enabled") is True
+    assert getattr(parsed, "bot.long.hsl.orange_tier_mode") == "tp_only"
+    assert getattr(parsed, "bot.short.hsl.panic_close_order_type") == "market"
+
+
+def test_optimize_fixed_bot_runtime_overrides_apply_grouped_and_flat_aliases():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+    parser = argparse.ArgumentParser(prog="optimize")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS.get("optimize", [])
+    }
+    allowed_keys = add_config_arguments(
+        parser,
+        config,
+        command="optimize",
+        help_all=False,
+        group_map=group_map,
+    )
+    target = get_template_config()
+
+    parsed_grouped = parser.parse_args(
+        [
+            "--bot.long.hsl.enabled",
+            "y",
+            "--bot.long.hsl.panic_close_order_type",
+            "market",
+        ]
+    )
+    update_config_with_args(target, parsed_grouped, allowed_keys=allowed_keys)
+    assert target["bot"]["long"]["hsl"]["enabled"] is True
+    assert target["bot"]["long"]["hsl"]["panic_close_order_type"] == "market"
+
+    parsed_flat_aliases = parser.parse_args(
+        [
+            "--bot.short.hsl_enabled",
+            "y",
+            "--bot.short.hsl_panic_close_order_type",
+            "market",
+        ]
+    )
+    update_config_with_args(target, parsed_flat_aliases, allowed_keys=allowed_keys)
+    assert target["bot"]["short"]["hsl"]["enabled"] is True
+    assert target["bot"]["short"]["hsl"]["panic_close_order_type"] == "market"
 
 
 def test_backtest_reserved_execution_live_aliases_parse_short_and_long():

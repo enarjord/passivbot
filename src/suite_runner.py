@@ -273,13 +273,11 @@ def resolve_coin_sources(
 
 
 def _collect_union(values: Iterable[Optional[List[str]]], fallback: List[str]) -> List[str]:
-    union: set[str] = set()
+    union: set[str] = set(fallback)
     for val in values:
         if not val:
             continue
         union.update(val)
-    if not union:
-        union.update(fallback)
     return sorted(union)
 
 

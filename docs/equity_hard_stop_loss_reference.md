@@ -11,14 +11,15 @@ See also:
 
 ## Current Scope
 
-1. Runtime HSL behavior is side-specific by `pside`.
+1. Runtime HSL behavior is side-specific by `pside`, with optional `coin` mode creating per-`coin+pside` controllers.
 2. Config lives under:
    - `bot.long.hsl.*`
    - `bot.short.hsl.*`
 3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
    - one shared `unified` signal (default)
    - side-local `pside` signals
-4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`.
+   - coin-local `coin` signals
+4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`; `coin` mode instead uses realized PnL cumsum drawdown plus current UPnL divided by the configured slot budget.
 5. RED can halt permanently or restart after cooldown, per `pside`.
 6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.
 7. Backtests export:
@@ -55,7 +56,7 @@ These are the main parity surfaces that should be reviewed together:
    - `tp_only_with_active_entry_cancellation`
 3. RED behavior
    - panic close order type
-   - confirmation that all positions on the triggered `pside` are fully closed
+   - confirmation that all positions on the triggered `pside`, or the triggered `coin+pside` in `coin` mode, are fully closed
    - cooldown restart
    - terminal latch
 4. Order execution intent

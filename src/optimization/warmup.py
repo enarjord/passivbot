@@ -5,9 +5,11 @@ from copy import deepcopy
 from typing import Sequence
 
 from config.bot import normalize_forager_score_weights
-from config.param_paths import require_existing_config_path
+from config.optimize_bounds import flatten_optimize_bounds
+from config.param_paths import require_existing_config_path, resolve_dotted_config_path
 from config.shared_bot import flatten_shared_bot_side
 from optimizer_overrides import optimizer_overrides
+from optimization.bounds import Bound, enforce_bounds
 from optimization.config_adapter import extract_bounds_tuple_list_from_config, get_optimization_key_paths
 from optimization.fine_tune_anchors import ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.shape import build_optimization_shape
@@ -48,6 +50,79 @@ def _set_path(config: dict, path: Sequence[str], value) -> None:
     target[path[-1]] = value
 
 
+def _try_get_path(config: dict, path: Sequence[str]):
+    target = config
+    for part in path:
+        if not isinstance(target, dict) or part not in target:
+            return None
+        target = target[part]
+    return target
+
+
+def _canonical_dead_value(flat_bounds: dict, bound_key: str, canonical_value: float):
+    raw_bound = flat_bounds.get(bound_key)
+    if raw_bound is None:
+        return canonical_value
+    bound = Bound.from_config(bound_key, raw_bound)
+    return enforce_bounds([canonical_value], [bound], sig_digits=None)[0]
+
+
+def _canonicalize_path_value(
+    config: dict,
+    flat_bounds: dict,
+    *,
+    bound_key: str,
+    path: Sequence[str],
+    canonical_value: float,
+) -> None:
+    if _try_get_path(config, path) is None:
+        return
+    _set_path(
+        config,
+        path,
+        _canonical_dead_value(flat_bounds, bound_key, canonical_value),
+    )
+
+
+def canonicalize_dead_optimizer_params(config: dict) -> None:
+    live_cfg = config.get("live", {})
+    strategy_kind = str(live_cfg.get("strategy_kind") or "trailing_martingale").strip().lower()
+    if strategy_kind != "trailing_martingale":
+        return
+    flat_bounds = flatten_optimize_bounds(
+        config.get("optimize", {}).get("bounds", {}),
+        strategy_kind=strategy_kind,
+    )
+    for pside in ("long", "short"):
+        close_root = ("bot", pside, "strategy", strategy_kind, "close")
+        retracement_base_path = (*close_root, "retracement_base_pct")
+        try:
+            retracement_base = float(_try_get_path(config, retracement_base_path))
+        except (TypeError, ValueError):
+            continue
+        if retracement_base > 0.0:
+            continue
+        canonical_base = _canonical_dead_value(
+            flat_bounds,
+            f"{pside}_close_retracement_base_pct",
+            0.0,
+        )
+        if float(canonical_base) > 0.0:
+            continue
+        _set_path(config, retracement_base_path, canonical_base)
+        for field in (
+            "retracement_volatility_1h_weight",
+            "retracement_volatility_1m_weight",
+        ):
+            _canonicalize_path_value(
+                config,
+                flat_bounds,
+                bound_key=f"{pside}_close_{field}",
+                path=(*close_root, field),
+                canonical_value=0.0,
+            )
+
+
 def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict:
     config.pop(ANCHOR_PLAN_KEY, None)
     _apply_config_overrides(
@@ -55,6 +130,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
         config.get("optimize", {}).get("fixed_runtime_overrides", {}),
     )
     config = optimizer_overrides(overrides_list or [], config, None)
+    _refresh_shared_bot_runtime_aliases(config)
     for pside in ("long", "short"):
         pside_cfg = config.get("bot", {}).get(pside, {})
         if not isinstance(pside_cfg, dict):
@@ -74,6 +150,7 @@ def _finalize_optimizer_vector_config(config: dict, overrides_list=None) -> dict
             pside_cfg["forager_score_weights"],
             path=f"bot.{pside}.forager_score_weights",
         )
+    canonicalize_dead_optimizer_params(config)
     return config
 
 
@@ -200,6 +277,7 @@ def stamp_warmup_metadata(mss: dict, coins: Sequence[str], warmup_map: dict) -> 
 __all__ = [
     "build_optimizer_max_config",
     "build_optimizer_vector_config",
+    "canonicalize_dead_optimizer_params",
     "compute_optimizer_backtest_warmup_minutes",
     "compute_optimizer_per_coin_warmup_minutes",
     "stamp_warmup_metadata",

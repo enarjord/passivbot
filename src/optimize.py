@@ -986,6 +986,52 @@ def config_to_individual(
     return enforced
 
 
+def _optimizer_anchor_id(config: dict) -> int | None:
+    anchor_meta = config.get("_optimizer_anchor")
+    if not isinstance(anchor_meta, dict):
+        return None
+    try:
+        return int(anchor_meta["id"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _canonicalize_optimizer_individual(
+    individual,
+    template: dict,
+    bounds,
+    sig_digits,
+    key_paths,
+    overrides_list,
+):
+    config = individual_to_config(
+        individual,
+        optimizer_overrides,
+        overrides_list,
+        template,
+        key_paths=key_paths,
+    )
+    canonical = config_to_individual(
+        config,
+        bounds,
+        sig_digits,
+        key_paths=key_paths,
+        anchor_id=_optimizer_anchor_id(config),
+    )
+    if len(individual) == len(canonical) and all(
+        float(current) == float(new) for current, new in zip(individual, canonical)
+    ):
+        return config
+    individual[:] = canonical
+    return individual_to_config(
+        individual,
+        optimizer_overrides,
+        overrides_list,
+        template,
+        key_paths=key_paths,
+    )
+
+
 def validate_array(arr, name, allow_nan=True):
     if not allow_nan and np.isnan(arr).any():
         raise ValueError(f"{name} contains NaN values")
@@ -1156,12 +1202,13 @@ class Evaluator:
 
     def evaluate(self, individual, overrides_list):
         individual[:] = enforce_bounds(individual, self.bounds, self.sig_digits)
-        config = individual_to_config(
+        config = _canonicalize_optimizer_individual(
             individual,
-            optimizer_overrides,
-            overrides_list,
             self.config,
-            key_paths=self.key_paths,
+            self.bounds,
+            self.sig_digits,
+            self.key_paths,
+            overrides_list,
         )
         individual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
@@ -1183,17 +1230,19 @@ class Evaluator:
                 for perturb_fn in perturbation_funcs:
                     perturbed = perturb_fn(individual)
                     perturbed = enforce_bounds(perturbed, self.bounds, self.sig_digits)
+                    perturbed_config = _canonicalize_optimizer_individual(
+                        perturbed,
+                        self.config,
+                        self.bounds,
+                        self.sig_digits,
+                        self.key_paths,
+                        overrides_list,
+                    )
                     new_hash = calc_hash(perturbed)
                     if new_hash not in self.seen_hashes:
                         individual[:] = perturbed
                         self.seen_hashes[new_hash] = None
-                        config = individual_to_config(
-                            perturbed,
-                            optimizer_overrides,
-                            overrides_list,
-                            self.config,
-                            key_paths=self.key_paths,
-                        )
+                        config = perturbed_config
                         self.duplicate_counter["resolved"] += 1
                         break
                 else:
@@ -1396,7 +1445,7 @@ class SuiteEvaluator:
         Returns (hlcvs_view, btc_view, coin_indices).
 
         Only applies TIME slicing here (creates views, O(1) memory).
-        Coin subsetting is deferred to build_backtest_payload which does it efficiently.
+        Coin subsetting is passed through as active indices for Rust.
         """
         master_spec = ctx.master_hlcvs_specs[exchange]
         master_array = self._ensure_master_attachment(master_spec, master_spec.name, "hlcvs")
@@ -1422,7 +1471,7 @@ class SuiteEvaluator:
             else:
                 btc_view = master_btc
 
-        # Return coin_indices to let build_backtest_payload handle subsetting in one step
+        # Return coin_indices so Rust can address the active columns without a Python copy.
         return hlcvs_view, btc_view, coin_indices
 
     def _uses_lazy_slicing(self, ctx: ScenarioEvalContext, exchange: str) -> bool:
@@ -1478,12 +1527,13 @@ class SuiteEvaluator:
         timings: Dict[str, float] | None = {} if profile_enabled else None
         profile_total_start = _profile_start(profile_enabled)
         individual[:] = enforce_bounds(individual, self.base.bounds, self.base.sig_digits)
-        config = individual_to_config(
+        config = _canonicalize_optimizer_individual(
             individual,
-            optimizer_overrides,
-            overrides_list,
             self.base.config,
-            key_paths=self.base.key_paths,
+            self.base.bounds,
+            self.base.sig_digits,
+            self.base.key_paths,
+            overrides_list,
         )
         individual_hash = calc_hash(individual)
         seen_hashes = self.base.seen_hashes
@@ -1508,17 +1558,19 @@ class SuiteEvaluator:
                 for perturb_fn in perturbation_funcs:
                     perturbed = perturb_fn(individual)
                     perturbed = enforce_bounds(perturbed, self.base.bounds, self.base.sig_digits)
+                    perturbed_config = _canonicalize_optimizer_individual(
+                        perturbed,
+                        self.base.config,
+                        self.base.bounds,
+                        self.base.sig_digits,
+                        self.base.key_paths,
+                        overrides_list,
+                    )
                     new_hash = calc_hash(perturbed)
                     if new_hash not in seen_hashes:
                         individual[:] = perturbed
                         seen_hashes[new_hash] = None
-                        config = individual_to_config(
-                            perturbed,
-                            optimizer_overrides,
-                            overrides_list,
-                            self.base.config,
-                            key_paths=self.base.key_paths,
-                        )
+                        config = perturbed_config
                         duplicate_counter["resolved"] += 1
                         break
                 else:
@@ -1566,7 +1618,7 @@ class SuiteEvaluator:
                 # Get data arrays - either from lazy slicing or cached SharedMemory
                 if self._uses_lazy_slicing(ctx, exchange):
                     # Get time-sliced VIEW (O(1) memory) + coin indices
-                    # Coin subsetting happens inside build_backtest_payload (single copy)
+                    # Coin subsetting is passed to Rust as active indices.
                     hlcvs_data, btc_data, coin_indices = self._get_lazy_slice_data(ctx, exchange)
                 else:
                     self._ensure_context_attachment(ctx, exchange)

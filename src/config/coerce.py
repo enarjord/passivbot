@@ -13,7 +13,7 @@ HSL_COOLDOWN_POSITION_POLICIES = (
     "graceful_stop",
     "manual",
 )
-HSL_SIGNAL_MODES = ("pside", "unified")
+HSL_SIGNAL_MODES = ("coin", "pside", "unified")
 MONITOR_BOOL_KEYS = (
     "enabled",
     "retain_price_ticks",

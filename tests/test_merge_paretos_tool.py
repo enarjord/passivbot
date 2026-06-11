@@ -22,6 +22,17 @@ def _side_config(side: str, value: float, *, enabled: bool) -> dict:
     }
 
 
+def _nested_side_config(side: str, value: float, *, enabled: bool) -> dict:
+    return {
+        "risk": {
+            "n_positions": 1.0,
+            "total_wallet_exposure_limit": 1.0 if enabled else 0.0,
+        },
+        "strategy": {"marker": value},
+        f"{side}_marker": value,
+    }
+
+
 def _write_candidate(
     pareto_dir: Path,
     name: str,
@@ -37,6 +48,38 @@ def _write_candidate(
             "common": {"shared_flag": True},
             "long": _side_config("long", marker, enabled=enabled_side == "long"),
             "short": _side_config("short", marker, enabled=enabled_side == "short"),
+        },
+        "optimize": {
+            "scoring": SCORING,
+            "bounds": bounds,
+        },
+        "metrics": {
+            "objectives": {"metric_a": metric_a, "metric_b": metric_b},
+            "stats": {
+                "metric_a": {"mean": metric_a},
+                "metric_b": {"mean": metric_b},
+            },
+        },
+    }
+    with open(pareto_dir / f"{name}.json", "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def _write_nested_candidate(
+    pareto_dir: Path,
+    name: str,
+    *,
+    enabled_side: str,
+    marker: float,
+    metric_a: float,
+    metric_b: float,
+    bounds: dict,
+) -> None:
+    payload = {
+        "bot": {
+            "common": {"shared_flag": True},
+            "long": _nested_side_config("long", marker, enabled=enabled_side == "long"),
+            "short": _nested_side_config("short", marker, enabled=enabled_side == "short"),
         },
         "optimize": {
             "scoring": SCORING,
@@ -95,6 +138,58 @@ def _make_front(tmp_path: Path, name: str, *, enabled_side: str) -> Path:
     return pareto_dir.parent
 
 
+def _make_nested_front(tmp_path: Path, name: str, *, enabled_side: str) -> Path:
+    pareto_dir = tmp_path / name / "pareto"
+    pareto_dir.mkdir(parents=True)
+    side_bounds = {
+        "long": {
+            "long": {
+                "risk": {
+                    "n_positions": [1.0, 1.0, 1.0],
+                    "total_wallet_exposure_limit": [0.75, 1.50, 0.01],
+                },
+                "strategy": {"initial_qty_pct": [0.10, 0.50, 0.02]},
+            },
+            "short": {
+                "risk": {
+                    "n_positions": [1.0, 1.0, 1.0],
+                    "total_wallet_exposure_limit": [0.0, 0.0, 0.01],
+                },
+                "strategy": {"initial_qty_pct": [0.20, 0.80, 0.04]},
+            },
+        },
+        "short": {
+            "long": {
+                "risk": {
+                    "n_positions": [1.0, 1.0, 1.0],
+                    "total_wallet_exposure_limit": [0.0, 0.0, 0.01],
+                },
+                "strategy": {"initial_qty_pct": [0.10, 0.50, 0.02]},
+            },
+            "short": {
+                "risk": {
+                    "n_positions": [1.0, 1.0, 1.0],
+                    "total_wallet_exposure_limit": [0.65, 1.40, 0.01],
+                },
+                "strategy": {"initial_qty_pct": [0.20, 0.80, 0.04]},
+            },
+        },
+    }[enabled_side]
+    for idx, (label, metric_a, metric_b) in enumerate(
+        [("balanced", 0.55, 0.45), ("best_a", 0.90, 0.80), ("best_b", 0.20, 0.10)]
+    ):
+        _write_nested_candidate(
+            pareto_dir,
+            label,
+            enabled_side=enabled_side,
+            marker=float(idx + 1),
+            metric_a=metric_a,
+            metric_b=metric_b,
+            bounds=side_bounds,
+        )
+    return pareto_dir.parent
+
+
 def test_merge_paretos_accepts_run_or_pareto_dirs_and_caps_outputs(tmp_path: Path):
     long_run = _make_front(tmp_path, "long_run", enabled_side="long")
     short_run = _make_front(tmp_path, "short_run", enabled_side="short")
@@ -116,6 +211,32 @@ def test_merge_paretos_accepts_run_or_pareto_dirs_and_caps_outputs(tmp_path: Pat
     assert merged["optimize"]["bounds"]["long_entry_initial_qty_pct"] == [0.05, 0.65, 0.01]
     assert merged["optimize"]["bounds"]["short_entry_initial_qty_pct"] == [0.15, 0.9, 0.02]
     assert merged["optimize"]["bounds"]["shared_param"] == [0.5, 3, 0.1]
+
+
+def test_merge_paretos_supports_nested_v8_side_risk_and_bounds(tmp_path: Path):
+    long_run = _make_nested_front(tmp_path, "long_run", enabled_side="long")
+    short_run = _make_nested_front(tmp_path, "short_run", enabled_side="short")
+    output_dir = tmp_path / "merged"
+
+    exit_code = main([str(long_run), str(short_run / "pareto"), str(output_dir), "--max", "5"])
+
+    assert exit_code == 0
+    index = json.loads((output_dir / "index.json").read_text())
+    assert index["count"] == 5
+
+    merged = json.loads((output_dir / index["files"][0]).read_text())
+    assert merged["bot"]["long"]["risk"]["total_wallet_exposure_limit"] == 1.0
+    assert merged["bot"]["short"]["risk"]["total_wallet_exposure_limit"] == 1.0
+    assert merged["optimize"]["bounds"]["long"]["risk"]["total_wallet_exposure_limit"] == [
+        0.75,
+        1.5,
+        0.01,
+    ]
+    assert merged["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] == [
+        0.65,
+        1.4,
+        0.01,
+    ]
 
 
 def test_merge_paretos_fills_after_core_until_max(tmp_path: Path):

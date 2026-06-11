@@ -370,6 +370,10 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
             .map_err(|_| PyValueError::new_err("coin metadata entries must be dicts"))?;
         coins.push(parse_coin_meta(coin_dict, idx)?);
     }
+    let active_coin_indices = match dict.get_item("active_coin_indices")? {
+        Some(item) if !item.is_none() => Some(item.extract::<Vec<usize>>()?),
+        _ => None,
+    };
 
     Ok(HlcvsMeta {
         requested_start_timestamp_ms: requested,
@@ -377,6 +381,7 @@ fn hlcvs_meta_from_py(any: &Bound<'_, PyAny>) -> PyResult<HlcvsMeta> {
         warmup_minutes_requested: warm_req,
         warmup_minutes_provided: warm_prov,
         coins,
+        active_coin_indices,
     })
 }
 
@@ -497,6 +502,9 @@ fn hlcvs_meta_to_dict<'py>(py: Python<'py>, meta: &HlcvsMeta) -> PyResult<Bound<
         coins.append(coin_meta_to_dict(py, entry)?)?;
     }
     dict.set_item("coins", coins)?;
+    if let Some(active_coin_indices) = &meta.active_coin_indices {
+        dict.set_item("active_coin_indices", active_coin_indices)?;
+    }
     Ok(dict)
 }
 
@@ -1895,9 +1903,9 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             .map(|item| item.extract::<String>())
             .transpose()?
             .unwrap_or_else(|| "unified".to_string());
-        if signal_mode != "pside" && signal_mode != "unified" {
+        if signal_mode != "coin" && signal_mode != "pside" && signal_mode != "unified" {
             return Err(PyValueError::new_err(format!(
-                "{key}.signal_mode must be one of {{pside, unified}}, got {:?}",
+                "{key}.signal_mode must be one of {{coin, pside, unified}}, got {:?}",
                 signal_mode
             )));
         }
@@ -2209,6 +2217,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
             .map(|_| extract_forager_score_weights(dict))
             .transpose()?
             .unwrap_or_default(),
+        is_forced_active: extract_optional_bool(dict, "is_forced_active", false)?,
         ema_span_0: extract_optional_f64(dict, "ema_span_0")?,
         ema_span_1: extract_optional_f64(dict, "ema_span_1")?,
         hsl_enabled,

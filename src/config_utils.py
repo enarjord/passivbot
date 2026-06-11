@@ -266,28 +266,38 @@ FIELD_RUNTIME_RULES = {
             "optimize": "Backtest Runtime",
         },
     },
+    "live.hsl_signal_mode": {
+        "owner": "live",
+        "consumed_by": {"live", "backtest", "optimize"},
+        "cli_exposed_on": {"live", "backtest", "optimize"},
+        "help_group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+    },
 }
 
 OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
-    "bot.long.hsl_enabled": {
-        "visible": ["--bot.long.hsl_enabled"],
-        "hidden": ["--bot_long_hsl_enabled"],
+    "bot.long.hsl.enabled": {
+        "visible": ["--bot.long.hsl.enabled"],
+        "hidden": ["--bot.long.hsl_enabled", "--bot_long_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.long.hsl_enabled for this optimize run.",
+        "help": "Override bot.long.hsl.enabled for this optimize run.",
     },
-    "bot.short.hsl_enabled": {
-        "visible": ["--bot.short.hsl_enabled"],
-        "hidden": ["--bot_short_hsl_enabled"],
+    "bot.short.hsl.enabled": {
+        "visible": ["--bot.short.hsl.enabled"],
+        "hidden": ["--bot.short.hsl_enabled", "--bot_short_hsl_enabled"],
         "type": str2bool,
         "metavar": "Y/N",
         "commands": {"optimize"},
-        "help": "Override bot.short.hsl_enabled for this optimize run.",
+        "help": "Override bot.short.hsl.enabled for this optimize run.",
     },
-    "bot.long.hsl_orange_tier_mode": {
-        "visible": ["--bot.long.hsl_orange_tier_mode"],
-        "hidden": ["--bot_long_hsl_orange_tier_mode"],
+    "bot.long.hsl.orange_tier_mode": {
+        "visible": ["--bot.long.hsl.orange_tier_mode"],
+        "hidden": ["--bot.long.hsl_orange_tier_mode", "--bot_long_hsl_orange_tier_mode"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
@@ -298,11 +308,11 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         ],
-        "help": "Override bot.long.hsl_orange_tier_mode for this optimize run.",
+        "help": "Override bot.long.hsl.orange_tier_mode for this optimize run.",
     },
-    "bot.short.hsl_orange_tier_mode": {
-        "visible": ["--bot.short.hsl_orange_tier_mode"],
-        "hidden": ["--bot_short_hsl_orange_tier_mode"],
+    "bot.short.hsl.orange_tier_mode": {
+        "visible": ["--bot.short.hsl.orange_tier_mode"],
+        "hidden": ["--bot.short.hsl_orange_tier_mode", "--bot_short_hsl_orange_tier_mode"],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
@@ -313,25 +323,31 @@ OPTIMIZE_FIXED_BOT_RUNTIME_CLI_ARGS = {
             "tp_only",
             "tp_only_with_active_entry_cancellation",
         ],
-        "help": "Override bot.short.hsl_orange_tier_mode for this optimize run.",
+        "help": "Override bot.short.hsl.orange_tier_mode for this optimize run.",
     },
-    "bot.long.hsl_panic_close_order_type": {
-        "visible": ["--bot.long.hsl_panic_close_order_type"],
-        "hidden": ["--bot_long_hsl_panic_close_order_type"],
+    "bot.long.hsl.panic_close_order_type": {
+        "visible": ["--bot.long.hsl.panic_close_order_type"],
+        "hidden": [
+            "--bot.long.hsl_panic_close_order_type",
+            "--bot_long_hsl_panic_close_order_type",
+        ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.long.hsl_panic_close_order_type for this optimize run.",
+        "help": "Override bot.long.hsl.panic_close_order_type for this optimize run.",
     },
-    "bot.short.hsl_panic_close_order_type": {
-        "visible": ["--bot.short.hsl_panic_close_order_type"],
-        "hidden": ["--bot_short_hsl_panic_close_order_type"],
+    "bot.short.hsl.panic_close_order_type": {
+        "visible": ["--bot.short.hsl.panic_close_order_type"],
+        "hidden": [
+            "--bot.short.hsl_panic_close_order_type",
+            "--bot_short_hsl_panic_close_order_type",
+        ],
         "type": str,
         "metavar": "VALUE",
         "commands": {"optimize"},
         "choices": ["limit", "market"],
-        "help": "Override bot.short.hsl_panic_close_order_type for this optimize run.",
+        "help": "Override bot.short.hsl.panic_close_order_type for this optimize run.",
     },
 }
 
@@ -1021,6 +1037,20 @@ RESERVED_CLI_ARGS = {
             "optimize": "Backtest Runtime",
         },
         "help": "How far into the past to fetch realized PnL history: 0=minimal lookback, positive=float days, 'all'=full history.",
+    },
+    "live.hsl_signal_mode": {
+        "visible": ["--hsl-signal-mode"],
+        "hidden": ["--live.hsl_signal_mode", "--live_hsl_signal_mode"],
+        "type": normalize_hsl_signal_mode,
+        "metavar": "MODE",
+        "choices": tuple(HSL_SIGNAL_MODES),
+        "commands": {"live", "backtest", "optimize"},
+        "group": {
+            "live": "Behavior",
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "HSL signal mode: unified, pside, or coin.",
     },
     "live.time_in_force": {
         "visible": ["--time-in-force", "-tif"],
