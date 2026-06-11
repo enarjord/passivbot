@@ -28,6 +28,9 @@ All notable user-facing changes will be documented in this file.
 - Live execution now skips both order cancellations and creations while the raw wallet
   balance is below the configured threshold, avoiding entry-grid cancellation from a
   transient near-zero balance snapshot.
+- Live order reconciliation now blocks a symbol and requests a full account refresh
+  when an open order snapshot is malformed, instead of dropping the bad actual order
+  and creating a duplicate.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

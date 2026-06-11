@@ -4146,6 +4146,73 @@ async def test_disappeared_self_order_guardrail_blocks_real_plan_create_until_re
 
 
 @pytest.mark.asyncio
+async def test_malformed_actual_open_order_blocks_symbol_plan(caplog):
+    bot = _make_open_order_guardrail_bot(epoch=11)
+    bot._last_plan_detail = {}
+    bot._order_plan_summary_is_interesting = lambda **kwargs: False
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.active_symbols = ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+
+    class _CM:
+        def get_current_close(self, symbol, max_age_ms=None):
+            return 100.0
+
+    bot.cm = _CM()
+
+    async def fake_get_live_last_prices(symbols, **kwargs):
+        return {symbol: 100.0 for symbol in symbols}
+
+    bot._get_live_last_prices = fake_get_live_last_prices
+    bot.live_value = lambda key: 0.0 if key == "order_match_tolerance_pct" else 0.0
+
+    malformed_order = _guardrail_order(id="malformed-entry")
+    malformed_order.pop("qty")
+    bot.open_orders = {"BTC/USDT:USDT": [malformed_order], "ETH/USDT:USDT": []}
+    ideal_orders = {
+        "BTC/USDT:USDT": [
+            {
+                "symbol": "BTC/USDT:USDT",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.01,
+                "price": 99_000.0,
+                "reduce_only": False,
+            }
+        ],
+        "ETH/USDT:USDT": [
+            {
+                "symbol": "ETH/USDT:USDT",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.1,
+                "price": 3_000.0,
+                "reduce_only": False,
+            }
+        ],
+    }
+
+    async def fake_calc_ideal_orders():
+        return ideal_orders
+
+    bot.calc_ideal_orders = fake_calc_ideal_orders
+
+    with caplog.at_level(logging.ERROR):
+        to_cancel, to_create = await Passivbot.calc_orders_to_cancel_and_create(bot)
+
+    assert to_cancel == []
+    assert [order["symbol"] for order in to_create] == ["ETH/USDT:USDT"]
+    assert bot._malformed_actual_order_symbols == {"BTC/USDT:USDT"}
+    assert bot._malformed_actual_order_counts == {"BTC/USDT:USDT": 1}
+    assert bot.state_change_detected_by_symbol == {"BTC/USDT:USDT"}
+    assert bot.execution_scheduled is True
+    assert bot._authoritative_pending_confirmations == {
+        surface: 12 for surface in ACCOUNT_SURFACES
+    }
+    assert "malformed open order snapshot" in caplog.text
+    assert "malformed_open_order_snapshot" in caplog.text
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_cancel_forces_full_authoritative_confirmation():
     bot = Passivbot.__new__(Passivbot)
     bot.debug_mode = False

@@ -4,7 +4,6 @@ import json
 import logging
 import math
 import sys
-import traceback
 from typing import Iterable, Optional
 
 from live.freshness import ACCOUNT_SURFACES
@@ -787,6 +786,12 @@ async def calc_orders_to_cancel_and_create(bot):
     ideal_orders = await bot.calc_ideal_orders()
 
     actual_orders = bot._snapshot_actual_orders()
+    malformed_actual_symbols = set(
+        getattr(bot, "_malformed_actual_order_symbols", set()) or set()
+    )
+    malformed_actual_counts = dict(
+        getattr(bot, "_malformed_actual_order_counts", {}) or {}
+    )
     keys = ("symbol", "side", "position_side", "qty", "price")
     to_cancel, to_create = [], []
     plan_summaries = []
@@ -794,6 +799,21 @@ async def calc_orders_to_cancel_and_create(bot):
         ideal_list = (
             ideal_orders.get(symbol, []) if isinstance(ideal_orders, dict) else []
         )
+        if symbol in malformed_actual_symbols:
+            blocked_actual = len(symbol_orders) + int(
+                malformed_actual_counts.get(symbol, 0) or 0
+            )
+            plan_summaries.append(
+                (
+                    symbol,
+                    blocked_actual,
+                    0,
+                    len(ideal_list),
+                    0,
+                    blocked_actual + len(ideal_list),
+                )
+            )
+            continue
         cancel_, create_ = bot._reconcile_symbol_orders(
             symbol, symbol_orders, ideal_list, keys
         )
@@ -883,32 +903,90 @@ async def calc_orders_to_cancel_and_create(bot):
 def snapshot_actual_orders(bot) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
     actual_orders: dict[str, list[dict]] = {}
+    malformed_symbols: set[str] = set()
+    malformed_counts: dict[str, int] = {}
     for symbol in bot.active_symbols:
         symbol_orders = []
         for order in bot.open_orders.get(symbol, []):
             try:
+                if not isinstance(order, dict):
+                    raise TypeError(f"expected dict, got {type(order).__name__}")
+                missing = [
+                    key
+                    for key in ("symbol", "side", "position_side", "qty", "price")
+                    if key not in order
+                ]
+                if missing:
+                    raise ValueError(f"missing required fields {','.join(missing)}")
+                qty = abs(float(order["qty"]))
+                price = float(order["price"])
+                if (
+                    not math.isfinite(qty)
+                    or not math.isfinite(price)
+                    or qty <= 0.0
+                    or price <= 0.0
+                ):
+                    raise ValueError("non-positive or non-finite qty or price")
+                raw_symbol = order["symbol"]
+                raw_side = order["side"]
+                raw_position_side = order["position_side"]
+                if raw_symbol is None or raw_side is None or raw_position_side is None:
+                    raise ValueError("null symbol, side, or position_side")
+                order_symbol = str(raw_symbol).strip()
+                side = str(raw_side).strip()
+                position_side = str(raw_position_side).strip()
+                if not order_symbol or side not in {"buy", "sell"}:
+                    raise ValueError("empty symbol or invalid side")
+                if position_side not in {"long", "short"}:
+                    raise ValueError("invalid position_side")
                 symbol_orders.append(
                     {
-                        "symbol": order["symbol"],
-                        "side": order["side"],
-                        "position_side": order["position_side"],
-                        "qty": abs(order["qty"]),
-                        "price": order["price"],
+                        "symbol": order_symbol,
+                        "side": side,
+                        "position_side": position_side,
+                        "qty": qty,
+                        "price": price,
                         "reduce_only": (
-                            order["position_side"] == "long" and order["side"] == "sell"
+                            position_side == "long" and side == "sell"
                         )
                         or (
-                            order["position_side"] == "short" and order["side"] == "buy"
+                            position_side == "short" and side == "buy"
                         ),
                         "id": order.get("id"),
                         "custom_id": order.get("custom_id"),
                     }
                 )
-            except Exception as exc:
-                logging.error(f"error in calc_orders_to_cancel_and_create {exc}")
-                traceback.print_exc()
-                print(order)
+            except (TypeError, KeyError, ValueError) as exc:
+                malformed_symbols.add(symbol)
+                malformed_counts[symbol] = malformed_counts.get(symbol, 0) + 1
+                order_id = order.get("id") if isinstance(order, dict) else None
+                logging.error(
+                    "[order] malformed open order snapshot; "
+                    "blocking order planning for symbol | symbol=%s | "
+                    "order_id=%s | reason=%s",
+                    _pb_attr("Passivbot")._log_symbol(symbol),
+                    order_id or "unknown",
+                    exc,
+                )
         actual_orders[symbol] = symbol_orders
+    bot._malformed_actual_order_symbols = malformed_symbols
+    bot._malformed_actual_order_counts = malformed_counts
+    if malformed_symbols:
+        if hasattr(bot, "_mark_account_critical_state_dirty"):
+            bot._mark_account_critical_state_dirty(
+                reason="malformed_open_order_snapshot",
+                symbols=malformed_symbols,
+                source="snapshot_actual_orders",
+                level=logging.ERROR,
+            )
+        else:
+            mark_account_critical_state_dirty(
+                bot,
+                reason="malformed_open_order_snapshot",
+                symbols=malformed_symbols,
+                source="snapshot_actual_orders",
+                level=logging.ERROR,
+            )
     return actual_orders
 
 
