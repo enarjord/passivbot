@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed optimizer candidate canonicalization so disabled trailing-martingale close
+  retracement params collapse to bounded canonical values before evaluation, duplicate
+  detection, and Pareto/result persistence.
 - Fixed suite backtests so scenario data preparation always includes the base
   `live.approved_coins` universe even when other scenarios define explicit
   coin subsets, and so `coin_overrides.<coin>.live.forced_mode_<side>=normal`

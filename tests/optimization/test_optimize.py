@@ -24,6 +24,7 @@ import optimize
 from optimize import (
     _apply_config_overrides,
     _analysis_indicates_liquidation,
+    _canonicalize_optimizer_individual,
     _clear_candidate_metrics,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
@@ -1039,6 +1040,88 @@ class TestIndividualToConfig:
         assert result["bot"]["long"]["z_param"] == 20.0
         assert result["bot"]["short"]["a_param"] == 30.0
         assert result["bot"]["short"]["z_param"] == 40.0
+
+    def test_canonicalizes_disabled_close_retracement_params_in_config(self):
+        template = load_prepared_config(
+            "configs/examples/default_trailing_martingale_long_npos4.json",
+            verbose=False,
+        )
+        template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "retracement_base_pct"
+        ] = [-0.001, 0.01, 0.00001]
+        shape = build_optimization_shape(template)
+        vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
+        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+
+        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
+        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
+        vector[key_to_idx["long_close_threshold_volatility_1h_weight"]] = 39.0
+
+        result = individual_to_config(
+            vector,
+            optimize.optimizer_overrides,
+            [],
+            template,
+            key_paths=shape.key_paths,
+        )
+        close = result["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+
+        assert close["retracement_base_pct"] == pytest.approx(0.0)
+        assert close["retracement_volatility_1h_weight"] == pytest.approx(0.01)
+        assert close["retracement_volatility_1m_weight"] == pytest.approx(0.01)
+        assert close["threshold_volatility_1h_weight"] == pytest.approx(39.0)
+
+    def test_canonicalizes_disabled_close_retracement_params_in_vector_for_dedupe(self):
+        template = load_prepared_config(
+            "configs/examples/default_trailing_martingale_long_npos4.json",
+            verbose=False,
+        )
+        template["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]["close"][
+            "retracement_base_pct"
+        ] = [-0.001, 0.01, 0.00001]
+        template["bot"]["short"]["risk"]["n_positions"] = 1.0
+        template["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 1.0
+        template["optimize"]["bounds"]["short"]["risk"]["n_positions"] = [1.0, 1.0]
+        template["optimize"]["bounds"]["short"]["risk"]["total_wallet_exposure_limit"] = [
+            1.0,
+            3.0,
+            0.01,
+        ]
+        shape = build_optimization_shape(template)
+        vector = config_to_individual(template, shape.bounds, optimization_shape=shape)
+        key_to_idx = {key: idx for idx, (key, _path) in enumerate(shape.key_paths)}
+
+        vector[key_to_idx["long_close_retracement_base_pct"]] = -0.0005
+        vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] = 37.0
+        vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] = 38.0
+        vector[key_to_idx["short_close_retracement_base_pct"]] = 0.002
+        vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] = 41.0
+
+        config = _canonicalize_optimizer_individual(
+            vector,
+            template,
+            shape.bounds,
+            shape.sig_digits,
+            shape.key_paths,
+            [],
+        )
+        long_close = config["bot"]["long"]["strategy"]["trailing_martingale"]["close"]
+        short_close = config["bot"]["short"]["strategy"]["trailing_martingale"]["close"]
+
+        assert vector[key_to_idx["long_close_retracement_base_pct"]] == pytest.approx(0.0)
+        assert vector[key_to_idx["long_close_retracement_volatility_1h_weight"]] == pytest.approx(
+            0.01
+        )
+        assert vector[key_to_idx["long_close_retracement_volatility_1m_weight"]] == pytest.approx(
+            0.01
+        )
+        assert vector[key_to_idx["short_close_retracement_base_pct"]] == pytest.approx(0.002)
+        assert vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] == pytest.approx(
+            41.0
+        )
+        assert long_close["retracement_base_pct"] == pytest.approx(0.0)
+        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(41.0)
 
     def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
         template = {
