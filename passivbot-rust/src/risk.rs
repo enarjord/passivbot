@@ -87,6 +87,8 @@ pub fn gate_entries_by_twel(
     positions: &[GateEntriesPosition],
     entries: &[GateEntriesCandidate],
 ) -> Vec<GateEntriesDecision> {
+    // Public/PyO3 reference helper. The live/backtest production gate lives in
+    // orchestrator.rs and is covered by parity regressions there.
     const EXPOSURE_EPS: f64 = 1e-12;
     const QTY_EPS: f64 = 1e-12;
 

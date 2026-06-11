@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import calendar
+from contextlib import contextmanager
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Iterator
 
 import numpy as np
+import portalocker  # type: ignore
 
 from ohlcv_catalog import OhlcvCatalog, ChunkRecord
 
@@ -159,35 +161,41 @@ class OhlcvStore:
             key for key in self._verified_checksums if key[0] != body_path_str
         }
 
+    @contextmanager
+    def _chunk_write_lock(self, paths: MonthChunkPaths) -> Iterator[None]:
+        with portalocker.Lock(str(paths.body_path) + ".lock", timeout=30):
+            yield
+
     def invalidate_chunk(self, chunk: ChunkRecord) -> None:
         paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
-        self._invalidate_verified_checksum_cache(paths.body_path)
-        body = np.load(paths.body_path, mmap_mode="r+")
-        valid = np.load(paths.valid_path, mmap_mode="r+")
-        try:
-            body[:] = np.nan
-            valid[:] = False
-            body.flush()
-            valid.flush()
-        finally:
-            del body
-            del valid
-        checksum = self._compute_chunk_checksum(paths)
-        self.catalog.register_chunk(
-            exchange=chunk.exchange,
-            timeframe=chunk.timeframe,
-            symbol=chunk.symbol,
-            year=chunk.year,
-            month=chunk.month,
-            body_path=chunk.body_path,
-            valid_path=chunk.valid_path,
-            start_ts=chunk.start_ts,
-            end_ts=chunk.end_ts,
-            rows=chunk.rows,
-            status=chunk.status,
-            schema_version=chunk.schema_version,
-            checksum=checksum,
-        )
+        with self._chunk_write_lock(paths):
+            self._invalidate_verified_checksum_cache(paths.body_path)
+            body = np.load(paths.body_path, mmap_mode="r+")
+            valid = np.load(paths.valid_path, mmap_mode="r+")
+            try:
+                body[:] = np.nan
+                valid[:] = False
+                body.flush()
+                valid.flush()
+            finally:
+                del body
+                del valid
+            checksum = self._compute_chunk_checksum(paths)
+            self.catalog.register_chunk(
+                exchange=chunk.exchange,
+                timeframe=chunk.timeframe,
+                symbol=chunk.symbol,
+                year=chunk.year,
+                month=chunk.month,
+                body_path=chunk.body_path,
+                valid_path=chunk.valid_path,
+                start_ts=chunk.start_ts,
+                end_ts=chunk.end_ts,
+                rows=chunk.rows,
+                status=chunk.status,
+                schema_version=chunk.schema_version,
+                checksum=checksum,
+            )
 
     def write_rows(
         self,
@@ -221,32 +229,35 @@ class OhlcvStore:
 
         for (year, month), indices in grouped.items():
             paths = self.ensure_month(exchange, timeframe, symbol, year, month, status=status)
-            self._invalidate_verified_checksum_cache(paths.body_path)
-            body = np.load(paths.body_path, mmap_mode="r+")
-            valid = np.load(paths.valid_path, mmap_mode="r+")
-            for src_idx in indices:
-                offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
-                body[offset] = val_arr[src_idx]
-                valid[offset] = True
-            body.flush()
-            valid.flush()
-            del body
-            del valid
-            checksum = self._compute_chunk_checksum(paths)
-            self.catalog.register_chunk(
-                exchange=exchange,
-                timeframe=timeframe,
-                symbol=symbol,
-                year=year,
-                month=month,
-                body_path=str(paths.body_path.resolve()),
-                valid_path=str(paths.valid_path.resolve()),
-                start_ts=month_start_ts(year, month),
-                end_ts=month_end_ts(year, month, timeframe),
-                rows=rows_in_month(year, month, timeframe),
-                status=status,
-                checksum=checksum,
-            )
+            with self._chunk_write_lock(paths):
+                self._invalidate_verified_checksum_cache(paths.body_path)
+                body = np.load(paths.body_path, mmap_mode="r+")
+                valid = np.load(paths.valid_path, mmap_mode="r+")
+                try:
+                    for src_idx in indices:
+                        offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
+                        body[offset] = val_arr[src_idx]
+                        valid[offset] = True
+                    body.flush()
+                    valid.flush()
+                finally:
+                    del body
+                    del valid
+                checksum = self._compute_chunk_checksum(paths)
+                self.catalog.register_chunk(
+                    exchange=exchange,
+                    timeframe=timeframe,
+                    symbol=symbol,
+                    year=year,
+                    month=month,
+                    body_path=str(paths.body_path.resolve()),
+                    valid_path=str(paths.valid_path.resolve()),
+                    start_ts=month_start_ts(year, month),
+                    end_ts=month_end_ts(year, month, timeframe),
+                    rows=rows_in_month(year, month, timeframe),
+                    status=status,
+                    checksum=checksum,
+                )
 
         self.catalog.upsert_symbol_bounds(exchange, timeframe, symbol, int(ts_arr.min()), int(ts_arr.max()))
 

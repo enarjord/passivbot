@@ -342,8 +342,8 @@ def get_cached_custom_endpoint_config() -> CustomEndpointConfig:
     """
     Return the cached custom endpoint configuration, loading it on first use.
 
-    If loading fails due to parsing errors the function logs the issue and
-    returns an empty configuration to keep the application running.
+    If a configured file exists but is malformed, raise instead of silently
+    disabling the override.
     """
     global _CONFIG_CACHE
     if _CONFIG_CACHE is None:
@@ -364,11 +364,7 @@ def get_cached_custom_endpoint_config() -> CustomEndpointConfig:
                 _CONFIG_SOURCE_PATH = _CONFIG_CACHE.source_path
         except CustomEndpointConfigError as exc:
             logger.error("Failed to load custom endpoint config: %s", exc)
-            _CONFIG_CACHE = CustomEndpointConfig(
-                source_path=None,
-                defaults={},
-                exchanges={},
-            )
+            raise
     return _CONFIG_CACHE
 
 
@@ -436,11 +432,10 @@ def apply_rest_overrides_to_ccxt(
                 override.rest_extra_headers,
             )
     except Exception as exc:
-        logger.warning(
-            "Failed to apply custom endpoint override for %s: %s",
-            getattr(override, "exchange_id", "unknown"),
-            exc,
-        )
+        raise CustomEndpointConfigError(
+            f"failed to apply custom endpoint override for "
+            f"{getattr(override, 'exchange_id', 'unknown')}: {exc}"
+        ) from exc
 
 
 __all__ = [

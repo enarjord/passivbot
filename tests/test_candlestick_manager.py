@@ -81,6 +81,36 @@ def test_standardize_gaps_does_not_fill_open_tail_when_disabled(tmp_path):
     assert t1 in cm._synthetic_timestamps.get("TAIL", set())
 
 
+def test_archive_day_conversion_does_not_fill_edge_gaps(tmp_path):
+    import pandas as pd
+
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    day_key = "2026-04-01"
+    start_ts, _end_ts = cm._date_range_of_key(day_key)
+    first_real_ts = start_ts + 2 * ONE_MIN_MS
+
+    out = cm._ohlcv_df_to_day_arr(
+        pd.DataFrame(
+            {
+                "timestamp": [first_real_ts],
+                "open": [101.0],
+                "high": [103.0],
+                "low": [99.0],
+                "close": [102.0],
+                "volume": [7.0],
+            }
+        ),
+        day_key,
+    )
+
+    assert out.size == 1
+    assert int(out[0]["ts"]) == first_real_ts
+    assert float(out[0]["c"]) == pytest.approx(102.0)
+
+
 def test_kucoin_synthetic_batch_summary_is_info_not_warning(tmp_path, caplog):
     class _Ex:
         id = "kucoinfutures"

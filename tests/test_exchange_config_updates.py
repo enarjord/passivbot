@@ -1,5 +1,7 @@
 import asyncio
 import logging
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 from ccxt.base.errors import RateLimitExceeded
@@ -34,6 +36,36 @@ class FreshMarketSnapshotProvider:
             )
             for symbol in symbols
         }
+
+
+class DummyTask:
+    def __init__(self, coro):
+        self._coro = coro
+
+    def __await__(self):
+        return self._coro.__await__()
+
+
+class DummyKucoinCCA:
+    def __init__(self):
+        self.leverage_calls = []
+
+    async def set_margin_mode(self, **_params):
+        return {}
+
+    async def set_leverage(self, **params):
+        self.leverage_calls.append(params)
+        return params
+
+
+def make_kucoin_config_bot():
+    from exchanges.kucoin import KucoinBot
+
+    bot = KucoinBot.__new__(KucoinBot)
+    bot.cca = DummyKucoinCCA()
+    bot.hedge_mode = True
+    bot.max_leverage = {}
+    return bot
 
 
 @pytest.mark.asyncio
@@ -82,7 +114,6 @@ async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap
     monkeypatch,
 ):
     import passivbot as pb_mod
-    from tests.test_kucoin_exchange_config import DummyTask, make_bot
 
     async def fake_sleep(_seconds):
         return None
@@ -90,7 +121,7 @@ async def test_update_exchange_configs_does_not_mark_invalid_kucoin_leverage_cap
     monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     monkeypatch.setattr(asyncio, "create_task", lambda coro: DummyTask(coro))
 
-    bot = make_bot()
+    bot = make_kucoin_config_bot()
     bot.exchange = "kucoin"
     bot.active_symbols = ["BTC/USDT:USDT"]
     bot.already_updated_exchange_config_symbols = set()
@@ -286,6 +317,37 @@ async def test_update_exchange_configs_stops_after_shutdown_signal(monkeypatch):
 
     assert bot.calls == ["A"]
     assert bot.already_updated_exchange_config_symbols == {"A"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_name", "class_name"),
+    [
+        ("exchanges.binance", "BinanceBot"),
+        ("exchanges.bitget", "BitgetBot"),
+        ("exchanges.kucoin", "KucoinBot"),
+    ],
+)
+async def test_exchange_update_config_reraises_hedge_mode_failures(module_name, class_name):
+    module = __import__(module_name, fromlist=[class_name])
+    bot_cls = getattr(module, class_name)
+    bot = bot_cls.__new__(bot_cls)
+    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_binance_update_config_accepts_already_hedged_response():
+    from exchanges.binance import BinanceBot
+
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(side_effect=Exception('{"code":-4059,"msg":"No need"}'))
+    )
+
+    await bot.update_exchange_config()
 
 
 @pytest.mark.asyncio

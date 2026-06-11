@@ -574,6 +574,7 @@ class BitgetBot(CCXTBot):
             logging.debug("[config] set hedge mode response: %s", res)
         except Exception as e:
             logging.error("[config] error setting hedge mode: %s %s", e, res)
+            raise
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)

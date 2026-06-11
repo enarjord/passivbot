@@ -170,16 +170,32 @@ class KucoinBot(CCXTBot):
         return self.determine_pos_side(order)
 
     def determine_pos_side(self, order):
-        # non hedge mode
-        if self.has_position("long", order["symbol"]):
+        explicit = order.get("position_side")
+        if explicit is None:
+            info = order.get("info", {}) or {}
+            explicit = info.get("positionSide") or info.get("posSide")
+        if explicit is not None:
+            explicit = str(explicit).lower()
+            if explicit in ("long", "short"):
+                return explicit
+            raise Exception(f"unknown position_side {explicit} for order {order}")
+
+        symbol = order["symbol"]
+        has_long = self.has_position("long", symbol)
+        has_short = self.has_position("short", symbol)
+        if has_long and not has_short:
             return "long"
-        elif self.has_position("short", order["symbol"]):
+        if has_short and not has_long:
             return "short"
-        elif order["side"] == "buy":
+
+        side = str(order.get("side", "")).lower()
+        if has_long and has_short:
+            raise Exception(f"ambiguous KuCoin position side for hedge-mode order {order}")
+        if side == "buy":
             return "long"
-        elif order["side"] == "sell":
+        if side == "sell":
             return "short"
-        raise Exception(f"unknown side {order['side']}")
+        raise Exception(f"unknown side {order.get('side')}")
 
     async def _do_fetch_open_orders(self, symbol: str = None) -> list:
         """KuCoin: Fetch open orders with pagination.
@@ -520,9 +536,10 @@ class KucoinBot(CCXTBot):
                 res = await self.cca.set_position_mode(True)
                 logging.info(f"set_position_mode hedged=True {res}")
             else:
-                logging.info("set_position_mode not supported by current KuCoin client; continuing")
+                raise NotImplementedError("set_position_mode not supported by current KuCoin client")
         except Exception as e:
-            logging.warning(f"set_position_mode hedged=True not applied: {e}")
+            logging.error(f"set_position_mode hedged=True not applied: {e}")
+            raise
 
     async def update_exchange_config_by_symbols(self, symbols):
         coros_to_call = []

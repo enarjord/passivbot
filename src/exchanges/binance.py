@@ -514,6 +514,7 @@ class BinanceBot(CCXTBot):
                 logging.debug("[config] hedge mode unchanged: %s", e)
             else:
                 logging.error("[config] error setting hedge mode: %s", e)
+                raise
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)

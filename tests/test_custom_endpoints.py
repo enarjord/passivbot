@@ -4,6 +4,7 @@ import pytest
 
 from custom_endpoint_overrides import (
     CustomEndpointConfig,
+    CustomEndpointConfigError,
     ResolvedEndpointOverride,
     apply_rest_overrides_to_ccxt,
     configure_custom_endpoint_loader,
@@ -143,3 +144,27 @@ def test_configure_loader_with_explicit_path(tmp_path):
     assert override.disable_ws is False
     assert override.rest_url_overrides["fapiPrivate"] == "https://proxy.example/fapi/v1"
     assert override.rest_domain_rewrites["https://fapi.binance.com"] == "https://proxy.example"
+
+
+def test_configured_loader_raises_on_malformed_endpoint_file(tmp_path):
+    config_path = tmp_path / "custom_endpoints.json"
+    config_path.write_text("{not json", encoding="utf-8")
+
+    configure_custom_endpoint_loader(str(config_path), autodiscover=False, preloaded=None)
+
+    with pytest.raises(CustomEndpointConfigError, match="failed to parse custom endpoint config"):
+        get_cached_custom_endpoint_config()
+
+
+def test_apply_rest_overrides_raises_on_invalid_ccxt_api_urls():
+    override = ResolvedEndpointOverride(
+        exchange_id="binanceusdm",
+        rest_domain_rewrites={"https://fapi.binance.com": "https://proxy.example"},
+    )
+
+    class BadExchange:
+        urls = {"api": {"fapiPrivate": 1}}
+        headers = {}
+
+    with pytest.raises(CustomEndpointConfigError, match="failed to apply custom endpoint override"):
+        apply_rest_overrides_to_ccxt(BadExchange(), override)

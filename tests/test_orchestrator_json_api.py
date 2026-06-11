@@ -287,6 +287,7 @@ def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_martin
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
+            "max_realized_loss_pct": 1.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": strategy_kind,
@@ -331,6 +332,56 @@ def test_json_rejects_missing_ema():
         symbols=[make_symbol(0, bid=100.0, ask=100.0, emas=ema_bundle(m1_close=[]))],
     )
     with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["qty_step", "price_step", "min_qty", "min_cost", "c_mult", "maker_fee", "taker_fee"],
+)
+def test_json_rejects_missing_exchange_param(field):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    del inp["symbols"][0]["exchange"][field]
+    with pytest.raises(ValueError, match=rf"missing field `{field}`"):
+        compute(pbr, inp)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("qty_step", 0.0),
+        ("price_step", 0.0),
+        ("min_qty", -0.01),
+        ("min_cost", -1.0),
+        ("c_mult", 0.0),
+    ],
+)
+def test_json_rejects_invalid_exchange_param(field, value):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    inp["symbols"][0]["exchange"][field] = value
+    with pytest.raises(ValueError, match=rf"InvalidExchangeParams.*{field}"):
+        compute(pbr, inp)
+
+
+def test_json_rejects_missing_realized_loss_gate_param():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    del inp["global"]["max_realized_loss_pct"]
+    with pytest.raises(ValueError, match=r"missing field `max_realized_loss_pct`"):
         compute(pbr, inp)
 
 

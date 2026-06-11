@@ -208,6 +208,10 @@ mod core {
             field: &'static str,
             symbol_idx: Option<usize>,
         },
+        InvalidExchangeParams {
+            symbol_idx: usize,
+            details: String,
+        },
         InvalidStrategyParams {
             symbol_idx: usize,
             details: String,
@@ -294,7 +298,6 @@ mod core {
         pub unstuck_allowance_short: f64,
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
         /// <=0 blocks all lossy closes; >=1 disables gating.
-        #[serde(default = "default_max_realized_loss_pct")]
         pub max_realized_loss_pct: f64,
         /// Net realized pnl cumsum peak from fill history (statelessly reconstructed).
         #[serde(default)]
@@ -317,10 +320,6 @@ mod core {
 
     fn default_hedge_mode() -> bool {
         true
-    }
-
-    fn default_max_realized_loss_pct() -> f64 {
-        1.0
     }
 
     fn default_market_order_near_touch_threshold() -> f64 {
@@ -2143,6 +2142,12 @@ mod core {
                     symbol_idx: s.symbol_idx,
                 });
             }
+            if let Err(details) = s.exchange.validate_required() {
+                return Err(OrchestratorError::InvalidExchangeParams {
+                    symbol_idx: s.symbol_idx,
+                    details,
+                });
+            }
         }
 
         // Compute selection sets and effective n_positions per pside.
@@ -3522,6 +3527,130 @@ mod core {
             super::compute_ideal_orders(&synced)
         }
 
+        fn normalize_twel_gate_orders(orders: &[IdealOrder]) -> Vec<(usize, i64, i64, u16)> {
+            orders
+                .iter()
+                .map(|o| {
+                    (
+                        o.symbol_idx,
+                        (o.qty * 1_000_000.0).round() as i64,
+                        (o.price * 1_000_000.0).round() as i64,
+                        o.order_type.id(),
+                    )
+                })
+                .collect()
+        }
+
+        fn production_twel_gate_for_test(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) -> Vec<(usize, i64, i64, u16)> {
+            let mut entries = entries.to_vec();
+            let mut current_positions: Vec<Option<(f64, f64, f64)>> = Vec::new();
+            let mut scratch: Vec<Option<(f64, f64, f64, f64)>> = Vec::new();
+            let mut keep: Vec<u8> = Vec::new();
+            let mut qty_by_order_idx: Vec<f64> = Vec::new();
+            let mut out: Vec<IdealOrder> = Vec::new();
+            gate_entries_by_twel_deterministic(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                &mut entries,
+                symbols,
+                &mut current_positions,
+                &mut scratch,
+                &mut keep,
+                &mut qty_by_order_idx,
+                &mut out,
+            );
+            normalize_twel_gate_orders(&entries)
+        }
+
+        fn reference_twel_gate_for_test(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) -> Vec<(usize, i64, i64, u16)> {
+            let candidates: Vec<crate::risk::GateEntriesCandidate> = entries
+                .iter()
+                .map(|entry| {
+                    let symbol = &symbols[entry.symbol_idx];
+                    crate::risk::GateEntriesCandidate {
+                        idx: entry.symbol_idx,
+                        qty: entry.qty.abs(),
+                        price: entry.price,
+                        qty_step: symbol.exchange.qty_step,
+                        min_qty: symbol.exchange.min_qty,
+                        min_cost: symbol.exchange.min_cost,
+                        c_mult: symbol.exchange.c_mult,
+                        market_price: match pside {
+                            PositionSide::Long => symbol.order_book.bid,
+                            PositionSide::Short => symbol.order_book.ask,
+                        },
+                        order_type: entry.order_type,
+                    }
+                })
+                .collect();
+            let signed_orders: Vec<IdealOrder> = crate::risk::gate_entries_by_twel(
+                pside.to_pside_int(),
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                &candidates,
+            )
+            .into_iter()
+            .map(|decision| IdealOrder {
+                symbol_idx: decision.idx,
+                pside,
+                qty: match pside {
+                    PositionSide::Long => decision.qty.abs(),
+                    PositionSide::Short => -decision.qty.abs(),
+                },
+                price: decision.price,
+                order_type: decision.order_type,
+            })
+            .collect();
+            normalize_twel_gate_orders(&signed_orders)
+        }
+
+        fn assert_twel_gate_matches_reference(
+            pside: PositionSide,
+            balance: f64,
+            total_wallet_exposure_limit: f64,
+            positions: &[GateEntriesPosition],
+            entries: &[IdealOrder],
+            symbols: &[SymbolInput],
+        ) {
+            let production = production_twel_gate_for_test(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                entries,
+                symbols,
+            );
+            let reference = reference_twel_gate_for_test(
+                pside,
+                balance,
+                total_wallet_exposure_limit,
+                positions,
+                entries,
+                symbols,
+            );
+            assert_eq!(
+                production, reference,
+                "production TWEL gate drifted from the exposed reference helper"
+            );
+        }
+
         fn make_basic_global() -> OrchestratorGlobal {
             OrchestratorGlobal {
                 filter_by_min_effective_cost: false,
@@ -4661,6 +4790,109 @@ mod core {
                 (entries[0].qty - 0.7).abs() < 1e-9,
                 "qty {}",
                 entries[0].qty
+            );
+        }
+
+        #[test]
+        fn twel_entry_gate_matches_reference_helper_on_core_scenarios() {
+            let balance = 1000.0;
+
+            let mut sym = make_basic_symbol(0);
+            sym.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym.exchange = ExchangeParams {
+                qty_step: 0.01,
+                price_step: 0.01,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let symbols = vec![sym.clone()];
+
+            let positions = vec![GateEntriesPosition {
+                idx: 0,
+                position_size: 1.0,
+                position_price: 100.0,
+                c_mult: 1.0,
+            }];
+            let entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Long,
+                qty: 150.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            }];
+            assert_twel_gate_matches_reference(
+                PositionSide::Long,
+                balance,
+                1.0,
+                &positions,
+                &entries,
+                &symbols,
+            );
+
+            let mut far_first_sym = make_basic_symbol(0);
+            far_first_sym.order_book = OrderBook {
+                bid: 20.0,
+                ask: 20.0,
+            };
+            far_first_sym.exchange = ExchangeParams {
+                qty_step: 0.1,
+                price_step: 0.1,
+                min_qty: 0.0,
+                min_cost: 0.0,
+                c_mult: 1.0,
+                ..Default::default()
+            };
+            let far_first_symbols = vec![far_first_sym];
+            let far_first_entries = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: 1.0,
+                    price: 10.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: 1.0,
+                    price: 20.0,
+                    order_type: OrderType::EntryGridNormalLong,
+                },
+            ];
+            assert_twel_gate_matches_reference(
+                PositionSide::Long,
+                balance,
+                0.015,
+                &[],
+                &far_first_entries,
+                &far_first_symbols,
+            );
+
+            let short_positions = vec![GateEntriesPosition {
+                idx: 0,
+                position_size: -1.0,
+                position_price: 100.0,
+                c_mult: 1.0,
+            }];
+            let short_entries = vec![IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: -150.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalShort,
+            }];
+            assert_twel_gate_matches_reference(
+                PositionSide::Short,
+                balance,
+                1.0,
+                &short_positions,
+                &short_entries,
+                &symbols,
             );
         }
 

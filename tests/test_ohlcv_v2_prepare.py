@@ -9,10 +9,12 @@ import pytest
 
 from candlestick_manager import OhlcvFetchError
 from hlcv_preparation import (
+    HLCVManager,
     _dense_hlcv_frame_from_sparse_v2_range,
     _fetch_coin_range_into_v2_store,
     _resolve_v2_store_range,
     prepare_hlcvs,
+    prepare_hlcvs_internal,
     try_prepare_hlcvs_v2_local,
 )
 from ohlcv_catalog import OhlcvCatalog
@@ -2419,6 +2421,129 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_loads_real_values(
 
 
 @pytest.mark.asyncio
+async def test_hlcv_manager_source_dir_marks_open_tail_fill_invalid(monkeypatch, tmp_path):
+    import hlcv_preparation as hp
+    from ohlcv_utils import dump_ohlcv_data
+    from utils import ts_to_date
+
+    source_dir = tmp_path / "ohlcv_source"
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+    eth_dir = source_dir / "binance" / "1m" / "ETH"
+    eth_dir.mkdir(parents=True, exist_ok=True)
+    dump_ohlcv_data(
+        np.array([[start_ts, 101.0, 103.0, 99.0, 102.0, 7.0]], dtype=np.float64),
+        str(eth_dir / "2026-04-01.npy"),
+    )
+
+    async def fake_load_markets(self):
+        self.markets = {
+            "ETH/USDT:USDT": {
+                "symbol": "ETH/USDT:USDT",
+                "base": "ETH",
+                "quote": "USDT",
+            }
+        }
+
+    class FakeExchange:
+        async def close(self):
+            return None
+
+    def fake_load_cc(self):
+        self.cc = FakeExchange()
+        self.cm = hp.CandlestickManager(
+            exchange=None,
+            exchange_name="binance",
+            cache_dir=str(tmp_path / "cm_cache"),
+        )
+
+    monkeypatch.setattr(hp.HLCVManager, "load_markets", fake_load_markets)
+    monkeypatch.setattr(hp.HLCVManager, "load_cc", fake_load_cc)
+
+    om = HLCVManager(
+        "binance",
+        ts_to_date(start_ts),
+        ts_to_date(end_ts),
+        gap_tolerance_ohlcvs_minutes=120.0,
+        ohlcv_source_dir=str(source_dir),
+    )
+    try:
+        om.update_timestamp_range(start_ts, end_ts)
+        df = await om.get_ohlcvs("ETH")
+    finally:
+        await om.aclose()
+
+    assert df["timestamp"].tolist() == [start_ts, start_ts + 60_000, end_ts]
+    assert df["valid"].tolist() == [True, False, False]
+    assert df["volume"].tolist() == [7.0, 0.0, 0.0]
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_internal_masks_invalid_direct_fetch_rows(monkeypatch):
+    import hlcv_preparation as hp
+
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 2 * 60_000
+
+    async def fake_first_timestamps(coins):
+        return {"ETH": start_ts}
+
+    monkeypatch.setattr(hp, "get_first_timestamps_unified", fake_first_timestamps)
+
+    class FakeOm:
+        async def load_markets(self):
+            return None
+
+        def has_coin(self, coin):
+            return coin == "ETH"
+
+        def update_date_range(self, new_start_date=None, new_end_date=None):
+            self.start_ts = int(new_start_date)
+            self.end_ts = int(new_end_date) if new_end_date is not None else end_ts
+
+        async def get_ohlcvs(self, coin):
+            return pd.DataFrame(
+                {
+                    "timestamp": np.array([start_ts, start_ts + 60_000, end_ts], dtype=np.int64),
+                    "high": np.array([103.0, 102.0, 102.0]),
+                    "low": np.array([99.0, 102.0, 102.0]),
+                    "close": np.array([102.0, 102.0, 102.0]),
+                    "volume": np.array([7.0, 0.0, 0.0]),
+                    "valid": np.array([True, False, False]),
+                }
+            )
+
+        def get_market_specific_settings(self, coin):
+            return {}
+
+    config = {
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "minimum_coin_age_days": 0.0,
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    mss, timestamps, aligned = await prepare_hlcvs_internal(
+        config,
+        ["ETH"],
+        "binance",
+        start_ts,
+        start_ts,
+        end_ts,
+        FakeOm(),
+    )
+
+    np.testing.assert_array_equal(timestamps, np.array([start_ts, start_ts + 60_000, end_ts]))
+    np.testing.assert_allclose(aligned["ETH"][0], np.array([103.0, 99.0, 102.0, 7.0]))
+    assert np.isnan(aligned["ETH"][1:]).all()
+    assert mss["ETH"]["first_valid_index"] == 0
+    assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
 async def test_prepare_hlcvs_prefers_local_v2_before_legacy_prepare(monkeypatch):
     prepared = (
         {
@@ -2848,3 +2973,70 @@ async def test_corrupt_chunk_repair_rebuilds_full_chunk_not_only_requested_slice
     )
     np.testing.assert_array_equal(preserved.valid, np.array([True]))
     np.testing.assert_allclose(preserved.values, repair[1:])
+
+
+@pytest.mark.asyncio
+async def test_corrupt_chunk_failed_repair_preserves_existing_rows(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start = month_start_ts(2026, 4)
+    month_end = month_end_ts(2026, 4, "1m")
+    ts = np.array([start, start + 60_000], dtype=np.int64)
+    initial = np.array([[101.0, 99.0, 100.0, 10.0], [102.0, 100.0, 101.0, 11.0]], dtype=np.float32)
+    corrupt = initial.copy()
+    corrupt[0, 0] = 999.0
+    store.write_rows("binance", "1m", "ETH/USDT:USDT", ts, initial)
+    chunk = catalog.list_chunks("binance", "1m", "ETH/USDT:USDT", int(start), int(start))[0]
+    body = np.load(chunk.body_path, mmap_mode="r+")
+    body[0, 0] = corrupt[0, 0]
+    body.flush()
+    del body
+
+    empty_fetch = pd.DataFrame(
+        {
+            "timestamp": np.array([], dtype=np.int64),
+            "high": np.array([], dtype=np.float32),
+            "low": np.array([], dtype=np.float32),
+            "close": np.array([], dtype=np.float32),
+            "volume": np.array([], dtype=np.float32),
+        }
+    )
+    repair_calls = []
+
+    class FakeManager:
+        gap_tolerance_ohlcvs_minutes = 120.0
+        cm = None
+
+        def update_timestamp_range(self, start_ts, end_ts):
+            self.start_ts = int(start_ts)
+            self.end_ts = int(end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            repair_calls.append((int(start_ts), int(end_ts)))
+            return empty_fetch
+
+    rng = await _resolve_v2_store_range(
+        om=FakeManager(),
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="binance",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=int(ts[0]),
+        end_ts=int(ts[-1]),
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert rng is None
+    assert repair_calls == [(int(start), int(month_end))]
+    body = np.load(chunk.body_path, mmap_mode="r")
+    valid = np.load(chunk.valid_path, mmap_mode="r")
+    try:
+        np.testing.assert_allclose(body[:2], corrupt)
+        np.testing.assert_array_equal(valid[:2], np.array([True, True]))
+    finally:
+        del body
+        del valid

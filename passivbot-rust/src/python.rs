@@ -2001,15 +2001,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
 }
 
 fn exchange_params_from_dict(dict: &PyDict) -> PyResult<ExchangeParams> {
-    Ok(ExchangeParams {
-        qty_step: extract_value(dict, "qty_step").unwrap_or_default(),
-        price_step: extract_value(dict, "price_step").unwrap_or_default(),
-        min_qty: extract_value(dict, "min_qty").unwrap_or_default(),
-        min_cost: extract_value(dict, "min_cost").unwrap_or_default(),
-        c_mult: extract_value(dict, "c_mult").unwrap_or_default(),
-        maker_fee: extract_value(dict, "maker_fee").unwrap_or(0.0002),
-        taker_fee: extract_value(dict, "taker_fee").unwrap_or(0.00055),
-    })
+    let params = ExchangeParams {
+        qty_step: extract_value(dict, "qty_step")?,
+        price_step: extract_value(dict, "price_step")?,
+        min_qty: extract_value(dict, "min_qty")?,
+        min_cost: extract_value(dict, "min_cost")?,
+        c_mult: extract_value(dict, "c_mult")?,
+        maker_fee: extract_value(dict, "maker_fee")?,
+        taker_fee: extract_value(dict, "taker_fee")?,
+    };
+    params.validate_required().map_err(PyValueError::new_err)?;
+    Ok(params)
 }
 
 fn bot_params_pair_from_dict(dict: &PyDict) -> PyResult<BotParamsPair> {

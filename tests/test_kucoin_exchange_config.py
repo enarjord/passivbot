@@ -41,6 +41,12 @@ def make_bot():
     bot.cca = DummyCCA()
     bot.hedge_mode = True
     bot.max_leverage = {}
+    bot.positions = {
+        "BTC/USDT:USDT": {
+            "long": {"size": 0.0},
+            "short": {"size": 0.0},
+        }
+    }
     return bot
 
 
@@ -179,8 +185,32 @@ async def test_update_exchange_config_handles_missing_position_mode(caplog):
     caplog.set_level(logging.INFO)
     bot = make_bot()
     bot.cca = types.SimpleNamespace()
-    await bot.update_exchange_config()
-    assert "set_position_mode not supported" in caplog.text
+    with pytest.raises(NotImplementedError, match="set_position_mode not supported"):
+        await bot.update_exchange_config()
+    assert "set_position_mode hedged=True not applied" in caplog.text
+
+
+def test_determine_pos_side_prefers_explicit_payload_over_existing_long_position():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "short",
+        "info": {},
+    }
+
+    assert bot.determine_pos_side(order) == "short"
+
+
+def test_determine_pos_side_rejects_ambiguous_hedge_order_without_payload():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+    bot.positions["BTC/USDT:USDT"]["short"]["size"] = -1.0
+
+    with pytest.raises(Exception, match="ambiguous KuCoin position side"):
+        bot.determine_pos_side({"symbol": "BTC/USDT:USDT", "side": "buy", "info": {}})
 
 
 @pytest.mark.asyncio

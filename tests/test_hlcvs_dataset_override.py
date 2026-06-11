@@ -3,7 +3,7 @@ import json
 import numpy as np
 import pytest
 
-from backtest import build_backtest_payload
+from backtest import build_backtest_payload, ensure_valid_index_metadata
 from config_utils import get_template_config
 from hlcvs_manifest import (
     HlcvsManifestError,
@@ -40,17 +40,20 @@ def _base_config(cache_dir, *, mode="dataset"):
     }
 
 
-def _write_dataset(cache_dir, *, manifest_start_date="2025-01-01"):
+def _write_dataset(cache_dir, *, manifest_start_date="2025-01-01", mss_overrides=None, hlcvs=None):
     cache_dir.mkdir(parents=True)
     coins = ["BTC", "ETH"]
     timestamps = np.array([1735689600000, 1735776000000, 1735862400000], dtype=np.int64)
-    hlcvs = np.arange(24, dtype=np.float64).reshape(3, 2, 4)
+    if hlcvs is None:
+        hlcvs = np.arange(24, dtype=np.float64).reshape(3, 2, 4)
     btc_usd_prices = np.array([100.0, 101.0, 102.0], dtype=np.float64)
     mss = {
         "BTC": {"exchange": "binance"},
         "ETH": {"exchange": "binance"},
         "__meta__": {"btc_source_exchange": "binanceusdm"},
     }
+    for coin, overrides in (mss_overrides or {}).items():
+        mss.setdefault(coin, {}).update(overrides)
     np.save(cache_dir / "hlcvs.npy", hlcvs)
     np.save(cache_dir / "timestamps.npy", timestamps)
     np.save(cache_dir / "btc_usd_prices.npy", btc_usd_prices)
@@ -143,6 +146,36 @@ def test_hlcvs_dataset_override_intersection_mode_keeps_available_warmup_rows(tm
     assert mss["__meta__"]["effective_data_start_ts"] == int(timestamps[0])
     assert mss["__meta__"]["original_requested_start_ts"] == int(timestamps[1])
     assert mss["__meta__"]["effective_requested_start_ts"] == int(timestamps[1])
+
+
+def test_hlcvs_dataset_override_preserves_sliced_valid_window_metadata(tmp_path):
+    cache_dir = tmp_path / "hlcvs_data" / "edge_filled__abc123"
+    hlcvs = np.ones((3, 2, 4), dtype=np.float64)
+    hlcvs[0, 0, :] = np.array([100.0, 100.0, 100.0, 0.0])
+    mss_overrides = {
+        "BTC": {
+            "first_valid_index": 1,
+            "last_valid_index": 2,
+            "source_first_valid_index": 1,
+            "source_last_valid_index": 2,
+            "trade_start_index": 1,
+        }
+    }
+    _write_dataset(cache_dir, mss_overrides=mss_overrides, hlcvs=hlcvs)
+    config = _base_config(cache_dir, mode="intersection")
+    config["live"]["approved_coins"] = {"long": ["BTC"], "short": []}
+
+    _cache_dir, coins, out_hlcvs, mss, _results_path, _btc, _timestamps = (
+        load_hlcvs_data_override(config, "binance")
+    )
+    ensure_valid_index_metadata(mss, out_hlcvs, coins)
+
+    assert coins == ["BTC"]
+    assert mss["BTC"]["first_valid_index"] == 1
+    assert mss["BTC"]["last_valid_index"] == 2
+    assert mss["BTC"]["source_first_valid_index"] == 1
+    assert mss["BTC"]["source_last_valid_index"] == 2
+    assert mss["BTC"]["trade_start_index"] == 1
 
 
 def test_backtest_payload_prefers_effective_override_requested_start():

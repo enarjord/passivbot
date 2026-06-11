@@ -132,7 +132,7 @@ impl HlcvsBundle {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct ExchangeParams {
     pub qty_step: f64,
     pub price_step: f64,
@@ -154,6 +154,41 @@ impl Default for ExchangeParams {
             maker_fee: 0.0002,
             taker_fee: 0.00055,
         }
+    }
+}
+
+impl ExchangeParams {
+    pub fn validate_required(&self) -> Result<(), String> {
+        fn finite_positive(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() && value > 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite and > 0"))
+            }
+        }
+        fn finite_non_negative(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() && value >= 0.0 {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite and >= 0"))
+            }
+        }
+        fn finite(value: f64, field: &str) -> Result<(), String> {
+            if value.is_finite() {
+                Ok(())
+            } else {
+                Err(format!("{field} must be finite"))
+            }
+        }
+
+        finite_positive(self.qty_step, "qty_step")?;
+        finite_positive(self.price_step, "price_step")?;
+        finite_non_negative(self.min_qty, "min_qty")?;
+        finite_non_negative(self.min_cost, "min_cost")?;
+        finite_positive(self.c_mult, "c_mult")?;
+        finite(self.maker_fee, "maker_fee")?;
+        finite(self.taker_fee, "taker_fee")?;
+        Ok(())
     }
 }
 

@@ -31,6 +31,20 @@ All notable user-facing changes will be documented in this file.
 - Live order reconciliation now blocks a symbol and requests a full account refresh
   when an open order snapshot is malformed, instead of dropping the bad actual order
   and creating a duplicate.
+- Rust live/backtest orchestration now rejects missing or invalid exchange metadata
+  and requires the realized-loss gate parameter instead of accepting neutral serde/PyO3
+  defaults.
+- Exchange configuration and test doubles now fail loudly on unsafe setup gaps:
+  Binance/Bitget/KuCoin hedge-mode failures propagate, KuCoin order side inference
+  prefers explicit hedge-side payloads, custom endpoint override errors raise, and
+  the fake exchange rejects invalid reduce-only orders instead of silently clipping them.
+- OHLCV cache integrity handling now retries expired persistent gaps after the documented
+  seven-day horizon, avoids stealing active fetch locks by unlinking lock files, serializes
+  v2 chunk writes with per-chunk locks, and no longer wipes corrupt chunks before a remote
+  repair succeeds.
+- Backtest HLCV preparation now preserves real-row validity through source-dir/direct fetches,
+  dataset overrides, and archive day imports, preventing edge-filled listing/delisting gaps
+  from becoming tradable candles.
 - Tightened fail-loud handling for live cancellations, current fill-event caches, and
   single-exchange HLCV preparation: unexpected cancel failures now propagate through
   restart/error handling, unreadable current fill-cache day files fail cache loading, and

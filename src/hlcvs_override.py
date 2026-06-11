@@ -120,6 +120,54 @@ def _side_membership_for_override(config: dict, dataset_coins: list[str], manife
     }
 
 
+def _slice_index_span(
+    meta: dict,
+    *,
+    first_key: str,
+    last_key: str,
+    row_start: int,
+    row_end: int,
+    n_rows: int,
+) -> None:
+    if first_key not in meta or last_key not in meta:
+        return
+    try:
+        first_idx = int(meta[first_key])
+        last_idx = int(meta[last_key])
+    except (TypeError, ValueError):
+        meta.pop(first_key, None)
+        meta.pop(last_key, None)
+        return
+    selected_last = int(row_end) - 1
+    if first_idx > last_idx or last_idx < row_start or first_idx > selected_last:
+        meta[first_key] = int(n_rows)
+        meta[last_key] = int(n_rows)
+        return
+    meta[first_key] = int(max(first_idx, row_start) - row_start)
+    meta[last_key] = int(min(last_idx, selected_last) - row_start)
+
+
+def _slice_valid_window_metadata(meta: dict, *, row_start: int, row_end: int) -> None:
+    n_rows = int(row_end) - int(row_start)
+    _slice_index_span(
+        meta,
+        first_key="first_valid_index",
+        last_key="last_valid_index",
+        row_start=int(row_start),
+        row_end=int(row_end),
+        n_rows=n_rows,
+    )
+    _slice_index_span(
+        meta,
+        first_key="source_first_valid_index",
+        last_key="source_last_valid_index",
+        row_start=int(row_start),
+        row_end=int(row_end),
+        n_rows=n_rows,
+    )
+    meta.pop("trade_start_index", None)
+
+
 def load_hlcvs_data_override(config, exchange):
     override_dir = get_optional_config_value(config, "backtest.hlcvs_data_dir")
     if not override_dir:
@@ -193,10 +241,11 @@ def load_hlcvs_data_override(config, exchange):
     btc_usd_prices = np.ascontiguousarray(btc_usd_prices[row_start:row_end])
     timestamps = np.ascontiguousarray(timestamps[row_start:row_end])
 
-    selected_mss = {coin: deepcopy(mss.get(coin, {})) for coin in selected_coins}
-    for meta in selected_mss.values():
-        for key in ("first_valid_index", "last_valid_index", "trade_start_index"):
-            meta.pop(key, None)
+    selected_mss = {}
+    for coin in selected_coins:
+        meta = deepcopy(mss.get(coin, {}))
+        _slice_valid_window_metadata(meta, row_start=row_start, row_end=row_end)
+        selected_mss[coin] = meta
     side_membership = _side_membership_for_override(config, selected_coins, manifest, mode)
     side_membership = {
         pside: sorted([coin for coin in side_membership.get(pside, []) if coin in selected_coins])

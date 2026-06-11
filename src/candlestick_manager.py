@@ -146,6 +146,7 @@ class GapEntry(TypedDict, total=False):
 
 # Maximum fetch attempts before marking gap as persistent
 _GAP_MAX_RETRIES = 3
+_GAP_PERSISTENT_RETRY_MS = 7 * 24 * 60 * 60 * 1000
 
 # Valid gap reasons
 GAP_REASON_AUTO = "auto_detected"
@@ -154,6 +155,9 @@ GAP_REASON_NO_ARCHIVE = "no_archive"
 GAP_REASON_FETCH_FAILED = "fetch_failed"
 GAP_REASON_MANUAL = "manual"
 GAP_REASON_NO_TRADES = "no_trades"
+_GAP_NON_EXPIRING_REASONS = frozenset(
+    {"pre_inception", GAP_REASON_NO_ARCHIVE, GAP_REASON_MANUAL, GAP_REASON_NO_TRADES}
+)
 
 
 _FIRST_OHLCV_EXCHANGE_CACHE_ALIASES = {
@@ -1022,13 +1026,23 @@ class CandlestickManager:
                 continue
             age = now - stat.st_mtime
             if age > threshold:
+                lock = portalocker.Lock(str(lock_path), timeout=0, fail_when_locked=True)
+                try:
+                    lock.acquire()
+                except portalocker.exceptions.LockException:
+                    continue
                 try:
                     lock_path.unlink()
                     self.log.info("removed stale candle lock %s (age %.1fs)", lock_path, age)
                 except FileNotFoundError:
-                    continue
+                    pass
                 except Exception as exc:
                     self.log.error("failed to remove stale lock %s: %s", lock_path, exc)
+                finally:
+                    try:
+                        lock.release()
+                    except Exception:
+                        pass
 
     def _cleanup_on_exit(self) -> None:
         with self._shutdown_guard:
@@ -1722,25 +1736,12 @@ class CandlestickManager:
                 if age is not None and age > self._lock_stale_seconds:
                     self._log(
                         "warning",
-                        "fetch_lock_stale",
+                        "fetch_lock_stale_waiting",
                         symbol=symbol,
                         timeframe=tf_norm,
                         age=f"{age:.2f}",
                         lock_path=lock_path,
                     )
-                    try:
-                        os.remove(lock_path)
-                    except FileNotFoundError:
-                        pass
-                    except Exception as rm_exc:
-                        self._log(
-                            "error",
-                            "fetch_lock_stale_remove_failed",
-                            symbol=symbol,
-                            timeframe=tf_norm,
-                            error=str(rm_exc),
-                        )
-                    continue
 
                 if time.monotonic() >= deadline:
                     raise TimeoutError(
@@ -2625,13 +2626,23 @@ class CandlestickManager:
                 gap["start_ts"] = min(gap["start_ts"], int(start_ts))
                 gap["end_ts"] = max(gap["end_ts"], int(end_ts))
                 previous_retry_count = gap.get("retry_count", 0)
+                retry_due = self._persistent_gap_retry_due(gap, now_ms=now_ms)
                 if retry_count is not None:
                     gap["retry_count"] = retry_count
+                    if retry_count >= _GAP_MAX_RETRIES and previous_retry_count < _GAP_MAX_RETRIES:
+                        gap["added_at"] = now_ms
                 elif increment_retry:
                     # Cap retry_count at _GAP_MAX_RETRIES to prevent unbounded growth
                     # and avoid redundant disk writes for persistent gaps
-                    new_retry_count = previous_retry_count + 1
+                    new_retry_count = (0 if retry_due else previous_retry_count) + 1
                     gap["retry_count"] = min(new_retry_count, _GAP_MAX_RETRIES)
+                    if retry_due:
+                        gap["added_at"] = now_ms
+                    elif (
+                        gap["retry_count"] >= _GAP_MAX_RETRIES
+                        and previous_retry_count < _GAP_MAX_RETRIES
+                    ):
+                        gap["added_at"] = now_ms
                 if reason != GAP_REASON_AUTO:
                     gap["reason"] = reason
                 updated = True
@@ -2708,8 +2719,21 @@ class CandlestickManager:
         )
 
     def _should_retry_gap(self, gap: GapEntry) -> bool:
-        """Check if a gap should be retried (retry_count < max)."""
-        return gap.get("retry_count", 0) < _GAP_MAX_RETRIES
+        """Check if a gap should be retried."""
+        if int(gap.get("retry_count", 0)) < _GAP_MAX_RETRIES:
+            return True
+        return self._persistent_gap_retry_due(gap)
+
+    def _persistent_gap_retry_due(self, gap: GapEntry, *, now_ms: Optional[int] = None) -> bool:
+        reason = str(gap.get("reason", GAP_REASON_AUTO))
+        if reason in _GAP_NON_EXPIRING_REASONS:
+            return False
+        if int(gap.get("retry_count", 0)) < _GAP_MAX_RETRIES:
+            return False
+        if now_ms is None:
+            now_ms = int(time.time() * 1000)
+        added_at = int(gap.get("added_at", now_ms))
+        return now_ms - added_at >= _GAP_PERSISTENT_RETRY_MS
 
     def clear_known_gaps(
         self,
@@ -2792,7 +2816,11 @@ class CandlestickManager:
             }
 
         total_minutes = sum((g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1 for g in gaps)
-        persistent = sum(1 for g in gaps if g.get("retry_count", 0) >= _GAP_MAX_RETRIES)
+        persistent = sum(
+            1
+            for g in gaps
+            if g.get("retry_count", 0) >= _GAP_MAX_RETRIES and not self._should_retry_gap(g)
+        )
         retryable = len(gaps) - persistent
 
         by_reason: Dict[str, int] = {}
@@ -2813,7 +2841,8 @@ class CandlestickManager:
                     "minutes": (g["end_ts"] - g["start_ts"]) // ONE_MIN_MS + 1,
                     "retry_count": g.get("retry_count", 0),
                     "reason": g.get("reason", GAP_REASON_AUTO),
-                    "persistent": g.get("retry_count", 0) >= _GAP_MAX_RETRIES,
+                    "persistent": g.get("retry_count", 0) >= _GAP_MAX_RETRIES
+                    and not self._should_retry_gap(g),
                 }
                 for g in gaps
             ],
@@ -4904,12 +4933,19 @@ class CandlestickManager:
         arr = arr[(arr["ts"] >= start_ts) & (arr["ts"] <= end_ts)]
         if arr.size == 0:
             return np.empty((0,), dtype=CANDLE_DTYPE)
-        # For archive day data, we expect full day coverage - use fill_leading_gaps=True
+        # Archive rows are persisted as real cache data. Never synthesize edge rows here:
+        # on listing/delisting days, leading or trailing fills would turn future/old
+        # prices into apparently tradable historical candles. Internal no-trade gaps
+        # remain standardized between real candles.
         out = self.standardize_gaps(
-            arr, start_ts=start_ts, end_ts=end_ts, strict=False, fill_leading_gaps=True
+            arr,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            strict=False,
+            fill_leading_gaps=False,
+            fill_trailing_gaps=False,
         )
-        # Validate full-day coverage (best-effort; callers can fall back to ccxt).
-        if out.size != 1440 or int(out[0]["ts"]) != start_ts or int(out[-1]["ts"]) != end_ts:
+        if out.size == 0 or int(out[0]["ts"]) < start_ts or int(out[-1]["ts"]) > end_ts:
             return np.empty((0,), dtype=CANDLE_DTYPE)
         return out
 

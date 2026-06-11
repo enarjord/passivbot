@@ -673,7 +673,9 @@ class HLCVManager:
         return df.reset_index(drop=True)
 
     async def get_ohlcvs(self, coin: str, start_date=None, end_date=None) -> pd.DataFrame:
-        empty_df = pd.DataFrame(columns=["timestamp", "open", "high", "low", "close", "volume"])
+        empty_df = pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume", "valid"]
+        )
         if start_date is not None or end_date is not None:
             self.update_date_range(start_date, end_date)
         if not self.markets:
@@ -722,15 +724,18 @@ class HLCVManager:
                 )
                 if filled.size == 0:
                     return empty_df
+                real_ts = src["ts"].astype(np.int64, copy=False)
+                filled_ts = filled["ts"].astype(np.int64, copy=False)
 
                 df = pd.DataFrame(
                     {
-                        "timestamp": filled["ts"].astype(np.int64),
+                        "timestamp": filled_ts,
                         "open": filled["o"].astype(float),
                         "high": filled["h"].astype(float),
                         "low": filled["l"].astype(float),
                         "close": filled["c"].astype(float),
                         "volume": filled["bv"].astype(float),
+                        "valid": np.isin(filled_ts, real_ts),
                     }
                 )
                 logging.info(
@@ -845,14 +850,17 @@ class HLCVManager:
         )
         if filled.size == 0:
             return empty_df
+        real_ts = real["ts"].astype(np.int64, copy=False)
+        filled_ts = filled["ts"].astype(np.int64, copy=False)
         df = pd.DataFrame(
             {
-                "timestamp": filled["ts"].astype(np.int64),
+                "timestamp": filled_ts,
                 "open": filled["o"].astype(float),
                 "high": filled["h"].astype(float),
                 "low": filled["l"].astype(float),
                 "close": filled["c"].astype(float),
                 "volume": filled["bv"].astype(float),
+                "valid": np.isin(filled_ts, real_ts),
             }
         )
         return df.reset_index(drop=True)
@@ -2001,7 +2009,7 @@ async def _read_v2_range_repairing_corrupt_chunk(
         if not corrupt_chunks:
             raise
         logging.warning(
-            "[%s] corrupt v2 chunk(s) for %s; invalidating %d chunk(s) before full-chunk repair: %s",
+            "[%s] corrupt v2 chunk(s) for %s; repairing %d chunk(s) from remote before replacing local rows: %s",
             exchange,
             coin,
             len(corrupt_chunks),
@@ -2020,7 +2028,6 @@ async def _read_v2_range_repairing_corrupt_chunk(
                 persistent=False,
                 note=str(chunk_exc),
             )
-            store.invalidate_chunk(chunk)
             repaired = await _fetch_coin_range_into_v2_store(
                 om=om,
                 catalog=catalog,
@@ -3105,8 +3112,21 @@ async def prepare_hlcvs_internal(
                 om.update_date_range(adjusted_start_ts)
                 df = await om.get_ohlcvs(coin)
                 data = df[["timestamp", "high", "low", "close", "volume"]].values
+                if "valid" in df.columns:
+                    valid_mask = df["valid"].eq(True).to_numpy(dtype=bool)
+                else:
+                    valid_mask = np.ones(len(data), dtype=bool)
 
                 if len(data) == 0:
+                    return None
+                if valid_mask.shape[0] != len(data):
+                    raise HlcvsDataIntegrityError(
+                        f"{exchange} invalid HLCV valid mask length for {coin}: "
+                        f"{valid_mask.shape[0]} != {len(data)}"
+                    )
+                finite_values = np.isfinite(data[:, 1:].astype(np.float64, copy=False)).all(axis=1)
+                valid_mask &= finite_values
+                if not valid_mask.any():
                     return None
 
                 diffs = np.diff(data[:, 0].astype(np.int64, copy=False))
@@ -3121,6 +3141,8 @@ async def prepare_hlcvs_internal(
                         f"bad_steps={int(bad_steps.size)}"
                     )
 
+                data = data.astype(np.float64, copy=True)
+                data[~valid_mask, 1:] = np.nan
                 data_bounds = (data[0, 0], data[-1, 0])
 
                 return (coin, data, data_bounds)
@@ -3185,8 +3207,12 @@ async def prepare_hlcvs_internal(
         aligned = np.full((n_timesteps, 4), np.nan, dtype=np.float64)
         aligned[start_idx:end_idx, :] = coin_data
         aligned_values_by_coin[coin] = aligned
-        first_idx = int(start_idx)
-        last_idx = int(end_idx - 1)
+        valid_mask = np.isfinite(coin_data[:, 0])
+        valid_idx = np.flatnonzero(valid_mask)
+        if valid_idx.size == 0:
+            continue
+        first_idx = int(start_idx + int(valid_idx[0]))
+        last_idx = int(start_idx + int(valid_idx[-1]))
         warm_minutes = int(per_coin_warmups.get(coin, default_warm))
         trade_start_idx = first_idx + warm_minutes
         if trade_start_idx > last_idx:
