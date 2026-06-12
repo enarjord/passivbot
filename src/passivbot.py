@@ -6205,33 +6205,51 @@ class Passivbot:
             or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
         )
 
+    @staticmethod
+    def _parse_position_anchor_timestamp_ms(candidate) -> int | None:
+        if candidate is None or candidate == "" or isinstance(candidate, bool):
+            return None
+        try:
+            anchor_ts = int(float(candidate))
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return anchor_ts if anchor_ts > 0 else None
+
     def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
         position = self.positions.get(symbol, {}).get(pside, {})
         candidates = [
-            position.get("timestamp"),
-            position.get("timestamp_ms"),
             position.get("open_time"),
             position.get("openTime"),
             position.get("createdTime"),
-            position.get("updatedTime"),
         ]
         info = position.get("info")
         if isinstance(info, dict):
             candidates.extend(
                 [
-                    info.get("timestamp"),
-                    info.get("timestamp_ms"),
                     info.get("open_time"),
                     info.get("openTime"),
                     info.get("createdTime"),
-                    info.get("updatedTime"),
                 ]
             )
+        candidates.extend(
+            [
+                position.get("timestamp"),
+                position.get("timestamp_ms"),
+            ]
+        )
+        if isinstance(info, dict):
+            candidates.extend(
+                [
+                    info.get("timestamp"),
+                    info.get("timestamp_ms"),
+                ]
+            )
+        candidates.append(position.get("updatedTime"))
+        if isinstance(info, dict):
+            candidates.append(info.get("updatedTime"))
         for candidate in candidates:
-            if candidate is None or candidate == "":
-                continue
-            anchor_ts = int(float(candidate))
-            if anchor_ts > 0:
+            anchor_ts = self._parse_position_anchor_timestamp_ms(candidate)
+            if anchor_ts is not None:
                 return anchor_ts
         return None
 

@@ -15,7 +15,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 
-from candlestick_manager import CandlestickManager
+from candlestick_manager import CandlestickManager, OhlcvTerminalEmptyPage
 from backtest_dataset_materializer import BacktestDatasetMaterializer, materialize_frames
 from ohlcv_catalog import OhlcvCatalog
 from ohlcv_legacy_import import import_legacy_range_into_store
@@ -2525,6 +2525,115 @@ async def _fetch_invalid_windows_into_v2_store_results(
     return results
 
 
+def _terminal_empty_page_last_ts(exc: OhlcvTerminalEmptyPage) -> int | None:
+    rows = exc.partial_rows
+    if rows.size == 0:
+        return None
+    return int(rows[-1]["ts"])
+
+
+def _terminal_empty_page_note(exc: OhlcvTerminalEmptyPage) -> str:
+    last_ts = _terminal_empty_page_last_ts(exc)
+    return (
+        "terminal_empty_page "
+        f"boundary={int(exc.terminal_start_ts)} "
+        f"requested_end={int(exc.requested_end_ts)} "
+        f"rows={int(exc.partial_rows.size)} "
+        f"last_ts={last_ts if last_ts is not None else 'none'} "
+        f"pages={int(exc.pages)}"
+    )
+
+
+def _has_matching_terminal_empty_attempt(
+    previous_attempts,
+    *,
+    start_ts: int,
+    end_ts: int,
+    terminal_start_ts: int,
+    requested_end_ts: int,
+    last_ts: int | None,
+) -> bool:
+    required_tokens = [
+        f"boundary={int(terminal_start_ts)}",
+        f"requested_end={int(requested_end_ts)}",
+        f"last_ts={last_ts if last_ts is not None else 'none'}",
+    ]
+    for attempt in previous_attempts:
+        if getattr(attempt, "outcome", None) != "terminal_empty_page":
+            continue
+        if int(getattr(attempt, "start_ts", -1)) != int(start_ts):
+            continue
+        if int(getattr(attempt, "end_ts", -1)) != int(end_ts):
+            continue
+        note = str(getattr(attempt, "note", "") or "")
+        if all(token in note for token in required_tokens):
+            return True
+    return False
+
+
+def _short_tail_return_note(
+    *,
+    request_end_ts: int,
+    ts: np.ndarray,
+    interval_ms: int,
+    trailing_missing_bars: int,
+) -> str:
+    last_ts = int(ts[-1])
+    return (
+        "short_tail_return "
+        f"boundary={last_ts + int(interval_ms)} "
+        f"request_end={int(request_end_ts)} "
+        f"rows={int(ts.size)} "
+        f"last_ts={last_ts} "
+        f"trailing_missing_bars={int(trailing_missing_bars)}"
+    )
+
+
+def _has_matching_short_tail_attempt(
+    previous_attempts,
+    *,
+    start_ts: int,
+    end_ts: int,
+    boundary_ts: int,
+    request_end_ts: int,
+    last_ts: int,
+) -> bool:
+    required_tokens = [
+        f"boundary={int(boundary_ts)}",
+        f"request_end={int(request_end_ts)}",
+        f"last_ts={int(last_ts)}",
+    ]
+    for attempt in previous_attempts:
+        if getattr(attempt, "outcome", None) != "trailing_unavailable_unconfirmed":
+            continue
+        if int(getattr(attempt, "start_ts", -1)) != int(start_ts):
+            continue
+        if int(getattr(attempt, "end_ts", -1)) != int(end_ts):
+            continue
+        note = str(getattr(attempt, "note", "") or "")
+        if all(token in note for token in required_tokens):
+            return True
+    return False
+
+
+def _terminal_empty_page_df(exc: OhlcvTerminalEmptyPage) -> pd.DataFrame:
+    rows = exc.partial_rows
+    if rows.size == 0:
+        return pd.DataFrame(
+            columns=["timestamp", "open", "high", "low", "close", "volume"]
+        )
+    return pd.DataFrame(
+        {
+            "timestamp": rows["ts"].astype(np.int64, copy=False),
+            "open": rows["o"].astype(float, copy=False),
+            "high": rows["h"].astype(float, copy=False),
+            "low": rows["l"].astype(float, copy=False),
+            "close": rows["c"].astype(float, copy=False),
+            "volume": rows["bv"].astype(float, copy=False),
+        }
+    ).reset_index(drop=True)
+
+
 async def _fetch_coin_range_into_v2_store(
     *,
     om: HLCVManager,
@@ -2545,13 +2654,48 @@ async def _fetch_coin_range_into_v2_store(
     else:
         om.update_date_range(start_ts, end_ts)
     fetch_started = time.perf_counter()
-    attempt = len(catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)) + 1
+    previous_attempts = catalog.list_fetch_attempts(exchange, "1m", symbol, start_ts, end_ts)
+    attempt = len(previous_attempts) + 1
+    latency_ms: int | None = None
+    terminal_empty_confirmed = False
+    terminal_empty_note: str | None = None
     try:
         v2_fetcher = getattr(om, "fetch_ohlcvs_for_v2_store", None)
         if callable(v2_fetcher):
             df = await v2_fetcher(coin, start_ts=start_ts, end_ts=end_ts)
         else:
             df = await om.get_ohlcvs(coin)
+    except OhlcvTerminalEmptyPage as exc:
+        latency_ms = int(round((time.perf_counter() - fetch_started) * 1000.0))
+        terminal_empty_note = _terminal_empty_page_note(exc)
+        last_ts = _terminal_empty_page_last_ts(exc)
+        if not _has_matching_terminal_empty_attempt(
+            previous_attempts,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            terminal_start_ts=exc.terminal_start_ts,
+            requested_end_ts=exc.requested_end_ts,
+            last_ts=last_ts,
+        ):
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="terminal_empty_page",
+                latency_ms=latency_ms,
+                note=terminal_empty_note,
+            )
+            return V2FetchResult(
+                False,
+                "terminal_empty_unconfirmed",
+                first_ts=int(exc.partial_rows[0]["ts"]) if exc.partial_rows.size else None,
+                last_ts=last_ts,
+            )
+        terminal_empty_confirmed = True
+        df = _terminal_empty_page_df(exc)
     except Exception as exc:
         latency_ms = int(round((time.perf_counter() - fetch_started) * 1000.0))
         catalog.record_fetch_attempt(
@@ -2575,7 +2719,8 @@ async def _fetch_coin_range_into_v2_store(
             end_ts=end_ts,
         )
         raise
-    latency_ms = int(round((time.perf_counter() - fetch_started) * 1000.0))
+    if latency_ms is None:
+        latency_ms = int(round((time.perf_counter() - fetch_started) * 1000.0))
     if df.empty:
         catalog.record_fetch_attempt(
             exchange=exchange,
@@ -2871,6 +3016,50 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(start_ts),
             ts_to_date(end_ts),
         )
+    trailing_unavailable = (
+        trailing_missing_bars > gap_tolerance_bars
+        and not has_internal_gaps
+        and not leading_unavailable
+        and not pre_inception_prefix_boundary
+        and not allow_unbounded_edge_gaps
+    )
+    short_tail_confirmed = False
+    short_tail_note: str | None = None
+    if trailing_unavailable and not terminal_empty_confirmed:
+        tail_boundary_ts = int(ts[-1]) + interval_ms
+        short_tail_note = _short_tail_return_note(
+            request_end_ts=request_end_ts,
+            ts=ts,
+            interval_ms=interval_ms,
+            trailing_missing_bars=trailing_missing_bars,
+        )
+        if not _has_matching_short_tail_attempt(
+            previous_attempts,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            boundary_ts=tail_boundary_ts,
+            request_end_ts=request_end_ts,
+            last_ts=int(ts[-1]),
+        ):
+            catalog.record_fetch_attempt(
+                exchange=exchange,
+                timeframe="1m",
+                symbol=symbol,
+                start_ts=start_ts,
+                end_ts=end_ts,
+                attempt=attempt,
+                outcome="trailing_unavailable_unconfirmed",
+                latency_ms=latency_ms,
+                note=short_tail_note,
+            )
+            return V2FetchResult(
+                False,
+                "trailing_unavailable_unconfirmed",
+                first_ts=int(ts[0]),
+                last_ts=int(ts[-1]),
+                trailing_missing_bars=trailing_missing_bars,
+            )
+        short_tail_confirmed = True
     values = np.column_stack(
         [
             df["high"].astype(np.float32, copy=False).to_numpy(),
@@ -2899,6 +3088,12 @@ async def _fetch_coin_range_into_v2_store(
             attempt=attempt,
             leading_reason="pre_inception" if pre_inception_prefix_boundary else "leading_unavailable",
             mark_leading_unavailable=leading_missing_bars > gap_tolerance_bars,
+            mark_trailing_unavailable=not allow_unbounded_edge_gaps,
+            trailing_note=(
+                terminal_empty_note
+                if terminal_empty_confirmed
+                else short_tail_note if short_tail_confirmed else None
+            ),
         )
     outcome = "sparse_ok" if sparse_missing_bars else "ok"
     reason = "ok"
@@ -2908,11 +3103,21 @@ async def _fetch_coin_range_into_v2_store(
     elif leading_unavailable:
         outcome = "leading_unavailable"
         reason = "leading_unavailable"
-    elif trailing_missing_bars > gap_tolerance_bars and not has_internal_gaps:
+    elif trailing_unavailable:
         outcome = "trailing_unavailable"
         reason = "trailing_unavailable"
     elif has_internal_gaps:
         reason = "internal_gaps"
+    note_parts = [
+        f"rows={len(ts)} missing_bars={sparse_missing_bars}",
+        f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars}",
+        f"normalized_duplicates={raw_duplicate_count}",
+        f"normalized_descending={raw_descending_count} clipped_rows={clipped_count}",
+    ]
+    if terminal_empty_confirmed and terminal_empty_note:
+        note_parts.append(f"confirmed_{terminal_empty_note}")
+    if short_tail_confirmed and short_tail_note:
+        note_parts.append(f"confirmed_{short_tail_note}")
     catalog.record_fetch_attempt(
         exchange=exchange,
         timeframe="1m",
@@ -2922,12 +3127,7 @@ async def _fetch_coin_range_into_v2_store(
         attempt=attempt,
         outcome=outcome,
         latency_ms=latency_ms,
-        note=(
-            f"rows={len(ts)} missing_bars={sparse_missing_bars} "
-            f"edge_missing_bars={leading_missing_bars},{trailing_missing_bars} "
-            f"normalized_duplicates={raw_duplicate_count} "
-            f"normalized_descending={raw_descending_count} clipped_rows={clipped_count}"
-        ),
+        note=" ".join(note_parts),
     )
     return V2FetchResult(
         True,
@@ -2953,6 +3153,8 @@ def _mark_sparse_fetch_gaps(
     attempt: int,
     leading_reason: str,
     mark_leading_unavailable: bool = True,
+    mark_trailing_unavailable: bool = True,
+    trailing_note: str | None = None,
 ) -> None:
     interval_ms = 60_000 if str(timeframe) == "1m" else timeframe_to_interval_ms(timeframe)
     sorted_ts = np.asarray(ts, dtype=np.int64)
@@ -2973,7 +3175,7 @@ def _mark_sparse_fetch_gaps(
             gap_end = int(sorted_ts[int(idx) + 1] - interval_ms)
             if gap_end >= gap_start:
                 gaps.append((gap_start, gap_end, "internal_gap"))
-    if last_ts < int(request_end_ts):
+    if mark_trailing_unavailable and last_ts < int(request_end_ts):
         gaps.append((last_ts + interval_ms, int(request_end_ts), "trailing_unavailable"))
     for gap_start, gap_end, reason in gaps:
         if gap_end < gap_start:
@@ -2987,7 +3189,7 @@ def _mark_sparse_fetch_gaps(
             reason=reason,
             persistent=True,
             retry_count=int(attempt),
-            note="confirmed_by_v2_fetch",
+            note=trailing_note if reason == "trailing_unavailable" and trailing_note else "confirmed_by_v2_fetch",
         )
 
 

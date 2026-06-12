@@ -817,26 +817,34 @@ async def calc_orders_to_cancel_and_create(bot):
                 )
             )
             continue
-        if symbol in trailing_unavailable_symbols:
-            blocked_total = len(symbol_orders) + len(ideal_list)
-            plan_summaries.append(
-                (
-                    symbol,
-                    len(symbol_orders),
-                    0,
-                    len(ideal_list),
-                    0,
-                    blocked_total,
-                )
-            )
-            continue
         cancel_, create_ = bot._reconcile_symbol_orders(
             symbol, symbol_orders, ideal_list, keys
         )
-        cancel_, create_ = bot._annotate_order_deltas(cancel_, create_)
         pre_cancel = len(cancel_)
         pre_create = len(create_)
+        trailing_skipped = 0
+        if symbol in trailing_unavailable_symbols:
+            cancel_, create_, trailing_skipped, fully_blocked = (
+                filter_trailing_unavailable_reconciliation(
+                    bot, symbol, cancel_, create_, ideal_list
+                )
+            )
+            if fully_blocked:
+                blocked_total = len(symbol_orders) + len(ideal_list)
+                plan_summaries.append(
+                    (
+                        symbol,
+                        len(symbol_orders),
+                        0,
+                        len(ideal_list),
+                        0,
+                        blocked_total,
+                    )
+                )
+                continue
+        cancel_, create_ = bot._annotate_order_deltas(cancel_, create_)
         cancel_, create_, skipped = bot._apply_order_match_tolerance(cancel_, create_)
+        skipped += trailing_skipped
         plan_summaries.append(
             (symbol, pre_cancel, len(cancel_), pre_create, len(create_), skipped)
         )
@@ -1017,6 +1025,82 @@ def reconcile_symbol_orders(
     to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
     to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
     return to_cancel, to_create
+
+
+def _order_is_reduce_only(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    reduced = extract_order_reduce_only(order)
+    if reduced is not None:
+        return bool(reduced)
+    side = str(order.get("side") or "").lower()
+    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
+    return (pside == "long" and side == "sell") or (pside == "short" and side == "buy")
+
+
+def _order_is_panic(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return "panic" in pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        return False
+    try:
+        return "panic" in str(_pb_attr("custom_id_to_snake")(custom_id))
+    except Exception:
+        return False
+
+
+def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
+    by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_reasons", {}) or {}
+    reasons = by_symbol.get(symbol, []) if isinstance(by_symbol, dict) else []
+    if isinstance(reasons, str):
+        return {reasons}
+    return {str(reason) for reason in reasons if reason}
+
+
+def filter_trailing_unavailable_reconciliation(
+    bot,
+    symbol: str,
+    to_cancel: list[dict],
+    to_create: list[dict],
+    ideal_orders: list[dict],
+) -> tuple[list[dict], list[dict], int, bool]:
+    """Constrain reconciliation when trailing data is unavailable.
+
+    Missing anchors/fetch failures can make regular trailing closes unsafe, so keep
+    preserving the symbol. The short post-fill window with no newer candle is softer:
+    block new entries, but allow entry cleanup and reduce-only/panic exits.
+    """
+    reasons = _trailing_unavailable_reasons(bot, symbol)
+    has_panic_plan = any(_order_is_panic(order) for order in ideal_orders) or any(
+        _order_is_panic(order) for order in to_create
+    )
+    soft_missing_candles_only = reasons == {"missing_trailing_candles"}
+    if not soft_missing_candles_only and not has_panic_plan:
+        return [], [], len(to_cancel) + len(to_create), True
+
+    filtered_create = [
+        order
+        for order in to_create
+        if _order_is_reduce_only(order) or _order_is_panic(order)
+    ]
+    dropped_create = len(to_create) - len(filtered_create)
+
+    if has_panic_plan:
+        return to_cancel, filtered_create, dropped_create, False
+
+    ideal_has_reduce_only = any(_order_is_reduce_only(order) for order in ideal_orders)
+    filtered_cancel = []
+    dropped_cancel = 0
+    for order in to_cancel:
+        if _order_is_reduce_only(order) and not ideal_has_reduce_only:
+            dropped_cancel += 1
+            continue
+        filtered_cancel.append(order)
+    return filtered_cancel, filtered_create, dropped_cancel + dropped_create, False
 
 
 def annotate_order_deltas(

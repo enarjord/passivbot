@@ -84,6 +84,25 @@ class OhlcvFetchError(RuntimeError):
     """Raised when a remote OHLCV fetch exhausts retries without a successful response."""
 
 
+class OhlcvTerminalEmptyPage(OhlcvFetchError):
+    """Raised when pagination reaches a terminal empty page after fetching rows."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        partial_rows: np.ndarray,
+        terminal_start_ts: int,
+        requested_end_ts: int,
+        pages: int,
+    ) -> None:
+        super().__init__(message)
+        self.partial_rows = partial_rows
+        self.terminal_start_ts = int(terminal_start_ts)
+        self.requested_end_ts = int(requested_end_ts)
+        self.pages = int(pages)
+
+
 _LOCK_STALE_SECONDS = 180.0
 
 
@@ -3963,6 +3982,24 @@ class CandlestickManager:
         pages = 0
         prev_last_ts: Optional[int] = None
         total_span = max(1, end_excl - since_start)
+
+        def _partial_rows() -> np.ndarray:
+            if not all_rows:
+                return np.empty((0,), dtype=CANDLE_DTYPE)
+            return np.sort(np.concatenate(all_rows), order="ts")
+
+        def _raise_terminal_empty_page(message: str) -> None:
+            raise OhlcvTerminalEmptyPage(
+                (
+                    f"{message} | exchange={self._ex_id} symbol={symbol} "
+                    f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                ),
+                partial_rows=_partial_rows(),
+                terminal_start_ts=since,
+                requested_end_ts=end_excl,
+                pages=pages,
+            )
+
         while since < end_excl:
             self._raise_if_shutdown_requested("fetch_ohlcv_paginated")
             # Bitget auto-probe: try a larger limit once to see if the API supports it.
@@ -3980,19 +4017,17 @@ class CandlestickManager:
             )
             if not page:
                 if raise_on_partial_empty_page and pages > 0:
-                    raise OhlcvFetchError(
+                    _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned an empty page before reaching "
-                        f"the requested end | exchange={self._ex_id} symbol={symbol} "
-                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                        "the requested end"
                     )
                 break
             arr = self._normalize_ccxt_ohlcv(page)
             if arr.size == 0:
                 if raise_on_partial_empty_page and pages > 0:
-                    raise OhlcvFetchError(
+                    _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned an empty normalized page before "
-                        f"reaching the requested end | exchange={self._ex_id} symbol={symbol} "
-                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                        "reaching the requested end"
                     )
                 break
             if probe_limit is not None and not self._ccxt_limit_probe_done:
@@ -4024,10 +4059,9 @@ class CandlestickManager:
             arr = arr[arr["ts"] < end_excl]
             if arr.size == 0:
                 if raise_on_partial_empty_page and pages > 0:
-                    raise OhlcvFetchError(
+                    _raise_terminal_empty_page(
                         "ccxt OHLCV pagination returned only out-of-range candles before "
-                        f"reaching the requested end | exchange={self._ex_id} symbol={symbol} "
-                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                        "reaching the requested end"
                     )
                 break
             # Diagnostics: page ts range and step

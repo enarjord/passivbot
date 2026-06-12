@@ -881,6 +881,36 @@ async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch
     assert any("missing_position_change_anchor" in record.message for record in caplog.records)
 
 
+def test_position_anchor_timestamp_skips_malformed_candidates():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"].update(
+        {
+            "openTime": "2026-06-12T12:00:00Z",
+            "timestamp": "not-a-number",
+            "info": {"openTime": "120000"},
+        }
+    )
+
+    assert bot._position_anchor_timestamp_ms(symbol, "long") == 120_000
+
+
+def test_position_anchor_timestamp_prefers_open_fields_over_update_fields():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"].update(
+        {
+            "openTime": "120000",
+            "timestamp": "240000",
+            "updatedTime": "360000",
+        }
+    )
+
+    assert bot._position_anchor_timestamp_ms(symbol, "long") == 120_000
+
+
 @pytest.mark.asyncio
 async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_of_window(
     monkeypatch,

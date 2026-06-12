@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from candlestick_manager import OhlcvFetchError
+from candlestick_manager import CANDLE_DTYPE, OhlcvFetchError, OhlcvTerminalEmptyPage
 from hlcv_preparation import (
     HLCVManager,
     _dense_hlcv_frame_from_sparse_v2_range,
@@ -277,7 +277,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_edge_sparse_within_toleran
 
 
 @pytest.mark.asyncio
-async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(tmp_path):
+async def test_fetch_coin_range_short_tail_requires_corroboration(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
     start_ts = month_start_ts(2026, 4)
@@ -303,7 +303,7 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
             )
 
     manager = FakeOhlcvManager()
-    result = await _fetch_coin_range_into_v2_store(
+    first = await _fetch_coin_range_into_v2_store(
         om=manager,
         catalog=catalog,
         store=store,
@@ -314,14 +314,129 @@ async def test_fetch_coin_range_into_v2_store_accepts_trailing_unavailable_tail(
         end_ts=end_ts,
     )
 
-    assert result.ok
-    assert result.reason == "trailing_unavailable"
+    assert not first.ok
+    assert first.reason == "trailing_unavailable_unconfirmed"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "trailing_unavailable_unconfirmed"
+    assert "short_tail_return" in (attempts[-1].note or "")
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    assert second.reason == "trailing_unavailable"
     attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     assert attempts[-1].outcome == "trailing_unavailable"
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
     gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
     assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
         (start_ts + 2 * 60_000, end_ts, "trailing_unavailable")
     ]
+    assert "short_tail_return" in (gaps[-1].note or "")
+
+    resolved = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=False,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+    assert resolved is not None
+    np.testing.assert_array_equal(
+        resolved.valid,
+        np.array([True, True, False, False, False, False]),
+    )
+
+
+@pytest.mark.asyncio
+async def test_fetch_coin_range_terminal_empty_tail_requires_corroboration(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 5 * 60_000
+    terminal_start_ts = start_ts + 2 * 60_000
+    partial_rows = np.array(
+        [
+            (start_ts, 100.0, 101.0, 99.0, 100.0, 10.0),
+            (start_ts + 60_000, 101.0, 102.0, 100.0, 101.0, 11.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    class TerminalEmptyOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            raise OhlcvTerminalEmptyPage(
+                "ccxt OHLCV pagination returned an empty page before reaching the requested end",
+                partial_rows=partial_rows,
+                terminal_start_ts=terminal_start_ts,
+                requested_end_ts=end_ts + 60_000,
+                pages=1,
+            )
+
+    manager = TerminalEmptyOhlcvManager()
+
+    first = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert not first.ok
+    assert first.reason == "terminal_empty_unconfirmed"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "terminal_empty_page"
+    assert "boundary=" in (attempts[-1].note or "")
+    assert catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts) == []
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    assert second.reason == "trailing_unavailable"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "trailing_unavailable"
+    assert "confirmed_terminal_empty_page" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (terminal_start_ts, end_ts, "trailing_unavailable")
+    ]
+    assert "terminal_empty_page" in (gaps[-1].note or "")
 
     resolved = await _resolve_v2_store_range(
         om=manager,
