@@ -40,6 +40,9 @@ All notable user-facing changes will be documented in this file.
 - Updated user-facing docs for current CLI logging flags, custom endpoint setup,
   backtest exchange naming, suite exchange expansion, uncovered tool commands, and
   current Forager/indicator wording.
+- Clarified v7 TWEL enforcer docs: `risk_twel_enforcer_threshold < 1.0` is an
+  auto-reduce trigger, not a thresholded no-entry mode, so entry refills may
+  interact with TWEL auto-reduce until raw TWEL is reached.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.

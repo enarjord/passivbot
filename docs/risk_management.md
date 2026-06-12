@@ -138,7 +138,16 @@ The bot reduces positions, starting with the **least underwater** ones first (fo
 * `1.0`: Strictly enforces the total limit.
 * `> 1.0`: Allows some overflow (e.g., during extreme volatility) before forced reduction occurs.
 
-This portfolio trimming mechanism pairs well with the excess allowance. When TWE hits TWEL and new orders are blocked, the TWEL enforcer will start chipping away at the least underwater positions to free up margin, even if those positions are technically within their per-position effective exposure limit.
+Current v7 caveat: this threshold is an auto-reduce trigger, not a thresholded
+entry-blocking policy. The global entry gate still uses raw TWEL. With
+`risk_twel_enforcer_threshold < 1.0`, entries may refill exposure between
+`total_wallet_exposure_limit * risk_twel_enforcer_threshold` and raw
+`total_wallet_exposure_limit`, while TWEL auto-reduce orders trim the least
+underwater positions. This trim/refill interaction can be intentional for some
+aggressive risk settings, but may also create repeated small realized losses and
+fees. If that is not desired in v7, use `risk_twel_enforcer_threshold = 1.0`,
+disable TWEL auto-reduce, or switch the side to `tp_only`/manual intervention
+while exposure is reduced.
 
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.

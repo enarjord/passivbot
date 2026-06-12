@@ -168,7 +168,9 @@ trimming behaviour; values above `1.0` create an additional grace margin.
 ## TWEL Enforcer (Auto Reduce)
 
 The “Total Wallet Exposure Limit” enforcer keeps the sum of exposures below
-`total_wallet_exposure_limit * risk_twel_enforcer_threshold`.  For each position:
+`total_wallet_exposure_limit * risk_twel_enforcer_threshold` by emitting
+reduce-only orders when the current portfolio exposure is above that threshold.
+For each position:
 
 ```text
 exposure_i      = wallet_exposure(...)
@@ -193,6 +195,15 @@ order_type = CloseAutoReduceTwel{Long,Short}
 
 By construction the quantity never exceeds the live position size.
 Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling cycle are skipped so that reductions do not double-up; they can be considered again on subsequent iterations once the WEL order has been filled.
+
+Current v7 caveat: `risk_twel_enforcer_threshold < 1.0` is an auto-reduce
+trigger, not a thresholded no-entry mode. The global entry gate still uses raw
+`total_wallet_exposure_limit`, so entries may refill exposure in the band between
+`total_wallet_exposure_limit * risk_twel_enforcer_threshold` and raw
+`total_wallet_exposure_limit` while TWEL auto-reduce orders are also being
+emitted. Set `risk_twel_enforcer_threshold = 1.0`, disable TWEL auto-reduce, or
+use a manual/`tp_only` intervention if this trim/refill interaction is
+undesirable for a v7 live bot.
 
 ## Parameter Interactions at a Glance
 
