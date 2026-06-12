@@ -253,6 +253,47 @@ async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
     ]
 
 
+@pytest.mark.asyncio
+async def test_calc_orders_preserves_orders_when_trailing_anchor_unavailable():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+
+    bot.open_orders[symbol] = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 101.0,
+            "custom_id": "order-0x0004",
+        }
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    103.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert to_create == []
+
+
 def test_to_executable_orders_respects_rust_market_execution_hint():
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})

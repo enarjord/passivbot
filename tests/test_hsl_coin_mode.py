@@ -43,6 +43,9 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_build_latch_payload",
         "_equity_hard_stop_check_coin",
         "_equity_hard_stop_clear_coin_runtime_forced_mode",
+        "_equity_hard_stop_compute_coin_stop_event",
+        "_equity_hard_stop_finalize_coin_red_stop",
+        "_equity_hard_stop_latest_panic_fill_timestamp_ms",
         "_equity_hard_stop_log_coin_cooldown_status",
         "_equity_hard_stop_make_state",
         "_equity_hard_stop_prime_coin_runtime_for_replay",
@@ -301,11 +304,121 @@ async def test_coin_hsl_history_replay_latches_red_without_panic_marker():
     assert state["runtime"].red_latched() is True
     assert state["runtime"].tier() == "red"
     assert state["pending_red_since_ms"] == 120_000
-    assert state["pending_stop_event"] is not None
-    assert state["pending_stop_event"]["symbol"] == symbol
-    assert state["pending_stop_event"]["drawdown_raw"] == pytest.approx(0.8)
+    assert state["pending_stop_event"] is None
     assert bot._runtime_forced_modes["long"][symbol] == "panic"
     assert bot._equity_hard_stop_coin_red_active() is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_check_defers_stop_event_until_flat_confirmation():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    bot.get_exchange_time = lambda: 180_000
+
+    async def calc_upnl(pside=None, symbol=None):
+        return -80.0
+
+    async def fail_compute(*_args, **_kwargs):
+        raise AssertionError("coin HSL must not snapshot stop event at RED trigger time")
+
+    bot._calc_upnl_sum_strict = calc_upnl
+    bot._equity_hard_stop_compute_coin_stop_event = fail_compute
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long",
+        symbol,
+        60_000,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+
+    out = await bot._equity_hard_stop_check_coin()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert out[f"long:{symbol}"]["tier"] == "red"
+    assert state["pending_red_since_ms"] == 180_000
+    assert state["pending_stop_event"] is None
+    assert bot._runtime_forced_modes["long"][symbol] == "panic"
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.get_exchange_time = lambda: 180_000
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    bot._pnls_manager = SimpleNamespace(
+        get_events=lambda: [
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "pb_order_type": "close_panic_long",
+                "pnl": -12.0,
+                "fee_paid": -0.1,
+            }
+        ]
+    )
+
+    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol)
+
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 170_000
+    assert state["pnl_reset_timestamp_ms"] == 170_001
+    assert state["cooldown_until_ms"] == 470_000
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points():
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.config["live"]["pnls_max_lookback_days"] = 1.0 / 1440.0
+    bot.get_exchange_time = lambda: 240_000
+    fill_events = [
+        {"timestamp": 120_000, "symbol": symbol, "pside": "long", "pnl": -20.0},
+        {"timestamp": 240_000, "symbol": symbol, "pside": "long", "pnl": -35.0},
+    ]
+    bot._pnls_manager = SimpleNamespace(get_events=lambda: fill_events)
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": -20.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -20.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 240_000,
+                    "balance": 100.0,
+                    "realized_pnl": -55.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -55.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": fill_events,
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["runtime"].red_latched() is False
+    assert state["last_metrics"]["realized_pnl"] == pytest.approx(-35.0)
+    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.35)
 
 
 @pytest.mark.asyncio

@@ -76,7 +76,13 @@ class TestSuiteMetricsToStatsAggregate:
     def _entry_with_metrics_format(self, aggregated_value=None):
         """Build an entry in the 'metrics' suite_metrics format."""
         payload = {
-            "stats": {"mean": 100.0, "min": 50.0, "max": 200.0, "std": 30.0},
+            "stats": {
+                "mean": 100.0,
+                "min": 50.0,
+                "max": 200.0,
+                "std": 30.0,
+                "median": 100.0,
+            },
             "scenarios": {},
         }
         if aggregated_value is not None:
@@ -136,6 +142,7 @@ class TestSuiteMetricsToStatsAggregate:
                             "min": 100.0,
                             "max": 500.0,
                             "std": 80.0,
+                            "median": 300.0,
                         },
                     },
                     # No "aggregated" key
@@ -158,7 +165,11 @@ class TestAggregateMetricsConfig:
             ScenarioResult(
                 scenario=SuiteScenario(f"s{i}", None, None, None, None),
                 per_exchange={},
-                metrics={"stats": {metric_name: {"mean": v, "min": v, "max": v, "std": 0.0}}},
+                metrics={
+                    "stats": {
+                        metric_name: {"mean": v, "min": v, "max": v, "std": 0.0, "median": v}
+                    }
+                },
                 elapsed_seconds=0.0,
                 output_path=None,
             )
@@ -291,12 +302,14 @@ class TestCalcFitnessAggregateOverride:
                 "min": 100.0,
                 "max": 300.0,
                 "std": 50.0,
+                "median": 150.0,
             },
             "adg_pnl": {
                 "mean": 0.001,
                 "min": 0.0005,
                 "max": 0.0015,
                 "std": 0.0002,
+                "median": 0.001,
             },
         }
         aggregated_values = {
@@ -346,6 +359,7 @@ class TestObjectivesNotDoubleCorrected:
                     "min": mean_values[sk] * 0.5,
                     "max": max_values[sk],
                     "std": 10.0,
+                    "median": mean_values[sk],
                 },
                 "aggregated": (
                     max_values[sk]

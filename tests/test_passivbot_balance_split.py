@@ -3003,7 +3003,13 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
             return {}
 
         def live_value(self, key):
-            return False
+            values = {
+                "max_realized_loss_pct": 0.0,
+                "filter_by_min_effective_cost": False,
+                "market_orders_allowed": False,
+                "market_order_near_touch_threshold": 0.0,
+            }
+            return values.get(key, False)
 
         def _log_realized_loss_gate_blocks(self, out, idx_to_symbol):
             return None
@@ -3046,6 +3052,23 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
     await method(FakeBot(), snapshot, return_snapshot=False)
 
     assert "market_order_slippage_pct" not in captured["input"]["global"]
+    assert captured["input"]["global"]["max_realized_loss_pct"] == pytest.approx(0.0)
+
+
+def test_live_max_realized_loss_pct_preserves_zero_and_defaults_none():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        def __init__(self, value):
+            self.value = value
+
+        def live_value(self, key):
+            assert key == "max_realized_loss_pct"
+            return self.value
+
+    helper = pb_mod.Passivbot._live_max_realized_loss_pct
+    assert helper(FakeBot(0.0)) == pytest.approx(0.0)
+    assert helper(FakeBot(None)) == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -3232,6 +3255,20 @@ async def test_orchestrator_snapshot_payload_includes_exchange_fees(monkeypatch)
     exchange = captured["input"]["symbols"][0]["exchange"]
     assert exchange["maker_fee"] == pytest.approx(0.0001)
     assert exchange["taker_fee"] == pytest.approx(0.0004)
+
+
+def test_orchestrator_exchange_params_require_live_fee_metadata():
+    symbol = "BTC/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.markets_dict = {symbol: {"maker": 0.0001}}
+    bot.qty_steps = {symbol: 0.001}
+    bot.price_steps = {symbol: 0.1}
+    bot.min_qtys = {symbol: 0.001}
+    bot.min_costs = {symbol: 5.0}
+    bot.c_mults = {symbol: 1.0}
+
+    with pytest.raises(ValueError, match="missing taker_fee"):
+        Passivbot._orchestrator_exchange_params(bot, symbol)
 
 
 def test_unstuck_logging_peak_stays_stable_when_profit_updates_both_balance_and_pnl():

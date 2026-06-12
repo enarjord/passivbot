@@ -1890,6 +1890,24 @@ def prep_backtest_args(
                 coin_specific_bot_params[pside]["wallet_exposure_limit"] = -1.0
         bot_params_list.append(coin_specific_bot_params)
         strategy_params_list.append(coin_specific_strategy_params)
+    maker_fee_override = get_optional_config_value(
+        config, "backtest.maker_fee_override", None
+    )
+    taker_fee_override = get_optional_config_value(
+        config, "backtest.taker_fee_override", None
+    )
+    maker_fee = _resolve_single_backtest_fee(
+        coins=coins,
+        mss=mss,
+        fee_kind="maker",
+        override_value=maker_fee_override,
+    )
+    taker_fee = _resolve_single_backtest_fee(
+        coins=coins,
+        mss=mss,
+        fee_kind="taker",
+        override_value=taker_fee_override,
+    )
     if exchange_params is None:
         exchange_params = [
             {
@@ -1898,12 +1916,8 @@ def prep_backtest_args(
                 "min_qty": mss[coin]["min_qty"],
                 "min_cost": mss[coin]["min_cost"],
                 "c_mult": mss[coin]["c_mult"],
-                "maker_fee": float(
-                    mss[coin].get("maker_fee", mss[coin].get("maker", 0.0002))
-                ),
-                "taker_fee": float(
-                    mss[coin].get("taker_fee", mss[coin].get("taker", 0.00055))
-                ),
+                "maker_fee": float(maker_fee),
+                "taker_fee": float(taker_fee),
             }
             for coin in coins
         ]
@@ -2002,24 +2016,6 @@ def prep_backtest_args(
         )
         if btc_collateral_ltv_cap is not None:
             btc_collateral_ltv_cap = float(btc_collateral_ltv_cap)
-        maker_fee_override = get_optional_config_value(
-            config, "backtest.maker_fee_override", None
-        )
-        taker_fee_override = get_optional_config_value(
-            config, "backtest.taker_fee_override", None
-        )
-        maker_fee = _resolve_single_backtest_fee(
-            coins=coins,
-            mss=mss,
-            fee_kind="maker",
-            override_value=maker_fee_override,
-        )
-        taker_fee = _resolve_single_backtest_fee(
-            coins=coins,
-            mss=mss,
-            fee_kind="taker",
-            override_value=taker_fee_override,
-        )
         backtest_params = {
             "starting_balance": require_config_value(config, "backtest.starting_balance"),
             "strategy_kind": strategy_kind,

@@ -1,6 +1,7 @@
 import json
 
 import pytest
+import utils
 
 from custom_endpoint_overrides import (
     CustomEndpointConfig,
@@ -154,6 +155,23 @@ def test_configured_loader_raises_on_malformed_endpoint_file(tmp_path):
 
     with pytest.raises(CustomEndpointConfigError, match="failed to parse custom endpoint config"):
         get_cached_custom_endpoint_config()
+
+
+def test_load_ccxt_instance_raises_on_malformed_custom_endpoint_file(monkeypatch, tmp_path):
+    config_path = tmp_path / "custom_endpoints.json"
+    config_path.write_text("{not json", encoding="utf-8")
+
+    class DummyExchange:
+        def __init__(self, _config):
+            self.options = {}
+            self.urls = {"api": {}}
+            self.headers = {}
+
+    monkeypatch.setattr(utils.ccxt, "binanceusdm", DummyExchange, raising=False)
+    configure_custom_endpoint_loader(str(config_path), autodiscover=False, preloaded=None)
+
+    with pytest.raises(CustomEndpointConfigError, match="failed to parse custom endpoint config"):
+        utils.load_ccxt_instance("binanceusdm")
 
 
 def test_apply_rest_overrides_raises_on_invalid_ccxt_api_urls():

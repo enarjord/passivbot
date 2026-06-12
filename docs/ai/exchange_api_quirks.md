@@ -45,6 +45,19 @@ Primary reference: `src/fill_events_manager.py` (`BybitFetcher._fetch_positions_
 
 ## KuCoin Futures
 
+### Hedge-mode refresh
+
+Problem:
+
+1. `set_position_mode(True)` is trading-critical setup, but broad no-op swallowing can hide a real one-way/hedge mismatch.
+2. KuCoin order and fill payloads must carry `positionSide` in hedge mode; otherwise a both-sides-open account cannot safely infer an order's position side.
+
+Handling:
+
+1. Treat current same-mode success as success (`code=200000`, `data.positionMode=1`).
+2. Let unknown `set_position_mode` failures raise unless a verified KuCoin no-op code is added with a targeted test.
+3. Prefer explicit `info.positionSide`/`info.posSide` before position-state inference; raise on ambiguous both-sides-open orders without an explicit hedge side.
+
 ### OHLCV limit behavior + sparse-minute markets
 
 Problem:
@@ -58,6 +71,19 @@ Handling:
 2. Overlap page boundaries by 1 candle to validate inter-page gaps.
 
 ## Bitget Futures
+
+### Hedge-mode refresh
+
+Problem:
+
+1. Bitget hedge-side attribution depends on `posSide`/`holdSide` payload fields.
+2. Broadly swallowing hedge-mode setup errors can mask an unsafe one-way/hedge mismatch.
+
+Handling:
+
+1. Treat current same-mode success as success (`code=00000`, `data.posMode=hedge_mode`).
+2. Let unknown `set_position_mode` failures raise unless a verified Bitget no-op code is added with a targeted test.
+3. Require explicit side-disambiguating payloads for order/fill normalization instead of defaulting to long; open orders should carry `posSide`, while fills may use `tradeSide`/`side`/`posMode`.
 
 ### `since` is effectively exclusive for OHLCV paging
 

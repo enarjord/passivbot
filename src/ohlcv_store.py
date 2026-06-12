@@ -206,6 +206,7 @@ class OhlcvStore:
         values: np.ndarray,
         *,
         status: str = "open",
+        clear_valid_range_ms: tuple[int, int] | None = None,
     ) -> None:
         ts_arr = np.asarray(timestamps_ms, dtype=np.int64)
         val_arr = np.asarray(values, dtype=np.float32)
@@ -222,6 +223,15 @@ class OhlcvStore:
         interval_ms = timeframe_to_interval_ms(timeframe)
         if np.any(ts_arr % interval_ms != 0):
             raise ValueError(f"timestamps must align to {timeframe}")
+        clear_start_ms: int | None = None
+        clear_end_ms: int | None = None
+        if clear_valid_range_ms is not None:
+            clear_start_ms = int(clear_valid_range_ms[0])
+            clear_end_ms = int(clear_valid_range_ms[1])
+            if clear_end_ms < clear_start_ms:
+                raise ValueError("clear_valid_range_ms end must be >= start")
+            if clear_start_ms % interval_ms != 0 or clear_end_ms % interval_ms != 0:
+                raise ValueError(f"clear_valid_range_ms must align to {timeframe}")
 
         grouped: dict[tuple[int, int], list[int]] = {}
         for idx, ts_ms in enumerate(ts_arr):
@@ -234,6 +244,16 @@ class OhlcvStore:
                 body = np.load(paths.body_path, mmap_mode="r+")
                 valid = np.load(paths.valid_path, mmap_mode="r+")
                 try:
+                    if clear_start_ms is not None and clear_end_ms is not None:
+                        month_start = month_start_ts(year, month)
+                        month_end = month_end_ts(year, month, timeframe)
+                        clear_start = max(month_start, clear_start_ms)
+                        clear_end = min(month_end, clear_end_ms)
+                        if clear_end >= clear_start:
+                            clear_src_start = month_offset(clear_start, year, month, timeframe)
+                            clear_src_end = month_offset(clear_end, year, month, timeframe) + 1
+                            body[clear_src_start:clear_src_end] = np.nan
+                            valid[clear_src_start:clear_src_end] = False
                     for src_idx in indices:
                         offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
                         body[offset] = val_arr[src_idx]
@@ -312,7 +332,6 @@ class OhlcvStore:
         overlap_end = min(int(chunk.end_ts), int(end_ts))
         if overlap_end < overlap_start:
             return
-        self.verify_chunk_checksum(chunk)
         year = int(chunk.year)
         month = int(chunk.month)
         src_start = month_offset(overlap_start, year, month, timeframe)
@@ -321,12 +340,17 @@ class OhlcvStore:
         dest_start = int((overlap_start - start_ts) // interval_ms)
         dest_end = dest_start + (src_end - src_start)
 
-        body = np.load(chunk.body_path, mmap_mode="r")
-        valid = np.load(chunk.valid_path, mmap_mode="r")
-        out_values[dest_start:dest_end] = body[src_start:src_end]
-        out_valid[dest_start:dest_end] = valid[src_start:src_end]
-        del body
-        del valid
+        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        with self._chunk_write_lock(paths):
+            self._verify_chunk_checksum_unlocked(chunk, paths)
+            body = np.load(chunk.body_path, mmap_mode="r")
+            valid = np.load(chunk.valid_path, mmap_mode="r")
+            try:
+                out_values[dest_start:dest_end] = body[src_start:src_end]
+                out_valid[dest_start:dest_end] = valid[src_start:src_end]
+            finally:
+                del body
+                del valid
 
     def _compute_chunk_checksum(self, paths: MonthChunkPaths) -> str:
         hasher = hashlib.sha256()
@@ -369,8 +393,7 @@ class OhlcvStore:
             del body
             del valid
 
-    def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
-        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+    def _verify_chunk_checksum_unlocked(self, chunk: ChunkRecord, paths: MonthChunkPaths) -> None:
         if not chunk.checksum:
             raise ValueError(
                 f"OHLCV chunk checksum missing for {chunk.exchange} {chunk.symbol} "
@@ -386,3 +409,8 @@ class OhlcvStore:
                 f"{chunk.year:04d}-{chunk.month:02d}: expected {chunk.checksum} got {actual}"
             )
         self._verified_checksums.add(cache_key)
+
+    def verify_chunk_checksum(self, chunk: ChunkRecord) -> None:
+        paths = MonthChunkPaths(body_path=Path(chunk.body_path), valid_path=Path(chunk.valid_path))
+        with self._chunk_write_lock(paths):
+            self._verify_chunk_checksum_unlocked(chunk, paths)

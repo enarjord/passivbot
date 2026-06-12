@@ -96,10 +96,16 @@ def flatten_metric_stats(stats: Mapping[str, MetricStats], *, prefix: str = "") 
     """Convert structured stats to the legacy flat format used by scoring/limits."""
 
     flattened: Dict[str, float] = {}
+    required_fields = ("mean", "min", "max", "std", "median")
     for metric, values in stats.items():
-        for field in ("mean", "min", "max", "std", "median"):
+        missing = [field for field in required_fields if field not in values]
+        if missing:
+            raise MetricAggregationError(
+                f"metric {metric!r} missing stat field(s): {', '.join(missing)}"
+            )
+        for field in required_fields:
             key = f"{prefix}{metric}_{field}"
-            flattened[key] = float(values.get(field, 0.0))
+            flattened[key] = _safe_float(values[field])
     return flattened
 
 

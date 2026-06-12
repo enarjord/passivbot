@@ -485,6 +485,35 @@ def _equity_hard_stop_event_value(fill: Any, key: str, default: Any = None) -> A
     return getattr(fill, key, default)
 
 
+def _equity_hard_stop_latest_panic_fill_timestamp_ms(
+    self,
+    pside: str,
+    *,
+    symbol: Optional[str] = None,
+    since_ms: Optional[int] = None,
+    fallback_ms: Optional[int] = None,
+) -> int:
+    latest_ts: Optional[int] = None
+    if self._pnls_manager is not None:
+        for event in self._pnls_manager.get_events():
+            if _equity_hard_stop_fill_pside(event) != pside:
+                continue
+            if symbol is not None and _equity_hard_stop_fill_symbol(event) != symbol:
+                continue
+            pb_type = str(_equity_hard_stop_event_value(event, "pb_order_type", "") or "").lower()
+            if "panic" not in pb_type or "close" not in pb_type:
+                continue
+            event_ts = _equity_hard_stop_fill_timestamp_ms(event)
+            if since_ms is not None and event_ts < int(since_ms):
+                continue
+            latest_ts = event_ts if latest_ts is None else max(latest_ts, event_ts)
+    if latest_ts is not None:
+        return int(latest_ts)
+    if fallback_ms is not None:
+        return int(fallback_ms)
+    return int(self.get_exchange_time())
+
+
 async def _calc_upnl_sum_strict(self, pside: Optional[str] = None, symbol: Optional[str] = None) -> float:
     if not self.fetched_positions:
         return 0.0
@@ -538,13 +567,17 @@ def _equity_hard_stop_fee_cost(fill: Any) -> float:
 
 
 def _get_exchange_fee_rates(self, symbol: str) -> tuple[float, float]:
-    market = {}
-    try:
-        market = self.markets_dict.get(symbol, {}) or {}
-    except Exception:
-        market = {}
-    maker_fee = market.get("maker_fee", market.get("maker", 0.0002))
-    taker_fee = market.get("taker_fee", market.get("taker", 0.00055))
+    market = self.markets_dict[symbol]
+    maker_fee = market.get("maker_fee")
+    if maker_fee is None:
+        maker_fee = market.get("maker")
+    taker_fee = market.get("taker_fee")
+    if taker_fee is None:
+        taker_fee = market.get("taker")
+    if maker_fee is None:
+        raise ValueError(f"missing maker_fee for {symbol}")
+    if taker_fee is None:
+        raise ValueError(f"missing taker_fee for {symbol}")
     maker_fee = float(maker_fee)
     taker_fee = float(taker_fee)
     if not math.isfinite(maker_fee):
@@ -965,36 +998,6 @@ def _equity_hard_stop_history_coin_has_value(row: dict, key: str, symbol: str, p
     return pside in by_pside and by_pside[pside] is not None
 
 
-def _equity_hard_stop_coin_stop_event_from_metrics(
-    pside: str,
-    symbol: str,
-    stop_event_ts_ms: int,
-    metrics: dict,
-    realized_pnl_total: Optional[float],
-) -> dict:
-    return {
-        "position_side": pside,
-        "symbol": symbol,
-        "signal_mode": "coin",
-        "stop_event_timestamp_ms": int(stop_event_ts_ms),
-        "balance": float(metrics["balance"]),
-        "slot_budget": float(metrics["slot_budget"]),
-        "realized_pnl_total": None if realized_pnl_total is None else float(realized_pnl_total),
-        "realized_pnl": float(metrics["realized_pnl"]),
-        "peak_realized_pnl": float(metrics["peak_realized_pnl"]),
-        "unrealized_pnl": float(metrics["unrealized_pnl"]),
-        "strategy_pnl": float(metrics["strategy_pnl"]),
-        "peak_strategy_pnl": float(metrics["peak_strategy_pnl"]),
-        "strategy_equity": float(metrics["strategy_equity"]),
-        "equity": float(metrics["equity"]),
-        "peak_strategy_equity": float(metrics["peak_strategy_equity"]),
-        "trigger_peak_strategy_equity": float(metrics["peak_strategy_equity"]),
-        "drawdown_raw": float(metrics["drawdown_raw"]),
-        "drawdown_ema": float(metrics["drawdown_ema"]),
-        "drawdown_score": float(metrics["drawdown_score"]),
-    }
-
-
 def _equity_hard_stop_activate_coin_red_from_metrics(
     self,
     pside: str,
@@ -1006,14 +1009,7 @@ def _equity_hard_stop_activate_coin_red_from_metrics(
     state = self._hsl_coin_state(pside, symbol)
     if state["pending_red_since_ms"] is None:
         state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
-    if state["pending_stop_event"] is None:
-        state["pending_stop_event"] = _equity_hard_stop_coin_stop_event_from_metrics(
-            pside,
-            symbol,
-            int(metrics["timestamp_ms"]),
-            metrics,
-            realized_pnl_total,
-        )
+    state["pending_stop_event"] = None
     self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "panic")
 
 
@@ -1298,11 +1294,19 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(self, pside: str, now
     state = self._hsl_state(pside)
     cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
     cooldown_ms = max(0, int(round(cooldown_minutes * 60_000.0))) if cooldown_minutes > 0.0 else 0
-    cooldown_until_ms = now_ms + cooldown_ms if cooldown_ms > 0 else None
-    stop_event = await self._equity_hard_stop_compute_stop_event(pside, now_ms)
+    previous_stop_ts = None
+    if state.get("last_stop_event") is not None:
+        previous_stop_ts = int(state["last_stop_event"]["stop_event_timestamp_ms"]) + 1
+    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+        pside,
+        since_ms=previous_stop_ts,
+        fallback_ms=now_ms,
+    )
+    cooldown_until_ms = stop_ts_ms + cooldown_ms if cooldown_ms > 0 else None
+    stop_event = await self._equity_hard_stop_compute_stop_event(pside, stop_ts_ms)
     payload = self._equity_hard_stop_build_latch_payload(
         pside,
-        stop_event_timestamp_ms=now_ms,
+        stop_event_timestamp_ms=stop_ts_ms,
         balance=float(stop_event["balance"]),
         realized_pnl_total=float(stop_event["realized_pnl_total"]),
         realized_pnl=float(stop_event["realized_pnl"]),
@@ -1328,7 +1332,7 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(self, pside: str, now
     logging.critical(
         "[risk] HSL[%s] cooldown violation repanic flattened; cooldown reset from flat_ts=%s to cooldown_until_ms=%s latch=%s",
         pside,
-        now_ms,
+        stop_ts_ms,
         cooldown_until_ms if cooldown_until_ms is not None else "none",
         latch_path,
     )
@@ -1342,7 +1346,7 @@ async def _equity_hard_stop_refresh_cooldown_after_repanic(self, pside: str, now
                 "latch_path": str(latch_path),
             },
             pside=pside,
-            ts=now_ms,
+            ts=stop_ts_ms,
         )
 
 
@@ -1352,12 +1356,21 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
     state = self._hsl_coin_state(pside, symbol)
     cooldown_minutes = float(self.hsl[pside]["cooldown_minutes_after_red"])
     cooldown_ms = max(0, int(round(cooldown_minutes * 60_000.0))) if cooldown_minutes > 0.0 else 0
-    cooldown_until_ms = now_ms + cooldown_ms if cooldown_ms > 0 else None
-    stop_event = await self._equity_hard_stop_compute_coin_stop_event(pside, symbol, now_ms)
+    previous_stop_ts = None
+    if state.get("last_stop_event") is not None:
+        previous_stop_ts = int(state["last_stop_event"]["stop_event_timestamp_ms"]) + 1
+    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+        pside,
+        symbol=symbol,
+        since_ms=previous_stop_ts,
+        fallback_ms=now_ms,
+    )
+    cooldown_until_ms = stop_ts_ms + cooldown_ms if cooldown_ms > 0 else None
+    stop_event = await self._equity_hard_stop_compute_coin_stop_event(pside, symbol, stop_ts_ms)
     payload = self._equity_hard_stop_build_latch_payload(
         pside,
         symbol=symbol,
-        stop_event_timestamp_ms=now_ms,
+        stop_event_timestamp_ms=stop_ts_ms,
         balance=float(stop_event["balance"]),
         realized_pnl_total=float(stop_event["realized_pnl_total"]),
         realized_pnl=float(stop_event["realized_pnl"]),
@@ -1381,14 +1394,14 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
     state["cooldown_unresolved_residue"] = False
     state["pending_stop_event"] = None
     state["red_flat_confirmations"] = 0
-    state["pnl_reset_timestamp_ms"] = int(now_ms) + 1
+    state["pnl_reset_timestamp_ms"] = int(stop_ts_ms) + 1
     latch_path = self._equity_hard_stop_write_latch(pside, payload, symbol=symbol)
     logging.critical(
         "[risk] HSL[%s:%s] cooldown violation repanic flattened; cooldown reset from flat_ts=%s "
         "to cooldown_until_ms=%s latch=%s",
         pside,
         symbol,
-        now_ms,
+        stop_ts_ms,
         cooldown_until_ms if cooldown_until_ms is not None else "none",
         latch_path,
     )
@@ -1405,7 +1418,7 @@ async def _equity_hard_stop_refresh_coin_cooldown_after_repanic(
             },
             pside=pside,
             symbol=symbol,
-            ts=now_ms,
+            ts=stop_ts_ms,
         )
 
 
@@ -2189,11 +2202,20 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     reset_ts = state["pnl_reset_timestamp_ms"]
                     if reset_ts is not None:
                         start_ms = int(reset_ts) if start_ms is None else max(start_ms, int(reset_ts))
+                    window_points: list[tuple[int, float]] = []
+                    window_base_realized = 0.0
+                    if start_ms is None:
+                        window_points = list(realized_points)
+                    else:
+                        for point_ts, value in realized_points:
+                            if point_ts < start_ms:
+                                window_base_realized = float(value)
+                            else:
+                                window_points.append((point_ts, value))
                     window_values = [
-                        value
-                        for point_ts, value in realized_points
-                        if start_ms is None or point_ts >= start_ms
+                        float(value) - window_base_realized for _, value in window_points
                     ]
+                    window_last_realized = window_values[-1] if window_values else 0.0
                     peak_realized = max([0.0, *window_values])
                     current_upnl = _equity_hard_stop_history_coin_value(
                         row,
@@ -2210,7 +2232,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         ts,
                         float(row["balance"]),
                         peak_realized,
-                        last_realized,
+                        window_last_realized,
                         current_upnl,
                     )
                     applied_rows += 1
@@ -2514,9 +2536,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
             self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
         if metrics["tier"] == "red" and not prev_latched:
             state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
-            state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
-                pside, int(metrics["timestamp_ms"])
-            )
+            state["pending_stop_event"] = None
             logging.critical(
                 "[risk] HSL[%s] RED triggered | strategy_equity=%.6f peak_strategy_equity=%.6f rolling_peak_strategy_equity=%.6f drawdown_score=%.6f red_threshold=%.6f",
                 pside,
@@ -2632,9 +2652,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
             if metrics["tier"] == "red" and not prev_latched:
                 state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
-                state["pending_stop_event"] = await self._equity_hard_stop_compute_coin_stop_event(
-                    pside, symbol, int(metrics["timestamp_ms"])
-                )
+                state["pending_stop_event"] = None
                 self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "panic")
                 logging.critical(
                     "[risk] HSL[%s:%s] RED triggered | drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f red_threshold=%.6f slot_budget=%.6f realized_pnl=%.6f peak_realized_pnl=%.6f upnl=%.6f",
@@ -2788,6 +2806,11 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
     cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
     if stop_event is None:
+        stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+            pside,
+            since_ms=state.get("pending_red_since_ms"),
+            fallback_ms=stop_ts_ms,
+        )
         stop_event = await self._equity_hard_stop_compute_stop_event(pside, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
@@ -2877,6 +2900,12 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
     if stop_event is None:
+        stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+            pside,
+            symbol=symbol,
+            since_ms=state.get("pending_red_since_ms"),
+            fallback_ms=stop_ts_ms,
+        )
         stop_event = await self._equity_hard_stop_compute_coin_stop_event(pside, symbol, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
@@ -2970,13 +2999,18 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 n_positions = self._equity_hard_stop_count_open_positions(pside)
                 entry_orders, nonpanic_close_orders = self._equity_hard_stop_count_blocking_open_orders(pside)
                 if n_positions == 0 and entry_orders == 0 and nonpanic_close_orders == 0:
-                    if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
-                        state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
-                            pside, int(self.get_exchange_time())
-                        )
+                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                        pside,
+                        since_ms=state.get("pending_red_since_ms"),
+                        fallback_ms=int(self.get_exchange_time()),
+                    )
+                    state["pending_stop_event"] = await self._equity_hard_stop_compute_stop_event(
+                        pside, stop_ts_ms
+                    )
                     state["red_flat_confirmations"] += 1
                 else:
                     state["red_flat_confirmations"] = 0
+                    state["pending_stop_event"] = None
                 self._equity_hard_stop_log_red_progress(
                     pside,
                     n_positions,
@@ -3034,13 +3068,21 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                     self._equity_hard_stop_count_blocking_open_orders_symbol(pside, symbol)
                 )
                 if not has_position and entry_orders == 0 and nonpanic_close_orders == 0:
-                    if state["red_flat_confirmations"] == 0 and state["pending_stop_event"] is None:
-                        state["pending_stop_event"] = await self._equity_hard_stop_compute_coin_stop_event(
-                            pside, symbol, int(self.get_exchange_time())
+                    stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+                        pside,
+                        symbol=symbol,
+                        since_ms=state.get("pending_red_since_ms"),
+                        fallback_ms=int(self.get_exchange_time()),
+                    )
+                    state["pending_stop_event"] = (
+                        await self._equity_hard_stop_compute_coin_stop_event(
+                            pside, symbol, stop_ts_ms
                         )
+                    )
                     state["red_flat_confirmations"] += 1
                 else:
                     state["red_flat_confirmations"] = 0
+                    state["pending_stop_event"] = None
                 if state["red_flat_confirmations"] >= 2:
                     if state["halted"] and state["cooldown_repanic_reset_pending"]:
                         await self._equity_hard_stop_refresh_coin_cooldown_after_repanic(

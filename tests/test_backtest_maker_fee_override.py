@@ -110,10 +110,12 @@ def test_prep_backtest_args_allows_heterogeneous_fees_with_explicit_overrides():
     config["backtest"]["taker_fee_override"] = 0.0009
     mss = _multi_coin_mss(eth_maker=0.0002, eth_taker=0.0007)
 
-    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
 
     assert backtest_params["maker_fee"] == 0.0003
     assert backtest_params["taker_fee"] == 0.0009
+    assert {item["maker_fee"] for item in exchange_params} == {0.0003}
+    assert {item["taker_fee"] for item in exchange_params} == {0.0009}
 
 
 def test_prep_backtest_args_passes_market_order_slippage_pct():

@@ -909,6 +909,7 @@ class HLCVManager:
                 int(start_ts),
                 int(end_ts) + 60_000,
                 timeframe="1m",
+                raise_on_partial_empty_page=True,
             )
         real = (
             self.cm._slice_ts_range(fetched, int(start_ts), int(end_ts))
@@ -2038,6 +2039,7 @@ async def _read_v2_range_repairing_corrupt_chunk(
                 start_ts=repair_start_ts,
                 end_ts=repair_end_ts,
                 allow_unbounded_edge_gaps=True,
+                clear_valid_range_ms=(repair_start_ts, repair_end_ts),
             )
             if not repaired:
                 return None
@@ -2535,6 +2537,7 @@ async def _fetch_coin_range_into_v2_store(
     end_ts: int,
     allow_unbounded_edge_gaps: bool = False,
     allow_pre_inception_prefix: bool = False,
+    clear_valid_range_ms: tuple[int, int] | None = None,
 ) -> V2FetchResult:
     interval_ms = 60_000
     if hasattr(om, "update_timestamp_range"):
@@ -2876,7 +2879,14 @@ async def _fetch_coin_range_into_v2_store(
             df["volume"].astype(np.float32, copy=False).to_numpy(),
         ]
     )
-    store.write_rows(exchange, "1m", symbol, ts, values)
+    store.write_rows(
+        exchange,
+        "1m",
+        symbol,
+        ts,
+        values,
+        clear_valid_range_ms=clear_valid_range_ms,
+    )
     if sparse_missing_bars:
         _mark_sparse_fetch_gaps(
             catalog=catalog,
@@ -4003,18 +4013,7 @@ async def _load_combined_coin_candidates(
         except Exception:
             symbol = None
         if isinstance(result, Exception):
-            summary = _ineligible_combined_summary(
-                coin=plan.coin,
-                exchange=ex,
-                symbol=symbol,
-                reason=f"api_error:{type(result).__name__}",
-                gap_class="api_error",
-                effective_start_ts=plan.effective_start_ts,
-                end_ts=end_ts,
-            )
-            if candidate_report is not None:
-                candidate_report.append(summary.to_dict())
-            continue
+            raise RuntimeError(f"Exchange {ex} failed for coin {plan.coin}") from result
         if result is None:
             summary = _ineligible_combined_summary(
                 coin=plan.coin,
@@ -4204,18 +4203,7 @@ async def fetch_data_for_coin_and_exchange(
         )
         return (ex, df, coverage_count, gap_count, total_volume)
     om.update_date_range(effective_start_ts, end_ts)
-    try:
-        df = await om.get_ohlcvs(coin)
-    except Exception as e:
-        logging.warning(f"Error retrieving {coin} from {ex}: {e}")
-        traceback.print_exc()
-        logging.info(
-            "%s candles load failed coin=%s elapsed_s=%.1f",
-            ex,
-            coin,
-            time.monotonic() - t0,
-        )
-        return None
+    df = await om.get_ohlcvs(coin)
     if df.empty:
         logging.info(
             "%s candles load empty coin=%s elapsed_s=%.1f",
@@ -4276,9 +4264,9 @@ async def compute_exchange_volume_ratios(
             om.update_date_range(start_date, end_date)
             tasks.append(om.get_ohlcvs(coin))
 
-        dfs = await asyncio.gather(*tasks, return_exceptions=True)
+        dfs = await asyncio.gather(*tasks)
         for i, df in enumerate(dfs):
-            if isinstance(df, Exception) or df is None or df.empty:
+            if df is None or df.empty:
                 dfs[i] = pd.DataFrame()
 
         if any(df.empty for df in dfs):

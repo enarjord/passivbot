@@ -28,8 +28,15 @@ def test_build_scenario_metrics_rejects_non_finite_metric_values():
         build_scenario_metrics({"binance": {"drawdown_worst": float("nan")}})
 
 
+def test_flatten_metric_stats_rejects_missing_stat_fields():
+    with pytest.raises(MetricAggregationError, match="missing stat field"):
+        flatten_metric_stats({"adg": {"mean": 1.0, "min": 0.5, "max": 1.5, "std": 0.25}})
+
+
 def test_merge_suite_payload_builds_structure():
-    aggregate_stats = {"adg": {"mean": 1.0, "min": 0.5, "max": 1.5, "std": 0.25}}
+    aggregate_stats = {
+        "adg": {"mean": 1.0, "min": 0.5, "max": 1.5, "std": 0.25, "median": 1.0}
+    }
     aggregate_values = {"adg": 1.0}
     scenario_metrics = {
         "case_a": {"stats": {"adg": {"mean": 0.8}}},

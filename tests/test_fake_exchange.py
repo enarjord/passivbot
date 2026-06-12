@@ -146,6 +146,19 @@ def test_build_fetcher_fake():
     assert isinstance(fetcher, FakeFetcher)
 
 
+@pytest.mark.parametrize("exchange", ["defx", "paradex"])
+def test_build_fetcher_unsupported_exchange_reports_live_fill_events(exchange):
+    bot = SimpleNamespace()
+    bot.exchange = exchange
+    bot.cca = "dummy"
+    bot.user = f"{exchange}_user"
+    bot.markets_dict = {}
+    bot.coin_to_symbol = lambda value, verbose=False: value
+
+    with pytest.raises(ValueError, match=f"Unsupported exchange '{exchange}' for live fill events"):
+        _build_fetcher_for_bot(bot, symbols=["BTC"])
+
+
 def test_setup_bot_fake_uses_fake_bot():
     from passivbot import setup_bot
 

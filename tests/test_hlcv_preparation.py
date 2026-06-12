@@ -1911,7 +1911,15 @@ async def test_fetch_ohlcvs_for_v2_store_returns_real_rows_without_synthetic_gap
         def _acquire_fetch_lock(self, symbol, timeframe):
             return FakeLock()
 
-        async def _fetch_ohlcv_paginated(self, symbol, since_ms, end_exclusive_ms, *, timeframe):
+        async def _fetch_ohlcv_paginated(
+            self,
+            symbol,
+            since_ms,
+            end_exclusive_ms,
+            *,
+            timeframe,
+            raise_on_partial_empty_page=False,
+        ):
             rows = np.array(
                 [
                     (since_ms, 100.0, 101.0, 99.0, 100.0, 10.0),
@@ -2141,7 +2149,7 @@ def test_build_exchange_volume_ratio_map_fails_loudly_without_overlap_to_referen
 
 
 @pytest.mark.asyncio
-async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(monkeypatch, tmp_path):
+async def test_load_combined_coin_candidates_raises_failed_non_forced_exchange(monkeypatch, tmp_path):
     start_ts = month_start_ts(2026, 4)
     end_ts = start_ts + 60_000
     plan = hp.CombinedCoinPlan(
@@ -2180,23 +2188,18 @@ async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(
     store = OhlcvStore(tmp_path / "ohlcvs", catalog)
     report = []
 
-    candidates = await hp._load_combined_coin_candidates(
-        plan=plan,
-        om_dict={"binanceusdm": FakeManager("binanceusdm"), "bybit": FakeManager("bybit")},
-        end_ts=end_ts,
-        force_refetch_gaps=False,
-        catalog=catalog,
-        store=store,
-        legacy_root=None,
-        exchanges_to_consider=("binanceusdm", "bybit"),
-        candidate_report=report,
-    )
-
-    assert [candidate.exchange for candidate in candidates] == ["binanceusdm"]
-    failed = [item for item in report if item["exchange"] == "bybit"][0]
-    assert failed["status"] == "ineligible"
-    assert failed["reason"] == "api_error:RuntimeError"
-    assert failed["gap_class"] == "api_error"
+    with pytest.raises(RuntimeError, match=r"Exchange bybit failed for coin BTC"):
+        await hp._load_combined_coin_candidates(
+            plan=plan,
+            om_dict={"binanceusdm": FakeManager("binanceusdm"), "bybit": FakeManager("bybit")},
+            end_ts=end_ts,
+            force_refetch_gaps=False,
+            catalog=catalog,
+            store=store,
+            legacy_root=None,
+            exchanges_to_consider=("binanceusdm", "bybit"),
+            candidate_report=report,
+        )
 
 
 @pytest.mark.asyncio

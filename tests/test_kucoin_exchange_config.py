@@ -204,6 +204,20 @@ def test_determine_pos_side_prefers_explicit_payload_over_existing_long_position
     assert bot.determine_pos_side(order) == "short"
 
 
+def test_determine_pos_side_prefers_info_position_side_when_both_psides_open():
+    bot = make_bot()
+    bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0
+    bot.positions["BTC/USDT:USDT"]["short"]["size"] = -1.0
+
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "info": {"positionSide": "SHORT"},
+    }
+
+    assert bot.determine_pos_side(order) == "short"
+
+
 def test_determine_pos_side_rejects_ambiguous_hedge_order_without_payload():
     bot = make_bot()
     bot.positions["BTC/USDT:USDT"]["long"]["size"] = 1.0

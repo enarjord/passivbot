@@ -1529,6 +1529,7 @@ def aggregate_metrics(
             "min": float(np.min(arr)),
             "max": float(np.max(arr)),
             "std": float(np.std(arr)),
+            "median": float(np.median(arr)),
         }
         mode = aggregate_cfg.get(metric)
         if mode is None and "_" in metric:

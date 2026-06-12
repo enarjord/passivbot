@@ -44,6 +44,19 @@ class PartialThenFailExchange:
         raise RequestTimeout("timed out")
 
 
+class PartialThenEmptyExchange:
+    id = "binanceusdm"
+
+    def __init__(self):
+        self.calls = 0
+
+    async def fetch_ohlcv(self, symbol, timeframe, since, limit, params=None):
+        self.calls += 1
+        if self.calls == 1:
+            return [[since, 1.0, 1.0, 1.0, 1.0, 0.0]]
+        return []
+
+
 @pytest.mark.asyncio
 async def test_bybit_retries_more_than_default(tmp_path, monkeypatch):
     # Avoid real sleeping in retry loop
@@ -113,6 +126,25 @@ async def test_paginated_fetch_raises_instead_of_returning_partial_on_page_failu
         )
 
     assert ex.calls == 6
+
+
+@pytest.mark.asyncio
+async def test_paginated_fetch_can_raise_on_partial_empty_success_page(tmp_path):
+    ex = PartialThenEmptyExchange()
+    cm = CandlestickManager(
+        exchange=ex, exchange_name="binanceusdm", cache_dir=str(tmp_path / "caches")
+    )
+
+    with pytest.raises(OhlcvFetchError, match="empty page"):
+        await cm._fetch_ohlcv_paginated(
+            "BTC/USDT:USDT",
+            1643262960000,
+            1643262960000 + 3 * 60_000,
+            timeframe="1m",
+            raise_on_partial_empty_page=True,
+        )
+
+    assert ex.calls == 2
 
 
 @pytest.mark.asyncio

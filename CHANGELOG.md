@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
+  panic fills, suite metric medians are real/fail-loud, malformed foreign
+  client-order ids decode to `unknown`, partial OHLCV fetches no longer bless
+  stale gaps/chunk rows, live realized-loss gate zero values and fee metadata are
+  preserved, trailing-anchor-unavailable symbols keep existing orders untouched,
+  and unsupported live fill-event exchanges now fail with an explicit startup error.
 - Fixed v8 backtests so delisted open positions are realized at the last valid candle, and
   next-candle close-ladder peeking expands recursive close grids when any ladder rung can fill.
 - Fixed live v8 trailing state handling so missing fill anchors or candle failures preserve

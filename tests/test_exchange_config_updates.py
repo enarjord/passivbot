@@ -339,6 +339,27 @@ async def test_exchange_update_config_reraises_hedge_mode_failures(module_name, 
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("module_name", "class_name", "response"),
+    [
+        ("exchanges.bitget", "BitgetBot", {"code": "00000", "data": {"posMode": "hedge_mode"}}),
+        ("exchanges.kucoin", "KucoinBot", {"code": "200000", "data": {"positionMode": 1}}),
+    ],
+)
+async def test_exchange_update_config_accepts_live_same_mode_success(
+    module_name, class_name, response
+):
+    module = __import__(module_name, fromlist=[class_name])
+    bot_cls = getattr(module, class_name)
+    bot = bot_cls.__new__(bot_cls)
+    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(return_value=response))
+
+    await bot.update_exchange_config()
+
+    bot.cca.set_position_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
 async def test_binance_update_config_accepts_already_hedged_response():
     from exchanges.binance import BinanceBot
 

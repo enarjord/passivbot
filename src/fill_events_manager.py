@@ -6824,7 +6824,10 @@ def custom_id_to_snake(client_oid: str) -> str:
     type_id = _try_decode_type_id_from_custom_id(client_oid)
     if type_id is None:
         return "unknown"
-    return str(pbr.order_type_id_to_snake(type_id))
+    try:
+        return str(pbr.order_type_id_to_snake(type_id))
+    except ValueError:
+        return "unknown"
 
 
 # ---------------------------------------------------------------------------
@@ -7000,7 +7003,12 @@ def _build_fetcher_for_bot(bot, symbols: List[str]) -> BaseFetcher:
         return KucoinFetcher(api=bot.cca)
     if exchange == "okx":
         return OkxFetcher(api=bot.cca)
-    raise ValueError(f"Unsupported exchange '{exchange}' for fill events CLI")
+    supported = "binance, bitget, bybit, fake, gateio, hyperliquid, kucoin, okx"
+    raise ValueError(
+        f"Unsupported exchange '{exchange}' for live fill events; realized PnL, "
+        f"unstuck accounting, and HSL replay require an exchange-specific fetcher. "
+        f"Supported exchanges: {supported}"
+    )
 
 
 def _instantiate_bot(config: dict):

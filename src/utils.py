@@ -654,11 +654,8 @@ def load_ccxt_instance(exchange_id: str, enable_rate_limit: bool = True, timeout
             }
     except Exception:
         pass
-    try:
-        override = resolve_custom_endpoint_override(ex)
-        apply_rest_overrides_to_ccxt(cc, override)
-    except Exception as exc:
-        logging.warning("Failed to apply custom endpoint override for %s: %s", ex, exc)
+    override = resolve_custom_endpoint_override(ex)
+    apply_rest_overrides_to_ccxt(cc, override)
     return cc
 
 

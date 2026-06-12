@@ -789,6 +789,9 @@ async def calc_orders_to_cancel_and_create(bot):
     malformed_actual_symbols = set(
         getattr(bot, "_malformed_actual_order_symbols", set()) or set()
     )
+    trailing_unavailable_symbols = set(
+        getattr(bot, "_orchestrator_trailing_unavailable_symbols", set()) or set()
+    )
     malformed_actual_counts = dict(
         getattr(bot, "_malformed_actual_order_counts", {}) or {}
     )
@@ -811,6 +814,19 @@ async def calc_orders_to_cancel_and_create(bot):
                     len(ideal_list),
                     0,
                     blocked_actual + len(ideal_list),
+                )
+            )
+            continue
+        if symbol in trailing_unavailable_symbols:
+            blocked_total = len(symbol_orders) + len(ideal_list)
+            plan_summaries.append(
+                (
+                    symbol,
+                    len(symbol_orders),
+                    0,
+                    len(ideal_list),
+                    0,
+                    blocked_total,
                 )
             )
             continue

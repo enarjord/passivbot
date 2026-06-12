@@ -1067,6 +1067,10 @@ class Passivbot:
     def live_value(self, key: str):
         return require_live_value(self.config, key)
 
+    def _live_max_realized_loss_pct(self) -> float:
+        value = self.live_value("max_realized_loss_pct")
+        return 1.0 if value is None else float(value)
+
     def bot_value(self, pside: str, key: str):
         bot_side = self.config.get("bot", {}).get(pside, {})
         sentinel = object()
@@ -2179,6 +2183,9 @@ class Passivbot:
         pb_hsl._equity_hard_stop_fill_timestamp_ms
     )
     _equity_hard_stop_event_value = staticmethod(pb_hsl._equity_hard_stop_event_value)
+    _equity_hard_stop_latest_panic_fill_timestamp_ms = (
+        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_ms
+    )
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now
@@ -6198,13 +6205,40 @@ class Passivbot:
             or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
         )
 
+    def _position_anchor_timestamp_ms(self, symbol: str, pside: str) -> int | None:
+        position = self.positions.get(symbol, {}).get(pside, {})
+        candidates = [
+            position.get("timestamp"),
+            position.get("timestamp_ms"),
+            position.get("open_time"),
+            position.get("openTime"),
+            position.get("createdTime"),
+            position.get("updatedTime"),
+        ]
+        info = position.get("info")
+        if isinstance(info, dict):
+            candidates.extend(
+                [
+                    info.get("timestamp"),
+                    info.get("timestamp_ms"),
+                    info.get("open_time"),
+                    info.get("openTime"),
+                    info.get("createdTime"),
+                    info.get("updatedTime"),
+                ]
+            )
+        for candidate in candidates:
+            if candidate is None or candidate == "":
+                continue
+            anchor_ts = int(float(candidate))
+            if anchor_ts > 0:
+                return anchor_ts
+        return None
+
     def get_last_position_changes(self, symbol=None):
         """Return the most recent fill timestamp per symbol/side for trailing logic."""
         last_position_changes = defaultdict(dict)
-        if self._pnls_manager is None:
-            return last_position_changes
-
-        events = self._pnls_manager.get_events()
+        events = [] if self._pnls_manager is None else self._pnls_manager.get_events()
         symbols = [symbol] if symbol is not None else list(self.positions)
         for symbol in symbols:
             if symbol not in self.positions:
@@ -6215,6 +6249,10 @@ class Passivbot:
                         if ev.symbol == symbol and ev.position_side == pside:
                             last_position_changes[symbol][pside] = int(ev.timestamp)
                             break
+                    if pside not in last_position_changes.get(symbol, {}):
+                        anchor_ts = self._position_anchor_timestamp_ms(symbol, pside)
+                        if anchor_ts is not None:
+                            last_position_changes[symbol][pside] = anchor_ts
         return last_position_changes
 
     # Legacy: wait_for_ohlcvs_1m_to_update removed (CandlestickManager handles freshness)
@@ -10837,7 +10875,7 @@ class Passivbot:
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
         last_increase_fill_timestamps = snapshot.get("last_increase_fill_timestamps", {})
-        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
         if hasattr(self, "_build_orchestrator_mode_overrides"):
             mode_overrides = self._build_orchestrator_mode_overrides(symbols)
         else:
@@ -10963,19 +11001,7 @@ class Passivbot:
                 {
                     "symbol_idx": int(idx),
                     "order_book": {"bid": mprice, "ask": mprice},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                        "maker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
-                        ),
-                        "taker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
-                        ),
-                    },
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": bool(
                         active and symbol not in trailing_unavailable_symbols
                     ),
@@ -12110,7 +12136,7 @@ class Passivbot:
         last_increase_fill_timestamps = self._merge_entry_cooldown_anchors(
             fill_increase_timestamps, delta_increase_timestamps
         )
-        max_realized_loss_pct = float(self.live_value("max_realized_loss_pct") or 1.0)
+        max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
 
         global_bp = {
             "long": self._bot_params_to_rust_dict("long", None),
@@ -12237,19 +12263,7 @@ class Passivbot:
                 {
                     "symbol_idx": int(idx),
                     "order_book": {"bid": bid, "ask": ask},
-                    "exchange": {
-                        "qty_step": float(self.qty_steps[symbol]),
-                        "price_step": float(self.price_steps[symbol]),
-                        "min_qty": float(self.min_qtys[symbol]),
-                        "min_cost": float(self.min_costs[symbol]),
-                        "c_mult": float(self.c_mults[symbol]),
-                        "maker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("maker", 0.0) or 0.0
-                        ),
-                        "taker_fee": float(
-                            self.markets_dict.get(symbol, {}).get("taker", 0.0) or 0.0
-                        ),
-                    },
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
                     "tradable": tradable,
                     "next_candle": None,
                     "effective_min_cost": float(effective_min_cost),

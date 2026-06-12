@@ -3939,6 +3939,7 @@ class CandlestickManager:
         timeframe: Optional[str] = None,
         tf: Optional[str] = None,
         on_batch: Optional[Callable[[np.ndarray], None]] = None,
+        raise_on_partial_empty_page: bool = False,
     ) -> np.ndarray:
         """Fetch OHLCV from `since_ms` up to but excluding `end_exclusive_ms`.
 
@@ -3978,9 +3979,21 @@ class CandlestickManager:
                 symbol, since, use_limit, end_exclusive_ms=end_excl, tf=tf_norm
             )
             if not page:
+                if raise_on_partial_empty_page and pages > 0:
+                    raise OhlcvFetchError(
+                        "ccxt OHLCV pagination returned an empty page before reaching "
+                        f"the requested end | exchange={self._ex_id} symbol={symbol} "
+                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                    )
                 break
             arr = self._normalize_ccxt_ohlcv(page)
             if arr.size == 0:
+                if raise_on_partial_empty_page and pages > 0:
+                    raise OhlcvFetchError(
+                        "ccxt OHLCV pagination returned an empty normalized page before "
+                        f"reaching the requested end | exchange={self._ex_id} symbol={symbol} "
+                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                    )
                 break
             if probe_limit is not None and not self._ccxt_limit_probe_done:
                 # If Bitget returns >200 rows, we can safely use 1000 going forward.
@@ -4010,6 +4023,12 @@ class CandlestickManager:
             # Exclude any candles >= end_exclusive
             arr = arr[arr["ts"] < end_excl]
             if arr.size == 0:
+                if raise_on_partial_empty_page and pages > 0:
+                    raise OhlcvFetchError(
+                        "ccxt OHLCV pagination returned only out-of-range candles before "
+                        f"reaching the requested end | exchange={self._ex_id} symbol={symbol} "
+                        f"tf={tf_norm} since={since} end_exclusive={end_excl} pages={pages}"
+                    )
                 break
             # Diagnostics: page ts range and step
             try:

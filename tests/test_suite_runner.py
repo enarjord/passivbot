@@ -511,6 +511,7 @@ def test_aggregate_metrics_computes_stats():
     summary = aggregate_metrics(scenario_results, {"default": "mean"})
     assert summary["aggregated"]["metric"] == pytest.approx(2.0)
     assert summary["stats"]["metric"]["max"] == pytest.approx(3.0)
+    assert summary["stats"]["metric"]["median"] == pytest.approx(2.0)
 
 
 def test_prepare_dataset_subset_clips_dates(monkeypatch):

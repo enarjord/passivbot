@@ -8,6 +8,10 @@ import numpy as np
 from utils import utc_ms
 
 
+def _active_market() -> dict:
+    return {"active": True, "maker": 0.0002, "taker": 0.00055}
+
+
 def _make_mock_pbr():
     module = types.ModuleType("passivbot_rust")
 
@@ -497,6 +501,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                     "cooldown_repanic_reset_pending": False,
                     "last_cooldown_intervention_log_ms": 0,
                     "cooldown_unresolved_residue": False,
+                    "pnl_reset_timestamp_ms": None,
                 }
                 for pside in ("long", "short")
             }
@@ -766,7 +771,7 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     bot.positions[symbol]["long"]["size"] = 1.25
     bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=121_000)
     bot.get_exchange_time = lambda: 122_000
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
     bot.trailing_prices = {
         symbol: {
@@ -862,7 +867,7 @@ async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch
 
     async def fake_get_candles(*args, **kwargs):
         candle_calls.append((args, kwargs))
-        return _make_ohlcv_array([(180_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+        return _make_candles([(180_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
 
     bot.cm.get_candles = fake_get_candles
 
@@ -877,13 +882,40 @@ async def test_missing_trailing_fill_anchor_marks_symbol_unavailable(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_trailing_anchor_uses_position_timestamp_when_fill_history_is_out_of_window(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    bot.positions[symbol]["long"]["timestamp"] = 120_000
+    bot._pnls_manager = _DummyPnlsManager([])
+    bot.is_trailing = lambda sym, pside=None: pside == "long"
+    candle_calls = []
+
+    async def fake_get_candles(sym, *, start_ts, end_ts=None, strict=False):
+        candle_calls.append((sym, start_ts, end_ts, strict))
+        return _make_candles([(180_000, 100.0, 101.0, 99.0, 100.5, 1.0)])
+
+    bot.cm.get_candles = fake_get_candles
+
+    assert bot.get_last_position_changes()[symbol]["long"] == 120_000
+
+    await bot.update_trailing_data()
+
+    assert candle_calls == [(symbol, 120_000, None, False)]
+    assert bot._orchestrator_trailing_unavailable_symbols == set()
+    assert bot.trailing_prices[symbol]["long"]["max_since_open"] == pytest.approx(101.0)
+
+
+@pytest.mark.asyncio
 async def test_orchestrator_marks_trailing_unavailable_symbols_non_tradable(monkeypatch):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
     bot.trailing_prices = {
         symbol: {
@@ -1104,7 +1136,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
         }
     ]
 
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
     bot.trailing_prices = {
         symbol: {
@@ -1158,7 +1190,7 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
 
     bot.coin_overrides = {}
     bot.PB_mode_stop = {"long": "manual", "short": "manual"}
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
     bot.trailing_prices = {
         symbol: {
@@ -1256,7 +1288,7 @@ async def test_staged_orchestrator_precondition_blocks_before_market_snapshot():
     bot = _make_dummy_bot(cfg)
     bot.exchange = "bybit"
     symbol = _set_basic_state(bot)
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
 
     snapshot_calls = []
 
@@ -1287,7 +1319,7 @@ async def test_staged_orchestrator_uses_market_snapshots_before_cm_fallback(
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
 
-    bot.markets_dict = {symbol: {"active": True}}
+    bot.markets_dict = {symbol: _active_market()}
     bot.effective_min_cost = {symbol: 1.0}
     bot.trailing_prices = {
         symbol: {
@@ -1399,7 +1431,7 @@ async def test_orchestrator_marks_ema_unavailable_symbols_non_tradable(monkeypat
         ("effective_min_cost", 1.0),
     ):
         getattr(bot, attr)[flat_symbol] = value
-    bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
+    bot.markets_dict = {managed_symbol: _active_market(), flat_symbol: _active_market()}
     bot.PB_modes = {
         "long": {managed_symbol: "normal", flat_symbol: "normal"},
         "short": {managed_symbol: "manual", flat_symbol: "manual"},
@@ -1514,7 +1546,7 @@ def test_hsl_halted_universe_keeps_managed_symbols_and_blocks_flat_candidates():
         "long": [managed_symbol, flat_symbol],
         "short": [],
     }
-    bot.markets_dict = {managed_symbol: {"active": True}, flat_symbol: {"active": True}}
+    bot.markets_dict = {managed_symbol: _active_market(), flat_symbol: _active_market()}
     bot.PB_mode_stop = {"long": "manual", "short": "manual"}
 
     _hsl_cfg(bot, "long")["enabled"] = True
@@ -1556,6 +1588,16 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
     assert bot._equity_hard_stop_halted_mode("long", symbol) == "panic"
 
     bot.positions[symbol]["long"]["size"] = 0.0
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "pb_order_type": "close_panic_long",
+            }
+        ]
+    )
     captured = {}
 
     async def fake_compute(pside, ts_ms):
@@ -1586,11 +1628,11 @@ async def test_hsl_cooldown_panic_refreshes_anchor(monkeypatch):
         "long", 180_000
     )
     assert changed is True
-    assert captured["compute"] == ("long", 180_000)
-    assert state["cooldown_until_ms"] == 240_000
+    assert captured["compute"] == ("long", 170_000)
+    assert state["cooldown_until_ms"] == 230_000
     assert state["cooldown_intervention_active"] is False
     assert state["cooldown_repanic_reset_pending"] is False
-    assert captured["write"][1]["cooldown_until_ms"] == 240_000
+    assert captured["write"][1]["cooldown_until_ms"] == 230_000
 
 
 @pytest.mark.asyncio
@@ -2499,6 +2541,38 @@ async def test_hard_stop_compute_stop_event_unified_uses_total_signal(monkeypatc
     assert stop_event["drawdown_raw"] == pytest.approx(1.0 - 70.0 / 95.0)
 
 
+@pytest.mark.asyncio
+async def test_hard_stop_check_defers_stop_event_until_flat_confirmation(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot, "long")["enabled"] = True
+    _hsl_cfg(bot, "short")["enabled"] = False
+    _hsl_cfg(bot, "long")["red_threshold"] = 0.5
+    _hsl_cfg(bot, "long")["ema_span_minutes"] = 1.0
+    bot.config["live"]["hsl_signal_mode"] = "pside"
+    bot.balance = 100.0
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 120_000)
+
+    bot._equity_hard_stop_apply_sample("long", 60_000, 100.0, 0.0, 0.0, 0.0)
+
+    async def fake_upnl(pside=None, symbol=None):
+        return -80.0 if pside == "long" else 0.0
+
+    async def fail_compute(*_args, **_kwargs):
+        raise AssertionError("HSL must not snapshot stop event at RED trigger time")
+
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fail_compute)
+
+    out = await bot._equity_hard_stop_check()
+
+    state = _hsl_state(bot, "long")
+    assert out["long"]["tier"] == "red"
+    assert state["pending_red_since_ms"] == 120_000
+    assert state["pending_stop_event"] is None
+    assert state["runtime"].red_latched() is True
+
+
 def test_hard_stop_status_logging_is_throttled(caplog):
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
@@ -2650,6 +2724,55 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
     )
     assert _hsl_state(bot)["runtime"].red_latched() is True
     assert captured["pside"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_finalize_red_stop_uses_latest_panic_fill_timestamp(monkeypatch):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.9
+    state = _hsl_state(bot)
+    state["pending_red_since_ms"] = 120_000
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda: [
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "pb_order_type": "close_panic_long",
+            }
+        ]
+    )
+    captured = {}
+
+    async def fake_compute(pside, ts_ms):
+        captured["compute"] = (pside, ts_ms)
+        return {
+            "stop_event_timestamp_ms": ts_ms,
+            "equity": 104.0,
+            "peak_strategy_equity": 110.0,
+            "trigger_peak_strategy_equity": 106.0,
+            "drawdown_raw": 0.05454545,
+            "drawdown_ema": 0.08,
+            "drawdown_score": 0.08,
+        }
+
+    def fake_write(pside, payload):
+        captured["write"] = (pside, payload)
+        return "/tmp/hs_latch_fill_ts.json"
+
+    monkeypatch.setattr(bot, "_equity_hard_stop_compute_stop_event", fake_compute)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+
+    await bot._equity_hard_stop_finalize_red_stop("long")
+
+    assert captured["compute"] == ("long", 170_000)
+    assert state["last_stop_event"]["stop_event_timestamp_ms"] == 170_000
+    assert state["cooldown_until_ms"] == 230_000
+    assert captured["write"][1]["cooldown_until_ms"] == 230_000
 
 
 @pytest.mark.asyncio

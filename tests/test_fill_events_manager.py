@@ -2045,6 +2045,7 @@ async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
 
 def test_fill_events_manager_custom_id_decode_does_not_return_raw_id():
     assert custom_id_to_snake("external-order-without-passivbot-marker") == "unknown"
+    assert custom_id_to_snake("12345678") == "unknown"
 
 
 @pytest.mark.asyncio
