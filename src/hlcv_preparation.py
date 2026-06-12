@@ -1419,6 +1419,36 @@ async def _resolve_v2_store_range(
         if rng.valid.any()
         else [(int(start_ts), int(end_ts))]
     )
+
+    async def refresh_after_unconfirmed_tail_retry(current_rng, current_plan):
+        current_invalid_windows = (
+            _iter_invalid_windows(current_rng.timestamps, current_rng.valid)
+            if current_rng.valid.any()
+            else [(int(start_ts), int(end_ts))]
+        )
+        return await _retry_unconfirmed_short_tail_range(
+            om=om,
+            catalog=catalog,
+            store=store,
+            legacy_root=legacy_root,
+            exchange=exchange,
+            coin=coin,
+            symbol=symbol,
+            start_ts=start_ts,
+            end_ts=end_ts,
+            allow_remote_fetch=allow_remote_fetch,
+            rng=current_rng,
+            plan=current_plan,
+            invalid_windows=current_invalid_windows,
+        )
+
+    rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+        await refresh_after_unconfirmed_tail_retry(rng, plan)
+    )
+    if blocked_by_unconfirmed_tail:
+        return None
+    if rng.valid.all():
+        return rng
     if _has_single_leading_invalid_prefix(rng):
         first_ts_evidence = await _collect_first_timestamp_evidence(
             om=om, exchange=exchange, coin=coin, symbol=symbol
@@ -1602,6 +1632,13 @@ async def _resolve_v2_store_range(
                         if rng.valid.any()
                         else [(int(start_ts), int(end_ts))]
                     )
+                    rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+                        await refresh_after_unconfirmed_tail_retry(rng, plan)
+                    )
+                    if blocked_by_unconfirmed_tail:
+                        return None
+                    if rng.valid.all():
+                        return rng
                     remaining_persistent_gaps = _persistent_gaps_overlapping_windows(
                         catalog.get_persistent_gaps(
                             exchange, "1m", symbol, int(start_ts), int(end_ts)
@@ -1688,6 +1725,13 @@ async def _resolve_v2_store_range(
                 if rng.valid.any()
                 else [(int(start_ts), int(end_ts))]
             )
+            rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+                await refresh_after_unconfirmed_tail_retry(rng, plan)
+            )
+            if blocked_by_unconfirmed_tail:
+                return None
+            if rng.valid.all():
+                return rng
             if _range_has_tolerable_internal_sparse_gaps(
                 rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
             ) and not _persistent_gaps_overlap_windows(plan.persistent_gaps, invalid_windows):
@@ -1770,6 +1814,13 @@ async def _resolve_v2_store_range(
                 ts_to_date(start_ts),
                 ts_to_date(end_ts),
             )
+            return rng
+        rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+            await refresh_after_unconfirmed_tail_retry(rng, plan)
+        )
+        if blocked_by_unconfirmed_tail:
+            return None
+        if rng.valid.all():
             return rng
         if _range_has_tolerable_internal_sparse_gaps(
             rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
@@ -1881,6 +1932,13 @@ async def _resolve_v2_store_range(
                     ts_to_date(end_ts),
                 )
                 return rng
+            rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+                await refresh_after_unconfirmed_tail_retry(rng, post_fetch_plan)
+            )
+            if blocked_by_unconfirmed_tail:
+                return None
+            if rng.valid.all():
+                return rng
             if _range_has_tolerable_internal_sparse_gaps(
                 rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
             ):
@@ -1934,6 +1992,13 @@ async def _resolve_v2_store_range(
     if rng is None:
         return None
     if not rng.valid.all():
+        rng, plan, invalid_windows, blocked_by_unconfirmed_tail = (
+            await refresh_after_unconfirmed_tail_retry(rng, plan)
+        )
+        if blocked_by_unconfirmed_tail:
+            return None
+        if rng.valid.all():
+            return rng
         if _range_has_tolerable_internal_sparse_gaps(
             rng, getattr(om, "gap_tolerance_ohlcvs_minutes", 120.0)
         ):
@@ -2630,6 +2695,176 @@ def _terminal_empty_page_df(exc: OhlcvTerminalEmptyPage) -> pd.DataFrame:
             "volume": rows["bv"].astype(float, copy=False),
         }
     ).reset_index(drop=True)
+
+
+def _fetch_attempt_note_int(note: str | None, key: str) -> int | None:
+    if not note:
+        return None
+    prefix = f"{key}="
+    for token in str(note).split():
+        if token.startswith(prefix):
+            try:
+                return int(token[len(prefix):])
+            except ValueError:
+                return None
+    return None
+
+
+def _unconfirmed_short_tail_still_uncovered(rng, attempt, *, end_ts: int) -> bool:
+    note = getattr(attempt, "note", None)
+    boundary_ts = _fetch_attempt_note_int(note, "boundary")
+    request_end_ts = _fetch_attempt_note_int(note, "request_end")
+    if boundary_ts is None or request_end_ts is None:
+        return True
+    tail_end_ts = min(int(request_end_ts), int(end_ts))
+    if int(boundary_ts) > tail_end_ts:
+        return False
+    timestamps = np.asarray(rng.timestamps, dtype=np.int64)
+    valid = np.asarray(rng.valid, dtype=bool)
+    tail_mask = (timestamps >= int(boundary_ts)) & (timestamps <= tail_end_ts)
+    if not bool(tail_mask.any()):
+        return True
+    return not bool(valid[tail_mask].all())
+
+
+def _latest_unconfirmed_short_tail_attempt(
+    *,
+    catalog: OhlcvCatalog,
+    exchange: str,
+    timeframe: str,
+    symbol: str,
+    start_ts: int,
+    end_ts: int,
+    rng,
+):
+    latest_by_key = {}
+    attempts = catalog.list_fetch_attempts(exchange, timeframe, symbol, start_ts, end_ts)
+    for idx, attempt in enumerate(attempts):
+        note = str(getattr(attempt, "note", "") or "")
+        if "short_tail_return" not in note:
+            continue
+        key = (
+            int(getattr(attempt, "start_ts", -1)),
+            int(getattr(attempt, "end_ts", -1)),
+            _fetch_attempt_note_int(note, "boundary"),
+            _fetch_attempt_note_int(note, "request_end"),
+            _fetch_attempt_note_int(note, "last_ts"),
+        )
+        latest_by_key[key] = (idx, attempt)
+    latest_attempts = [
+        attempt for _, attempt in sorted(latest_by_key.values(), key=lambda item: item[0])
+    ]
+    for attempt in reversed(latest_attempts):
+        note = str(getattr(attempt, "note", "") or "")
+        if "unconfirmed_short_tail_return" not in note:
+            continue
+        if _unconfirmed_short_tail_still_uncovered(rng, attempt, end_ts=end_ts):
+            return attempt
+    return None
+
+
+async def _retry_unconfirmed_short_tail_range(
+    *,
+    om,
+    catalog: OhlcvCatalog,
+    store: OhlcvStore,
+    legacy_root: Path | None,
+    exchange: str,
+    coin: str,
+    symbol: str,
+    start_ts: int,
+    end_ts: int,
+    allow_remote_fetch: bool,
+    rng,
+    plan,
+    invalid_windows: list[tuple[int, int]],
+):
+    unconfirmed_tail_attempt = _latest_unconfirmed_short_tail_attempt(
+        catalog=catalog,
+        exchange=exchange,
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        rng=rng,
+    )
+    if unconfirmed_tail_attempt is None:
+        return rng, plan, invalid_windows, False
+    if not allow_remote_fetch:
+        logging.info(
+            "[%s] v2 local blocked by unconfirmed trailing tail for %s (%s -> %s)",
+            exchange,
+            coin,
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        return rng, plan, invalid_windows, True
+    fetch_start_ts = int(getattr(unconfirmed_tail_attempt, "start_ts"))
+    fetch_end_ts = int(getattr(unconfirmed_tail_attempt, "end_ts"))
+    logging.info(
+        "[%s] retrying unconfirmed trailing tail boundary for %s (%s -> %s)",
+        exchange,
+        coin,
+        ts_to_date(fetch_start_ts),
+        ts_to_date(fetch_end_ts),
+    )
+    if not await _fetch_coin_range_into_v2_store(
+        om=om,
+        catalog=catalog,
+        store=store,
+        exchange=exchange,
+        coin=coin,
+        symbol=symbol,
+        start_ts=fetch_start_ts,
+        end_ts=fetch_end_ts,
+    ):
+        return rng, plan, invalid_windows, True
+    plan = plan_local_symbol_range(
+        catalog=catalog,
+        legacy_root=legacy_root,
+        exchange=exchange,
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+    rng = await _read_v2_range_repairing_corrupt_chunk(
+        om=om,
+        catalog=catalog,
+        store=store,
+        exchange=exchange,
+        coin=coin,
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=allow_remote_fetch,
+    )
+    if rng is None:
+        return rng, plan, invalid_windows, True
+    invalid_windows = (
+        _iter_invalid_windows(rng.timestamps, rng.valid)
+        if not rng.valid.all() and rng.valid.any()
+        else ([] if rng.valid.all() else [(int(start_ts), int(end_ts))])
+    )
+    unconfirmed_tail_attempt = _latest_unconfirmed_short_tail_attempt(
+        catalog=catalog,
+        exchange=exchange,
+        timeframe="1m",
+        symbol=symbol,
+        start_ts=start_ts,
+        end_ts=end_ts,
+        rng=rng,
+    )
+    if unconfirmed_tail_attempt is not None:
+        logging.info(
+            "[%s] v2 local still blocked by unconfirmed trailing tail for %s (%s -> %s)",
+            exchange,
+            coin,
+            ts_to_date(start_ts),
+            ts_to_date(end_ts),
+        )
+        return rng, plan, invalid_windows, True
+    return rng, plan, invalid_windows, False
 
 
 async def _fetch_coin_range_into_v2_store(

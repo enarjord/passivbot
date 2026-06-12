@@ -438,6 +438,72 @@ async def test_fetch_coin_range_mixed_sparse_tail_requires_trailing_corroboratio
 
 
 @pytest.mark.asyncio
+async def test_resolve_v2_store_range_retries_mixed_sparse_tail_before_partial(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 8 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+        fetch_calls = 0
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            self.fetch_calls += 1
+            ts = np.array(
+                [start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+                dtype=np.int64,
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "high": np.array([101.0, 103.0, 104.0], dtype=np.float32),
+                    "low": np.array([99.0, 101.0, 102.0], dtype=np.float32),
+                    "close": np.array([100.0, 102.0, 103.0], dtype=np.float32),
+                    "volume": np.array([10.0, 12.0, 13.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    rng = await _resolve_v2_store_range(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+        allow_remote_fetch=True,
+        local_hit_log_label="test local hit",
+        remote_fetch_log_label="test remote fetch",
+    )
+
+    assert manager.fetch_calls == 2
+    assert rng is not None
+    np.testing.assert_array_equal(
+        rng.timestamps,
+        np.array([start_ts + 3 * 60_000, start_ts + 4 * 60_000], dtype=np.int64),
+    )
+    assert rng.valid.all()
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert "unconfirmed_short_tail_return" in (attempts[-2].note or "")
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (start_ts, start_ts, "leading_unavailable"),
+        (start_ts + 2 * 60_000, start_ts + 2 * 60_000, "internal_gap"),
+        (start_ts + 5 * 60_000, end_ts, "trailing_unavailable"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_fetch_coin_range_terminal_empty_tail_requires_corroboration(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
