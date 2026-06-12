@@ -2756,7 +2756,10 @@ def _latest_unconfirmed_short_tail_attempt(
     ]
     for attempt in reversed(latest_attempts):
         note = str(getattr(attempt, "note", "") or "")
-        if "unconfirmed_short_tail_return" not in note:
+        if (
+            "unconfirmed_short_tail_return" not in note
+            and getattr(attempt, "outcome", None) != "trailing_unavailable_unconfirmed"
+        ):
             continue
         if _unconfirmed_short_tail_still_uncovered(rng, attempt, end_ts=end_ts):
             return attempt
