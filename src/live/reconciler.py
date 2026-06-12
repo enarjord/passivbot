@@ -1053,6 +1053,36 @@ def _order_is_panic(order: dict) -> bool:
         return False
 
 
+def _order_pb_type(order: dict) -> str:
+    if not isinstance(order, dict):
+        return ""
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        return ""
+    try:
+        return str(_pb_attr("custom_id_to_snake")(custom_id))
+    except Exception:
+        return ""
+
+
+def _reduce_only_order_family(order: dict) -> tuple[str, str] | None:
+    if not _order_is_reduce_only(order):
+        return None
+    pb_type = _order_pb_type(order)
+    if not pb_type:
+        return None
+    parts = pb_type.split("_")
+    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
+    if parts and parts[-1] in {"long", "short"}:
+        pside = pside or parts[-1]
+        parts = parts[:-1]
+    family = "_".join(parts) if parts else pb_type
+    return pside, family
+
+
 def _trailing_unavailable_reasons(bot, symbol: str) -> set[str]:
     by_symbol = getattr(bot, "_orchestrator_trailing_unavailable_reasons", {}) or {}
     reasons = by_symbol.get(symbol, []) if isinstance(by_symbol, dict) else []
@@ -1092,13 +1122,19 @@ def filter_trailing_unavailable_reconciliation(
     if has_panic_plan:
         return to_cancel, filtered_create, dropped_create, False
 
-    ideal_has_reduce_only = any(_order_is_reduce_only(order) for order in ideal_orders)
+    ideal_reduce_only_families = {
+        family
+        for order in ideal_orders
+        if (family := _reduce_only_order_family(order)) is not None
+    }
     filtered_cancel = []
     dropped_cancel = 0
     for order in to_cancel:
-        if _order_is_reduce_only(order) and not ideal_has_reduce_only:
-            dropped_cancel += 1
-            continue
+        if _order_is_reduce_only(order):
+            family = _reduce_only_order_family(order)
+            if family is None or family not in ideal_reduce_only_families:
+                dropped_cancel += 1
+                continue
         filtered_cancel.append(order)
     return filtered_cancel, filtered_create, dropped_cancel + dropped_create, False
 

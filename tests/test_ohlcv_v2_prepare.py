@@ -365,6 +365,79 @@ async def test_fetch_coin_range_short_tail_requires_corroboration(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_fetch_coin_range_mixed_sparse_tail_requires_trailing_corroboration(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 8 * 60_000
+
+    class FakeOhlcvManager:
+        gap_tolerance_ohlcvs_minutes = 0.0
+        cm = None
+
+        def update_timestamp_range(self, new_start_ts, new_end_ts):
+            self.start_ts = int(new_start_ts)
+            self.end_ts = int(new_end_ts)
+
+        async def fetch_ohlcvs_for_v2_store(self, coin, *, start_ts, end_ts):
+            ts = np.array(
+                [start_ts + 60_000, start_ts + 3 * 60_000, start_ts + 4 * 60_000],
+                dtype=np.int64,
+            )
+            return pd.DataFrame(
+                {
+                    "timestamp": ts,
+                    "high": np.array([101.0, 103.0, 104.0], dtype=np.float32),
+                    "low": np.array([99.0, 101.0, 102.0], dtype=np.float32),
+                    "close": np.array([100.0, 102.0, 103.0], dtype=np.float32),
+                    "volume": np.array([10.0, 12.0, 13.0], dtype=np.float32),
+                }
+            )
+
+    manager = FakeOhlcvManager()
+    first = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert first.ok
+    assert first.reason == "leading_unavailable"
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert attempts[-1].outcome == "leading_unavailable"
+    assert "unconfirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [gap.reason for gap in gaps] == ["leading_unavailable", "internal_gap"]
+
+    second = await _fetch_coin_range_into_v2_store(
+        om=manager,
+        catalog=catalog,
+        store=store,
+        exchange="bybit",
+        coin="ETH",
+        symbol="ETH/USDT:USDT",
+        start_ts=start_ts,
+        end_ts=end_ts,
+    )
+
+    assert second.ok
+    attempts = catalog.list_fetch_attempts("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert "confirmed_short_tail_return" in (attempts[-1].note or "")
+    gaps = catalog.get_gaps("bybit", "1m", "ETH/USDT:USDT", start_ts, end_ts)
+    assert [(gap.start_ts, gap.end_ts, gap.reason) for gap in gaps] == [
+        (start_ts, start_ts, "leading_unavailable"),
+        (start_ts + 2 * 60_000, start_ts + 2 * 60_000, "internal_gap"),
+        (start_ts + 5 * 60_000, end_ts, "trailing_unavailable"),
+    ]
+    assert "short_tail_return" in (gaps[-1].note or "")
+
+
+@pytest.mark.asyncio
 async def test_fetch_coin_range_terminal_empty_tail_requires_corroboration(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)

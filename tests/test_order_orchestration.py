@@ -405,6 +405,98 @@ async def test_calc_orders_blocks_entry_creates_when_trailing_candles_pending():
     assert to_create == []
 
 
+@pytest.mark.asyncio
+async def test_calc_orders_preserves_mismatched_reduce_only_cancel_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_trailing_long",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    102.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
+
+
+@pytest.mark.asyncio
+async def test_calc_orders_allows_same_family_reduce_only_replace_when_trailing_candles_pending():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot._orchestrator_trailing_unavailable_symbols = {symbol}
+    bot._orchestrator_trailing_unavailable_reasons = {
+        symbol: ["missing_trailing_candles"]
+    }
+
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "sell",
+            "long",
+            1.0,
+            101.0,
+            "close_grid_long",
+            reduce_only=True,
+        )
+    ]
+
+    async def fake_calc_ideal_orders(self):
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    102.0,
+                    "close_grid_long",
+                    reduce_only=True,
+                )
+            ]
+        }
+
+    bot.calc_ideal_orders = types.MethodType(fake_calc_ideal_orders, bot)
+
+    to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+
+    assert [(order["side"], order["position_side"], order["price"]) for order in to_cancel] == [
+        ("sell", "long", 101.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_grid_long"]
+
+
 def test_to_executable_orders_respects_rust_market_execution_hint():
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})

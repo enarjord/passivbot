@@ -2604,14 +2604,12 @@ def _has_matching_short_tail_attempt(
         f"last_ts={int(last_ts)}",
     ]
     for attempt in previous_attempts:
-        if getattr(attempt, "outcome", None) != "trailing_unavailable_unconfirmed":
-            continue
         if int(getattr(attempt, "start_ts", -1)) != int(start_ts):
             continue
         if int(getattr(attempt, "end_ts", -1)) != int(end_ts):
             continue
         note = str(getattr(attempt, "note", "") or "")
-        if all(token in note for token in required_tokens):
+        if "short_tail_return" in note and all(token in note for token in required_tokens):
             return True
     return False
 
@@ -3016,16 +3014,18 @@ async def _fetch_coin_range_into_v2_store(
             ts_to_date(start_ts),
             ts_to_date(end_ts),
         )
+    has_unbounded_trailing_tail = (
+        trailing_missing_bars > gap_tolerance_bars and not allow_unbounded_edge_gaps
+    )
     trailing_unavailable = (
-        trailing_missing_bars > gap_tolerance_bars
+        has_unbounded_trailing_tail
         and not has_internal_gaps
         and not leading_unavailable
         and not pre_inception_prefix_boundary
-        and not allow_unbounded_edge_gaps
     )
     short_tail_confirmed = False
     short_tail_note: str | None = None
-    if trailing_unavailable and not terminal_empty_confirmed:
+    if has_unbounded_trailing_tail and not terminal_empty_confirmed:
         tail_boundary_ts = int(ts[-1]) + interval_ms
         short_tail_note = _short_tail_return_note(
             request_end_ts=request_end_ts,
@@ -3041,25 +3041,27 @@ async def _fetch_coin_range_into_v2_store(
             request_end_ts=request_end_ts,
             last_ts=int(ts[-1]),
         ):
-            catalog.record_fetch_attempt(
-                exchange=exchange,
-                timeframe="1m",
-                symbol=symbol,
-                start_ts=start_ts,
-                end_ts=end_ts,
-                attempt=attempt,
-                outcome="trailing_unavailable_unconfirmed",
-                latency_ms=latency_ms,
-                note=short_tail_note,
-            )
-            return V2FetchResult(
-                False,
-                "trailing_unavailable_unconfirmed",
-                first_ts=int(ts[0]),
-                last_ts=int(ts[-1]),
-                trailing_missing_bars=trailing_missing_bars,
-            )
-        short_tail_confirmed = True
+            if trailing_unavailable:
+                catalog.record_fetch_attempt(
+                    exchange=exchange,
+                    timeframe="1m",
+                    symbol=symbol,
+                    start_ts=start_ts,
+                    end_ts=end_ts,
+                    attempt=attempt,
+                    outcome="trailing_unavailable_unconfirmed",
+                    latency_ms=latency_ms,
+                    note=short_tail_note,
+                )
+                return V2FetchResult(
+                    False,
+                    "trailing_unavailable_unconfirmed",
+                    first_ts=int(ts[0]),
+                    last_ts=int(ts[-1]),
+                    trailing_missing_bars=trailing_missing_bars,
+                )
+        else:
+            short_tail_confirmed = True
     values = np.column_stack(
         [
             df["high"].astype(np.float32, copy=False).to_numpy(),
@@ -3118,6 +3120,8 @@ async def _fetch_coin_range_into_v2_store(
         note_parts.append(f"confirmed_{terminal_empty_note}")
     if short_tail_confirmed and short_tail_note:
         note_parts.append(f"confirmed_{short_tail_note}")
+    elif short_tail_note:
+        note_parts.append(f"unconfirmed_{short_tail_note}")
     catalog.record_fetch_attempt(
         exchange=exchange,
         timeframe="1m",
@@ -3175,7 +3179,7 @@ def _mark_sparse_fetch_gaps(
             gap_end = int(sorted_ts[int(idx) + 1] - interval_ms)
             if gap_end >= gap_start:
                 gaps.append((gap_start, gap_end, "internal_gap"))
-    if mark_trailing_unavailable and last_ts < int(request_end_ts):
+    if mark_trailing_unavailable and trailing_note and last_ts < int(request_end_ts):
         gaps.append((last_ts + interval_ms, int(request_end_ts), "trailing_unavailable"))
     for gap_start, gap_end, reason in gaps:
         if gap_end < gap_start:
