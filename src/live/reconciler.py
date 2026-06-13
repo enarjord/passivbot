@@ -789,6 +789,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     bot,
     ideal_orders,
     *,
+    actual_symbols: Optional[Iterable[str]] = None,
     apply_initial_entry_gate: bool = True,
     apply_creation_guardrails: bool = True,
 ):
@@ -796,7 +797,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
 
-    actual_orders = bot._snapshot_actual_orders()
+    actual_orders = bot._snapshot_actual_orders(actual_symbols)
     malformed_actual_symbols = set(
         getattr(bot, "_malformed_actual_order_symbols", set()) or set()
     )
@@ -941,12 +942,16 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     return to_cancel, to_create
 
 
-def snapshot_actual_orders(bot) -> dict[str, list[dict]]:
+def snapshot_actual_orders(
+    bot, symbols: Optional[Iterable[str]] = None
+) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
     actual_orders: dict[str, list[dict]] = {}
     malformed_symbols: set[str] = set()
     malformed_counts: dict[str, int] = {}
-    for symbol in bot.active_symbols:
+    if symbols is None:
+        symbols = getattr(bot, "active_symbols", [])
+    for symbol in sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)):
         symbol_orders = []
         for order in bot.open_orders.get(symbol, []):
             try:

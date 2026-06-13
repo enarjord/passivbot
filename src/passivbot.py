@@ -10541,16 +10541,19 @@ class Passivbot:
     async def calc_protective_panic_ideal_orders_orchestrator(self):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
-        symbols = set()
+        position_symbols = set()
         for symbol, pos in (getattr(self, "positions", {}) or {}).items():
             for pside in ("long", "short"):
                 size = float(pos.get(pside, {}).get("size", 0.0) or 0.0)
                 if size != 0.0:
-                    symbols.add(symbol)
+                    position_symbols.add(symbol)
+        open_order_symbols = set()
         for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
             if orders:
-                symbols.add(symbol)
-        symbols = sorted(symbols)
+                open_order_symbols.add(symbol)
+        reconcile_symbols = sorted(position_symbols | open_order_symbols)
+        self._protective_panic_reconcile_symbols = reconcile_symbols
+        symbols = sorted(position_symbols)
         if not symbols:
             return {}
 
@@ -12693,16 +12696,23 @@ class Passivbot:
     async def calc_protective_panic_orders_to_cancel_and_create(self):
         """Determine protective cancels/reduce-only creates for RED panic supervision."""
         ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator()
+        actual_symbols = sorted(
+            set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
+            | set(ideal_orders)
+        )
         return await reconciler.calc_orders_to_cancel_and_create_from_ideal(
             self,
             ideal_orders,
+            actual_symbols=actual_symbols,
             apply_initial_entry_gate=False,
             apply_creation_guardrails=False,
         )
 
-    def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
+    def _snapshot_actual_orders(
+        self, symbols: Optional[Iterable[str]] = None
+    ) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
-        return reconciler.snapshot_actual_orders(self)
+        return reconciler.snapshot_actual_orders(self, symbols)
 
     def _reconcile_symbol_orders(
         self,

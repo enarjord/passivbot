@@ -352,6 +352,75 @@ async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
 
 
 @pytest.mark.asyncio
+async def test_calc_protective_panic_reconciles_when_active_symbols_stale():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.positions[symbol]["long"]["size"] = 1.0
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert to_cancel == []
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
+async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symbol():
+    symbol = "DOGE/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {
+        symbol: [
+            _make_order(
+                symbol,
+                "buy",
+                "long",
+                1.0,
+                0.1,
+                "entry_grid_normal_long",
+            )
+        ]
+    }
+
+    async def fail_market_snapshot_fetch(symbols):
+        raise AssertionError(f"cancel-only symbols must not require market snapshots: {symbols}")
+
+    bot._get_orchestrator_market_snapshots = fail_market_snapshot_fetch
+
+    ideal = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot)
+
+    assert ideal == {}
+    assert bot._protective_panic_reconcile_symbols == [symbol]
+
+
+@pytest.mark.asyncio
 async def test_red_supervisor_uses_protective_refresh_and_order_plan():
     calls = []
 
