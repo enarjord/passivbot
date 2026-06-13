@@ -164,12 +164,7 @@ async def execute_order_plan(
                 f"{passivbot_cls._log_symbol(order['symbol'])} {order['side']} "
                 f"{order['position_side']} {order['qty']} @ {order['price']}"
             )
-            if _pb_attr("order_has_match")(order, to_cancel):
-                logging.debug(
-                    "matching order cancellation found; will be delayed until next cycle: %s",
-                    xf_log,
-                )
-            elif delay_time_ms := bot.order_was_recently_updated(order):
+            if delay_time_ms := bot.order_was_recently_updated(order):
                 logging.info(
                     "[order] recent execution found; delaying for up to %.1f secs: %s",
                     delay_time_ms / 1000,
@@ -278,7 +273,6 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         int(bot.get_exchange_time()) if hasattr(bot, "get_exchange_time") else _utc_ms()
     )
     for order in orders:
-        bot.add_to_recent_order_executions(order)
         passivbot_cls._record_emitted_order_custom_id(
             bot, order, emitted_ts=emitted_ts, status="submitted"
         )
@@ -309,6 +303,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
     for ex, order in zip(res, orders):
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
+                bot.add_to_recent_order_executions(order)
                 passivbot_cls._record_emitted_order_custom_id(
                     bot,
                     order,
@@ -335,6 +330,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
         if debug_prints and bot.debug_mode:
             print("debug create_orders", debug_prints)
         passivbot_cls._record_emitted_order_custom_id(bot, ex, emitted_ts=emitted_ts)
+        bot.add_to_recent_order_executions(ex)
         to_return.append(ex)
     if to_return:
         for elm in to_return:

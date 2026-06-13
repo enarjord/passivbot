@@ -772,6 +772,103 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
 
 
 @pytest.mark.asyncio
+async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self.cancelled_orders = None
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        def get_raw_balance(self):
+            return 100.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancelled_orders = list(orders)
+            return list(orders)
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = list(symbols or [])
+            return set(symbols or [])
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return list(orders)
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    symbol = "BTC/USDT:USDT"
+    to_cancel = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "price": 100.0,
+            "qty": 1.0,
+            "reduce_only": True,
+        }
+    ]
+    to_create = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "price": 100.0,
+            "qty": 1.0,
+            "reduce_only": True,
+            "pb_order_type": "close_grid_long",
+        }
+    ]
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_order_plan_to_exchange(bot, to_cancel, to_create)
+
+    assert bot.cancelled_orders == to_cancel
+    assert bot.config_symbols == [symbol]
+    assert bot.created_orders == to_create
+    assert bot.execution_scheduled is True
+
+
+@pytest.mark.asyncio
 async def test_execute_to_exchange_skips_creations_pending_exchange_config():
     import passivbot as pb_mod
 

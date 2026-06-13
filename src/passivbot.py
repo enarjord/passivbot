@@ -6174,10 +6174,23 @@ class Passivbot:
 
     def did_create_order(self, executed) -> bool:
         """Return True if the exchange acknowledged order creation."""
-        try:
-            return "id" in executed and executed["id"] is not None
-        except:
+        if not isinstance(executed, dict):
             return False
+        if executed.get("id") is None:
+            return False
+        status = str(executed.get("status") or "").strip().lower()
+        info = executed.get("info")
+        if not status and isinstance(info, dict):
+            status = str(
+                info.get("status")
+                or info.get("state")
+                or info.get("ordStatus")
+                or info.get("orderStatus")
+                or ""
+            ).strip().lower()
+        if status in {"rejected", "canceled", "cancelled", "expired", "failed"}:
+            return False
+        return True
         # further tests defined in child class
 
     def did_cancel_order(self, executed, order=None) -> bool:

@@ -191,6 +191,15 @@ def test_market_execution_notice_is_not_suppressed(caplog):
     assert all("pb_type=close_grid_long" in rec.message for rec in records)
 
 
+def test_base_did_create_order_rejects_terminal_statuses():
+    bot = Passivbot.__new__(Passivbot)
+
+    assert bot.did_create_order({"id": "open-1", "status": "open"})
+    assert not bot.did_create_order({"id": "reject-1", "status": "rejected"})
+    assert not bot.did_create_order({"id": "cancel-1", "info": {"status": "canceled"}})
+    assert not bot.did_create_order({"id": "expire-1", "info": {"ordStatus": "EXPIRED"}})
+
+
 @pytest.mark.asyncio
 async def test_calc_orders_to_cancel_and_create_reconciles_orders(monkeypatch):
     symbol = "BTC/USDT"
