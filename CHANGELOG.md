@@ -135,6 +135,9 @@ All notable user-facing changes will be documented in this file.
 - Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
   strategy parameters end-to-end, with no production fallback bridge from removed v7
   `trailing_grid` fields.
+- Added deprecated v8 compatibility strategy kind `trailing_grid_v7` plus
+  `passivbot tool migrate-config-v7` for explicitly converting v7 trailing-grid configs into
+  canonical v8 shape without reinterpreting them as `trailing_martingale`.
 - Fixed live v8 EMA warmup sizing to fail loudly on malformed strategy/forager span values
   instead of silently shrinking the warmup window and risking missing orchestrator EMA inputs.
 - Hardened `trailing_martingale` close recursion against non-finite close prices before

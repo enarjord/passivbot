@@ -1046,6 +1046,18 @@ def _build_monitor_trailing_section(
     balance_raw: float,
     market: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    config = getattr(self, "config", {})
+    live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
+    strategy_kind = str(live_cfg.get("strategy_kind") or "").strip().lower()
+    if strategy_kind == "trailing_grid_v7":
+        return {
+            "_meta": {
+                "diagnostics_supported": False,
+                "strategy_kind": "trailing_grid_v7",
+                "reason": "monitor trailing diagnostics use trailing_martingale helper formulas",
+            }
+        }
+
     out: dict[str, dict[str, Any]] = {}
     for symbol, market_entry in sorted(market.items()):
         if not isinstance(market_entry, dict):

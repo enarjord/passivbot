@@ -796,6 +796,41 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["recent"]["order_cancellations"][0]["pb_order_type"] == "close_unstuck_long"
 
 
+def test_monitor_trailing_section_marks_trailing_grid_v7_diagnostics_unsupported():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _build_monitor_trailing_section = pb_mod.Passivbot._build_monitor_trailing_section
+
+        def __init__(self):
+            self.config = {"live": {"strategy_kind": "trailing_grid_v7"}}
+
+    bot = FakeBot()
+
+    payload = bot._build_monitor_trailing_section(
+        balance_raw=1000.0,
+        market={
+            "BTC/USDT:USDT": {
+                "last_price": 100.0,
+                "trailing": {
+                    "long": {
+                        "min_since_open": 90.0,
+                        "max_since_min": 95.0,
+                    }
+                },
+            }
+        },
+    )
+
+    assert payload == {
+        "_meta": {
+            "diagnostics_supported": False,
+            "strategy_kind": "trailing_grid_v7",
+            "reason": "monitor trailing diagnostics use trailing_martingale helper formulas",
+        }
+    }
+
+
 @pytest.mark.asyncio
 async def test_update_positions_and_balance_cancels_balance_task_when_positions_fail():
     import passivbot as pb_mod

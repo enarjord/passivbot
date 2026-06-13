@@ -2078,6 +2078,41 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
     }))
 }
 
+fn trailing_grid_v7_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    let entry = extract_value::<&PyDict>(dict, "entry")?;
+    let close = extract_value::<&PyDict>(dict, "close")?;
+    Ok(serde_json::json!({
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry": {
+            "grid_double_down_factor": extract_value::<f64>(entry, "grid_double_down_factor")?,
+            "grid_spacing_pct": extract_value::<f64>(entry, "grid_spacing_pct")?,
+            "grid_spacing_we_weight": extract_value::<f64>(entry, "grid_spacing_we_weight")?,
+            "grid_spacing_volatility_weight": extract_value::<f64>(entry, "grid_spacing_volatility_weight")?,
+            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
+            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
+            "trailing_double_down_factor": extract_value::<f64>(entry, "trailing_double_down_factor")?,
+            "trailing_grid_ratio": extract_value::<f64>(entry, "trailing_grid_ratio")?,
+            "trailing_retracement_pct": extract_value::<f64>(entry, "trailing_retracement_pct")?,
+            "trailing_retracement_we_weight": extract_value::<f64>(entry, "trailing_retracement_we_weight")?,
+            "trailing_retracement_volatility_weight": extract_value::<f64>(entry, "trailing_retracement_volatility_weight")?,
+            "trailing_threshold_pct": extract_value::<f64>(entry, "trailing_threshold_pct")?,
+            "trailing_threshold_we_weight": extract_value::<f64>(entry, "trailing_threshold_we_weight")?,
+            "trailing_threshold_volatility_weight": extract_value::<f64>(entry, "trailing_threshold_volatility_weight")?,
+            "volatility_ema_span_hours": extract_value::<f64>(entry, "volatility_ema_span_hours")?,
+        },
+        "close": {
+            "grid_markup_start": extract_value::<f64>(close, "grid_markup_start")?,
+            "grid_markup_end": extract_value::<f64>(close, "grid_markup_end")?,
+            "grid_qty_pct": extract_value::<f64>(close, "grid_qty_pct")?,
+            "trailing_grid_ratio": extract_value::<f64>(close, "trailing_grid_ratio")?,
+            "trailing_qty_pct": extract_value::<f64>(close, "trailing_qty_pct")?,
+            "trailing_retracement_pct": extract_value::<f64>(close, "trailing_retracement_pct")?,
+            "trailing_threshold_pct": extract_value::<f64>(close, "trailing_threshold_pct")?,
+        },
+    }))
+}
+
 fn strategy_params_pair_from_dict(
     dict: &PyDict,
     strategy_kind: &str,
@@ -2100,6 +2135,10 @@ fn strategy_params_pair_from_dict(
         "ema_anchor" => (
             ema_anchor_strategy_params_from_dict(long_dict)?,
             ema_anchor_strategy_params_from_dict(short_dict)?,
+        ),
+        "trailing_grid_v7" => (
+            trailing_grid_v7_strategy_params_from_dict(long_dict)?,
+            trailing_grid_v7_strategy_params_from_dict(short_dict)?,
         ),
         _ => {
             return Err(PyValueError::new_err(format!(

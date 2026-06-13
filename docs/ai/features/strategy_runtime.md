@@ -6,6 +6,12 @@ The canonical v8 strategy kind is `trailing_martingale`. The v7 `trailing_grid` 
 aliased to it. Do not add compatibility migrations, duplicate strategy names, or silent shims for
 removed fields unless the user explicitly asks for released-version compatibility.
 
+`trailing_grid_v7` is the explicit compatibility exception. It is a normal Rust strategy kind,
+deprecated from introduction, and exists only for configs converted by
+`passivbot tool migrate-config-v7`. Keep its v7-only fields under
+`bot.<side>.strategy.trailing_grid_v7`; do not add them to `trailing_martingale` or shared
+`BotParams` unless a shared runtime function truly requires it.
+
 Removed v7 trailing-grid concepts:
 
 - `entry_trailing_grid_ratio`
@@ -19,6 +25,12 @@ Canonical v8 config path:
 
 ```text
 bot.<side>.strategy.trailing_martingale
+```
+
+Deprecated v7 compatibility config path:
+
+```text
+bot.<side>.strategy.trailing_grid_v7
 ```
 
 Optimizer selector contract:

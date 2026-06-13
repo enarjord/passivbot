@@ -1,6 +1,7 @@
 pub mod ema_anchor;
 pub mod registry;
 pub mod spec;
+pub mod trailing_grid_v7;
 pub mod trailing_martingale;
 
 use crate::types::{
@@ -17,6 +18,7 @@ pub enum StrategyKind {
     #[serde(rename = "trailing_martingale")]
     TrailingMartingale,
     EmaAnchor,
+    TrailingGridV7,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
@@ -106,10 +108,52 @@ impl Default for EmaAnchorParams {
     }
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TrailingGridV7Params {
+    pub ema_span_0: f64,
+    pub ema_span_1: f64,
+    pub entry: TrailingGridV7EntryParams,
+    pub close: TrailingGridV7CloseParams,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TrailingGridV7EntryParams {
+    pub grid_double_down_factor: f64,
+    pub grid_spacing_pct: f64,
+    pub grid_spacing_we_weight: f64,
+    pub grid_spacing_volatility_weight: f64,
+    pub initial_ema_dist: f64,
+    pub initial_qty_pct: f64,
+    pub trailing_double_down_factor: f64,
+    pub trailing_grid_ratio: f64,
+    pub trailing_retracement_pct: f64,
+    pub trailing_retracement_we_weight: f64,
+    pub trailing_retracement_volatility_weight: f64,
+    pub trailing_threshold_pct: f64,
+    pub trailing_threshold_we_weight: f64,
+    pub trailing_threshold_volatility_weight: f64,
+    pub volatility_ema_span_hours: f64,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default, deny_unknown_fields)]
+pub struct TrailingGridV7CloseParams {
+    pub grid_markup_start: f64,
+    pub grid_markup_end: f64,
+    pub grid_qty_pct: f64,
+    pub trailing_grid_ratio: f64,
+    pub trailing_qty_pct: f64,
+    pub trailing_retracement_pct: f64,
+    pub trailing_threshold_pct: f64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum StrategyParams {
     TrailingMartingale(TrailingMartingaleParams),
     EmaAnchor(EmaAnchorParams),
+    TrailingGridV7(TrailingGridV7Params),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -177,6 +221,15 @@ pub fn parse_strategy_params(
                 .map(StrategyParams::EmaAnchor)
                 .map_err(|err| format!("failed to parse ema_anchor strategy params: {err}"))
         }
+        StrategyKind::TrailingGridV7 => {
+            let value = raw.ok_or_else(|| {
+                "trailing_grid_v7 requires per-side strategy_params in orchestrator input"
+                    .to_string()
+            })?;
+            serde_json::from_value::<TrailingGridV7Params>(value.clone())
+                .map(StrategyParams::TrailingGridV7)
+                .map_err(|err| format!("failed to parse trailing_grid_v7 strategy params: {err}"))
+        }
     }
 }
 
@@ -184,6 +237,7 @@ pub fn strategy_ema_spans(params: &StrategyParams) -> (f64, f64) {
     match params {
         StrategyParams::TrailingMartingale(params) => (params.ema_span_0, params.ema_span_1),
         StrategyParams::EmaAnchor(params) => (params.ema_span_0, params.ema_span_1),
+        StrategyParams::TrailingGridV7(params) => (params.ema_span_0, params.ema_span_1),
     }
 }
 
@@ -191,6 +245,7 @@ pub fn strategy_entry_volatility_span_hours(params: &StrategyParams) -> Option<f
     match params {
         StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1h),
         StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1h),
+        StrategyParams::TrailingGridV7(params) => Some(params.entry.volatility_ema_span_hours),
     }
 }
 
@@ -198,6 +253,7 @@ pub fn strategy_offset_volatility_span_minutes(params: &StrategyParams) -> Optio
     match params {
         StrategyParams::TrailingMartingale(params) => Some(params.volatility_ema_span_1m),
         StrategyParams::EmaAnchor(params) => Some(params.offset_volatility_ema_span_1m),
+        StrategyParams::TrailingGridV7(_) => Some(0.0),
     }
 }
 
@@ -205,6 +261,7 @@ pub fn strategy_initial_entry_offset(params: &StrategyParams) -> f64 {
     match params {
         StrategyParams::TrailingMartingale(params) => params.entry.initial_ema_dist,
         StrategyParams::EmaAnchor(params) => params.offset,
+        StrategyParams::TrailingGridV7(params) => params.entry.initial_ema_dist,
     }
 }
 
@@ -212,6 +269,7 @@ pub fn strategy_initial_qty_pct(params: &StrategyParams) -> f64 {
     match params {
         StrategyParams::TrailingMartingale(params) => params.entry.initial_qty_pct,
         StrategyParams::EmaAnchor(params) => params.base_qty_pct,
+        StrategyParams::TrailingGridV7(params) => params.entry.initial_qty_pct,
     }
 }
 
@@ -227,6 +285,7 @@ pub fn strategy_needs_log_range_1m(params: &StrategyParams) -> bool {
         StrategyParams::EmaAnchor(params) => {
             params.offset_volatility_1m_weight != 0.0 && params.offset_volatility_ema_span_1m > 0.0
         }
+        StrategyParams::TrailingGridV7(_) => false,
     }
 }
 
@@ -242,6 +301,12 @@ pub fn strategy_needs_log_range_1h(params: &StrategyParams) -> bool {
         StrategyParams::EmaAnchor(params) => {
             params.offset_volatility_1h_weight != 0.0 && params.offset_volatility_ema_span_1h > 0.0
         }
+        StrategyParams::TrailingGridV7(params) => {
+            (params.entry.grid_spacing_volatility_weight != 0.0
+                || params.entry.trailing_threshold_volatility_weight != 0.0
+                || params.entry.trailing_retracement_volatility_weight != 0.0)
+                && params.entry.volatility_ema_span_hours > 0.0
+        }
     }
 }
 
@@ -251,6 +316,9 @@ pub fn strategy_has_trailing(params: &StrategyParams) -> bool {
             params.entry.retracement_base_pct > 0.0 || params.close.retracement_base_pct > 0.0
         }
         StrategyParams::EmaAnchor(_) => false,
+        StrategyParams::TrailingGridV7(params) => {
+            params.entry.trailing_grid_ratio != 0.0 || params.close.trailing_grid_ratio != 0.0
+        }
     }
 }
 
@@ -262,5 +330,6 @@ pub fn generate_orders(
     match kind {
         StrategyKind::TrailingMartingale => trailing_martingale::generate_orders(side, request),
         StrategyKind::EmaAnchor => ema_anchor::generate_orders(side, request),
+        StrategyKind::TrailingGridV7 => trailing_grid_v7::generate_orders(side, request),
     }
 }

@@ -14,6 +14,7 @@ from config import (
     project_config,
 )
 from config.optimize_bounds import get_optimize_bounds_defaults
+from config.migrations.trailing_grid_v7 import migrate_v7_trailing_grid_config
 from config.strategy_spec import get_supported_strategy_kinds
 
 
@@ -72,6 +73,338 @@ def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_
             flat_generated[f"{pside}_{local_key}"] = value
 
     assert flat_generated == expected
+
+
+def _minimal_v7_trailing_grid_config():
+    return {
+        "config_version": "v7.12.0",
+        "live": {
+            "leverage": 3,
+        },
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-02-01",
+        },
+        "bot": {
+            "long": {
+                "n_positions": 7,
+                "total_wallet_exposure_limit": 1.5,
+                "risk_wel_enforcer_threshold": 0.99,
+                "risk_twel_enforcer_threshold": 0.985,
+                "risk_we_excess_allowance_pct": 0.1,
+                "forager_volatility_ema_span": 120,
+                "forager_volume_ema_span": 760,
+                "ema_span_0": 385.0,
+                "ema_span_1": 620.0,
+                "entry_grid_double_down_factor": 1.39,
+                "entry_grid_spacing_pct": 0.02312,
+                "entry_grid_spacing_we_weight": 0.6766,
+                "entry_grid_spacing_volatility_weight": 17.8,
+                "entry_initial_ema_dist": 0.0078,
+                "entry_initial_qty_pct": 0.0122,
+                "entry_trailing_double_down_factor": 1.0,
+                "entry_trailing_grid_ratio": -0.32,
+                "entry_trailing_retracement_pct": 0.01498,
+                "entry_trailing_retracement_we_weight": 4.958,
+                "entry_trailing_retracement_volatility_weight": 37.9,
+                "entry_trailing_threshold_pct": 0.00215,
+                "entry_trailing_threshold_we_weight": 4.243,
+                "entry_trailing_threshold_volatility_weight": 15.2,
+                "entry_volatility_ema_span_hours": 1909.0,
+                "close_grid_markup_start": 0.01041,
+                "close_grid_markup_end": 0.00241,
+                "close_grid_qty_pct": 0.88,
+                "close_trailing_grid_ratio": -0.07,
+                "close_trailing_qty_pct": 0.89,
+                "close_trailing_retracement_pct": 0.00413,
+                "close_trailing_threshold_pct": 0.0125,
+            },
+            "short": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 0.0,
+                "risk_wel_enforcer_threshold": 0.8,
+                "risk_twel_enforcer_threshold": 0.8,
+                "risk_we_excess_allowance_pct": 0.0,
+                "forager_volatility_ema_span": 10,
+                "forager_volume_ema_span": 360,
+                "ema_span_0": 300.0,
+                "ema_span_1": 700.0,
+                "entry_grid_double_down_factor": 1.0,
+                "entry_grid_spacing_pct": 0.02,
+                "entry_grid_spacing_we_weight": 1.0,
+                "entry_grid_spacing_volatility_weight": 10.0,
+                "entry_initial_ema_dist": 0.01,
+                "entry_initial_qty_pct": 0.01,
+                "entry_trailing_double_down_factor": 1.0,
+                "entry_trailing_grid_ratio": -0.7,
+                "entry_trailing_retracement_pct": 0.01,
+                "entry_trailing_retracement_we_weight": 1.0,
+                "entry_trailing_retracement_volatility_weight": 10.0,
+                "entry_trailing_threshold_pct": 0.002,
+                "entry_trailing_threshold_we_weight": 1.0,
+                "entry_trailing_threshold_volatility_weight": 10.0,
+                "entry_volatility_ema_span_hours": 1000.0,
+                "close_grid_markup_start": 0.00402,
+                "close_grid_markup_end": 0.00223,
+                "close_grid_qty_pct": 0.5,
+                "close_trailing_grid_ratio": -0.03,
+                "close_trailing_qty_pct": 0.5,
+                "close_trailing_retracement_pct": 0.005,
+                "close_trailing_threshold_pct": 0.005,
+            },
+        },
+        "optimize": {
+            "bounds": {
+                "long_close_grid_markup_start": [0.0015, 0.012, 1e-05],
+                "long_close_grid_markup_end": [-0.1, 0.012, 1e-05],
+                "long_entry_trailing_grid_ratio": [-0.8, -0.2, 0.01],
+                "long_forager_volatility_ema_span": [10, 720, 1],
+                "long_n_positions": [2, 7, 1],
+            }
+        },
+        "coin_overrides": {
+            "XMR": {
+                "bot": {
+                    "long": {
+                        "entry_trailing_grid_ratio": 1.0,
+                        "close_grid_markup_start": 0.02,
+                    }
+                }
+            }
+        },
+    }
+
+
+def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
+    migrated, report = migrate_v7_trailing_grid_config(_minimal_v7_trailing_grid_config())
+
+    assert migrated["config_version"] == CONFIG_SCHEMA_VERSION
+    assert migrated["live"]["strategy_kind"] == "trailing_grid_v7"
+    assert set(migrated["bot"]["long"]["strategy"]) == {"trailing_grid_v7"}
+    long_strategy = migrated["bot"]["long"]["strategy"]["trailing_grid_v7"]
+    assert long_strategy["ema_span_0"] == pytest.approx(385.0)
+    assert long_strategy["entry"]["trailing_grid_ratio"] == pytest.approx(-0.32)
+    assert long_strategy["entry"]["volatility_ema_span_hours"] == pytest.approx(1909.0)
+    assert long_strategy["close"]["grid_markup_start"] == pytest.approx(0.01041)
+    assert long_strategy["close"]["grid_markup_end"] == pytest.approx(0.00241)
+    assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
+    assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
+    assert migrated["bot"]["long"]["forager"]["volume_ema_span_1m"] == 760
+    assert (
+        migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"]["close"][
+            "grid_markup_start"
+        ]
+        == [0.0015, 0.012, 1e-05]
+    )
+    assert (
+        migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"]["entry"][
+            "trailing_grid_ratio"
+        ]
+        == [-0.8, -0.2, 0.01]
+    )
+    assert migrated["optimize"]["bounds"]["long"]["forager"]["volatility_ema_span_1m"] == [
+        10,
+        720,
+        1,
+    ]
+    override = migrated["coin_overrides"]["XMR"]["bot"]["long"]["strategy"]["trailing_grid_v7"]
+    assert override["entry"]["trailing_grid_ratio"] == pytest.approx(1.0)
+    assert override["close"]["grid_markup_start"] == pytest.approx(0.02)
+    assert report["destination_strategy_kind"] == "trailing_grid_v7"
+    assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
+
+
+def test_migrated_v7_trailing_grid_config_prepares_and_validates():
+    migrated, _report = migrate_v7_trailing_grid_config(_minimal_v7_trailing_grid_config())
+
+    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["live"]["strategy_kind"] == "trailing_grid_v7"
+    assert set(prepared["bot"]["long"]["strategy"]) == {"trailing_grid_v7"}
+    assert set(prepared["optimize"]["bounds"]["long"]["strategy"]) == {"trailing_grid_v7"}
+
+
+def test_migrate_v7_trailing_grid_coin_override_preserves_wallet_exposure_limit():
+    source = _minimal_v7_trailing_grid_config()
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "ema_span_0": 3.0,
+                "wallet_exposure_limit": 0.25,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    assert long_override["wallet_exposure_limit"] == pytest.approx(0.25)
+    assert long_override["strategy"]["trailing_grid_v7"]["ema_span_0"] == pytest.approx(3.0)
+    assert (
+        "coin_overrides.BTC.bot.long.wallet_exposure_limit -> "
+        "coin_overrides.BTC.bot.long.wallet_exposure_limit"
+    ) in report["moved_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
+    source = _minimal_v7_trailing_grid_config()
+    source["coin_overrides"]["BTC"] = {
+        "foo": {"bar": 1},
+        "bot": {
+            "long": {
+                "ema_span_0": 3.0,
+                "mystery": 42,
+                "risk": {"mystery": 1},
+            }
+        },
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert "coin_overrides.BTC.foo" in report["manual_review_fields"]
+    assert "coin_overrides.BTC.bot.long.mystery" in report["manual_review_fields"]
+    assert "coin_overrides.BTC.bot.long.risk" in report["manual_review_fields"]
+    assert "mystery" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    assert "risk" not in migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    assert "foo" not in migrated["coin_overrides"]["BTC"]
+
+
+def test_migrate_v7_trailing_grid_old_bound_alias_prepares():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long_entry_grid_spacing_weight": [0.1, 2.0, 0.1],
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
+        "entry"
+    ]
+    assert entry_bounds["grid_spacing_we_weight"] == [0.1, 2.0, 0.1]
+    assert "grid_spacing_weight" not in entry_bounds
+    assert (
+        "optimize.bounds.long_entry_grid_spacing_weight -> "
+        "optimize.bounds.long_entry_grid_spacing_we_weight"
+    ) in report["moved_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_old_filter_side_aliases_to_forager():
+    source = _minimal_v7_trailing_grid_config()
+    long_side = source["bot"]["long"]
+    for key in (
+        "forager_volatility_ema_span",
+        "forager_volume_ema_span",
+        "forager_volume_drop_pct",
+    ):
+        long_side.pop(key, None)
+    long_side.update(
+        {
+            "filter_volatility_ema_span": 111.0,
+            "filter_noisiness_rolling_window": 222.0,
+            "filter_noisiness_ema_span": 333.0,
+            "filter_log_range_ema_span": 444.0,
+            "filter_volume_ema_span": 555.0,
+            "filter_volume_rolling_window": 666.0,
+            "filter_volume_drop_pct": 0.24,
+        }
+    )
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    forager = migrated["bot"]["long"]["forager"]
+    assert forager["volatility_ema_span_1m"] == pytest.approx(111.0)
+    assert forager["volume_ema_span_1m"] == pytest.approx(555.0)
+    assert forager["volume_drop_pct"] == pytest.approx(0.24)
+    for key in (
+        "filter_volatility_ema_span",
+        "filter_noisiness_rolling_window",
+        "filter_noisiness_ema_span",
+        "filter_log_range_ema_span",
+        "filter_volume_ema_span",
+        "filter_volume_rolling_window",
+        "filter_volume_drop_pct",
+    ):
+        assert f"bot.long.{key}" not in report["manual_review_fields"]
+    assert (
+        "bot.long.filter_volatility_ema_span -> "
+        "bot.long.forager.volatility_ema_span_1m"
+    ) in report["moved_fields"]
+    assert (
+        "bot.long.filter_volume_ema_span -> bot.long.forager.volume_ema_span_1m"
+    ) in report["moved_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_forager_aliases_win_over_old_filter_aliases():
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"].update(
+        {
+            "forager_volatility_ema_span": 120.0,
+            "filter_volatility_ema_span": 999.0,
+            "forager_volume_ema_span": 760.0,
+            "filter_volume_ema_span": 888.0,
+        }
+    )
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    forager = migrated["bot"]["long"]["forager"]
+    assert forager["volatility_ema_span_1m"] == pytest.approx(120.0)
+    assert forager["volume_ema_span_1m"] == pytest.approx(760.0)
+    assert "bot.long.filter_volatility_ema_span" not in report["manual_review_fields"]
+    assert "bot.long.filter_volume_ema_span" not in report["manual_review_fields"]
+
+
+def test_migrate_v7_trailing_grid_old_filter_bound_aliases_to_forager():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long_filter_volatility_ema_span": [10, 720, 1],
+        "long_filter_volume_ema_span": [360, 2880, 10],
+        "long_filter_noisiness_rolling_window": [20, 300, 1],
+        "long_filter_noisiness_ema_span": [30, 400, 1],
+        "long_filter_log_range_ema_span": [40, 500, 1],
+        "long_filter_volume_rolling_window": [600, 2600, 10],
+        "long_filter_volume_drop_pct": [0.1, 0.9, 0.01],
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    forager_bounds = migrated["optimize"]["bounds"]["long"]["forager"]
+    assert forager_bounds["volatility_ema_span_1m"] == [10, 720, 1]
+    assert forager_bounds["volume_ema_span_1m"] == [360, 2880, 10]
+    assert forager_bounds["volume_drop_pct"] == [0.1, 0.9, 0.01]
+    for key in source["optimize"]["bounds"]:
+        assert f"optimize.bounds.{key}" not in report["manual_review_fields"]
+    assert (
+        "optimize.bounds.long_filter_volatility_ema_span -> "
+        "optimize.bounds.long_forager_volatility_ema_span_1m"
+    ) in report["moved_fields"]
+    assert (
+        "optimize.bounds.long_filter_volume_ema_span -> "
+        "optimize.bounds.long_forager_volume_ema_span_1m"
+    ) in report["moved_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_unknown_flat_bound_is_reported_not_emitted():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long_entry_totally_unknown": [0.1, 2.0, 0.1],
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
+        "entry"
+    ]
+    assert "totally_unknown" not in entry_bounds
+    assert "optimize.bounds.long_entry_totally_unknown" in report["manual_review_fields"]
+    assert not any(
+        "long_entry_totally_unknown" in moved for moved in report["moved_fields"]
+    )
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
 @pytest.mark.parametrize(

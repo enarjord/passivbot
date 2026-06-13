@@ -63,7 +63,7 @@ pub fn calc_close_qty(
     }
 }
 
-fn calc_wel_auto_reduce_long(
+pub(crate) fn calc_wel_auto_reduce_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
@@ -147,7 +147,7 @@ fn calc_wel_auto_reduce_long(
     })
 }
 
-fn calc_wel_auto_reduce_short(
+pub(crate) fn calc_wel_auto_reduce_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,

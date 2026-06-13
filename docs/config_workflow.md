@@ -7,6 +7,7 @@ This is the recommended way to work with Passivbot configs on the current config
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_martingale_long_npos4.json` mirrors those defaults exactly.
 - New V8 configs must keep the top-level `config_version: "v8.0.0"` field. V8 is a breaking schema; older or pre-v8 configs are not automatically converted to V8.
+- V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. The output uses deprecated compatibility strategy kind `trailing_grid_v7`; new optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow
@@ -35,6 +36,7 @@ passivbot live configs/live/my_config.json
 - Keep shared execution/risk settings in `live`. Backtests inherit `market_orders_allowed`, `market_order_near_touch_threshold`, `pnls_max_lookback_days`, `fee_pct_fallback`, and `fee_pct_sanity_abs_max` directly from `live`; these fields are not accepted under `backtest`.
 - `live.pnls_max_lookback_days` uses one shared contract across live and backtest: `0` = minimal lookback at that path's native sampling resolution, positive numbers = that many rolling days, and `"all"` = full available history.
 - Keep new configs on the canonical schema. Do not author new configs using deprecated field names.
+- Do not paste old flat v7 trailing-grid fields into a v8 config. Run the migration helper so the fields land under `bot.<side>.strategy.trailing_grid_v7`.
 - Use `coin_overrides` for per-coin exceptions instead of cloning whole configs for minor differences.
 - Leave `logging.persist_to_file = true` for normal live operations so each bot run has a durable logfile under `logs/` and monitor tooling can follow the stable `logs/{user}.log` alias.
 

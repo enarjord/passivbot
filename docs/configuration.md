@@ -232,6 +232,14 @@ Key HSL analysis metrics:
 
 The canonical V8 strategy kind is `trailing_martingale`. It replaces the v7 `trailing_grid` schema with threshold/retracement fields. If retracement is disabled, threshold behaves like recursive DCA/grid spacing. If retracement is enabled, threshold is the required excursion and retracement is the confirmation move.
 
+V8 also includes `trailing_grid_v7` as deprecated compatibility for migrating v7 trailing-grid configs without immediate re-optimization. Convert old configs explicitly with:
+
+```bash
+passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json
+```
+
+The helper writes canonical v8 shape with `live.strategy_kind = "trailing_grid_v7"` and strategy parameters under `bot.<side>.strategy.trailing_grid_v7`. It does not convert v7 parameters into `trailing_martingale`, and normal v8 loading does not silently accept old flat trailing-grid fields.
+
 - **strategy.trailing_martingale.entry.double_down_factor**:
   - Quantity of the next re-entry is position size times the double down factor.
   - Example: If position size is `1.4` and `double_down_factor` is `0.9`, then the next entry quantity is `1.4 * 0.9 = 1.26`.
@@ -291,7 +299,7 @@ Close threshold/retracement mirrors entries, but close threshold is additive so 
 - **strategy.trailing_martingale.close.retracement_volatility_1h_weight**, **retracement_volatility_1m_weight**:
   - Close retracement is widened multiplicatively by volatility only. There is intentionally no close retracement wallet-exposure weight.
 
-The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of V8 behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`.
+The V8 `trailing_martingale` schema is a clean break from the v7 `trailing_grid` schema. Removed concepts include `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`, `close_grid_markup_start`, and `close_grid_markup_end`. The old `markup_start`/`markup_end` linear TP grid is not part of `trailing_martingale` behavior; recursive closes are now driven by `close.threshold_*`, `close.retracement_*`, and `close.qty_pct`. Those v7 concepts are preserved only by the deprecated `trailing_grid_v7` compatibility strategy.
 
 ### Unstuck Parameters
 
@@ -412,7 +420,8 @@ See [docs/forager.md](forager.md) for a full description of motivation, ranking 
 - **filter_by_min_effective_cost**: If `true`, disallows coins where
   `balance * allowed_wallet_exposure_limit * strategy_initial_sizing_fraction < min_effective_cost`.
   For `trailing_martingale`, the sizing fraction is
-  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `ema_anchor`, it is
+  `bot.<side>.strategy.trailing_martingale.entry.initial_qty_pct`; for `trailing_grid_v7`, it is
+  `bot.<side>.strategy.trailing_grid_v7.entry.initial_qty_pct`; for `ema_anchor`, it is
   `bot.<side>.strategy.ema_anchor.base_qty_pct`.
   - Example: If the exchange's effective minimum cost for a coin is `$5`, but the bot wants to make an order of `$2`, disallow that coin.
 - **forced_mode_long**, **forced_mode_short**: Force all coins long/short to a given mode.
@@ -557,7 +566,7 @@ Risk should be constrained through canonical `*_strategy_eq` metrics instead. De
 - **compress_results_file**: If `true`, compresses optimize output results file to save space.
 - **enable_overrides**: List of constraint overrides applied during optimization to enforce specific parameter relationships. The optimizer evaluator checks these conditions and apply the overrides before running each backtest (defaults to none):
   - **"lossless_close_trailing"**: Ensures trailing closes are profitable by enforcing `strategy.trailing_martingale.close.threshold_base_pct` > `strategy.trailing_martingale.close.retracement_base_pct`. This prevents retracement from triggering before reaching the minimum profit threshold.
-  - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid.
+  - **"forward_tp_grid"**, **"backward_tp_grid"**: Legacy v7 override names. They are not part of the V8 `trailing_martingale` close contract because `close_grid_markup_start` / `close_grid_markup_end` no longer define a linear TP grid. These overrides remain rejected for `trailing_grid_v7`; tune the migrated close-grid bounds directly instead.
   - **"mirror_short_from_long"**: Mirrors `bot.short` from `bot.long` for the shared side groups (`risk`, `forager`, `hsl`, `unstuck`) plus the active strategy selected by `live.strategy_kind`. This is useful when optimizing a mirrored long/short strategy while only searching the long-side parameter space.
 - **crossover_probability**: Probability of performing crossover between two individuals in the genetic algorithm. Determines how often parents exchange genetic information to create offspring.
 - **crossover_eta**: Crowding factor (η) for simulated-binary crossover. Lower values (<20) allow offspring to move farther away from their parents; higher values keep them closer. Default is `20.0`.

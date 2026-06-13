@@ -6199,7 +6199,17 @@ class Passivbot:
         """Return True when trailing logic is active for the given symbol and side."""
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+            if isinstance(getattr(self, "config", None), dict)
+            else None
+        )
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if strategy_kind == "trailing_grid_v7":
+            return (
+                float(strategy_cfg.get("entry", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+                or float(strategy_cfg.get("close", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+            )
         return (
             float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
             or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
@@ -7189,7 +7199,7 @@ class Passivbot:
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
             return float(strategy_cfg["base_qty_pct"])
-        if strategy_kind == "trailing_martingale":
+        if strategy_kind in {"trailing_martingale", "trailing_grid_v7"}:
             entry_cfg = strategy_cfg.get("entry")
             if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
                 raise KeyError(f"missing required strategy key {pside}.entry.initial_qty_pct")
@@ -11153,19 +11163,66 @@ class Passivbot:
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
+        missing_strategy_path = object()
 
         def _strategy_lookup(params: dict, *paths):
             for path in paths:
                 current = params
                 for part in path:
                     if not isinstance(current, dict) or part not in current:
-                        current = None
+                        current = missing_strategy_path
                         break
                     current = current[part]
-                if current is not None:
+                if current is not missing_strategy_path:
                     return current
             rendered = " | ".join(".".join(path) for path in paths)
             raise KeyError(f"missing required strategy parameter path: {rendered}")
+
+        def _strategy_lookup_optional(params: dict, default: float, *paths):
+            try:
+                return _strategy_lookup(params, *paths)
+            except KeyError:
+                return default
+
+        def _strategy_abs_max_weight(
+            params: dict,
+            *,
+            context: str,
+            symbol: str,
+            optional: bool,
+            paths: tuple[tuple[str, ...], ...],
+        ) -> float:
+            found = False
+            max_abs = 0.0
+            for path in paths:
+                current = params
+                for part in path:
+                    if not isinstance(current, dict) or part not in current:
+                        current = missing_strategy_path
+                        break
+                    current = current[part]
+                if current is missing_strategy_path:
+                    continue
+                found = True
+                try:
+                    val = float(current)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(
+                        f"invalid live warmup value for {context} "
+                        f"symbol={Passivbot._log_symbol(symbol)} path={'.'.join(path)}: {current!r}"
+                    ) from exc
+                if not math.isfinite(val):
+                    raise ValueError(
+                        f"invalid live warmup value for {context} "
+                        f"symbol={Passivbot._log_symbol(symbol)} path={'.'.join(path)}: {current!r}"
+                    )
+                max_abs = max(max_abs, abs(val))
+            if found or optional:
+                return max_abs
+            rendered = " | ".join(".".join(path) for path in paths)
+            raise KeyError(f"missing required strategy parameter path: {rendered}")
+
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
 
         def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
             try:
@@ -11236,44 +11293,52 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                m1_lr_span = Passivbot._positive_finite_warmup_value(
-                    _strategy_lookup(
+                if strategy_kind == "trailing_grid_v7":
+                    m1_span_value = _strategy_lookup_optional(
+                        strategy_params,
+                        0.0,
+                        ("volatility_ema_span_1m",),
+                        ("entry_volatility_ema_span_1m",),
+                        ("offset_volatility_ema_span_1m",),
+                    )
+                else:
+                    m1_span_value = _strategy_lookup(
                         strategy_params,
                         ("volatility_ema_span_1m",),
                         ("entry_volatility_ema_span_1m",),
                         ("offset_volatility_ema_span_1m",),
-                    ),
+                    )
+                m1_lr_span = Passivbot._positive_finite_warmup_value(
+                    m1_span_value,
                     context=f"strategy {pside}.volatility_ema_span_1m",
                     symbol=symbol,
                 )
                 m1_lr_weight = 0.0
                 if m1_lr_span > 0.0:
                     m1_lr_weight = max(
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("entry", "threshold_volatility_1m_weight"),
-                                    ("entry", "retracement_volatility_1m_weight"),
-                                    ("entry_weight_volatility_1m",),
-                                    ("offset_volatility_1m_weight",),
-                                ),
-                                context=f"strategy {pside}.entry_volatility_1m_weight",
-                                symbol=symbol,
-                            )
+                        _strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1m_weight",
+                            symbol=symbol,
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1m_weight"),
+                                ("entry", "retracement_volatility_1m_weight"),
+                                ("entry_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
                         ),
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("close", "threshold_volatility_1m_weight"),
-                                    ("close", "retracement_volatility_1m_weight"),
-                                    ("close_weight_volatility_1m",),
-                                    ("offset_volatility_1m_weight",),
-                                ),
-                                context=f"strategy {pside}.close_volatility_1m_weight",
-                                symbol=symbol,
-                            )
+                        _strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1m_weight",
+                            symbol=symbol,
+                            optional=False,
+                            paths=(
+                                ("close", "threshold_volatility_1m_weight"),
+                                ("close", "retracement_volatility_1m_weight"),
+                                ("close_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
                         ),
                     )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
@@ -11284,6 +11349,7 @@ class Passivbot:
                         ("volatility_ema_span_1h",),
                         ("offset_volatility_ema_span_1h",),
                         ("entry_volatility_ema_span_1h",),
+                        ("entry", "volatility_ema_span_hours"),
                     ),
                     context=f"strategy {pside}.volatility_ema_span_1h",
                     symbol=symbol,
@@ -11291,31 +11357,32 @@ class Passivbot:
                 h1_lr_weight = 0.0
                 if h1_span > 0.0:
                     h1_lr_weight = max(
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("entry", "threshold_volatility_1h_weight"),
-                                    ("entry", "retracement_volatility_1h_weight"),
-                                    ("entry_weight_volatility_1h",),
-                                    ("offset_volatility_1h_weight",),
-                                ),
-                                context=f"strategy {pside}.entry_volatility_1h_weight",
-                                symbol=symbol,
-                            )
+                        _strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1h_weight",
+                            symbol=symbol,
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1h_weight"),
+                                ("entry", "retracement_volatility_1h_weight"),
+                                ("entry", "grid_spacing_volatility_weight"),
+                                ("entry", "trailing_threshold_volatility_weight"),
+                                ("entry", "trailing_retracement_volatility_weight"),
+                                ("entry_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
                         ),
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("close", "threshold_volatility_1h_weight"),
-                                    ("close", "retracement_volatility_1h_weight"),
-                                    ("close_weight_volatility_1h",),
-                                    ("offset_volatility_1h_weight",),
-                                ),
-                                context=f"strategy {pside}.close_volatility_1h_weight",
-                                symbol=symbol,
-                            )
+                        _strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1h_weight",
+                            symbol=symbol,
+                            optional=strategy_kind == "trailing_grid_v7",
+                            paths=(
+                                ("close", "threshold_volatility_1h_weight"),
+                                ("close", "retracement_volatility_1h_weight"),
+                                ("close_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
                         ),
                     )
                 if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
