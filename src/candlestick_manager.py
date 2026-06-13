@@ -6695,6 +6695,15 @@ class CandlestickManager:
         start_ts = int(end_ts - period_ms * (span_candles - 1))
         return start_ts, end_ts
 
+    def _ema_window_has_expected_tail(self, arr: np.ndarray, end_ts: int) -> bool:
+        if not isinstance(arr, np.ndarray) or arr.size == 0:
+            return False
+        try:
+            timestamps = np.asarray(arr["ts"], dtype=np.int64)
+        except (KeyError, TypeError, ValueError):
+            return False
+        return bool(np.any(timestamps == int(end_ts)))
+
     async def get_latest_ema_close(
         self,
         symbol: str,
@@ -6730,6 +6739,8 @@ class CandlestickManager:
             allow_remote_fetch=allow_remote_fetch,
         )
         if arr.size == 0:
+            return float("nan")
+        if not self._ema_window_has_expected_tail(arr, end_ts):
             return float("nan")
         closes = np.asarray(arr["c"], dtype=np.float64)
         res = float(self._ema(closes, span))
@@ -6965,6 +6976,8 @@ class CandlestickManager:
         )
         if arr.size == 0:
             return float("nan")
+        if not self._ema_window_has_expected_tail(arr, end_ts):
+            return float("nan")
         series = series_fn(arr)
         res = float(self._ema(series, span))
         cache[key] = (res, int(end_ts), int(now))
@@ -7033,6 +7046,10 @@ class CandlestickManager:
             max_lookback_candles=window_candles,
         )
         if raw.size == 0:
+            for metric_key in missing:
+                out[metric_key] = float("nan")
+            return out
+        if not self._ema_window_has_expected_tail(raw, end_ts):
             for metric_key in missing:
                 out[metric_key] = float("nan")
             return out

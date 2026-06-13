@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from ccxt.base.errors import RateLimitExceeded
+from ccxt.base.errors import BadRequest, RateLimitExceeded
 
 
 class FreshPlanningSnapshot:
@@ -369,6 +369,45 @@ async def test_binance_update_config_accepts_already_hedged_response():
     )
 
     await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_bybit_update_config_accepts_already_hedged_bad_request():
+    from exchanges.bybit import BybitBot
+
+    bot = BybitBot.__new__(BybitBot)
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(
+            side_effect=BadRequest(
+                'bybit {"retCode":110025,"retMsg":"position mode is not modified"}'
+            )
+        )
+    )
+
+    await bot.update_exchange_config()
+
+    bot.cca.set_position_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_bybit_update_config_reraises_unknown_bad_request():
+    from exchanges.bybit import BybitBot
+
+    bot = BybitBot.__new__(BybitBot)
+    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=BadRequest("boom")))
+
+    with pytest.raises(BadRequest, match="boom"):
+        await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetch_pnls_legacy_path_is_disabled():
+    from exchanges.bitget import BitgetBot
+
+    bot = BitgetBot.__new__(BitgetBot)
+
+    with pytest.raises(NotImplementedError, match="fetch_fill_events"):
+        await bot.fetch_pnls()
 
 
 @pytest.mark.asyncio

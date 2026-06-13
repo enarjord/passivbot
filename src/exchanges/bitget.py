@@ -8,7 +8,6 @@ from typing import Dict, List, Tuple
 from bitget_normalization import deduce_side_pside
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
-from pure_funcs import calc_hash
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
@@ -128,44 +127,9 @@ class BitgetBot(CCXTBot):
     # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
-        params = {"productType": "USDT-FUTURES"}
-        if start_time:
-            start_time = int(start_time)
-        if end_time:
-            params["endTime"] = int(end_time)
-        if limit:
-            params["limit"] = min(100, limit)
-        side_pos_side_map = {"buy": "long", "sell": "short"}
-        data_d = {}
-        while True:
-            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
-            end_id = fetched["data"]["endId"]
-            data = fetched["data"]["fillList"]
-            if data is None:
-                break
-            if not data:
-                break
-            with_hashes = {calc_hash(x): x for x in data}
-            if all([h in data_d for h in with_hashes]):
-                break
-            for h, x in with_hashes.items():
-                data_d[h] = x
-                data_d[h]["pnl"] = float(x["profit"])
-                data_d[h]["price"] = float(x["price"])
-                data_d[h]["amount"] = float(x["baseVolume"])
-                data_d[h]["id"] = x["tradeId"]
-                data_d[h]["timestamp"] = float(x["cTime"])
-                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
-                data_d[h]["position_side"] = side_pos_side_map[x["side"]]
-                data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
-            if start_time is None:
-                break
-            last_ts = float(data[-1]["cTime"])
-            if last_ts < start_time:
-                break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
-            params["endTime"] = int(last_ts)
-        return sorted(data_d.values(), key=lambda x: x["timestamp"])
+        raise NotImplementedError(
+            "Bitget fetch_pnls legacy PnL path is unsupported; use fetch_fill_events"
+        )
 
     async def _throttled_order_detail(self, order_id: str, symbol: str):
         """Rate limited wrapper for clientOid lookups."""

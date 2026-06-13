@@ -282,6 +282,44 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_latest_ema_helpers_reject_short_tail_without_caching(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "SHORTTAIL/USDT"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    stale = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (start_ts + ONE_MIN_MS, 11.0, 12.0, 10.0, 11.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return stale
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    close = await cm.get_latest_ema_close(symbol, span, max_age_ms=60_000)
+    quote_volume = await cm.get_latest_ema_quote_volume(symbol, span, max_age_ms=60_000)
+    log_range = await cm.get_latest_ema_log_range(symbol, span, max_age_ms=60_000)
+    metrics = await cm.get_latest_ema_metrics(
+        symbol,
+        {"close": span, "qv": span, "log_range": span},
+        max_age_ms=60_000,
+    )
+
+    assert math.isnan(close)
+    assert math.isnan(quote_volume)
+    assert math.isnan(log_range)
+    assert all(math.isnan(metrics[key]) for key in ("close", "qv", "log_range"))
+    assert cm._ema_cache.get(symbol, {}) == {}
+
+
+@pytest.mark.asyncio
 async def test_get_candles_negative_max_age_raises(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "Z/USDT"

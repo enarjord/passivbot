@@ -4291,17 +4291,25 @@ class FillEventsManager:
         def handle_batch(batch: List[Dict[str, object]]) -> None:
             ensure_qty_signage(batch)
             days_touched: set[str] = set()
+            parsed_events: List[Tuple[Dict[str, object], FillEvent]] = []
+            malformed_events: List[Tuple[Dict[str, object], ValueError]] = []
             for raw in batch:
                 raw.setdefault("raw", [])
                 try:
                     event = FillEvent.from_dict(raw)
                 except ValueError as exc:
-                    logger.warning(
-                        "[fills] skipping malformed event %s (error=%s)",
-                        raw.get("id"),
-                        exc,
-                    )
+                    malformed_events.append((raw, exc))
                     continue
+                parsed_events.append((raw, event))
+            if malformed_events:
+                preview = ", ".join(
+                    f"id={raw.get('id')!r} error={exc}" for raw, exc in malformed_events[:3]
+                )
+                extra = "" if len(malformed_events) <= 3 else f", +{len(malformed_events) - 3} more"
+                raise ValueError(
+                    f"malformed fill event(s) fetched from {self.exchange}: {preview}{extra}"
+                ) from malformed_events[0][1]
+            for _raw, event in parsed_events:
                 source_ids = {str(source_id) for source_id in event.source_ids or [] if source_id}
                 replaced_ids: set[str] = set()
                 if source_ids:
