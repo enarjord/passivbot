@@ -3037,6 +3037,38 @@ def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
     assert calls[0] == pytest.approx((1000.0, 0.01, 10.0, 10.0))
 
 
+def test_unstuck_allowance_blocks_degraded_synthetic_pnl():
+    bot = Passivbot.__new__(Passivbot)
+    bot._pnls_manager = types.SimpleNamespace(
+        get_events=lambda start_ms=None, end_ms=None, symbol=None: [
+            types.SimpleNamespace(
+                pnl=0.0,
+                fee_paid=0.0,
+                timestamp=1_000,
+                pnl_status="complete",
+                pnl_source="synthetic_fill_reconstruction_degraded",
+                id="degraded-close",
+                symbol="BTC/USDT:USDT",
+                position_side="long",
+                pb_order_type="close_grid_long",
+            )
+        ],
+        cache=None,
+    )
+
+    def bot_value(pside, key):
+        if key == "unstuck_loss_allowance_pct":
+            return 0.01
+        if key == "total_wallet_exposure_limit":
+            return 1.0
+        return 0.0
+
+    bot.bot_value = bot_value
+
+    with pytest.raises(RuntimeError, match="degraded realized PnL"):
+        bot._calc_unstuck_allowances(allow_new_unstuck=True)
+
+
 @pytest.mark.asyncio
 async def test_orchestrator_snapshot_payload_routes_split_balances(monkeypatch):
     import passivbot as pb_mod

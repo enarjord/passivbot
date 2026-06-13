@@ -39,6 +39,9 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
+    GAP_CONFIDENCE_CONFIRMED,
+    GAP_REASON_CONFIRMED,
+    PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
@@ -1285,6 +1288,133 @@ class Passivbot:
 
     def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
+
+    @staticmethod
+    def _pnl_gap_is_confirmed_legitimate(gap: dict) -> bool:
+        reason = str(gap.get("reason") or "").lower()
+        try:
+            confidence = float(gap.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+    @staticmethod
+    def _pnl_gap_overlaps(gap: dict, start_ms: Optional[int], end_ms: Optional[int]) -> bool:
+        try:
+            gap_start = int(gap.get("start_ts", 0) or 0)
+            gap_end = int(gap.get("end_ts", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if gap_end <= gap_start:
+            return False
+        start = 0 if start_ms is None else int(start_ms)
+        end = (2**63 - 1) if end_ms is None else int(end_ms)
+        return gap_start < end and gap_end > start
+
+    @staticmethod
+    def _pnl_event_preview(events: Iterable[Any]) -> str:
+        preview = ",".join(
+            f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
+            f"{getattr(ev, 'position_side', '')}:{getattr(ev, 'pb_order_type', '')}"
+            for ev in list(events)[:5]
+        )
+        return preview
+
+    def _assert_pnl_history_safe_for_risk(
+        self,
+        events: list,
+        *,
+        context: str,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+        require_coverage: bool = True,
+    ) -> None:
+        """Fail before risk gates consume incomplete realized-PnL history."""
+        self._assert_no_pending_pnl_events(events, context=context)
+        degraded = [
+            event
+            for event in events
+            if str(getattr(event, "pnl_source", "") or "").lower()
+            == PNL_SOURCE_SYNTHETIC_DEGRADED
+        ]
+        if degraded:
+            preview = self._pnl_event_preview(degraded)
+            suffix = f", +{len(degraded) - 5} more" if len(degraded) > 5 else ""
+            raise RuntimeError(
+                f"{context}: degraded realized PnL for {len(degraded)} close fill(s): "
+                f"{preview}{suffix}"
+            )
+        if not require_coverage or self._pnls_manager is None:
+            return
+        cache = getattr(self._pnls_manager, "cache", None)
+        if cache is None:
+            return
+
+        if end_ms is None:
+            try:
+                end_ms = int(self.get_exchange_time())
+            except (AttributeError, TypeError, ValueError):
+                end_ms = None
+
+        get_known_gaps = getattr(cache, "get_known_gaps", None)
+        known_gaps = list(get_known_gaps() or []) if callable(get_known_gaps) else []
+        blocking_gaps = [
+            gap
+            for gap in known_gaps
+            if not self._pnl_gap_is_confirmed_legitimate(gap)
+            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
+        ]
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            raise RuntimeError(
+                f"{context}: fill history gap overlaps risk lookback "
+                f"start={start_ms if start_ms is not None else 'all'} "
+                f"end={end_ms if end_ms is not None else 'latest'} "
+                f"gap={int(gap.get('start_ts', 0) or 0)}-{int(gap.get('end_ts', 0) or 0)} "
+                f"reason={gap.get('reason', 'unknown')}"
+            )
+
+        metadata = {}
+        load_metadata = getattr(cache, "load_metadata", None)
+        if callable(load_metadata):
+            metadata = load_metadata() or {}
+        if start_ms is None:
+            get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+            if not callable(get_history_scope):
+                get_history_scope = getattr(cache, "get_history_scope", None)
+            raw_history_scope = (
+                get_history_scope()
+                if callable(get_history_scope)
+                else metadata.get("history_scope", "unknown")
+            )
+            history_scope = str(raw_history_scope).lower()
+            if history_scope != "all":
+                raise RuntimeError(
+                    f"{context}: fill history coverage unknown for full-history risk lookback "
+                    f"(history_scope={history_scope})"
+                )
+            return
+
+        covered_start_ms = 0
+        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
+        if callable(get_covered_start_ms):
+            covered_start_ms = int(get_covered_start_ms() or 0)
+        else:
+            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+
+        event_oldest = 0
+        if events:
+            event_oldest = min(int(getattr(ev, "timestamp", 0) or 0) for ev in events)
+        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
+        oldest_known = min([x for x in (event_oldest, metadata_oldest) if x > 0], default=0)
+        if (covered_start_ms > 0 and covered_start_ms <= int(start_ms)) or (
+            oldest_known > 0 and oldest_known <= int(start_ms)
+        ):
+            return
+        raise RuntimeError(
+            f"{context}: fill history coverage unknown for risk lookback "
+            f"start={int(start_ms)} covered_start={covered_start_ms} oldest_event={oldest_known}"
+        )
 
     def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
         lookback = parse_pnls_max_lookback_days(
@@ -8342,6 +8472,10 @@ class Passivbot:
                     "all" if lookback.is_all else "window",
                 )
                 await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if start_ms is not None and callable(mark_covered_start):
+                    mark_covered_start(int(start_ms))
                 self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
 
             # Load cached events
@@ -8519,6 +8653,10 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if age_limit is not None and callable(mark_covered_start):
+                    mark_covered_start(int(age_limit))
                 self._pnls_manager.set_history_scope(
                     "all" if lookback.is_all else "window"
                 )
@@ -8777,12 +8915,15 @@ class Passivbot:
         if not allow_new_unstuck or self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="unstuck allowance realized PnL",
+            start_ms=start_ms,
+        )
         if not events:
             return {"long": 0.0, "short": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="unstuck allowance realized PnL"
-        )
 
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
@@ -8810,12 +8951,15 @@ class Passivbot:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="realized loss gate PnL cumsum",
+            start_ms=start_ms,
+        )
         if not events:
             return {"max": 0.0, "last": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="realized loss gate PnL cumsum"
-        )
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         return {"max": max(0.0, float(pnls_cumsum.max())), "last": float(pnls_cumsum[-1])}
 

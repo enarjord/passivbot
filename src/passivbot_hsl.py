@@ -604,27 +604,22 @@ def _equity_hard_stop_realized_pnl_now(self, pside: Optional[str] = None) -> flo
     if self._pnls_manager is None:
         return 0.0
     realized = 0.0
-    events = self._pnls_manager.get_events()
-    pending = [
-        event
-        for event in events
-        if str(getattr(event, "pnl_status", "complete") or "complete").lower() == "pending"
-        and (pside is None or _equity_hard_stop_fill_pside(event) == pside)
-    ]
-    if pending:
-        preview = ",".join(
-            f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
-            f"{getattr(ev, 'position_side', '')}:{getattr(ev, 'pb_order_type', '')}"
-            for ev in pending[:5]
-        )
-        suffix = f", +{len(pending) - 5} more" if len(pending) > 5 else ""
-        raise RuntimeError(
-            f"equity hard stop realized PnL: realized PnL pending for "
-            f"{len(pending)} close fill(s): {preview}{suffix}"
-        )
+    start_ms = self._pnls_lookback_start_ms()
+    events = (
+        self._pnls_manager.get_events()
+        if start_ms is None
+        else self._pnls_manager.get_events(start_ms=start_ms)
+    )
+    if pside is not None:
+        events = [
+            event for event in events if _equity_hard_stop_fill_pside(event) == pside
+        ]
+    self._assert_pnl_history_safe_for_risk(
+        events,
+        context="equity hard stop realized PnL",
+        start_ms=start_ms,
+    )
     for event in events:
-        if pside is not None and _equity_hard_stop_fill_pside(event) != pside:
-            continue
         realized += float(getattr(event, "pnl", 0.0) or 0.0)
         realized += _equity_hard_stop_fee_cost(event)
     return realized
