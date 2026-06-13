@@ -781,9 +781,20 @@ def mark_account_critical_state_dirty(
 
 async def calc_orders_to_cancel_and_create(bot):
     """Determine which existing orders to cancel and which new ones to place."""
+    ideal_orders = await bot.calc_ideal_orders()
+    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+
+
+async def calc_orders_to_cancel_and_create_from_ideal(
+    bot,
+    ideal_orders,
+    *,
+    apply_initial_entry_gate: bool = True,
+    apply_creation_guardrails: bool = True,
+):
+    """Reconcile exchange orders against a supplied ideal order map."""
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
-    ideal_orders = await bot.calc_ideal_orders()
 
     actual_orders = bot._snapshot_actual_orders()
     malformed_actual_symbols = set(
@@ -851,12 +862,18 @@ async def calc_orders_to_cancel_and_create(bot):
         to_cancel += cancel_
         to_create += create_
 
-    to_create, initial_entry_gate_skipped = (
-        await bot._apply_initial_entry_distance_gate(to_create)
-    )
+    if apply_initial_entry_gate:
+        to_create, initial_entry_gate_skipped = (
+            await bot._apply_initial_entry_distance_gate(to_create)
+        )
+    else:
+        initial_entry_gate_skipped = 0
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
-    to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+    if apply_creation_guardrails:
+        to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+    else:
+        freshness_skipped = 0
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)

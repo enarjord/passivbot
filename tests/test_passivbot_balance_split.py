@@ -2280,6 +2280,155 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
 
 
 @pytest.mark.asyncio
+async def test_refresh_protective_authoritative_state_uses_only_positions_and_open_orders():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    bot.exchange = "binance"
+    bot.stop_signal_received = False
+    bot.positions = {}
+    bot.open_orders = {}
+    bot._authoritative_refresh_epoch = 0
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    fetched_positions = [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "size": 0.1,
+            "price": 100.0,
+        }
+    ]
+    fetched_orders = [
+        {
+            "id": "1",
+            "symbol": "BTC/USDT:USDT",
+            "side": "sell",
+            "position_side": "long",
+            "qty": 0.1,
+            "price": 101.0,
+        }
+    ]
+    bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
+        return_value={
+            "plan": {"positions", "open_orders"},
+            "positions": fetched_positions,
+            "open_orders": fetched_orders,
+        }
+    )
+    bot._apply_open_orders_snapshot = AsyncMock(return_value=True)
+
+    def apply_positions(positions):
+        bot.positions = {
+            "BTC/USDT:USDT": {
+                "long": {"size": 0.1, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        return [], positions
+
+    bot._apply_positions_snapshot = apply_positions
+    bot._positions_signature = lambda positions: tuple(
+        (p["symbol"], p["position_side"], p["size"], p["price"]) for p in positions
+    )
+    recorded = []
+    bot._record_authoritative_surface = lambda surface, signature: recorded.append(
+        (surface, signature)
+    )
+    cooldown_updates = []
+    bot._update_entry_cooldown_position_delta_guard = (
+        lambda symbols, now_ms: cooldown_updates.append((tuple(symbols), now_ms))
+    )
+    finalized = []
+    bot._finalize_authoritative_refresh_consistency = lambda plan: finalized.append(
+        set(plan)
+    )
+    bot.fetch_balance = AsyncMock(side_effect=AssertionError("balance not required"))
+    bot.update_pnls = AsyncMock(side_effect=AssertionError("fills not required"))
+
+    ok = await bot.refresh_protective_authoritative_state()
+
+    assert ok is True
+    bot._fetch_authoritative_state_staged_snapshot.assert_awaited_once_with(
+        {"positions", "open_orders"}
+    )
+    bot._apply_open_orders_snapshot.assert_awaited_once_with(
+        fetched_orders,
+        allow_followup_positions_refresh=False,
+        reconcile_balance=False,
+    )
+    assert recorded == [
+        (
+            "positions",
+            (("BTC/USDT:USDT", "long", 0.1, 100.0),),
+        )
+    ]
+    assert cooldown_updates == [(("BTC/USDT:USDT",), 1_700_000_000_000)]
+    assert finalized == [{"positions", "open_orders"}]
+
+
+def test_protective_planning_snapshot_does_not_require_balance_fills_or_candles():
+    import passivbot as pb_mod
+
+    symbol = "BTC/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.config_get = lambda keys: None
+    bot._authoritative_refresh_epoch = 1
+    bot._authoritative_pending_confirmations = {
+        "balance": 2,
+        "positions": 2,
+        "open_orders": 2,
+        "fills": 2,
+    }
+    bot._staged_planner_surface_min_epochs = (
+        pb_mod.Passivbot._staged_planner_surface_min_epochs.__get__(bot, Passivbot)
+    )
+    bot._ensure_freshness_ledger = (
+        pb_mod.Passivbot._ensure_freshness_ledger.__get__(bot, Passivbot)
+    )
+    bot._live_market_snapshot_max_age_ms = lambda: 10_000
+    bot._market_snapshot_signature_invalid = lambda symbols: []
+    now_ms = pb_mod.utc_ms()
+    ledger = FreshnessLedger(now_ms=now_ms)
+    ledger.begin_epoch(now_ms=now_ms)
+    ledger.stamp("positions", (symbol, "long", 0.1), now_ms=now_ms)
+    ledger.stamp("open_orders", (), now_ms=now_ms)
+    ledger.stamp("market_snapshot", (symbol, 99.5, 100.5), now_ms=now_ms)
+    bot.freshness_ledger = ledger
+    snapshots = {
+        symbol: MarketSnapshot(
+            symbol=symbol,
+            bid=99.5,
+            ask=100.5,
+            last=100.0,
+            fetched_ms=now_ms,
+            source="test",
+        )
+    }
+
+    snapshot = pb_mod.planning_gates.build_protective_planning_snapshot(
+        bot, [symbol], snapshots
+    )
+
+    assert set(snapshot.required_surfaces) == {
+        "positions",
+        "open_orders",
+        "market_snapshot",
+    }
+    assert "balance" not in snapshot.required_surfaces
+    assert "fills" not in snapshot.required_surfaces
+    assert "completed_candles" not in snapshot.required_surfaces
+    assert {surface.name: surface.min_epoch for surface in snapshot.surfaces} == {
+        "positions": 1,
+        "open_orders": 1,
+        "market_snapshot": 1,
+    }
+
+
+@pytest.mark.asyncio
 async def test_fetch_authoritative_state_staged_snapshot_cleans_up_on_cancelled_surface():
     from live import state_refresh
 
@@ -3053,6 +3202,140 @@ async def test_live_orchestrator_input_omits_backtest_market_slippage(monkeypatc
 
     assert "market_order_slippage_pct" not in captured["input"]["global"]
     assert captured["input"]["global"]["max_realized_loss_pct"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
+async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monkeypatch):
+    import passivbot as pb_mod
+
+    symbol = "BTC/USDT:USDT"
+
+    class FakePlanningSnapshot:
+        def last_prices(self):
+            return {symbol: 100.0}
+
+    class FakeBot:
+        exchange = "binance"
+        user = "tester"
+        balance = 120.0
+        balance_raw = 120.0
+        positions = {
+            symbol: {
+                "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": 0.0, "price": 0.0},
+            }
+        }
+        open_orders = {}
+        active_symbols = []
+        _config_hedge_mode = True
+        hedge_mode = True
+        config = {"live": {"strategy_kind": "trailing_martingale"}}
+        markets_dict = {symbol: {"active": True, "maker": 0.0002, "taker": 0.0004}}
+        qty_steps = {symbol: 0.001}
+        price_steps = {symbol: 0.1}
+        min_qtys = {symbol: 0.001}
+        min_costs = {symbol: 5.0}
+        c_mults = {symbol: 1.0}
+        effective_min_cost = {symbol: 5.0}
+        _get_exchange_fee_rates = pb_mod.Passivbot._get_exchange_fee_rates
+
+        def config_get(self, keys):
+            return None
+
+        def live_value(self, key):
+            values = {
+                "filter_by_min_effective_cost": False,
+                "market_orders_allowed": True,
+                "market_order_near_touch_threshold": 0.0,
+                "max_realized_loss_pct": 1.0,
+            }
+            return values.get(key, False)
+
+        def get_exchange_time(self):
+            return 1_700_000_000_000
+
+        def get_hysteresis_snapped_balance(self):
+            return self.balance
+
+        def get_raw_balance(self):
+            return self.balance_raw
+
+        async def _get_orchestrator_market_snapshots(self, symbols):
+            return {
+                sym: MarketSnapshot(
+                    symbol=sym,
+                    bid=99.5,
+                    ask=100.5,
+                    last=100.0,
+                    fetched_ms=pb_mod.utc_ms(),
+                    source="test",
+                )
+                for sym in symbols
+            }
+
+        async def _load_orchestrator_ema_bundle(self, symbols, modes):
+            raise AssertionError("protective panic path must not load EMA bundles")
+
+        def _bot_params_to_rust_dict(self, pside, sym):
+            return {}
+
+        def _strategy_params_to_rust_dict(self, pside, sym):
+            return {}
+
+        def _calc_effective_min_cost_at_price(self, sym, price):
+            return 5.0
+
+        def _to_executable_orders(self, ideal_orders, last_prices):
+            return ideal_orders, set()
+
+        def _finalize_reduce_only_orders(self, ideal_orders_f, last_prices):
+            return ideal_orders_f
+
+    captured = {}
+
+    def fake_build_snapshot(bot, symbols, market_snapshots):
+        assert symbols == [symbol]
+        return FakePlanningSnapshot()
+
+    def fake_compute(json_str):
+        captured["input"] = json.loads(json_str)
+        return json.dumps({"orders": [], "diagnostics": {"warnings": []}})
+
+    monkeypatch.setattr(
+        pb_mod.planning_gates,
+        "build_protective_planning_snapshot",
+        fake_build_snapshot,
+    )
+    monkeypatch.setattr(pb_mod.Passivbot, "_monitor_record_price_ticks", lambda *a, **k: None)
+    monkeypatch.setattr(
+        pb_mod.Passivbot, "_build_orchestrator_runtime_hints", lambda self, symbol_to_idx: {}
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_equity_hard_stop_enabled",
+        lambda self, pside=None: True,
+    )
+    monkeypatch.setattr(
+        pb_mod.Passivbot,
+        "_equity_hard_stop_panic_close_order_type",
+        lambda self, pside: "market",
+    )
+    monkeypatch.setattr(pb_mod.pbr, "compute_ideal_orders_json", fake_compute)
+
+    out = await pb_mod.Passivbot.calc_protective_panic_ideal_orders_orchestrator(
+        FakeBot()
+    )
+
+    assert out == {}
+    rust_symbol = captured["input"]["symbols"][0]
+    assert rust_symbol["long"]["mode"] == "panic"
+    assert rust_symbol["short"]["mode"] == "panic"
+    assert rust_symbol["emas"] == {
+        "m1": {"close": [], "log_range": [], "volume": []},
+        "h1": {"close": [], "log_range": [], "volume": []},
+    }
+    assert captured["input"]["global"]["unstuck_allowance_long"] == 0.0
+    assert captured["input"]["global"]["realized_pnl_cumsum_last"] == 0.0
 
 
 def test_live_max_realized_loss_pct_preserves_zero_and_defaults_none():

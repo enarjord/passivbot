@@ -24,7 +24,7 @@ class OKXBot(CCXTBot):
     async def _detect_account_config(self):
         """
         Inspect account configuration to detect portfolio margin (PM) and position mode.
-        Falls back silently if the endpoint is unavailable.
+        Startup must know whether OKX is in dual-side or net mode before building orders.
         """
         try:
             cfg = await self.cca.private_get_account_config()
@@ -46,7 +46,9 @@ class OKXBot(CCXTBot):
             if not self.okx_dual_side:
                 logging.info("OKX account is in net (one-way) mode; running without posSide/hedge.")
         except Exception as e:
-            logging.warning(f"Unable to detect OKX account configuration: {e}")
+            raise RuntimeError(
+                "Unable to detect OKX account configuration before live order setup"
+            ) from e
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
@@ -260,7 +262,7 @@ class OKXBot(CCXTBot):
                     "[config] OKX rejected hedge/dual-side switch (51039/51000). Continuing in net mode without posSide."
                 )
             else:
-                logging.error("[config] error setting hedge mode: %s", e)
+                raise
 
     async def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.

@@ -150,6 +150,8 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     async def fetch_open_orders(symbol=None):
         fetched_symbols.append(symbol)
+        if symbol is None:
+            return []
         return [
             {
                 "id": "order-1",
@@ -169,13 +171,82 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
         {"balance", "positions", "open_orders", "fills"}, {}
     )
 
-    assert fetched_symbols == ["SOL/USDT:USDT"]
+    assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"
     assert seen_fill_scope == [["SOL/USDT:USDT"]]
     assert not hasattr(bot, "_fill_symbol_scope")
+
+
+@pytest.mark.asyncio
+async def test_binance_startup_open_order_sweep_includes_unscoped_stale_orders():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.exchange = "binance"
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.markets_dict = {
+        "SOL/USDT:USDT": {"id": "SOLUSDT", "swap": True},
+        "DOGE/USDT:USDT": {"id": "DOGEUSDT", "swap": True},
+    }
+    bot._record_live_margin_mode_from_payload = lambda payload: None
+
+    async def capture_positions_snapshot():
+        return [{"raw": "position"}], [
+            {
+                "symbol": "SOL/USDT:USDT",
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+            }
+        ]
+
+    fetched_symbols = []
+
+    async def fetch_open_orders(symbol=None):
+        fetched_symbols.append(symbol)
+        if symbol is None:
+            return [
+                {
+                    "id": "doge-stale",
+                    "symbol": "DOGE/USDT:USDT",
+                    "amount": 2.0,
+                    "timestamp": 2,
+                    "info": {"symbol": "DOGEUSDT", "positionSide": "LONG"},
+                }
+            ]
+        return [
+            {
+                "id": "sol-scoped",
+                "symbol": symbol,
+                "amount": 0.1,
+                "timestamp": 1,
+                "info": {"symbol": "SOLUSDT", "positionSide": "LONG"},
+            }
+        ]
+
+    bot.capture_positions_snapshot = capture_positions_snapshot
+    bot.cca = SimpleNamespace(fetch_open_orders=fetch_open_orders, options={})
+
+    snapshot = await bot.capture_authoritative_state_staged_snapshot(
+        {"positions", "open_orders"}, {}
+    )
+
+    assert fetched_symbols == ["SOL/USDT:USDT", None]
+    assert [order["symbol"] for order in snapshot["open_orders"]] == [
+        "SOL/USDT:USDT",
+        "DOGE/USDT:USDT",
+    ]
+    assert getattr(bot, "_binance_open_orders_all_symbols_swept") is True
+
+    fetched_symbols.clear()
+    orders = await bot._fetch_open_orders_for_staged_symbols({"SOL/USDT:USDT"})
+
+    assert fetched_symbols == ["SOL/USDT:USDT"]
+    assert [order["id"] for order in orders] == ["sol-scoped"]
 
 
 def test_bybit_position_side_uses_determine_pos_side_ccxt_contract():

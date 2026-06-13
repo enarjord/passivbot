@@ -30,12 +30,71 @@ def _utc_ms() -> int:
     return int(_utils_utc_ms())
 
 
+def _order_is_reduce_only(order: dict) -> bool:
+    if not isinstance(order, dict):
+        return False
+    for key in ("reduce_only", "reduceOnly"):
+        if key in order:
+            return bool(order[key])
+    info = order.get("info")
+    if isinstance(info, dict):
+        for key in ("reduceOnly", "reduce_only"):
+            if key in info:
+                return bool(info[key])
+    side = str(order.get("side") or "").lower()
+    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
+    return (pside == "long" and side == "sell") or (pside == "short" and side == "buy")
+
+
+def _order_pb_type(order: dict) -> str:
+    if not isinstance(order, dict):
+        return ""
+    pb_type = str(order.get("pb_order_type") or "")
+    if pb_type:
+        return pb_type
+    custom_id = str(order.get("custom_id") or "")
+    if not custom_id:
+        info = order.get("info")
+        if isinstance(info, dict):
+            custom_id = str(
+                info.get("clientOrderId")
+                or info.get("clientOid")
+                or info.get("clOrdId")
+                or ""
+            )
+    if not custom_id:
+        return ""
+    try:
+        return str(_pb_attr("custom_id_to_snake")(custom_id))
+    except Exception:
+        return ""
+
+
+def _order_is_panic(order: dict) -> bool:
+    return "panic" in _order_pb_type(order)
+
+
+def _order_is_protective_create(order: dict) -> bool:
+    return _order_is_reduce_only(order) or _order_is_panic(order)
+
+
 async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
     """Run one execution cycle including config sync and order placement/cancellation."""
-    passivbot_cls = _pb_attr("Passivbot")
     if prepare_cycle:
         await bot.execution_cycle()
     to_cancel, to_create = await bot.calc_orders_to_cancel_and_create()
+    return await execute_order_plan(bot, to_cancel, to_create)
+
+
+async def execute_order_plan(
+    bot,
+    to_cancel: list[dict],
+    to_create: list[dict],
+    *,
+    configure_creations: bool = True,
+):
+    """Execute a precomputed order plan against the exchange."""
+    passivbot_cls = _pb_attr("Passivbot")
     order_wave = passivbot_cls._begin_order_wave(bot, to_cancel, to_create)
 
     seen = set()
@@ -61,20 +120,29 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
         balance_threshold = float(getattr(bot, "balance_threshold", 0.0) or 0.0)
         low_balance = raw_balance < balance_threshold
         if low_balance and (to_cancel or to_create):
+            blocked_creates = [
+                order for order in to_create if not _order_is_protective_create(order)
+            ]
+            to_create = [
+                order for order in to_create if _order_is_protective_create(order)
+            ]
             if order_wave is not None:
-                order_wave["skipped_cancel"] += len(to_cancel)
-                order_wave["skipped_create"] += len(to_create)
+                order_wave["skipped_create"] += len(blocked_creates)
             logging.info(
-                "[balance] too low: %.2f %s; not cancelling or creating orders",
+                "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
+                "allowing %d cancellations and %d protective creates",
                 raw_balance,
                 bot.quote,
+                len(blocked_creates),
+                len(to_cancel),
+                len(to_create),
             )
     if bot.debug_mode:
         if to_cancel:
             print(
                 f"would cancel {len(to_cancel)} order{'s' if len(to_cancel) > 1 else ''}"
             )
-    elif not low_balance:
+    else:
         cancel_started_ms = _utc_ms()
         bot._order_wave_in_progress = order_wave
         try:
@@ -89,8 +157,6 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
             print(
                 f"would create {len(to_create)} order{'s' if len(to_create) > 1 else ''}"
             )
-    elif low_balance:
-        pass
     else:
         to_create_mod = []
         for order in to_create:
@@ -130,7 +196,7 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
                 order_wave["skipped_create"] += max(
                     0, before_state_filter - len(to_create_mod)
                 )
-        if to_create_mod:
+        if to_create_mod and configure_creations:
             creation_symbols = sorted({order["symbol"] for order in to_create_mod})
             configured_symbols = await bot.update_exchange_configs(creation_symbols)
             if bot._shutdown_requested():
@@ -154,6 +220,14 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
                     order_wave["skipped_create"] += max(
                         0, before_config_filter - len(to_create_mod)
                     )
+        elif to_create_mod:
+            logging.info(
+                "[risk] executing protective order plan without exchange config sync | symbols=%s orders=%d",
+                passivbot_cls._log_symbols(
+                    sorted({order["symbol"] for order in to_create_mod}), limit=12
+                ),
+                len(to_create_mod),
+            )
         before_market_filter = len(to_create_mod)
         to_create_mod = await passivbot_cls._filter_fresh_market_snapshot_creations(
             bot, to_create_mod
@@ -162,24 +236,25 @@ async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
             order_wave["skipped_create"] += max(
                 0, before_market_filter - len(to_create_mod)
             )
-        res = None
-        try:
-            create_started_ms = _utc_ms()
-            bot._order_wave_in_progress = order_wave
+        if to_create_mod:
+            res = None
             try:
-                res = await bot.execute_orders_parent(to_create_mod)
-            finally:
-                bot._order_wave_in_progress = None
-            if order_wave is not None:
-                order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
-                order_wave["create_posted"] = len(res or [])
-        except RestartBotException:
-            raise
-        except Exception as exc:
-            logging.error(f"error executing orders {to_create_mod} {exc}")
-            print_async_exception(res)
-            traceback.print_exc()
-            await bot.restart_bot_on_too_many_errors()
+                create_started_ms = _utc_ms()
+                bot._order_wave_in_progress = order_wave
+                try:
+                    res = await bot.execute_orders_parent(to_create_mod)
+                finally:
+                    bot._order_wave_in_progress = None
+                if order_wave is not None:
+                    order_wave["create_ms"] = int(max(0, _utc_ms() - create_started_ms))
+                    order_wave["create_posted"] = len(res or [])
+            except RestartBotException:
+                raise
+            except Exception as exc:
+                logging.error(f"error executing orders {to_create_mod} {exc}")
+                print_async_exception(res)
+                traceback.print_exc()
+                await bot.restart_bot_on_too_many_errors()
     if to_cancel or to_create:
         bot.execution_scheduled = True
     if not passivbot_cls._shutdown_requested(bot):

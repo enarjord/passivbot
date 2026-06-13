@@ -352,6 +352,99 @@ async def test_calc_orders_allows_panic_close_when_trailing_candles_pending():
 
 
 @pytest.mark.asyncio
+async def test_red_supervisor_uses_protective_refresh_and_order_plan():
+    calls = []
+
+    class FakeBot:
+        _equity_hard_stop_supervisor_running = False
+        stop_signal_received = False
+
+        def __init__(self):
+            self.state = {
+                "red_flat_confirmations": 0,
+                "last_red_progress": None,
+                "halted": False,
+            }
+
+        def _hsl_psides(self):
+            return ("long",)
+
+        def _hsl_state(self, pside):
+            assert pside == "long"
+            return self.state
+
+        def _equity_hard_stop_enabled(self, pside=None):
+            return True
+
+        def _equity_hard_stop_runtime_red_latched(self, pside):
+            return True
+
+        async def refresh_protective_authoritative_state(self):
+            calls.append("protective_refresh")
+            return True
+
+        async def update_pos_oos_pnls_ohlcvs(self):
+            raise AssertionError("RED supervisor must not require normal market refresh")
+
+        def _equity_hard_stop_count_open_positions(self, pside):
+            return 1
+
+        def _equity_hard_stop_count_blocking_open_orders(self, pside):
+            return 1, 0
+
+        def _equity_hard_stop_log_red_progress(self, *args):
+            calls.append("log_progress")
+
+        def _equity_hard_stop_set_red_runtime_forced_modes(self, pside):
+            calls.append("force_panic")
+
+        def _equity_hard_stop_refresh_halted_runtime_forced_modes(self):
+            calls.append("refresh_halted")
+
+        async def calc_protective_panic_orders_to_cancel_and_create(self):
+            calls.append("protective_plan")
+            return [{"symbol": "BTC/USDT:USDT"}], [{"symbol": "BTC/USDT:USDT"}]
+
+        async def execute_order_plan_to_exchange(
+            self,
+            to_cancel,
+            to_create,
+            *,
+            configure_creations=True,
+        ):
+            calls.append(
+                (
+                    "execute_plan",
+                    list(to_cancel),
+                    list(to_create),
+                    configure_creations,
+                )
+            )
+            self.stop_signal_received = True
+
+        async def execute_to_exchange(self, *args, **kwargs):
+            raise AssertionError("RED supervisor must not use normal execution cycle")
+
+        def live_value(self, key):
+            assert key == "execution_delay_seconds"
+            return 0.0
+
+    bot = FakeBot()
+    await Passivbot._equity_hard_stop_run_red_supervisor(bot)
+
+    assert calls[:4] == [
+        "protective_refresh",
+        "log_progress",
+        "force_panic",
+        "refresh_halted",
+    ]
+    assert calls[4] == "protective_plan"
+    assert calls[5][0] == "execute_plan"
+    assert calls[5][3] is False
+    assert bot._equity_hard_stop_supervisor_running is False
+
+
+@pytest.mark.asyncio
 async def test_calc_orders_blocks_entry_creates_when_trailing_candles_pending():
     symbol = "BTC/USDT"
     bot = OrchestrationBot({symbol: 100.0})

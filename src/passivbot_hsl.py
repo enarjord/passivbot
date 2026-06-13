@@ -2991,7 +2991,7 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
             ]
             if not active_red_psides:
                 return
-            if not await self.update_pos_oos_pnls_ohlcvs():
+            if not await self.refresh_protective_authoritative_state():
                 await asyncio.sleep(0.5)
                 continue
             for pside in list(active_red_psides):
@@ -3033,7 +3033,14 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                 self._equity_hard_stop_set_red_runtime_forced_modes(pside)
             self._equity_hard_stop_refresh_halted_runtime_forced_modes()
             try:
-                await self.execute_to_exchange()
+                to_cancel, to_create = (
+                    await self.calc_protective_panic_orders_to_cancel_and_create()
+                )
+                await self.execute_order_plan_to_exchange(
+                    to_cancel,
+                    to_create,
+                    configure_creations=False,
+                )
             except RestartBotException as e:
                 logging.error("[risk] RED supervisor ignored restart request: %s", e)
             except Exception as e:
@@ -3058,7 +3065,7 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                         active.append((pside, symbol))
             if not active:
                 return
-            if not await self.update_pos_oos_pnls_ohlcvs():
+            if not await self.refresh_protective_authoritative_state():
                 await asyncio.sleep(0.5)
                 continue
             for pside, symbol in list(active):
@@ -3103,7 +3110,14 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
             if not active:
                 return
             try:
-                await self.execute_to_exchange()
+                to_cancel, to_create = (
+                    await self.calc_protective_panic_orders_to_cancel_and_create()
+                )
+                await self.execute_order_plan_to_exchange(
+                    to_cancel,
+                    to_create,
+                    configure_creations=False,
+                )
             except RestartBotException as e:
                 logging.error("[risk] coin RED supervisor ignored restart request: %s", e)
             except Exception as e:
