@@ -1017,6 +1017,9 @@ def create_forager_hard_stop_drawdown_figure(
     autoplot = (_ipy_display is not None) if autoplot is None else autoplot
     if return_figures is None:
         return_figures = not autoplot
+    hsl_signal_mode = str(
+        (((config or {}).get("live") or {}).get("hsl_signal_mode", "unified") or "unified")
+    ).strip().lower()
 
     pside_cfgs = {
         pside: _resolve_pside_cfg(pside)
@@ -1164,6 +1167,13 @@ def create_forager_hard_stop_drawdown_figure(
     threshold_colors = {"yellow": "#d4a017", "orange": "#d95f02", "red": "#b22222"}
     multiple_sides = len(side_order) > 1
 
+    def _drawdown_title(pside: str) -> str:
+        if hsl_signal_mode == "coin":
+            return f"{pside.capitalize()} Coin HSL Max Drawdown"
+        if multiple_sides:
+            return f"{pside.capitalize()} Equity Hard Stop Drawdown"
+        return "Equity Hard Stop Drawdown"
+
     for side_idx, pside in enumerate(side_order):
         series = series_by_side[pside]
         x = series["trace"].index.to_numpy()
@@ -1217,12 +1227,8 @@ def create_forager_hard_stop_drawdown_figure(
             alpha=0.75,
             label="RED Threshold",
         )
-        drawdown_ax.set_title(
-            f"{pside.capitalize()} Equity Hard Stop Drawdown"
-            if multiple_sides
-            else "Equity Hard Stop Drawdown"
-        )
-        drawdown_ax.set_ylabel("Drawdown")
+        drawdown_ax.set_title(_drawdown_title(pside))
+        drawdown_ax.set_ylabel("Max Coin Drawdown" if hsl_signal_mode == "coin" else "Drawdown")
         drawdown_ax.grid(True, linestyle="--", alpha=0.3)
         drawdown_ax.legend(loc="upper left", ncol=3)
 
