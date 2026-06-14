@@ -22,10 +22,49 @@ Default rule: hard-fail.
 
 ## Required Behavior
 
-1. Required inputs must be complete before calling Rust orchestrator/backtester.
+1. Required inputs must be complete before the consumer that depends on them.
+   Do not pass fabricated defaults to Rust or the live executor; if live omits
+   a symbol/order class because inputs are unavailable, represent that
+   unavailability explicitly.
 2. If a required input fetch fails, raise immediately with actionable context.
 3. If an explicitly allowed fallback exists, it must be bounded, observable, and test-covered.
 4. If fallback source is unavailable, raise immediately.
+
+## Live Order Freshness Contract
+
+Live freshness requirements are scoped by order class and symbol. Do not treat every stale
+surface as a global halt, and do not silently proceed with missing inputs required by the
+specific exchange action being evaluated.
+
+Account-critical surfaces are required before any exchange action, including panic or
+reduce-only protection:
+
+1. positions
+2. balance
+3. open orders
+
+Market snapshot/ticker freshness is required for symbols being traded, especially symbols with
+positions or initial-entry candidates. Candles and EMAs are required for order classes that
+depend on strategy indicators, but stale candles for flat symbols must not block protective
+management of held symbols.
+
+Approved/ignored coin lists are live eligibility inputs. Stale or unreadable eligibility state
+must block affected initial entries, but it must not block protective management of existing
+positions. If a held coin is removed from approved coins or added to ignored coins, handle it as
+graceful stop when `auto_gs=true`.
+
+Fill/PnL history is required for order classes and risk gates that depend on it, including HSL,
+max-loss, auto-unstuck, trailing, and related logic where applicable. Corrupted or unavailable
+fills must use bounded repair/retry and observable degraded decisions. Do not replace missing
+fill/PnL inputs with silent neutral defaults.
+
+Manual or external fills/orders without a Passivbot client order id are not automatically
+corruption. If the exchange row is otherwise valid and does not violate ownership or safety
+policy, accept it as exchange truth and log it clearly as external/manual.
+
+Hard-fail remains the default for trading-critical required inputs, but live order classes differ:
+blocking a panic or reduce-only protective action can be worse than acting when that action's own
+required account-critical and symbol-scoped surfaces are fresh.
 
 ## Fallback Matrix
 
