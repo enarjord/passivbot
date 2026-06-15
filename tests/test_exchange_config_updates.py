@@ -444,7 +444,7 @@ async def test_okx_update_config_reraises_unknown_hedge_mode_failure():
 
 
 @pytest.mark.asyncio
-async def test_okx_update_config_verified_net_mode_skips_hedge_switch():
+async def test_okx_update_config_verified_net_mode_fails_loudly():
     from exchanges.okx import OKXBot
 
     bot = OKXBot.__new__(OKXBot)
@@ -457,7 +457,8 @@ async def test_okx_update_config_verified_net_mode_skips_hedge_switch():
         set_position_mode=AsyncMock(),
     )
 
-    await bot.update_exchange_config()
+    with pytest.raises(RuntimeError, match="requires dual-side/hedge mode"):
+        await bot.update_exchange_config()
 
     assert bot.okx_dual_side is False
     assert bot.hedge_mode is False
@@ -570,7 +571,7 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
             ], [
                 {
                     "symbol": "BTC/USDT:USDT",
-                    "side": "buy",
+                    "side": "sell",
                     "position_side": "long",
                     "price": 0.9,
                     "qty": 1.0,

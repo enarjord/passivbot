@@ -2299,7 +2299,7 @@ async def test_refresh_authoritative_state_staged_uses_generic_staged_fetch_for_
 
 
 @pytest.mark.asyncio
-async def test_refresh_protective_authoritative_state_uses_only_positions_and_open_orders():
+async def test_refresh_protective_authoritative_state_uses_account_critical_surfaces():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
@@ -2312,6 +2312,13 @@ async def test_refresh_protective_authoritative_state_uses_only_positions_and_op
     bot._authoritative_refresh_epoch_changed = set()
     bot._authoritative_surface_signatures = {}
     bot._authoritative_surface_generations = {}
+    bot.balance_override = None
+    bot._balance_override_logged = False
+    bot.previous_hysteresis_balance = None
+    bot.balance_hysteresis_snap_pct = 0.02
+    bot.balance_raw = 0.0
+    bot.balance = 0.0
+    bot._exchange_reported_balance_raw = 0.0
     fetched_positions = [
         {
             "symbol": "BTC/USDT:USDT",
@@ -2332,7 +2339,8 @@ async def test_refresh_protective_authoritative_state_uses_only_positions_and_op
     ]
     bot._fetch_authoritative_state_staged_snapshot = AsyncMock(
         return_value={
-            "plan": {"positions", "open_orders"},
+            "plan": {"balance", "positions", "open_orders"},
+            "balance": 123.45,
             "positions": fetched_positions,
             "open_orders": fetched_orders,
         }
@@ -2364,14 +2372,13 @@ async def test_refresh_protective_authoritative_state_uses_only_positions_and_op
     bot._finalize_authoritative_refresh_consistency = lambda plan: finalized.append(
         set(plan)
     )
-    bot.fetch_balance = AsyncMock(side_effect=AssertionError("balance not required"))
     bot.update_pnls = AsyncMock(side_effect=AssertionError("fills not required"))
 
     ok = await bot.refresh_protective_authoritative_state()
 
     assert ok is True
     bot._fetch_authoritative_state_staged_snapshot.assert_awaited_once_with(
-        {"positions", "open_orders"}
+        {"balance", "positions", "open_orders"}
     )
     bot._apply_open_orders_snapshot.assert_awaited_once_with(
         fetched_orders,
@@ -2380,15 +2387,20 @@ async def test_refresh_protective_authoritative_state_uses_only_positions_and_op
     )
     assert recorded == [
         (
+            "balance",
+            123.45,
+        ),
+        (
             "positions",
             (("BTC/USDT:USDT", "long", 0.1, 100.0),),
         )
     ]
+    assert bot.balance_raw == pytest.approx(123.45)
     assert cooldown_updates == [(("BTC/USDT:USDT",), 1_700_000_000_000)]
-    assert finalized == [{"positions", "open_orders"}]
+    assert finalized == [{"balance", "positions", "open_orders"}]
 
 
-def test_protective_planning_snapshot_does_not_require_balance_fills_or_candles():
+def test_protective_planning_snapshot_requires_balance_not_fills_or_candles():
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
@@ -2415,6 +2427,7 @@ def test_protective_planning_snapshot_does_not_require_balance_fills_or_candles(
     ledger.begin_epoch(now_ms=now_ms)
     ledger.stamp("positions", (symbol, "long", 0.1), now_ms=now_ms)
     ledger.stamp("open_orders", (), now_ms=now_ms)
+    ledger.stamp("balance", 100.0, now_ms=now_ms)
     ledger.stamp("market_snapshot", (symbol, 99.5, 100.5), now_ms=now_ms)
     bot.freshness_ledger = ledger
     snapshots = {
@@ -2433,14 +2446,15 @@ def test_protective_planning_snapshot_does_not_require_balance_fills_or_candles(
     )
 
     assert set(snapshot.required_surfaces) == {
+        "balance",
         "positions",
         "open_orders",
         "market_snapshot",
     }
-    assert "balance" not in snapshot.required_surfaces
     assert "fills" not in snapshot.required_surfaces
     assert "completed_candles" not in snapshot.required_surfaces
     assert {surface.name: surface.min_epoch for surface in snapshot.surfaces} == {
+        "balance": 1,
         "positions": 1,
         "open_orders": 1,
         "market_snapshot": 1,

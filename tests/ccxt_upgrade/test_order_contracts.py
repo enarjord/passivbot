@@ -355,6 +355,66 @@ def test_bitget_determine_side_uses_trade_side_reduce_only_and_pos_side():
     assert bot._determine_side(open_long) == "buy"
 
 
+@pytest.mark.asyncio
+async def test_bitget_legacy_fill_events_keep_multiple_fills_per_order():
+    class FakeBitgetAPI:
+        def __init__(self):
+            self.history_calls = 0
+            self.detail_calls = []
+
+        async def private_mix_get_v2_mix_order_fill_history(self, params):
+            self.history_calls += 1
+            if self.history_calls > 1:
+                return {"data": {"fillList": []}}
+            return {
+                "data": {
+                    "fillList": [
+                        {
+                            "tradeId": "tid-1",
+                            "orderId": "oid-1",
+                            "cTime": "1000",
+                            "symbol": "BTCUSDT",
+                            "tradeSide": "open",
+                            "posMode": "hedge_mode",
+                            "side": "buy",
+                            "baseVolume": "0.1",
+                            "price": "10",
+                            "profit": "1",
+                        },
+                        {
+                            "tradeId": "tid-2",
+                            "orderId": "oid-1",
+                            "cTime": "1500",
+                            "symbol": "BTCUSDT",
+                            "tradeSide": "open",
+                            "posMode": "hedge_mode",
+                            "side": "buy",
+                            "baseVolume": "0.2",
+                            "price": "11",
+                            "profit": "2",
+                        },
+                    ]
+                }
+            }
+
+        async def private_mix_get_v2_mix_order_detail(self, params):
+            self.detail_calls.append(dict(params))
+            return {"data": {"clientOid": "pb-0x0004-bitget"}}
+
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.cca = FakeBitgetAPI()
+    bot.symbol_ids = {"BTC/USDT:USDT": "BTCUSDT"}
+    bot.symbol_ids_inv = {"BTCUSDT": "BTC/USDT:USDT"}
+
+    events = await bot.fetch_fill_events(start_time=500, end_time=2_000, limit=100)
+
+    assert [event["id"] for event in events] == ["tid-1", "tid-2"]
+    assert [event["order_id"] for event in events] == ["oid-1", "oid-1"]
+    assert sum(event["qty"] for event in events) == pytest.approx(0.3)
+    assert {call["orderId"] for call in bot.cca.detail_calls} == {"oid-1"}
+    assert all(event["client_order_id"] == "pb-0x0004-bitget" for event in events)
+
+
 def test_gateio_order_side_contract_depends_on_reduce_only_flag():
     bot = GateIOBot.__new__(GateIOBot)
     assert bot.determine_pos_side({"side": "buy", "reduceOnly": False}) == "long"
@@ -440,6 +500,21 @@ def test_gateio_get_balance_uses_total_for_classic_margin():
 def test_okx_order_side_uses_info_pos_side():
     bot = OKXBot.__new__(OKXBot)
     assert bot._get_position_side_for_order({"info": {"posSide": "SHORT"}}) == "short"
+
+
+def test_okx_order_params_refuse_net_mode():
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = False
+
+    with pytest.raises(RuntimeError, match="requires dual-side/hedge mode"):
+        bot._build_order_params(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "position_side": "long",
+                "reduce_only": True,
+                "custom_id": "0x0007-okx",
+            }
+        )
 
 
 def test_okx_get_balance_includes_multi_asset_collateral_excluding_upl():

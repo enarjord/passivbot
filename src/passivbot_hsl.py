@@ -635,7 +635,6 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
     if reset_timestamp_ms is not None:
         start_ms = int(reset_timestamp_ms) if start_ms is None else max(start_ms, int(reset_timestamp_ms))
     events = []
-    pending = []
     for event in self._pnls_manager.get_events():
         if _equity_hard_stop_fill_pside(event) != pside:
             continue
@@ -644,25 +643,12 @@ def _equity_hard_stop_coin_realized_pnl_peak_last(
         event_ts = _equity_hard_stop_fill_timestamp_ms(event)
         if start_ms is not None and event_ts < start_ms:
             continue
-        if (
-            str(_equity_hard_stop_event_value(event, "pnl_status", "complete") or "complete").lower()
-            == "pending"
-        ):
-            pending.append(event)
-            continue
         events.append(event)
-    if pending:
-        preview = ",".join(
-            f"{str(_equity_hard_stop_event_value(ev, 'id', ''))[:12]}:"
-            f"{_equity_hard_stop_fill_symbol(ev)}:{_equity_hard_stop_fill_pside(ev)}:"
-            f"{_equity_hard_stop_event_value(ev, 'pb_order_type', '')}"
-            for ev in pending[:5]
-        )
-        suffix = f", +{len(pending) - 5} more" if len(pending) > 5 else ""
-        raise RuntimeError(
-            f"coin HSL realized PnL: realized PnL pending for {len(pending)} close fill(s): "
-            f"{preview}{suffix}"
-        )
+    self._assert_pnl_history_safe_for_risk(
+        events,
+        context="coin HSL realized PnL",
+        start_ms=start_ms,
+    )
     events.sort(key=_equity_hard_stop_fill_timestamp_ms)
     current = 0.0
     peak = 0.0

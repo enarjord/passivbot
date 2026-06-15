@@ -463,6 +463,55 @@ async def test_protective_panic_reconciliation_preserves_healthy_pside_orders():
 
 
 @pytest.mark.asyncio
+async def test_protective_panic_reconciliation_ignores_stale_normal_mode_filter():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.PB_modes["long"][symbol] = "manual"
+    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        )
+    ]
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        self._protective_panic_reconcile_psides_by_symbol = {symbol: {"long"}}
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
+        ("long", "buy", 99.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
 async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symbol():
     symbol = "DOGE/USDT:USDT"
     bot = Passivbot.__new__(Passivbot)

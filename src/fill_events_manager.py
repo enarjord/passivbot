@@ -4595,7 +4595,7 @@ class FillEventsManager:
         )
         lookback_covered = (
             covered_start_ms > 0 and covered_start_ms <= start_ms and bool(self._events)
-        ) or (oldest_event_ts > 0 and oldest_event_ts <= start_ms) or (
+        ) or (
             covered_start_ms > 0
             and covered_start_ms <= start_ms
             and metadata_indicates_no_cached_fills
@@ -4618,17 +4618,26 @@ class FillEventsManager:
             )
 
         if self._events:
-            logger.info(
-                "[fills] lookback uncovered from %s; refreshing missing range before latest",
-                _format_ms(start_ms),
-            )
-            await self.refresh_range(
-                start_ms=start_ms,
-                end_ms=None,
-                gap_hours=gap_hours,
-                overlap=overlap,
-                force_refetch_gaps=force_refetch_gaps,
-            )
+            if oldest_event_ts > 0 and oldest_event_ts <= start_ms:
+                logger.info(
+                    "[fills] lookback coverage unproven from %s despite older cached fill at %s; refreshing full lookback",
+                    _format_ms(start_ms),
+                    _format_ms(oldest_event_ts),
+                )
+                await self.refresh(start_ms=start_ms, end_ms=None)
+                await self.refresh_latest(overlap=overlap)
+            else:
+                logger.info(
+                    "[fills] lookback uncovered from %s; refreshing missing range before latest",
+                    _format_ms(start_ms),
+                )
+                await self.refresh_range(
+                    start_ms=start_ms,
+                    end_ms=None,
+                    gap_hours=gap_hours,
+                    overlap=overlap,
+                    force_refetch_gaps=force_refetch_gaps,
+                )
         else:
             logger.info("[fills] cache empty; refreshing full lookback from %s", _format_ms(start_ms))
             await self.refresh(start_ms=start_ms, end_ms=None)

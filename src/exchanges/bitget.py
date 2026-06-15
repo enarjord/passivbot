@@ -156,35 +156,36 @@ class BitgetBot(CCXTBot):
         )
 
     async def _ensure_client_oid_for_event(self, event: dict) -> None:
-        if not event.get("id"):
+        order_id = event.get("order_id") or event.get("id")
+        if not order_id:
             return
         if not hasattr(self, "_client_oid_cache"):
             self._client_oid_cache = {}
-        cached = self._client_oid_cache.get(event["id"])
+        cached = self._client_oid_cache.get(order_id)
         if cached:
             event["client_order_id"], event["pb_order_type"] = cached
             return
         try:
             order_details = await self._throttled_order_detail(
-                event["id"], self.get_symbol_id(event["symbol"])
+                order_id, self.get_symbol_id(event["symbol"])
             )
             client_oid = order_details.get("data", {}).get("clientOid")
             if client_oid:
                 pb_type = custom_id_to_snake(client_oid)
                 event["client_order_id"] = client_oid
                 event["pb_order_type"] = pb_type
-                self._client_oid_cache[event["id"]] = (client_oid, pb_type)
+                self._client_oid_cache[order_id] = (client_oid, pb_type)
             else:
                 logging.debug(
                     "bitget order detail missing clientOid for id=%s symbol=%s",
-                    event["id"],
+                    order_id,
                     symbol_to_coin(event["symbol"] or "", verbose=False)
                     or event["symbol"],
                 )
         except Exception as exc:
             logging.warning(
                 "failed to fetch bitget order detail for id=%s symbol=%s: %s",
-                event["id"],
+                order_id,
                 symbol_to_coin(event["symbol"] or "", verbose=False)
                 or event["symbol"],
                 exc,
@@ -208,7 +209,7 @@ class BitgetBot(CCXTBot):
             except Exception:
                 pass
         for evt in source_events:
-            evt_id = evt.get("id")
+            evt_id = evt.get("order_id") or evt.get("id")
             cid = evt.get("client_order_id")
             pb = evt.get("pb_order_type")
             if evt_id and cid and evt_id not in self._client_oid_cache:
@@ -219,8 +220,30 @@ class BitgetBot(CCXTBot):
         def _extract_fill(elm: dict) -> dict:
             timestamp = int(elm["cTime"])
             side, position_side = deduce_side_pside(elm)
+            order_id = str(elm.get("orderId") or "")
+            fill_id = (
+                elm.get("tradeId")
+                or elm.get("fillId")
+                or elm.get("execId")
+                or elm.get("id")
+            )
+            if fill_id:
+                event_id = str(fill_id)
+            else:
+                event_id = json.dumps(
+                    [
+                        order_id,
+                        timestamp,
+                        side,
+                        position_side,
+                        elm.get("baseVolume"),
+                        elm.get("price"),
+                    ],
+                    separators=(",", ":"),
+                )
             return {
-                "id": elm.get("orderId"),
+                "id": event_id,
+                "order_id": order_id,
                 "timestamp": timestamp,
                 "datetime": ts_to_date(timestamp),
                 "symbol": self.get_symbol_id_inv(elm["symbol"]),
@@ -281,19 +304,20 @@ class BitgetBot(CCXTBot):
                     continue
                 if event_id in events_map:
                     continue
-                cached = self._client_oid_cache.get(event_id)
+                order_id = event.get("order_id") or event_id
+                cached = self._client_oid_cache.get(order_id)
                 if cached:
                     event["client_order_id"], event["pb_order_type"] = cached
                 if not event.get("client_order_id"):
                     pending.append(
                         (
-                            event_id,
+                            order_id,
                             event,
                             asyncio.create_task(self._ensure_client_oid_for_event(event)),
                         )
                     )
                 else:
-                    self._client_oid_cache[event_id] = (
+                    self._client_oid_cache[order_id] = (
                         event["client_order_id"],
                         event.get("pb_order_type"),
                     )

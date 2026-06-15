@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened v8 live-safety review follow-ups: ambiguous order-create responses are
+  remembered before retry, protective panic bypasses stale normal-mode filters
+  while requiring fresh account-critical balance/position/order state, PnL risk
+  gates require explicit fill-history coverage including coin HSL, Bitget keeps
+  multiple fills per order, and OKX net-mode accounts fail loudly.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless

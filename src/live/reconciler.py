@@ -793,6 +793,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
     apply_initial_entry_gate: bool = True,
     apply_creation_guardrails: bool = True,
+    apply_mode_filters: bool = True,
 ):
     """Reconcile exchange orders against a supplied ideal order map."""
     if not hasattr(bot, "_last_plan_detail"):
@@ -833,7 +834,11 @@ async def calc_orders_to_cancel_and_create_from_ideal(
             )
             continue
         cancel_, create_ = bot._reconcile_symbol_orders(
-            symbol, symbol_orders, ideal_list, keys
+            symbol,
+            symbol_orders,
+            ideal_list,
+            keys,
+            apply_mode_filters=apply_mode_filters,
         )
         pre_cancel = len(cancel_)
         pre_create = len(create_)
@@ -1062,10 +1067,13 @@ def reconcile_symbol_orders(
     actual_orders: list[dict],
     ideal_orders: list,
     keys: tuple[str, ...],
+    *,
+    apply_mode_filters: bool = True,
 ) -> tuple[list[dict], list[dict]]:
     """Return cancel/create lists for a single symbol after mode filtering."""
     to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
-    to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
+    if apply_mode_filters:
+        to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
     return to_cancel, to_create
 
 

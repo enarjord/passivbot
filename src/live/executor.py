@@ -41,9 +41,7 @@ def _order_is_reduce_only(order: dict) -> bool:
         for key in ("reduceOnly", "reduce_only"):
             if key in info:
                 return bool(info[key])
-    side = str(order.get("side") or "").lower()
-    pside = str(order.get("position_side") or order.get("positionSide") or "").lower()
-    return (pside == "long" and side == "sell") or (pside == "short" and side == "buy")
+    return False
 
 
 def _order_pb_type(order: dict) -> str:
@@ -64,10 +62,7 @@ def _order_pb_type(order: dict) -> str:
             )
     if not custom_id:
         return ""
-    try:
-        return str(_pb_attr("custom_id_to_snake")(custom_id))
-    except Exception:
-        return ""
+    return str(_pb_attr("custom_id_to_snake")(custom_id))
 
 
 def _order_is_panic(order: dict) -> bool:
@@ -76,6 +71,34 @@ def _order_is_panic(order: dict) -> bool:
 
 def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order) or _order_is_panic(order)
+
+
+def _remember_ambiguous_create(
+    bot,
+    passivbot_cls,
+    order: dict,
+    emitted_ts: int,
+    *,
+    status: str,
+    reason: str,
+    error: BaseException | None = None,
+) -> None:
+    bot.add_to_recent_order_executions(order)
+    passivbot_cls._record_emitted_order_custom_id(
+        bot,
+        order,
+        emitted_ts=emitted_ts,
+        status=status,
+    )
+    logging.debug(
+        "[order] remembered ambiguous create | symbol=%s type=%s custom_id=%s status=%s reason=%s error_type=%s",
+        passivbot_cls._log_symbol(order.get("symbol")),
+        bot._resolve_pb_order_type(order),
+        shorten_custom_id(str(order.get("custom_id", ""))),
+        status,
+        reason,
+        type(error).__name__ if error is not None else "",
+    )
 
 
 async def execute_to_exchange(bot, *, prepare_cycle: bool = True):
@@ -289,33 +312,61 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "post")
-    res = await bot.execute_orders(orders)
+    try:
+        res = await bot.execute_orders(orders)
+    except RestartBotException:
+        raise
+    except Exception as exc:
+        for order in orders:
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_error_ambiguous",
+                reason="exchange_exception",
+                error=exc,
+            )
+        raise
     if not res:
-        return
+        for order in orders:
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_response_missing",
+                reason="empty_response",
+            )
+        return []
     if len(orders) != len(res):
         print(
             f"debug unequal lengths execute_orders_parent: "
             f"{len(orders)} orders, {len(res)} executions",
             res,
         )
+        for order in orders:
+            _remember_ambiguous_create(
+                bot,
+                passivbot_cls,
+                order,
+                emitted_ts,
+                status="create_response_partial",
+                reason="length_mismatch",
+            )
         return []
     to_return = []
     for ex, order in zip(res, orders):
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
-                bot.add_to_recent_order_executions(order)
-                passivbot_cls._record_emitted_order_custom_id(
+                _remember_ambiguous_create(
                     bot,
+                    passivbot_cls,
                     order,
                     emitted_ts=emitted_ts,
                     status="create_error_ambiguous",
-                )
-                logging.debug(
-                    "[order] remembered ambiguous create after exchange error | symbol=%s type=%s custom_id=%s error_type=%s",
-                    passivbot_cls._log_symbol(order.get("symbol")),
-                    bot._resolve_pb_order_type(order),
-                    shorten_custom_id(str(order.get("custom_id", ""))),
-                    type(ex).__name__,
+                    reason="result_exception",
+                    error=ex,
                 )
             print(f"debug did_create_order false {ex}")
             continue

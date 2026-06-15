@@ -316,6 +316,22 @@ class TestGetRealizedPnlCumsumStats:
         with pytest.raises(RuntimeError, match="fill history coverage unknown"):
             bot._get_realized_pnl_cumsum_stats()
 
+    def test_oldest_event_without_coverage_does_not_prove_risk_lookback(self):
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        bot = _make_bot_with_events(
+            [_make_fill_event(10.0, timestamp=start_ms - 60_000)],
+            cache=_RiskCache(
+                covered_start_ms=0,
+                history_scope="window",
+                oldest_event_ts=start_ms - 60_000,
+            ),
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="fill history coverage unknown"):
+            bot._get_realized_pnl_cumsum_stats()
+
     def test_covered_empty_history_returns_zero_cumsum(self):
         now_ms = 10 * 86_400_000
         start_ms = now_ms - 86_400_000
@@ -329,6 +345,35 @@ class TestGetRealizedPnlCumsumStats:
         _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
 
         assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+
+    def test_coin_hsl_uses_risk_history_gate_for_degraded_pnl(self):
+        hsl = pytest.importorskip(
+            "passivbot_hsl", reason="live HSL dependencies not available"
+        )
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        bot = _make_bot_with_events(
+            [
+                _make_fill_event(
+                    -10.0,
+                    timestamp=start_ms + 60_000,
+                    pnl_source="synthetic_fill_reconstruction_degraded",
+                )
+            ],
+            cache=_RiskCache(
+                covered_start_ms=start_ms,
+                history_scope="window",
+            ),
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="degraded realized PnL"):
+            hsl._equity_hard_stop_coin_realized_pnl_peak_last(
+                bot,
+                "long",
+                "BTC/USDT:USDT",
+                now_ms,
+            )
 
     def test_equity_hard_stop_uses_net_pnl_with_fee_paid(self):
         bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])

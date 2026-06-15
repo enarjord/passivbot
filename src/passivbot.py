@@ -1394,7 +1394,19 @@ class Passivbot:
                 raise RuntimeError(
                     f"{context}: fill history coverage unknown for full-history risk lookback "
                     f"(history_scope={history_scope})"
-                )
+            )
+            return
+
+        get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+        if not callable(get_history_scope):
+            get_history_scope = getattr(cache, "get_history_scope", None)
+        raw_history_scope = (
+            get_history_scope()
+            if callable(get_history_scope)
+            else metadata.get("history_scope", "unknown")
+        )
+        history_scope = str(raw_history_scope or "unknown").lower()
+        if history_scope == "all":
             return
 
         covered_start_ms = 0
@@ -1404,18 +1416,13 @@ class Passivbot:
         else:
             covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
 
-        event_oldest = 0
-        if events:
-            event_oldest = min(int(getattr(ev, "timestamp", 0) or 0) for ev in events)
-        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
-        oldest_known = min([x for x in (event_oldest, metadata_oldest) if x > 0], default=0)
-        if (covered_start_ms > 0 and covered_start_ms <= int(start_ms)) or (
-            oldest_known > 0 and oldest_known <= int(start_ms)
-        ):
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
             return
+        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
         raise RuntimeError(
             f"{context}: fill history coverage unknown for risk lookback "
-            f"start={int(start_ms)} covered_start={covered_start_ms} oldest_event={oldest_known}"
+            f"start={int(start_ms)} covered_start={covered_start_ms} "
+            f"oldest_event={metadata_oldest} history_scope={history_scope}"
         )
 
     def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
@@ -12934,6 +12941,7 @@ class Passivbot:
             actual_psides_by_symbol=actual_psides_by_symbol,
             apply_initial_entry_gate=False,
             apply_creation_guardrails=False,
+            apply_mode_filters=False,
         )
 
     def _snapshot_actual_orders(
@@ -12953,10 +12961,17 @@ class Passivbot:
         actual_orders: list[dict],
         ideal_orders: list,
         keys: tuple[str, ...],
+        *,
+        apply_mode_filters: bool = True,
     ) -> tuple[list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
         return reconciler.reconcile_symbol_orders(
-            self, symbol, actual_orders, ideal_orders, keys
+            self,
+            symbol,
+            actual_orders,
+            ideal_orders,
+            keys,
+            apply_mode_filters=apply_mode_filters,
         )
 
     def _annotate_order_deltas(

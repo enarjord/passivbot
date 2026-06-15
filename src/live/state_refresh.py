@@ -31,12 +31,16 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     bot._begin_authoritative_refresh_epoch()
     bot._last_authoritative_block_reason = None
     bot._last_authoritative_pending_pnl_count = 0
-    plan = {"positions", "open_orders"}
+    plan = {"balance", "positions", "open_orders"}
     bot._authoritative_refresh_plan_surfaces = set(plan)
     snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
+    fetched_balance = snapshot.get("balance")
     fetched_positions = snapshot.get("positions")
     fetched_open_orders = snapshot.get("open_orders")
 
+    prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
+    if prepared_balance_snapshot is None:
+        return False
     if fetched_positions in [None, False]:
         return False
     if fetched_open_orders in [None, False]:
@@ -50,6 +54,10 @@ async def refresh_protective_authoritative_state(bot) -> bool:
     if not open_orders_ok:
         return False
     _old_positions, fetched_positions_new = bot._apply_positions_snapshot(fetched_positions)
+    bot._commit_balance_snapshot(prepared_balance_snapshot)
+    bot._record_authoritative_surface(
+        "balance", round(float(bot.get_hysteresis_snapped_balance()), 12)
+    )
     bot._record_authoritative_surface(
         "positions",
         bot._positions_signature(fetched_positions_new),
