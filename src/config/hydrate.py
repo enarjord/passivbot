@@ -29,6 +29,7 @@ TEMPLATE_SYNC_PRESERVE_PATHS: tuple[Path, ...] = (
     ("coin_overrides",),
     ("backtest", "suite", "aggregate"),
     ("backtest", "suite", "scenarios"),
+    ("backtest", "market_settings"),
     ("backtest", "market_settings_sources"),
     *tuple(PARTIALLY_OPEN_CONFIG_PATHS),
 )

@@ -115,6 +115,7 @@ def get_template_config():
                 "hlcvs_data_override_mode": "intersection",
                 "liquidation_threshold": 0.05,
                 "maker_fee_override": 0.0004,
+                "market_settings": {"overrides": {}, "overrides_by_exchange": {}},
                 "market_settings_sources": {},
                 "ohlcv_source_dir": None,
                 "market_order_slippage_pct": 0.0005,
