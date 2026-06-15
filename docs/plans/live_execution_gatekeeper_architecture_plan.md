@@ -7,6 +7,11 @@ Draft architecture/spec for a future v8 live-bot refactor.
 This is not an implementation checklist for one large rewrite. It defines the target shape and a
 safe migration path for making live execution easier to inspect, test, and reason about.
 
+The first implementation commitment is intentionally narrower than the full target architecture:
+build the event/data-packet spine and immutable per-cycle snapshot boundary first. Gatekeeper
+enforcement should remain conditional until the planning-availability contract is explicit and
+tested.
+
 ## Purpose
 
 Split the live bot into narrow components with explicit data contracts and structured decision
@@ -21,6 +26,29 @@ evidence:
 
 The primary goal is live safety and diagnosis. A live incident should be reconstructible from
 structured events without reverse-engineering interleaved logs or hidden mutable state.
+
+## Reviewer Calibration
+
+External review agreed that the design targets real live-safety problems, but the value is
+front-loaded:
+
+- Highest value / lowest behavior risk:
+  - structured event envelope
+  - `DataPacket` metadata
+  - immutable `LiveSnapshot` used through the whole cycle
+  - planning-unavailable diagnostics
+- Higher risk / later:
+  - replacing scattered execution checks with enforced gatekeeper decisions
+  - semi-lazy refresh scheduling that changes when data is refreshed
+
+The key unresolved safety gap is downstream gatekeeper visibility. A gatekeeper can only evaluate
+actions Rust emitted. If stale or missing snapshot inputs cause Rust not to emit an order it would
+have emitted with fresh data, the gatekeeper cannot recover that missing action. The mitigation is
+not gatekeeping alone; it is an explicit planning-availability contract before enforcement.
+
+This means the first useful plateau is Phases 1-2 plus a planning-availability audit surface. The
+full gatekeeper should be built only after that plateau is reviewed and the stale-input policy is
+settled.
 
 ## Non-Goals
 
@@ -349,6 +377,67 @@ planning_unavailable: symbol=XMR/USDT:USDT pside=long order_class=initial_entry 
 planning_unavailable: symbol=BTC/USDT:USDT pside=long order_class=hsl_check reason=fill_history_degraded
 ```
 
+## Planning Availability Contract
+
+Planning availability is the bridge between snapshot freshness and Rust output. It must answer:
+
+```text
+For this snapshot, which symbol+pside+order_class decisions were evaluable?
+Which were explicitly unavailable, degraded, or skipped before/inside Rust planning?
+```
+
+This is required because missing ideal orders are otherwise ambiguous. "Rust emitted no order" may
+mean either:
+
+- the strategy genuinely wanted no order, or
+- the bot lacked fresh enough data to evaluate that order class.
+
+Initial order classes:
+
+- `initial_entry`
+- `risk_increasing_entry`
+- `take_profit_close`
+- `trailing_close`
+- `unstuck_close`
+- `wel_twel_reduce_close`
+- `hsl_panic_close`
+- `entry_cancel`
+- `protective_close_cancel`
+
+Initial availability values:
+
+- `available`
+- `unavailable`
+- `degraded`
+- `not_applicable`
+- `unknown`
+
+Every non-`available` value needs a reason code and packet revision evidence:
+
+```text
+PlanningAvailability
+  cycle_id
+  snapshot_id
+  symbol
+  position_side
+  order_class
+  status
+  reason_code
+  required_surfaces
+  packet_revisions
+```
+
+Open policy choice:
+
+- For order classes whose Rust input cannot safely represent missing data, exclude or block the
+  affected symbol/order class before Rust and emit `planning_unavailable`.
+- For order classes where stale values are useful for diagnostics only, carry the stale packet in
+  `LiveSnapshot` but do not let it satisfy the requirement matrix.
+- Do not pass fabricated neutral defaults to Rust to force a shape.
+
+Gatekeeper enforcement must not be treated as complete until this contract is implemented at least
+in Python for live-only data surfaces, and reviewed for the Rust-owned strategy surfaces.
+
 ## Rust Orchestrator Contract
 
 Rust remains the source of ideal order behavior.
@@ -631,6 +720,8 @@ in JSONL artifacts or DEBUG/TRACE.
 ### Phase 0: Contracts Only
 
 - Add this plan and review with external agents.
+- Record the agreed scope split: Phases 1-2 are green-lit as a behavior-preserving plateau;
+  gatekeeper enforcement is conditional on planning-availability work.
 - Identify current call sites for snapshot building, Rust input building, reconciliation, gates, and
   executor writes.
 - Define initial `DataPacket`, `LiveSnapshot`, `PlannedAction`, and `GateDecision` types in tests
@@ -660,12 +751,31 @@ Exit criteria:
 - Freeze a `LiveSnapshot` per execution cycle.
 - Keep background refresh completions out of the current cycle.
 - Carry packet revisions into Rust-input construction.
-- Emit planning-unavailable diagnostics for missing/stale non-account surfaces.
+- Use the frozen snapshot through Rust input building and subsequent reconciliation/execution
+  diagnostics where practical.
+- Emit initial planning-unavailable diagnostics for missing/stale non-account surfaces.
 
 Exit criteria:
 
 - Fake-live can assert packet revisions and snapshot ids are stable through a cycle.
 - Account-critical failures still block exchange writes.
+- The bot can explain which snapshot packet revisions were used for one normal fake-live cycle.
+
+### Phase 2.5: Planning Availability Contract
+
+- Define `PlanningAvailability` records for symbol+pside+order-class evaluation.
+- Emit availability diagnostics before gatekeeper enforcement.
+- Decide, per order class, whether stale values are excluded from Rust input, included only as
+  diagnostic snapshot data, or allowed as an explicit fallback.
+- Add tests for silent-omission risks where missing data prevents order-class evaluation.
+
+Exit criteria:
+
+- "No ideal order" can be distinguished from "order class unavailable" for the initial high-risk
+  classes.
+- The stale-input policy is explicit enough for a reviewer to audit.
+- Gatekeeper enforcement can depend on availability records rather than assuming Rust evaluated
+  every order class.
 
 ### Phase 3: Explicit Action Planner
 
@@ -694,6 +804,7 @@ Exit criteria:
 - Route creates/cancels/replaces through gatekeeper decisions.
 - Executor submits only approved actions.
 - Deferred actions trigger targeted refresh scheduling.
+- Enforce action classes incrementally, starting with the least ambiguous classes.
 
 Exit criteria:
 
@@ -759,6 +870,8 @@ The smallest valuable slice:
 3. Wrap positions, open orders, and balance refresh packets.
 4. Emit `snapshot.built` and `data_packet.updated` events in fake-live.
 5. Add tests proving the current cycle uses frozen packet revisions.
+6. Emit minimal `planning_unavailable` events for account-critical or obviously stale non-account
+   surfaces without changing execution.
 
 This creates the diagnostic spine without changing order behavior. Gatekeeper enforcement should
-wait until the event and snapshot boundaries are visible and testable.
+wait until the event, snapshot, and planning-availability boundaries are visible and testable.
