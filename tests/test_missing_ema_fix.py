@@ -260,6 +260,39 @@ def _rust_strategy_params(**overrides):
     return params
 
 
+def _rust_trailing_grid_v7_strategy_params():
+    return {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "entry": {
+            "grid_double_down_factor": 1.0,
+            "grid_spacing_pct": 0.01,
+            "grid_spacing_we_weight": 0.0,
+            "grid_spacing_volatility_weight": 0.0,
+            "initial_ema_dist": 0.0,
+            "initial_qty_pct": 0.1,
+            "trailing_double_down_factor": 1.0,
+            "trailing_grid_ratio": 0.0,
+            "trailing_retracement_pct": 0.01,
+            "trailing_retracement_we_weight": 0.0,
+            "trailing_retracement_volatility_weight": 0.0,
+            "trailing_threshold_pct": 0.01,
+            "trailing_threshold_we_weight": 0.0,
+            "trailing_threshold_volatility_weight": 0.0,
+            "volatility_ema_span_hours": 1.0,
+        },
+        "close": {
+            "grid_markup_start": 0.01,
+            "grid_markup_end": 0.005,
+            "grid_qty_pct": 0.2,
+            "trailing_grid_ratio": 0.0,
+            "trailing_qty_pct": 0.1,
+            "trailing_retracement_pct": 0.005,
+            "trailing_threshold_pct": 0.01,
+        },
+    }
+
+
 def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pairs):
     trailing = {
         "min_since_open": 0.0,
@@ -551,6 +584,35 @@ async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close
     )
 
     with pytest.raises(ValueError, match=r"orchestrator compute_ideal_orders failed: MissingEma \{ symbol_idx: 0 \}"):
+        pbr.compute_ideal_orders_json(json.dumps(payload))
+
+
+def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
+    try:
+        import passivbot_rust as pbr
+    except ImportError:
+        pytest.skip("passivbot_rust module not importable in test environment")
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    symbol = "BTC/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    payload = _make_orchestrator_payload(
+        symbol,
+        m1_close_pairs=[[span0, 30.0], [span1, 30.0], [span2, 30.0]],
+        m1_volume_pairs=[],
+        m1_lr_pairs=[],
+    )
+    payload["global"]["strategy_kind"] = "trailing_grid_v7"
+    params = _rust_trailing_grid_v7_strategy_params()
+    params["close"].pop("trailing_threshold_pct")
+    payload["symbols"][0]["long"]["strategy_params"] = params
+    payload["symbols"][0]["short"]["strategy_params"] = _rust_trailing_grid_v7_strategy_params()
+
+    with pytest.raises(ValueError, match="trailing_threshold_pct"):
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
 

@@ -17,6 +17,7 @@ from config.optimize_bounds import get_optimize_bounds_defaults
 from config.migrations.trailing_grid_v7 import migrate_v7_trailing_grid_config
 from config.overrides import parse_overrides
 from config.strategy_spec import get_supported_strategy_kinds
+from tools.migrate_config_v7 import main as migrate_config_v7_main
 
 
 def _set_path(mapping, path, value):
@@ -215,6 +216,71 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
 
 
+def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    input_path.write_text(
+        json.dumps(_minimal_v7_trailing_grid_config()),
+        encoding="utf-8",
+    )
+
+    rc = migrate_config_v7_main([str(input_path), str(output_path)])
+
+    assert rc == 0
+    assert output_path.exists()
+    loaded = json.loads(output_path.read_text(encoding="utf-8"))
+    assert loaded["live"]["strategy_kind"] == "trailing_grid_v7"
+
+
+def test_migrate_config_v7_cli_unresolved_returns_nonzero_without_output_but_writes_report(
+    tmp_path,
+):
+    source = _minimal_v7_trailing_grid_config()
+    source["custom_top_level_section"] = {"important": 1}
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    report_path = tmp_path / "report.json"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+
+    rc = migrate_config_v7_main(
+        [str(input_path), str(output_path), "--report", str(report_path)]
+    )
+
+    assert rc == 1
+    assert not output_path.exists()
+    assert report_path.exists()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "manual_review_required"
+    assert report["output_written"] is False
+    assert "custom_top_level_section" in report["manual_review_fields"]
+
+
+def test_migrate_config_v7_cli_override_writes_unresolved_best_effort_output(tmp_path):
+    source = _minimal_v7_trailing_grid_config()
+    source["custom_top_level_section"] = {"important": 1}
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    report_path = tmp_path / "report.json"
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+
+    rc = migrate_config_v7_main(
+        [
+            str(input_path),
+            str(output_path),
+            "--report",
+            str(report_path),
+            "--allow-manual-review-output",
+        ]
+    )
+
+    assert rc == 0
+    assert output_path.exists()
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["status"] == "unsafe_manual_review_output_written"
+    assert report["output_written"] is True
+    assert report["allow_manual_review_output"] is True
+
+
 def test_migrate_v7_trailing_grid_rejects_root_ema_only_config():
     source = {
         "bot": {
@@ -320,6 +386,17 @@ def test_migrate_v7_trailing_grid_reports_source_strategy_subtree():
     _migrated, report = migrate_v7_trailing_grid_config(source)
 
     assert "bot.long.strategy" in report["manual_review_fields"]
+
+
+def test_migrate_v7_trailing_grid_reports_grouped_bot_side_sections():
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["risk"] = {"n_positions": 3}
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert "bot.long.risk" in report["manual_review_fields"]
+    assert not any(moved.startswith("bot.long.risk ->") for moved in report["moved_fields"])
+    assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
 
 
 def test_migrate_v7_trailing_grid_reports_top_level_wallet_exposure_limit():
@@ -659,6 +736,41 @@ def test_migrate_v7_trailing_grid_unknown_nested_strategy_bound_is_reported_not_
     prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
+def test_migrate_v7_trailing_grid_unknown_nested_shared_bound_is_reported_not_emitted():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long": {
+            "foo": {"bar": [1, 2, 1]},
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert "foo" not in migrated["optimize"]["bounds"]["long"]
+    assert "optimize.bounds.long.foo.bar" in report["manual_review_fields"]
+    assert not any("optimize.bounds.long.foo" in moved for moved in report["moved_fields"])
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_valid_nested_shared_bound_is_moved():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long": {
+            "risk": {"n_positions": [2, 5, 1]},
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["optimize"]["bounds"]["long"]["risk"]["n_positions"] == [2, 5, 1]
+    assert (
+        "optimize.bounds.long.risk.n_positions -> "
+        "optimize.bounds.long.risk.n_positions"
+    ) in report["moved_fields"]
+    assert "optimize.bounds.long.risk.n_positions" not in report["manual_review_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
 def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_is_canonicalized():
     source = _minimal_v7_trailing_grid_config()
     source["optimize"]["bounds"] = {
@@ -782,6 +894,23 @@ def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_trailing_marti
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+@pytest.mark.parametrize("strategy_kind", ["trailing_grid_v7", "ema_anchor"])
+@pytest.mark.parametrize("flat_key", ["entry_grid_spacing_pct", "entry_volatility_ema_span_1h"])
+def test_prepare_config_rejects_v7_flat_trailing_grid_fields_with_any_strategy_kind(
+    strategy_kind,
+    flat_key,
+):
+    source = get_template_config()
+    source["live"]["strategy_kind"] = strategy_kind
+    source["bot"]["long"][flat_key] = 0.5
+
+    with pytest.raises(
+        ValueError,
+        match=rf"bot\.long\.{flat_key}.*passivbot tool migrate-config-v7",
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
     source = get_template_config()
     source["live"]["strategy_kind"] = "trailing_martingale"
@@ -805,6 +934,7 @@ def test_prepare_config_rejects_old_v7_flat_aliases_with_trailing_martingale():
     [
         "entry_grid_spacing_weight",
         "entry_grid_spacing_pct",
+        "entry_volatility_ema_span_1h",
     ],
 )
 def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
@@ -823,7 +953,10 @@ def test_parse_overrides_rejects_v7_flat_strategy_override_keys(flat_key):
 
     with pytest.raises(
         ValueError,
-        match=rf"coin_overrides\.BTC\.bot\.long.*unsupported flat strategy.*{flat_key}",
+        match=(
+            rf"coin_overrides\.BTC\.bot\.long.*unsupported flat strategy.*"
+            rf"{flat_key}.*passivbot tool migrate-config-v7"
+        ),
     ):
         parse_overrides(
             prepared,

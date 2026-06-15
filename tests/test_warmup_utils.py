@@ -496,6 +496,28 @@ class TestWarmupEdgeCases:
         with pytest.raises(ValueError, match="invalid warmup value"):
             compute_backtest_warmup_minutes(config)
 
+    def test_malformed_shared_span_raises(self, base_config):
+        """Shared/forager warmup spans must fail loudly when present and malformed."""
+        base_config["bot"]["long"]["forager_volume_ema_span_1m"] = "not-a-number"
+
+        with pytest.raises(
+            ValueError,
+            match=r"invalid warmup value for long\.forager_volume_ema_span_1m",
+        ):
+            compute_backtest_warmup_minutes(base_config)
+
+    def test_per_coin_malformed_shared_span_raises_with_coin_context(self, base_config):
+        """Per-coin shared warmup spans must not silently collapse to zero."""
+        base_config["coin_overrides"] = {
+            "BTC": {"bot": {"long": {"forager_volume_ema_span_1m": None}}}
+        }
+
+        with pytest.raises(
+            ValueError,
+            match=r"invalid warmup value for BTC\.long\.forager_volume_ema_span_1m",
+        ):
+            compute_per_coin_warmup_minutes(base_config)
+
 
 # ============================================================================
 # Summary

@@ -2184,6 +2184,110 @@ mod tests {
     }
 
     #[test]
+    fn close_trailing_grid_ratio_positive_splits_long_by_wallet_exposure() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let close = TrailingGridV7CloseParams {
+            grid_markup_start: 0.01,
+            grid_markup_end: 0.005,
+            grid_qty_pct: 0.2,
+            trailing_grid_ratio: 0.5,
+            trailing_qty_pct: 0.25,
+            trailing_retracement_pct: 0.005,
+            trailing_threshold_pct: 0.01,
+        };
+        let trailing = TrailingPriceBundle {
+            max_since_open: 102.0,
+            min_since_max: 101.0,
+            ..Default::default()
+        };
+
+        let trailing_first = calc_next_close_long(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &close,
+            &Position {
+                size: 40.0,
+                price: 100.0,
+            },
+            &trailing,
+        );
+        assert_eq!(trailing_first.order_type, OrderType::CloseTrailingLong);
+        assert!(trailing_first.qty < 0.0);
+
+        let grid_after_threshold = calc_next_close_long(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &close,
+            &Position {
+                size: 80.0,
+                price: 100.0,
+            },
+            &trailing,
+        );
+        assert_eq!(grid_after_threshold.order_type, OrderType::CloseGridLong);
+        assert!(grid_after_threshold.qty < 0.0);
+    }
+
+    #[test]
+    fn close_trailing_grid_ratio_positive_splits_short_by_wallet_exposure() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let close = TrailingGridV7CloseParams {
+            grid_markup_start: 0.01,
+            grid_markup_end: 0.005,
+            grid_qty_pct: 0.2,
+            trailing_grid_ratio: 0.5,
+            trailing_qty_pct: 0.25,
+            trailing_retracement_pct: 0.005,
+            trailing_threshold_pct: 0.01,
+        };
+        let trailing = TrailingPriceBundle {
+            min_since_open: 98.0,
+            max_since_min: 99.0,
+            ..Default::default()
+        };
+
+        let trailing_first = calc_next_close_short(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &close,
+            &Position {
+                size: -40.0,
+                price: 100.0,
+            },
+            &trailing,
+        );
+        assert_eq!(trailing_first.order_type, OrderType::CloseTrailingShort);
+        assert!(trailing_first.qty > 0.0);
+
+        let grid_after_threshold = calc_next_close_short(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &close,
+            &Position {
+                size: -80.0,
+                price: 100.0,
+            },
+            &trailing,
+        );
+        assert_eq!(grid_after_threshold.order_type, OrderType::CloseGridShort);
+        assert!(grid_after_threshold.qty > 0.0);
+    }
+
+    #[test]
     #[should_panic(expected = "trailing_grid_v7::calc_closes_long: non-finite close price")]
     fn close_sorting_rejects_non_finite_price_on_v7_path() {
         let mut closes = vec![Order {

@@ -110,8 +110,8 @@ def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
             joined = ", ".join(bad_keys)
             raise ValueError(
                 f"coin_overrides.{coin}.bot.{pside} contains unsupported flat strategy "
-                f"override key(s): {joined}. Use "
-                f"coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
+                f"override key(s): {joined}. Run `passivbot tool migrate-config-v7`, "
+                f"or use coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
             )
 
 

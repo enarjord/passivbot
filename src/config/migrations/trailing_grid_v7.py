@@ -7,6 +7,7 @@ from typing import Any
 
 from config.optimize_bounds import (
     BOT_BOUND_GROUP_BY_KEY,
+    SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY,
     set_flat_optimize_bound,
     sort_optimize_bounds_in_place,
 )
@@ -258,6 +259,13 @@ def _report_unknown_top_level_sections(source: dict, report: dict) -> None:
             report["manual_review_fields"].append(str(key))
 
 
+def migration_report_has_unresolved(report: dict) -> bool:
+    return bool(
+        report.get("manual_review_fields")
+        or report.get("dropped_unsupported_fields")
+    )
+
+
 def _move_shared_side_fields(
     source_side: dict,
     target_side: dict,
@@ -484,6 +492,34 @@ def _move_nested_strategy_bounds(
     return moved_any
 
 
+def _move_nested_shared_bounds(
+    *,
+    pside: str,
+    group_name: str,
+    group_bounds: Any,
+    target_bounds: dict,
+    report: dict,
+) -> None:
+    source_prefix = f"optimize.bounds.{pside}.{group_name}"
+    supported_local_keys = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name)
+    if supported_local_keys is None or not isinstance(group_bounds, dict):
+        if isinstance(group_bounds, dict):
+            for path, _value in _iter_leaf_items(group_bounds):
+                report["manual_review_fields"].append(f"{source_prefix}.{'.'.join(path)}")
+        else:
+            report["manual_review_fields"].append(source_prefix)
+        return
+    target_group = target_bounds.setdefault(pside, {}).setdefault(group_name, {})
+    for path, value in _iter_leaf_items(group_bounds):
+        source_path = f"{source_prefix}.{'.'.join(path)}"
+        if len(path) != 1 or path[0] not in supported_local_keys:
+            report["manual_review_fields"].append(source_path)
+            continue
+        local_key = path[0]
+        target_group[local_key] = deepcopy(value)
+        report["moved_fields"].append(f"{source_path} -> {source_path}")
+
+
 def _move_bounds(source: dict, target: dict, report: dict) -> None:
     bounds = source.get("optimize", {}).get("bounds")
     if not isinstance(bounds, dict):
@@ -541,8 +577,13 @@ def _move_bounds(source: dict, target: dict, report: dict) -> None:
                 continue
             for group_name, group_bounds in side_bounds.items():
                 if group_name != "strategy":
-                    target_bounds.setdefault(pside, {})[group_name] = deepcopy(group_bounds)
-                    report["moved_fields"].append(f"optimize.bounds.{pside}.{group_name}")
+                    _move_nested_shared_bounds(
+                        pside=pside,
+                        group_name=group_name,
+                        group_bounds=group_bounds,
+                        target_bounds=target_bounds,
+                        report=report,
+                    )
                     continue
                 if isinstance(group_bounds, dict):
                     handled_strategy_names = {"trailing_grid", TRAILING_GRID_V7_KIND}
@@ -745,7 +786,9 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         _report_source_strategy_subtree(source_side, pside=pside, report=report)
         known = _known_legacy_side_keys() | {"strategy"}
         for key in sorted(source_side):
-            if key not in known and key not in BOT_GROUP_FIELD_MAP:
+            if key in BOT_GROUP_FIELD_MAP:
+                report["manual_review_fields"].append(f"bot.{pside}.{key}")
+            elif key not in known:
                 report["manual_review_fields"].append(f"bot.{pside}.{key}")
 
     if not moved_strategy:
@@ -759,7 +802,12 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
     return target, report
 
 
-def migrate_v7_trailing_grid_file(input_path: str | Path, output_path: str | Path) -> tuple[dict, dict]:
+def migrate_v7_trailing_grid_file(
+    input_path: str | Path,
+    output_path: str | Path,
+    *,
+    allow_manual_review_output: bool = False,
+) -> tuple[dict, dict]:
     from config.parse import load_raw_config
     import json
 
@@ -767,6 +815,20 @@ def migrate_v7_trailing_grid_file(input_path: str | Path, output_path: str | Pat
     output_path = Path(output_path)
     source = load_raw_config(input_path)
     migrated, report = migrate_v7_trailing_grid_config(source, source_path=str(input_path))
+    unresolved = migration_report_has_unresolved(report)
+    report["manual_review_required"] = unresolved
+    report["allow_manual_review_output"] = bool(allow_manual_review_output)
+    report["output_config_path"] = str(output_path)
+    if unresolved and not allow_manual_review_output:
+        report["output_written"] = False
+        report["status"] = "manual_review_required"
+        return migrated, report
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(migrated, indent=4, sort_keys=True) + "\n", encoding="utf-8")
+    report["output_written"] = True
+    report["status"] = (
+        "unsafe_manual_review_output_written"
+        if unresolved
+        else "ok"
+    )
     return migrated, report

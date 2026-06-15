@@ -109,7 +109,7 @@ impl Default for EmaAnchorParams {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct TrailingGridV7Params {
     pub ema_span_0: f64,
     pub ema_span_1: f64,
@@ -118,7 +118,7 @@ pub struct TrailingGridV7Params {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct TrailingGridV7EntryParams {
     pub grid_double_down_factor: f64,
     pub grid_spacing_pct: f64,
@@ -138,7 +138,7 @@ pub struct TrailingGridV7EntryParams {
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(default, deny_unknown_fields)]
+#[serde(deny_unknown_fields)]
 pub struct TrailingGridV7CloseParams {
     pub grid_markup_start: f64,
     pub grid_markup_end: f64,
@@ -331,5 +331,55 @@ pub fn generate_orders(
         StrategyKind::TrailingMartingale => trailing_martingale::generate_orders(side, request),
         StrategyKind::EmaAnchor => ema_anchor::generate_orders(side, request),
         StrategyKind::TrailingGridV7 => trailing_grid_v7::generate_orders(side, request),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_strategy_params, StrategyKind, StrategySide};
+    use crate::types::BotParams;
+    use serde_json::json;
+
+    #[test]
+    fn trailing_grid_v7_parse_rejects_missing_required_leaf() {
+        let raw = json!({
+            "ema_span_0": 200.0,
+            "ema_span_1": 800.0,
+            "entry": {
+                "grid_double_down_factor": 1.0,
+                "grid_spacing_pct": 0.01,
+                "grid_spacing_we_weight": 0.0,
+                "grid_spacing_volatility_weight": 0.0,
+                "initial_ema_dist": 0.0,
+                "initial_qty_pct": 0.01,
+                "trailing_double_down_factor": 1.0,
+                "trailing_grid_ratio": 0.0,
+                "trailing_retracement_pct": 0.01,
+                "trailing_retracement_we_weight": 0.0,
+                "trailing_retracement_volatility_weight": 0.0,
+                "trailing_threshold_pct": 0.01,
+                "trailing_threshold_we_weight": 0.0,
+                "trailing_threshold_volatility_weight": 0.0,
+                "volatility_ema_span_hours": 1.0
+            },
+            "close": {
+                "grid_markup_start": 0.01,
+                "grid_markup_end": 0.005,
+                "grid_qty_pct": 0.2,
+                "trailing_grid_ratio": 0.0,
+                "trailing_qty_pct": 0.1,
+                "trailing_retracement_pct": 0.005
+            }
+        });
+
+        let err = parse_strategy_params(
+            StrategyKind::TrailingGridV7,
+            StrategySide::Long,
+            Some(&raw),
+            &BotParams::default(),
+        )
+        .expect_err("missing close.trailing_threshold_pct must fail");
+
+        assert!(err.contains("trailing_threshold_pct"), "{err}");
     }
 }

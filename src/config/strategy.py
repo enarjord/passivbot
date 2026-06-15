@@ -41,6 +41,7 @@ TRAILING_GRID_V7_FLAT_ONLY_KEYS = {
     "entry_trailing_threshold_pct",
     "entry_trailing_threshold_we_weight",
     "entry_trailing_threshold_volatility_weight",
+    "entry_volatility_ema_span_1h",
     "entry_volatility_ema_span_hours",
 }
 
@@ -194,8 +195,6 @@ def build_runtime_strategy_side(
 def reject_trailing_grid_v7_flat_fields_for_trailing_martingale(config: dict) -> None:
     live_cfg = config.setdefault("live", {})
     normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
-    if normalized_kind != DEFAULT_STRATEGY_KIND:
-        return
     bot_cfg = config.setdefault("bot", {})
     for pside in BOT_POSITION_SIDES:
         bot_side = bot_cfg.get(pside)
@@ -205,10 +204,10 @@ def reject_trailing_grid_v7_flat_fields_for_trailing_martingale(config: dict) ->
         if legacy_keys:
             joined = ", ".join(f"bot.{pside}.{key}" for key in legacy_keys)
             raise ValueError(
-                f"{joined} are v7 trailing-grid-only flat fields and cannot be used with "
-                f"live.strategy_kind={DEFAULT_STRATEGY_KIND!r}. Run "
-                "`passivbot tool migrate-config-v7` and use "
-                "live.strategy_kind='trailing_grid_v7', or remove these fields."
+                f"{joined} are v7 trailing-grid-only flat fields and cannot be used in "
+                f"normal v8 configs with live.strategy_kind={normalized_kind!r}. Run "
+                "`passivbot tool migrate-config-v7`, or move these values under "
+                "bot.<side>.strategy.trailing_grid_v7 before loading."
             )
 
 

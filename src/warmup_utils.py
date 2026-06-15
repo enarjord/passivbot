@@ -15,24 +15,28 @@ from strategy_warmup import (
 )
 
 
-def _to_float(value) -> float:
+def _to_float(value, *, context: str) -> float:
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
-        return 0.0
+        raise ValueError(f"invalid warmup value for {context}: {value!r}") from None
+    if not math.isfinite(numeric):
+        raise ValueError(f"invalid warmup value for {context}: {value!r}")
+    return numeric
 
 
 def _require_max_warmup_minutes(config: dict) -> float:
-    return _to_float(require_live_value(config, "max_warmup_minutes"))
+    return _to_float(
+        require_live_value(config, "max_warmup_minutes"),
+        context="live.max_warmup_minutes",
+    )
 
 
-def _accumulate_max_minutes(max_minutes: float, *values) -> tuple[float, bool]:
+def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
     for value in values:
-        numeric = _to_float(value)
-        if not math.isfinite(numeric):
-            return max_minutes, False
+        numeric = _to_float(value, context=context)
         max_minutes = max(max_minutes, numeric)
-    return max_minutes, True
+    return max_minutes
 
 
 def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
@@ -136,9 +140,13 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         )
         for pside, params, strategy in side_sets:
             for field in minute_fields:
-                max_minutes, is_valid = _accumulate_max_minutes(max_minutes, params.get(field))
-                if not is_valid:
-                    return 0
+                if field not in params:
+                    continue
+                max_minutes = _accumulate_max_minutes(
+                    max_minutes,
+                    params[field],
+                    context=f"{pside}.{field}",
+                )
             requirements = strategy_warmup_requirements(
                 strategy,
                 pside=pside,
@@ -174,11 +182,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
             return 0
         max_minutes = max(max_minutes, extracted * 60.0)
 
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
+    warmup_ratio = _to_float(
+        require_config_value(config, "live.warmup_ratio"),
+        context="live.warmup_ratio",
+    )
     limit = _require_max_warmup_minutes(config)
 
-    if not math.isfinite(max_minutes):
-        return 0
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
     if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
@@ -186,7 +195,10 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
+    warmup_ratio = _to_float(
+        require_config_value(config, "live.warmup_ratio"),
+        context="live.warmup_ratio",
+    )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
     minute_fields = [
@@ -203,29 +215,24 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
         )
         for pside, params, strategy in side_sets:
             for field in minute_fields:
-                max_minutes, is_valid = _accumulate_max_minutes(max_minutes, params.get(field))
-                if not is_valid:
-                    per_coin[coin] = 0
-                    break
-            else:
-                requirements = strategy_warmup_requirements(
-                    strategy,
-                    pside=pside,
-                    symbol=coin if coin != "__default__" else None,
-                    error_label="warmup",
-                )
-                max_minutes = max(
+                if field not in params:
+                    continue
+                max_minutes = _accumulate_max_minutes(
                     max_minutes,
-                    requirements.max_1m_span_minutes,
-                    requirements.max_h1_span_hours * 60.0,
+                    params[field],
+                    context=f"{coin}.{pside}.{field}",
                 )
-                continue
-            break
-        if coin in per_coin:
-            continue
-        if not math.isfinite(max_minutes):
-            per_coin[coin] = 0
-            continue
+            requirements = strategy_warmup_requirements(
+                strategy,
+                pside=pside,
+                symbol=coin if coin != "__default__" else None,
+                error_label="warmup",
+            )
+            max_minutes = max(
+                max_minutes,
+                requirements.max_1m_span_minutes,
+                requirements.max_h1_span_hours * 60.0,
+            )
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)
