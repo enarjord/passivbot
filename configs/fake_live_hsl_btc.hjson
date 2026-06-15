@@ -1,0 +1,125 @@
+{
+  bot: {
+    long: {
+      strategy: {
+        trailing_martingale: {
+          ema_span_0: 2.0
+          ema_span_1: 4.0
+          volatility_ema_span_1h: 0.0
+          volatility_ema_span_1m: 60.0
+          entry: {
+            double_down_factor: 1.0
+            initial_ema_dist: -0.001
+            initial_qty_pct: 0.1
+            threshold_base_pct: 0.01
+            threshold_we_weight: 0.0
+            threshold_volatility_1h_weight: 0.0
+            threshold_volatility_1m_weight: 0.0
+            retracement_base_pct: 0.0
+            retracement_we_weight: 0.0
+            retracement_volatility_1h_weight: 0.0
+            retracement_volatility_1m_weight: 0.0
+          }
+          close: {
+            qty_pct: 1.0
+            threshold_base_pct: 0.005
+            threshold_we_weight: 0.0
+            threshold_volatility_1h_weight: 0.0
+            threshold_volatility_1m_weight: 0.0
+            retracement_base_pct: 0.0
+            retracement_volatility_1h_weight: 0.0
+            retracement_volatility_1m_weight: 0.0
+          }
+        }
+      }
+      forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
+      forager_volatility_ema_span_1m: 0.0
+      forager_volume_drop_pct: 0.0
+      forager_volume_ema_span_1m: 1.0
+      hsl_cooldown_minutes_after_red: 1.0
+      hsl_ema_span_minutes: 1.0
+      hsl_enabled: true
+      hsl_no_restart_drawdown_threshold: 0.9
+      hsl_orange_tier_mode: tp_only_with_active_entry_cancellation
+      hsl_panic_close_order_type: market
+      hsl_red_threshold: 0.05
+      hsl_tier_ratios: {yellow: 0.5, orange: 0.75}
+      n_positions: 1.0
+      risk_twel_enforcer_threshold: 1.0
+      risk_we_excess_allowance_pct: 0.0
+      risk_wel_enforcer_threshold: 1.0
+      total_wallet_exposure_limit: 5.0
+      unstuck_close_pct: 0.01
+      unstuck_ema_dist: 0.0
+      unstuck_loss_allowance_pct: 0.1
+      unstuck_threshold: 1.0
+    }
+    short: {
+      hsl_enabled: false
+      strategy: {
+        trailing_martingale: {
+          ema_span_0: 0.0
+          ema_span_1: 0.0
+          volatility_ema_span_1h: 0.0
+          volatility_ema_span_1m: 60.0
+          entry: {
+            double_down_factor: 0.5
+            initial_ema_dist: -0.01
+            initial_qty_pct: 0.01
+            threshold_base_pct: 0.025
+            threshold_we_weight: 0.0
+            threshold_volatility_1h_weight: 0.0
+            threshold_volatility_1m_weight: 0.0
+            retracement_base_pct: 0.0
+            retracement_we_weight: 0.0
+            retracement_volatility_1h_weight: 0.0
+            retracement_volatility_1m_weight: 0.0
+          }
+          close: {
+            qty_pct: 1.0
+            threshold_base_pct: 0.005
+            threshold_we_weight: 0.0
+            threshold_volatility_1h_weight: 0.0
+            threshold_volatility_1m_weight: 0.0
+            retracement_base_pct: 0.0
+            retracement_volatility_1h_weight: 0.0
+            retracement_volatility_1m_weight: 0.0
+          }
+        }
+      }
+      forager_score_weights: {volume: 1.0, ema_readiness: 0.0, volatility: 0.0}
+      forager_volatility_ema_span_1m: 0.0
+      forager_volume_drop_pct: 0.0
+      forager_volume_ema_span_1m: 0.0
+      n_positions: 1.0
+      total_wallet_exposure_limit: 0.0
+    }
+  }
+  live: {
+    approved_coins: {
+      long: []
+      short: []
+    }
+    ignored_coins: {
+      long: []
+      short: []
+    }
+    execution_delay_seconds: 1.0
+    hedge_mode: false
+    hsl_position_during_cooldown_policy: panic
+    inactive_coin_candle_ttl_minutes: 10.0
+    leverage: 5.0
+    market_orders_allowed: true
+    max_memory_candles_per_symbol: 2000
+    minimum_coin_age_days: 0.0
+    pnls_max_lookback_days: 0.0013888889
+    time_in_force: good_till_cancelled
+    user: fake_hsl_runner
+    warmup_concurrency: 0
+    warmup_jitter_seconds: 0.0
+    warmup_ratio: 0.0
+  }
+  logging: {
+    level: 1
+  }
+}
