@@ -39,6 +39,25 @@ from planning_snapshot import (
 from exchanges.binance import BinanceBot
 
 
+class _SafeRiskCache:
+    def get_known_gaps(self):
+        return []
+
+    def get_covered_start_ms(self):
+        return 1
+
+    def get_history_scope(self):
+        return "all"
+
+    def load_metadata(self):
+        return {
+            "known_gaps": [],
+            "covered_start_ms": 1,
+            "history_scope": "all",
+            "oldest_event_ts": 1,
+        }
+
+
 def test_repeated_shutdown_signal_forces_immediate_exit(monkeypatch):
     bot = SimpleNamespace(stop_signal_received=True, _shutdown_in_progress=True)
     monkeypatch.setattr(passivbot_module, "bot", bot)
@@ -2955,7 +2974,9 @@ def test_unstuck_allowance_routes_raw_balance_to_rust(monkeypatch):
         get_events=lambda: [
             types.SimpleNamespace(pnl=10.0, fee_paid=-1.0),
             types.SimpleNamespace(pnl=-4.0, fee_paid=-0.5),
-        ]
+        ],
+        cache=_SafeRiskCache(),
+        get_history_scope=lambda: "all",
     )
 
     def bot_value(pside, key):
@@ -3006,7 +3027,9 @@ def test_unstuck_allowance_uses_only_configured_pnl_lookback(monkeypatch):
                 types.SimpleNamespace(pnl=10.0, timestamp=now_ms - 60_000),
             ]
             if start_ms is None or ev.timestamp >= start_ms
-        ]
+        ],
+        cache=_SafeRiskCache(),
+        get_history_scope=lambda: "all",
     )
 
     def bot_value(pside, key):
@@ -3241,6 +3264,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     import passivbot as pb_mod
 
     symbol = "BTC/USDT:USDT"
+    healthy_symbol = "ETH/USDT:USDT"
 
     class FakePlanningSnapshot:
         def last_prices(self):
@@ -3254,8 +3278,12 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
         positions = {
             symbol: {
                 "long": {"size": 1.0, "price": 100.0},
+                "short": {"size": -1.0, "price": 100.0},
+            },
+            healthy_symbol: {
+                "long": {"size": 2.0, "price": 200.0},
                 "short": {"size": 0.0, "price": 0.0},
-            }
+            },
         }
         open_orders = {}
         active_symbols = []
@@ -3285,6 +3313,11 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
 
         def get_exchange_time(self):
             return 1_700_000_000_000
+
+        def get_forced_PB_mode(self, pside, sym=None):
+            if sym == symbol and pside == "long":
+                return "panic"
+            return None
 
         def get_hysteresis_snapped_balance(self):
             return self.balance
@@ -3361,13 +3394,18 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     assert out == {}
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
-    assert rust_symbol["short"]["mode"] == "panic"
+    assert rust_symbol["short"]["mode"] == "manual"
+    assert captured["input"]["global"]["panic_close_market"] is True
+    assert len(captured["input"]["symbols"]) == 1
     assert rust_symbol["emas"] == {
         "m1": {"close": [], "log_range": [], "volume": []},
         "h1": {"close": [], "log_range": [], "volume": []},
     }
     assert captured["input"]["global"]["unstuck_allowance_long"] == 0.0
     assert captured["input"]["global"]["realized_pnl_cumsum_last"] == 0.0
+    assert pb_mod.Passivbot._protective_panic_target_psides_by_symbol(FakeBot()) == {
+        symbol: {"long"}
+    }
 
 
 def test_live_max_realized_loss_pct_preserves_zero_and_defaults_none():

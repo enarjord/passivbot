@@ -790,6 +790,7 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     ideal_orders,
     *,
     actual_symbols: Optional[Iterable[str]] = None,
+    actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
     apply_initial_entry_gate: bool = True,
     apply_creation_guardrails: bool = True,
 ):
@@ -797,7 +798,9 @@ async def calc_orders_to_cancel_and_create_from_ideal(
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
 
-    actual_orders = bot._snapshot_actual_orders(actual_symbols)
+    actual_orders = bot._snapshot_actual_orders(
+        actual_symbols, psides_by_symbol=actual_psides_by_symbol
+    )
     malformed_actual_symbols = set(
         getattr(bot, "_malformed_actual_order_symbols", set()) or set()
     )
@@ -943,7 +946,10 @@ async def calc_orders_to_cancel_and_create_from_ideal(
 
 
 def snapshot_actual_orders(
-    bot, symbols: Optional[Iterable[str]] = None
+    bot,
+    symbols: Optional[Iterable[str]] = None,
+    *,
+    psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
 ) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
     actual_orders: dict[str, list[dict]] = {}
@@ -951,8 +957,20 @@ def snapshot_actual_orders(
     malformed_counts: dict[str, int] = {}
     if symbols is None:
         symbols = getattr(bot, "active_symbols", [])
+    pside_filter = None
+    if psides_by_symbol is not None:
+        pside_filter = {
+            str(symbol): {str(pside) for pside in psides if pside}
+            for symbol, psides in psides_by_symbol.items()
+        }
     for symbol in sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)):
         symbol_orders = []
+        allowed_psides = (
+            pside_filter.get(symbol, set()) if pside_filter is not None else None
+        )
+        if allowed_psides == set():
+            actual_orders[symbol] = symbol_orders
+            continue
         for order in bot.open_orders.get(symbol, []):
             try:
                 if not isinstance(order, dict):
@@ -985,6 +1003,8 @@ def snapshot_actual_orders(
                     raise ValueError("empty symbol or invalid side")
                 if position_side not in {"long", "short"}:
                     raise ValueError("invalid position_side")
+                if allowed_psides is not None and position_side not in allowed_psides:
+                    continue
                 symbol_orders.append(
                     {
                         "symbol": order_symbol,

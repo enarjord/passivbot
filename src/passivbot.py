@@ -1348,7 +1348,9 @@ class Passivbot:
             return
         cache = getattr(self._pnls_manager, "cache", None)
         if cache is None:
-            return
+            raise RuntimeError(
+                f"{context}: fill history coverage unavailable; missing FillEventsManager cache"
+            )
 
         if end_ms is None:
             try:
@@ -6176,7 +6178,8 @@ class Passivbot:
         """Return True if the exchange acknowledged order creation."""
         if not isinstance(executed, dict):
             return False
-        if executed.get("id") is None:
+        order_id = executed.get("id")
+        if order_id is None or not str(order_id).strip():
             return False
         status = str(executed.get("status") or "").strip().lower()
         info = executed.get("info")
@@ -10695,20 +10698,75 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         return await self.calc_ideal_orders_orchestrator()
 
+    def _protective_panic_target_psides_by_symbol(self) -> dict[str, set[str]]:
+        """Return symbols/psides whose current live mode explicitly requires panic supervision."""
+        candidate_symbols: set[str] = set()
+
+        def position_size(pos_by_pside: dict, pside: str) -> Optional[float]:
+            side_pos = pos_by_pside.get(pside)
+            if not isinstance(side_pos, dict) or "size" not in side_pos:
+                return None
+            size_raw = side_pos["size"]
+            if size_raw is None:
+                return None
+            return float(size_raw)
+
+        for symbol, pos in (getattr(self, "positions", {}) or {}).items():
+            if not isinstance(pos, dict):
+                continue
+            for pside in ("long", "short"):
+                size = position_size(pos, pside)
+                if size is not None and size != 0.0:
+                    candidate_symbols.add(str(symbol))
+                    break
+        for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
+            if orders:
+                candidate_symbols.add(str(symbol))
+
+        mode_getter = getattr(self, "_orchestrator_mode_override", None)
+        forced_getter = getattr(self, "get_forced_PB_mode", None)
+        runtime_forced = getattr(self, "_runtime_forced_modes", {}) or {}
+        targets: dict[str, set[str]] = {}
+        for symbol in sorted(candidate_symbols):
+            for pside in ("long", "short"):
+                mode = None
+                if callable(mode_getter):
+                    mode = mode_getter(pside, symbol)
+                elif callable(forced_getter):
+                    mode = forced_getter(pside, symbol)
+                else:
+                    forced_by_pside = runtime_forced.get(pside)
+                    if isinstance(forced_by_pside, dict):
+                        mode = forced_by_pside.get(symbol)
+                if str(mode or "").strip().lower() == "panic":
+                    targets.setdefault(symbol, set()).add(pside)
+        return targets
+
     async def calc_protective_panic_ideal_orders_orchestrator(self):
         """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
         self._current_planning_snapshot = None
+        target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(
+            self
+        )
+        self._protective_panic_reconcile_psides_by_symbol = {
+            symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
+        }
         position_symbols = set()
         for symbol, pos in (getattr(self, "positions", {}) or {}).items():
             for pside in ("long", "short"):
-                size = float(pos.get(pside, {}).get("size", 0.0) or 0.0)
+                target_psides = target_psides_by_symbol.get(symbol)
+                if target_psides is None or pside not in target_psides:
+                    continue
+                side_pos = pos.get(pside)
+                if not isinstance(side_pos, dict) or "size" not in side_pos:
+                    continue
+                size_raw = side_pos["size"]
+                if size_raw is None:
+                    continue
+                size = float(size_raw)
                 if size != 0.0:
                     position_symbols.add(symbol)
-        open_order_symbols = set()
-        for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
-            if orders:
-                open_order_symbols.add(symbol)
-        reconcile_symbols = sorted(position_symbols | open_order_symbols)
+        reconcile_symbols = sorted(target_psides_by_symbol)
         self._protective_panic_reconcile_symbols = reconcile_symbols
         symbols = sorted(position_symbols)
         if not symbols:
@@ -10747,14 +10805,7 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "panic_close_market": bool(
-                    any(
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                        == "market"
-                        for pside in ("long", "short")
-                        if Passivbot._equity_hard_stop_enabled(self, pside)
-                    )
-                ),
+                "panic_close_market": False,
                 "unstuck_allowance_long": 0.0,
                 "unstuck_allowance_short": 0.0,
                 "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
@@ -10775,12 +10826,24 @@ class Passivbot:
 
         if not hasattr(self, "effective_min_cost") or self.effective_min_cost is None:
             self.effective_min_cost = {}
+        target_psides = {
+            pside for psides in target_psides_by_symbol.values() for pside in psides
+        }
+        panic_close_market = bool(
+            any(
+                Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
+                == "market"
+                for pside in target_psides
+                if Passivbot._equity_hard_stop_enabled(self, pside)
+            )
+        )
+        input_dict["global"]["panic_close_market"] = panic_close_market
         for symbol in symbols:
             idx = symbol_to_idx[symbol]
             snap = market_snapshots.get(symbol)
             mprice = float(last_prices.get(symbol, 0.0))
             if not math.isfinite(mprice) or mprice <= 0.0:
-                raise Exception(f"invalid market price for {symbol}: {mprice}")
+                raise RuntimeError(f"invalid market price for {symbol}: {mprice}")
             bid = float(snap.bid) if snap is not None and snap.is_valid() else mprice
             ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
             active = bool(
@@ -10800,7 +10863,11 @@ class Passivbot:
                 )
                 trailing = _trailing_bundle_default_dict()
                 return {
-                    "mode": "panic",
+                    "mode": (
+                        "panic"
+                        if pside in target_psides_by_symbol.get(symbol, set())
+                        else "manual"
+                    ),
                     "position": {
                         "size": float(pos["size"]),
                         "price": float(pos["price"]),
@@ -12857,19 +12924,28 @@ class Passivbot:
             set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
             | set(ideal_orders)
         )
+        actual_psides_by_symbol = getattr(
+            self, "_protective_panic_reconcile_psides_by_symbol", None
+        )
         return await reconciler.calc_orders_to_cancel_and_create_from_ideal(
             self,
             ideal_orders,
             actual_symbols=actual_symbols,
+            actual_psides_by_symbol=actual_psides_by_symbol,
             apply_initial_entry_gate=False,
             apply_creation_guardrails=False,
         )
 
     def _snapshot_actual_orders(
-        self, symbols: Optional[Iterable[str]] = None
+        self,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
     ) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
-        return reconciler.snapshot_actual_orders(self, symbols)
+        return reconciler.snapshot_actual_orders(
+            self, symbols, psides_by_symbol=psides_by_symbol
+        )
 
     def _reconcile_symbol_orders(
         self,

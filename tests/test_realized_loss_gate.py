@@ -75,7 +75,10 @@ class _RiskCache:
         }
 
 
-def _make_bot_with_events(events, balance=10000.0, cache=None):
+_DEFAULT_RISK_CACHE = object()
+
+
+def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
     bot._pnls_manager = MagicMock()
@@ -90,7 +93,17 @@ def _make_bot_with_events(events, balance=10000.0, cache=None):
         return out
 
     bot._pnls_manager.get_events.side_effect = _get_events
-    bot._pnls_manager.cache = None
+    if cache is _DEFAULT_RISK_CACHE:
+        oldest_event_ts = min(
+            (int(getattr(ev, "timestamp", 0) or 0) for ev in events),
+            default=1,
+        )
+        cache = _RiskCache(
+            covered_start_ms=1,
+            history_scope="all",
+            oldest_event_ts=max(1, oldest_event_ts),
+        )
+    bot._pnls_manager.cache = cache
     if cache is not None:
         bot._pnls_manager.cache = cache
         bot._pnls_manager.get_history_scope.side_effect = cache.get_history_scope
@@ -257,6 +270,17 @@ class TestGetRealizedPnlCumsumStats:
         )
 
         with pytest.raises(RuntimeError, match="degraded realized PnL"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_missing_cache_blocks_risk_history_coverage(self):
+        now_ms = 10 * 86_400_000
+        bot = _make_bot_with_events(
+            [_make_fill_event(10.0, timestamp=now_ms - 60_000)],
+            cache=None,
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="missing FillEventsManager cache"):
             bot._get_realized_pnl_cumsum_stats()
 
     def test_known_gap_overlapping_lookback_fails_loudly(self):

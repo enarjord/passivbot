@@ -195,6 +195,7 @@ def test_base_did_create_order_rejects_terminal_statuses():
     bot = Passivbot.__new__(Passivbot)
 
     assert bot.did_create_order({"id": "open-1", "status": "open"})
+    assert not bot.did_create_order({"id": "", "status": "open"})
     assert not bot.did_create_order({"id": "reject-1", "status": "rejected"})
     assert not bot.did_create_order({"id": "cancel-1", "info": {"status": "canceled"}})
     assert not bot.did_create_order({"id": "expire-1", "info": {"ordStatus": "EXPIRED"}})
@@ -396,6 +397,72 @@ async def test_calc_protective_panic_reconciles_when_active_symbols_stale():
 
 
 @pytest.mark.asyncio
+async def test_protective_panic_reconciliation_preserves_healthy_pside_orders():
+    symbol = "BTC/USDT"
+    bot = OrchestrationBot({symbol: 100.0})
+    bot.register_symbol(symbol)
+    bot.active_symbols = []
+    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.positions[symbol]["short"]["size"] = -1.0
+    bot.open_orders[symbol] = [
+        _make_order(
+            symbol,
+            "buy",
+            "long",
+            1.0,
+            99.0,
+            "entry_grid_normal_long",
+        ),
+        _make_order(
+            symbol,
+            "sell",
+            "short",
+            1.0,
+            101.0,
+            "entry_grid_normal_short",
+        ),
+        _make_order(
+            symbol,
+            "buy",
+            "short",
+            1.0,
+            98.0,
+            "close_grid_short",
+            reduce_only=True,
+        ),
+    ]
+
+    async def fake_protective_ideal(self):
+        self._protective_panic_reconcile_symbols = [symbol]
+        self._protective_panic_reconcile_psides_by_symbol = {symbol: {"long"}}
+        return {
+            symbol: [
+                _make_order(
+                    symbol,
+                    "sell",
+                    "long",
+                    1.0,
+                    100.0,
+                    "close_panic_long",
+                    reduce_only=True,
+                    order_kind="market",
+                )
+            ]
+        }
+
+    bot.calc_protective_panic_ideal_orders_orchestrator = types.MethodType(
+        fake_protective_ideal, bot
+    )
+
+    to_cancel, to_create = await bot.calc_protective_panic_orders_to_cancel_and_create()
+
+    assert [(order["position_side"], order["side"], order["price"]) for order in to_cancel] == [
+        ("long", "buy", 99.0)
+    ]
+    assert [order["pb_order_type"] for order in to_create] == ["close_panic_long"]
+
+
+@pytest.mark.asyncio
 async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symbol():
     symbol = "DOGE/USDT:USDT"
     bot = Passivbot.__new__(Passivbot)
@@ -422,6 +489,7 @@ async def test_protective_panic_ideal_does_not_fetch_ticker_for_cancel_only_symb
         raise AssertionError(f"cancel-only symbols must not require market snapshots: {symbols}")
 
     bot._get_orchestrator_market_snapshots = fail_market_snapshot_fetch
+    bot._orchestrator_mode_override = lambda pside, sym: "panic" if pside == "long" else None
 
     ideal = await Passivbot.calc_protective_panic_ideal_orders_orchestrator(bot)
 
