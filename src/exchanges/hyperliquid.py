@@ -654,6 +654,31 @@ class HyperliquidBot(CCXTBot):
                 return _validate_total(row.get("total"))
         raise KeyError(f"unified Hyperliquid balance payload missing total for {self.quote}")
 
+    def _hl_position_unrealized_pnl(self, position: dict) -> float:
+        """Exchange-reported unrealized PnL for a CCXT Hyperliquid position payload.
+
+        Trading-critical: raises on missing/invalid uPNL rather than defaulting to 0.0,
+        mirroring the non-unified balance path's ``float(...["unrealizedPnl"])``. Used to
+        derive balance from the unified account equity (see ``_fetch_positions_and_balance``).
+        """
+        raw = None
+        if isinstance(position, dict):
+            raw = position.get("unrealizedPnl")
+            if raw is None and isinstance(position.get("info"), dict):
+                raw = (position["info"].get("position") or {}).get("unrealizedPnl")
+        if raw is None:
+            symbol = position.get("symbol") if isinstance(position, dict) else position
+            raise KeyError(
+                f"Hyperliquid position payload missing unrealizedPnl for {symbol!r}"
+            )
+        value = float(raw)
+        if not math.isfinite(value):
+            symbol = position.get("symbol") if isinstance(position, dict) else position
+            raise ValueError(
+                f"Hyperliquid position unrealizedPnl is not finite for {symbol!r}: {raw!r}"
+            )
+        return value
+
     async def _fetch_positions_and_balance(self):
         timings_ms = {}
         started = utc_ms()
@@ -676,6 +701,8 @@ class HyperliquidBot(CCXTBot):
             info = await balance_task
             positions = {}
             raw_core_positions = None
+            unified_total = None
+            unified_core_upnl = 0.0
             if self._hl_balance_payload_is_unified(info):
                 self._hl_balance_payload_mode = "unified_total"
                 if speculative_core_positions_task is not None:
@@ -692,7 +719,13 @@ class HyperliquidBot(CCXTBot):
                         normalized["symbol"], normalized.get("margin_mode")
                     )
                     positions[(normalized["symbol"], normalized["position_side"])] = normalized
-                balance = self._hl_extract_unified_total(info)
+                    unified_core_upnl += self._hl_position_unrealized_pnl(position)
+                # Unified `total[USDC]` is the cross-margined account equity: it already
+                # includes perp uPNL for core *and* every HIP-3 dex (all perp margin is held
+                # in the unified USDC wallet). Passivbot balance is equity minus uPNL, so core
+                # uPNL is captured here and HIP-3 uPNL is subtracted below once the dex-scoped
+                # positions are fetched. `balance` is finalized after the HIP-3 fetch.
+                unified_total = self._hl_extract_unified_total(info)
             else:
                 self._hl_balance_payload_mode = "perp_account_value"
                 raw_core_positions = deepcopy(info["info"].get("assetPositions", []))
@@ -725,6 +758,14 @@ class HyperliquidBot(CCXTBot):
             hip3_raw, hip3_positions = await hip3_positions_task
             for position in hip3_positions:
                 positions[(position["symbol"], position["position_side"])] = position
+            if self._hl_balance_payload_mode == "unified_total":
+                unified_hip3_upnl = 0.0
+                for hip3_payload in hip3_raw or []:
+                    for raw_position in hip3_payload.get("response") or []:
+                        if not self._get_hl_dex_for_symbol(raw_position.get("symbol")):
+                            continue
+                        unified_hip3_upnl += self._hl_position_unrealized_pnl(raw_position)
+                balance = unified_total - unified_core_upnl - unified_hip3_upnl
             raw_snapshot = {
                 "balance": deepcopy(info),
                 "positions": {

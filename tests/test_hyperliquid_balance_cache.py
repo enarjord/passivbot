@@ -462,13 +462,17 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
     bot._get_hl_dex_for_symbol = lambda symbol: "xyz" if symbol == "XYZ-SP500/USDC:USDC" else None
     bot._record_hl_live_margin_mode = lambda *args, **kwargs: None
 
+    UNIFIED_TOTAL = 50.92373263  # unified `total[USDC]` == account equity (includes perp uPNL)
+    CORE_UPNL = 1.234567  # core perp uPNL, surfaced only via info.position
+    HIP3_UPNL = -0.456789  # HIP-3 dex uPNL, surfaced at the CCXT top level
+
     class _UnifiedCCA:
         async def fetch_balance(self):
             return {
-                "total": {"USDC": 50.92373263},
+                "total": {"USDC": UNIFIED_TOTAL},
                 "info": {
                     "balances": [
-                        {"coin": "USDC", "hold": "6.59768", "total": "50.92373263"},
+                        {"coin": "USDC", "hold": "6.59768", "total": str(UNIFIED_TOTAL)},
                     ]
                 },
             }
@@ -483,6 +487,8 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
                         "entryPrice": 6953.4,
                         "marginMode": "cross",
                         "initialMargin": 0.69617,
+                        # HIP-3 uPNL exposed at the CCXT top level (tests the primary path).
+                        "unrealizedPnl": HIP3_UPNL,
                         "info": {
                             "position": {
                                 "coin": "xyz:SP500",
@@ -505,6 +511,8 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
                             "coin": "BTC",
                             "leverage": {"type": "cross"},
                             "marginUsed": "1.039948",
+                            # Core uPNL only under info.position (tests the fallback path).
+                            "unrealizedPnl": str(CORE_UPNL),
                         }
                     },
                 }
@@ -514,11 +522,36 @@ async def test_hyperliquid_combined_fetch_handles_unified_balance_payload(stubbe
 
     raw_snapshot, positions, balance = await bot._fetch_positions_and_balance()
 
-    assert balance == pytest.approx(50.92373263)
+    # Unified `total[USDC]` is the account equity (it already includes perp uPNL for core
+    # AND every HIP-3 dex). Passivbot balance must subtract all perp uPNL; with negative
+    # net uPNL the corrected balance is HIGHER than the raw unified total.
+    assert balance == pytest.approx(UNIFIED_TOTAL - (CORE_UPNL + HIP3_UPNL))
+    assert balance == pytest.approx(50.14595463)
     assert raw_snapshot["balance_mode"] == "unified_total"
     assert {p["symbol"] for p in positions} == {"BTC/USDC:USDC", "XYZ-SP500/USDC:USDC"}
     assert any(p["symbol"] == "BTC/USDC:USDC" and p["margin_used"] == pytest.approx(1.039948) for p in positions)
     assert any(p["symbol"] == "XYZ-SP500/USDC:USDC" and p["margin_used"] == pytest.approx(0.69617) for p in positions)
+
+
+def test_hyperliquid_position_unrealized_pnl_fails_loud(stubbed_modules):
+    HyperliquidBot = importlib.import_module("exchanges.hyperliquid").HyperliquidBot
+    bot = HyperliquidBot.__new__(HyperliquidBot)
+
+    # top-level value is preferred
+    assert bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "unrealizedPnl": 2.5}) == 2.5
+    # falls back to info.position.unrealizedPnl (string)
+    assert (
+        bot._hl_position_unrealized_pnl(
+            {"symbol": "BTC/USDC:USDC", "info": {"position": {"unrealizedPnl": "-3.5"}}}
+        )
+        == -3.5
+    )
+    # missing uPNL must hard-fail, never silently default to 0.0 (balance is trading-critical)
+    with pytest.raises(KeyError):
+        bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "info": {"position": {}}})
+    # non-finite uPNL must hard-fail
+    with pytest.raises(ValueError):
+        bot._hl_position_unrealized_pnl({"symbol": "BTC/USDC:USDC", "unrealizedPnl": float("inf")})
 
 
 @pytest.mark.asyncio
