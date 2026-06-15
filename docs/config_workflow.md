@@ -7,7 +7,7 @@ This is the recommended way to work with Passivbot configs on the current config
 - The canonical hardcoded defaults live in `src/config/schema.py`.
 - The example config `configs/examples/default_trailing_martingale_long_npos4.json` mirrors those defaults exactly.
 - New V8 configs must keep the top-level `config_version: "v8.0.0"` field. V8 is a breaking schema; older or pre-v8 configs are not automatically converted to V8.
-- V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. The output uses deprecated compatibility strategy kind `trailing_grid_v7`; new optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
+- V7 trailing-grid configs can be converted explicitly with `passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json`. Clean migrations write deprecated compatibility strategy kind `trailing_grid_v7`; if the report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. New optimization work should use the canonical `trailing_martingale` strategy unless you intentionally need v7 behavior.
 - If you run `passivbot live`, `passivbot backtest`, or `passivbot optimize` without a config path, Passivbot starts from the in-code defaults in `src/config/schema.py`.
 
 ## Recommended Workflow

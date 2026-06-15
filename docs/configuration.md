@@ -238,7 +238,7 @@ V8 also includes `trailing_grid_v7` as deprecated compatibility for migrating v7
 passivbot tool migrate-config-v7 input_v7.json output_v8_trailing_grid_v7.json
 ```
 
-The helper writes canonical v8 shape with `live.strategy_kind = "trailing_grid_v7"` and strategy parameters under `bot.<side>.strategy.trailing_grid_v7`. It does not convert v7 parameters into `trailing_martingale`, and normal v8 loading does not silently accept old flat trailing-grid fields.
+Clean migrations write canonical v8 shape with `live.strategy_kind = "trailing_grid_v7"` and strategy parameters under `bot.<side>.strategy.trailing_grid_v7`. If the transform report contains manual-review or dropped unsupported fields, the command returns nonzero and does not write output unless `--allow-manual-review-output` is passed. The helper does not convert v7 parameters into `trailing_martingale`, and normal v8 loading does not silently accept old flat trailing-grid fields.
 
 - **strategy.trailing_martingale.entry.double_down_factor**:
   - Quantity of the next re-entry is position size times the double down factor.
