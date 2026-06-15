@@ -252,10 +252,25 @@ async def routine_fill_refresh_prefetch_task(bot, *, reason: str) -> None:
 
 async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[str, int]):
     """Measure one staged authoritative fetch while preserving exceptions."""
-    del bot
     started = _utc_ms()
     try:
-        return await coro
+        result = await coro
+        recorder = getattr(bot, "_capture_live_data_packet_fetch_metadata", None)
+        if callable(recorder):
+            try:
+                recorder(
+                    surface,
+                    result,
+                    call_started_ts_ms=started,
+                    response_received_ts_ms=_utc_ms(),
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[diagnostic] failed to capture %s data packet metadata: %s",
+                    surface,
+                    exc,
+                )
+        return result
     finally:
         timings_ms[surface] = int(max(0, _utc_ms() - started))
 

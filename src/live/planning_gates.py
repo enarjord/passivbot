@@ -262,6 +262,9 @@ def log_staged_execution_defer(bot, details: dict) -> None:
         return
     bot._staged_execution_defer_last_log_key = log_key
     bot._staged_execution_defer_last_log_ms = now_ms
+    emitter = getattr(bot, "_emit_planning_unavailable_diagnostic", None)
+    if callable(emitter):
+        emitter(details)
     logging.log(
         logging.DEBUG if routine_candle_target else logging.INFO,
         "[state] %s",
@@ -378,6 +381,8 @@ def build_staged_planning_snapshot(
     ledger = bot._ensure_freshness_ledger()
     required = bot._staged_planner_required_surfaces(include_market_snapshot=True)
     min_epochs = bot._staged_planner_surface_min_epochs(required)
+    packet_getter = getattr(bot, "_planning_data_packets", None)
+    data_packets = packet_getter(required) if callable(packet_getter) else {}
     snapshot = PlanningSnapshot.capture(
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
@@ -388,8 +393,12 @@ def build_staged_planning_snapshot(
         symbols=ordered_symbols,
         market_snapshots=market_snapshots,
         market_snapshot_max_age_ms=bot._live_market_snapshot_max_age_ms(),
+        data_packets=data_packets,
     )
     snapshot.raise_if_invalid(now_ms=_utc_ms(), context="rust order calculation")
+    emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
+    if callable(emitter):
+        emitter(snapshot, context="rust_order_calculation")
     return snapshot
 
 
@@ -424,6 +433,8 @@ def build_protective_planning_snapshot(
             f"required={sorted(required)}"
             f" invalid={invalid}"
         )
+    packet_getter = getattr(bot, "_planning_data_packets", None)
+    data_packets = packet_getter(required) if callable(packet_getter) else {}
     snapshot = PlanningSnapshot.capture(
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
@@ -434,10 +445,14 @@ def build_protective_planning_snapshot(
         symbols=ordered_symbols,
         market_snapshots=market_snapshots,
         market_snapshot_max_age_ms=bot._live_market_snapshot_max_age_ms(),
+        data_packets=data_packets,
     )
     snapshot.raise_if_invalid(
         now_ms=_utc_ms(), context="protective panic order calculation"
     )
+    emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
+    if callable(emitter):
+        emitter(snapshot, context="protective_panic_order_calculation")
     return snapshot
 
 

@@ -254,6 +254,99 @@ def _counted_staged_account_refresh_bot(
 
 
 @pytest.mark.asyncio
+async def test_staged_account_refresh_emits_data_packet_diagnostics():
+    symbol = "BTC/USDT:USDT"
+    bot, _counts = _counted_staged_account_refresh_bot(
+        balance=123.45,
+        positions=[
+            {
+                "symbol": symbol,
+                "position_side": "long",
+                "size": 0.1,
+                "price": 100.0,
+            }
+        ],
+        open_orders=[
+            {
+                "id": "entry-1",
+                "symbol": symbol,
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.01,
+                "amount": 0.01,
+                "price": 99.0,
+                "timestamp": 1,
+                "reduce_only": False,
+            }
+        ],
+    )
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload=None, **kwargs: events.append(
+            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+        )
+    )
+
+    assert await bot.refresh_authoritative_state() is True
+
+    packet_events = [
+        event for event in events if event["kind"] == "data_packet.updated"
+    ]
+    assert {event["payload"]["kind"] for event in packet_events} == {
+        "balance",
+        "positions",
+        "open_orders",
+    }
+    by_kind = {event["payload"]["kind"]: event["payload"] for event in packet_events}
+    assert by_kind["balance"]["revision"] == 1
+    assert by_kind["balance"]["scope"] == "global"
+    assert by_kind["balance"]["freshness"]["status"] == "fresh"
+    assert by_kind["balance"]["quality"] == "ok"
+    assert by_kind["balance"]["response_received_ts_ms"] >= by_kind["balance"][
+        "call_started_ts_ms"
+    ]
+    assert "raw_hash" in by_kind["positions"]
+    assert "raw" not in by_kind["positions"]
+    assert by_kind["open_orders"]["coverage"]["row_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_data_packet_capture_failure_does_not_block_authoritative_fetch():
+    from live import state_refresh
+
+    def failing_recorder(*_args, **_kwargs):
+        raise RuntimeError("metadata recorder failed")
+
+    async def fetched_payload():
+        return ("raw-balance", 123.45)
+
+    bot = SimpleNamespace(_capture_live_data_packet_fetch_metadata=failing_recorder)
+    timings_ms = {}
+
+    result = await state_refresh.timed_authoritative_fetch(
+        bot, "balance", fetched_payload(), timings_ms
+    )
+
+    assert result == ("raw-balance", 123.45)
+    assert timings_ms["balance"] >= 0
+
+
+def test_diagnostic_event_emit_failure_is_noncritical():
+    from live.events import DiagnosticEvent, emit_diagnostic_event
+
+    def failing_monitor(*_args, **_kwargs):
+        raise RuntimeError("monitor unavailable")
+
+    bot = SimpleNamespace(_monitor_record_event=failing_monitor)
+    event = DiagnosticEvent.build(
+        "snapshot.built", ("diagnostic",), {"snapshot_id": "x"}
+    )
+
+    assert emit_diagnostic_event(bot, event) is None
+
+
+@pytest.mark.asyncio
 async def test_staged_orchestrator_market_snapshot_fetch_uses_headroom_ttl():
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bitget"
@@ -4317,6 +4410,88 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     assert planning_snapshot.invalid_details(now_ms=passivbot_module.utc_ms()) == []
 
 
+@pytest.mark.asyncio
+async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
+    symbol = "BTC/USDT:USDT"
+    positions = [
+        {
+            "symbol": symbol,
+            "position_side": "long",
+            "size": 0.1,
+            "price": 100.0,
+        }
+    ]
+    bot, _counts = _counted_staged_account_refresh_bot(
+        balance=100.0,
+        positions=positions,
+        open_orders=[],
+    )
+    bot.config = {"live": {"user": "tester"}}
+    bot.exchange = "fake"
+    bot.coin_overrides = {}
+    _disable_entry_cooldown_delta_guard_for_staged_refresh_test(bot)
+    bot.active_symbols = [symbol]
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.cm = SimpleNamespace(
+        get_completed_candle_health=lambda sym, windows=None, now_ms=None: {
+            "ok": True,
+            "timeframes": {
+                "1m": {
+                    "coverage_ok": True,
+                    "latest_expected_ts": 120_000,
+                    "last_cached_ts": 120_000,
+                    "missing_candles": 0,
+                    "runtime_synthetic_count": 0,
+                }
+            },
+        }
+    )
+    events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload=None, **kwargs: events.append(
+            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+        )
+    )
+
+    assert await bot.refresh_authoritative_state() is True
+    candle_signature = ((symbol, 120_000),)
+    bot._record_authoritative_surface("completed_candles", candle_signature)
+    snapshots = {
+        symbol: MarketSnapshot(
+            symbol=symbol,
+            bid=99.5,
+            ask=100.5,
+            last=100.0,
+            fetched_ms=passivbot_module.utc_ms(),
+            source="test",
+        )
+    }
+    bot._record_market_snapshot_surface([symbol], snapshots)
+
+    planning_snapshot = bot._build_staged_planning_snapshot([symbol], snapshots)
+    frozen_revisions = {
+        packet.kind: packet.revision for packet in planning_snapshot.data_packets
+    }
+
+    assert frozen_revisions == {
+        "balance": 1,
+        "positions": 1,
+        "open_orders": 1,
+    }
+    snapshot_events = [
+        event for event in events if event["kind"] == "snapshot.built"
+    ]
+    assert snapshot_events[-1]["payload"]["snapshot_id"] == planning_snapshot.snapshot_id
+
+    positions[0]["size"] = 0.2
+    assert await bot.refresh_authoritative_state() is True
+    assert bot._live_data_packets["positions"].revision == 2
+    assert {
+        packet.kind: packet.revision for packet in planning_snapshot.data_packets
+    } == frozen_revisions
+    assert planning_snapshot.snapshot_id == snapshot_events[-1]["payload"]["snapshot_id"]
+
+
 def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"user": "tester"}}
@@ -4344,6 +4519,41 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
 
     with pytest.raises(RuntimeError, match="planning snapshot invalid"):
         bot._build_staged_planning_snapshot([symbol], snapshots)
+
+
+def test_staged_execution_defer_emits_planning_unavailable_diagnostic():
+    bot = Passivbot.__new__(Passivbot)
+    events = []
+    bot._monitor_record_event = (
+        lambda kind, tags, payload=None, **kwargs: events.append(
+            {"kind": kind, "tags": tuple(tags), "payload": dict(payload or {}), **kwargs}
+        )
+    )
+    details = {
+        "missing": ["positions"],
+        "required": ["balance", "positions", "open_orders"],
+        "epoch": 3,
+        "min_epochs": {"positions": 3},
+        "invalid": {},
+        "context": "rust order calculation",
+        "defer_reason": "staged_planner_inputs_not_fresh",
+    }
+
+    bot._log_staged_execution_defer(details)
+
+    assert len(events) == 1
+    assert events[0]["kind"] == "planning_unavailable"
+    assert events[0]["tags"] == ("diagnostic", "planning", "unavailable")
+    assert events[0]["payload"] == {
+        "cycle_id": 3,
+        "context": "rust order calculation",
+        "missing": ["positions"],
+        "required": ["balance", "positions", "open_orders"],
+        "min_epochs": {"positions": 3},
+        "invalid": {},
+        "defer_reason": "staged_planner_inputs_not_fresh",
+    }
+    assert isinstance(events[0]["ts"], int)
 
 
 @pytest.mark.asyncio

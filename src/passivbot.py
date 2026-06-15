@@ -51,7 +51,13 @@ from fill_events_manager import (
     signed_fee_paid_from_payload,
 )
 from live import executor, market_data, planning_gates, reconciler, state_refresh
+from live.data_packets import (
+    ACCOUNT_PACKET_KINDS,
+    DataPacketMetadata,
+    build_data_packet_metadata,
+)
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from live.events import DiagnosticEvent, emit_diagnostic_event
 from monitor_publisher import MonitorPublisher
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
 from live.planning_snapshot import PlanningSnapshot
@@ -743,6 +749,9 @@ class Passivbot:
         self._authoritative_barrier_last_log_key = None
         self._authoritative_barrier_last_log_ms = 0
         self.freshness_ledger = FreshnessLedger(now_ms=utc_ms())
+        self._live_data_packets = {}
+        self._live_data_packet_revisions = {}
+        self._pending_live_data_packet_metadata = {}
         self._disabled_psides_logged = set()
         self._last_coin_symbol_warning_counts = {
             "symbol_to_coin_fallbacks": 0,
@@ -7440,6 +7449,8 @@ class Passivbot:
                 int(self._authoritative_surface_generations.get(surface, 0) or 0) + 1
             )
             self._authoritative_refresh_epoch_changed.add(surface)
+        if surface in ACCOUNT_PACKET_KINDS:
+            self._finalize_live_data_packet_metadata(surface, signature=signature)
         return changed
 
     def _positions_signature(self, positions: list[dict]) -> tuple:
@@ -7521,6 +7532,161 @@ class Passivbot:
             ledger = FreshnessLedger(now_ms=utc_ms())
             self.freshness_ledger = ledger
         return ledger
+
+    def _ensure_live_data_packet_state(self) -> None:
+        if not isinstance(getattr(self, "_live_data_packets", None), dict):
+            self._live_data_packets = {}
+        if not isinstance(getattr(self, "_live_data_packet_revisions", None), dict):
+            self._live_data_packet_revisions = {}
+        if not isinstance(
+            getattr(self, "_pending_live_data_packet_metadata", None), dict
+        ):
+            self._pending_live_data_packet_metadata = {}
+
+    def _stage_live_data_packet_metadata(self, packet: DataPacketMetadata) -> None:
+        if packet.kind not in ACCOUNT_PACKET_KINDS:
+            return
+        self._ensure_live_data_packet_state()
+        self._pending_live_data_packet_metadata[packet.kind] = packet
+
+    def _capture_live_data_packet_fetch_metadata(
+        self,
+        surface: str,
+        result,
+        *,
+        call_started_ts_ms: int,
+        response_received_ts_ms: int,
+    ) -> None:
+        """Stage fetch metadata for account-critical packets without mutating trading state."""
+        cycle_hint = int(getattr(self, "_authoritative_refresh_epoch", 0) or 0)
+        source = f"{getattr(self, 'exchange', '') or 'exchange'}.staged_refresh"
+
+        def stage(kind: str, value, raw_payload=None) -> None:
+            self._stage_live_data_packet_metadata(
+                build_data_packet_metadata(
+                    kind=kind,
+                    value=value,
+                    raw_payload=raw_payload,
+                    cycle_hint=cycle_hint,
+                    call_started_ts_ms=call_started_ts_ms,
+                    response_received_ts_ms=response_received_ts_ms,
+                    source=source,
+                )
+            )
+
+        if surface == "positions_balance":
+            raw_snapshot, positions, balance = result
+            raw_balance = (
+                raw_snapshot.get("balance")
+                if isinstance(raw_snapshot, dict) and "balance" in raw_snapshot
+                else raw_snapshot
+            )
+            raw_positions = (
+                raw_snapshot.get("positions")
+                if isinstance(raw_snapshot, dict) and "positions" in raw_snapshot
+                else raw_snapshot
+            )
+            stage("positions", positions, raw_positions)
+            stage("balance", balance, raw_balance)
+        elif surface == "balance":
+            raw_balance, balance = result
+            stage("balance", balance, raw_balance)
+        elif surface == "positions":
+            raw_positions, positions = result
+            stage("positions", positions, raw_positions)
+        elif surface == "open_orders":
+            stage("open_orders", result, None)
+
+    def _finalize_live_data_packet_metadata(self, surface: str, *, signature) -> None:
+        if surface not in ACCOUNT_PACKET_KINDS:
+            return
+        self._ensure_live_data_packet_state()
+        current_revision = int(self._live_data_packet_revisions.get(surface, 0) or 0)
+        revision = current_revision + 1
+        self._live_data_packet_revisions[surface] = revision
+        pending = self._pending_live_data_packet_metadata.pop(surface, None)
+        if pending is None:
+            pending = build_data_packet_metadata(
+                kind=surface,
+                value=signature,
+                raw_payload=None,
+                cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+                response_received_ts_ms=utc_ms(),
+                source="authoritative_surface",
+                quality="ok",
+                freshness_status="fresh",
+            )
+        packet = pending.with_revision(
+            revision,
+            cycle_hint=int(getattr(self, "_authoritative_refresh_epoch", 0) or 0),
+        )
+        self._live_data_packets[surface] = packet
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "data_packet.updated",
+                ("diagnostic", "data_packet", surface),
+                packet.to_dict(),
+                ts_ms=packet.response_received_ts_ms or utc_ms(),
+            ),
+        )
+
+    def _planning_data_packets(
+        self, required: set[str] | frozenset[str] | tuple[str, ...]
+    ) -> dict[str, DataPacketMetadata]:
+        self._ensure_live_data_packet_state()
+        return {
+            surface: packet
+            for surface, packet in self._live_data_packets.items()
+            if surface in set(required)
+        }
+
+    def _emit_snapshot_built_diagnostic(self, snapshot: PlanningSnapshot, *, context: str) -> None:
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "snapshot.built",
+                ("diagnostic", "snapshot", "planning"),
+                {
+                    "snapshot_id": snapshot.snapshot_id,
+                    "cycle_id": int(snapshot.epoch),
+                    "context": str(context),
+                    "symbols": list(snapshot.symbols),
+                    "required_surfaces": list(snapshot.required_surfaces),
+                    "data_packets": [
+                        {
+                            "kind": packet.kind,
+                            "revision": int(packet.revision),
+                            "freshness": packet.freshness.to_dict(),
+                            "quality": packet.quality,
+                            "raw_ref": packet.raw_ref,
+                            "raw_hash": packet.raw_hash,
+                        }
+                        for packet in snapshot.data_packets
+                    ],
+                },
+                ts_ms=snapshot.ts_ms,
+            ),
+        )
+
+    def _emit_planning_unavailable_diagnostic(self, details: dict) -> None:
+        emit_diagnostic_event(
+            self,
+            DiagnosticEvent.build(
+                "planning_unavailable",
+                ("diagnostic", "planning", "unavailable"),
+                {
+                    "cycle_id": int(details.get("epoch", 0) or 0),
+                    "context": str(details.get("context") or "planning"),
+                    "missing": list(details.get("missing") or []),
+                    "required": list(details.get("required") or []),
+                    "min_epochs": dict(details.get("min_epochs") or {}),
+                    "invalid": details.get("invalid") or {},
+                    "defer_reason": details.get("defer_reason"),
+                },
+                ts_ms=utc_ms(),
+            ),
+        )
 
     def _cancel_result_requires_full_authoritative_confirmation(self, executed) -> bool:
         if isinstance(executed, list):

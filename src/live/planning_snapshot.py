@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Iterable, Mapping
 
+from live.data_packets import DataPacketMetadata, stable_hash
 from live.freshness import FreshnessLedger
 from live.market_snapshot import MarketSnapshot
 
@@ -70,6 +71,8 @@ class PlanningSnapshot:
     market_snapshots: tuple[PlanningMarketSnapshot, ...]
     market_snapshot_max_age_ms: int
     completed_candle_signature: Any
+    snapshot_id: str = ""
+    data_packets: tuple[DataPacketMetadata, ...] = ()
 
     @classmethod
     def capture(
@@ -84,6 +87,7 @@ class PlanningSnapshot:
         symbols: Iterable[str],
         market_snapshots: Mapping[str, MarketSnapshot],
         market_snapshot_max_age_ms: int,
+        data_packets: Mapping[str, DataPacketMetadata] | None = None,
     ) -> "PlanningSnapshot":
         ordered_symbols = tuple(sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)))
         required = tuple(sorted(dict.fromkeys(str(surface) for surface in required_surfaces)))
@@ -102,6 +106,24 @@ class PlanningSnapshot:
             for symbol in ordered_symbols
             if symbol in market_snapshots and market_snapshots[symbol].is_valid()
         )
+        packet_rows = tuple(
+            data_packets[surface]
+            for surface in required
+            if data_packets is not None and surface in data_packets
+        )
+        snapshot_payload = {
+            "ts_ms": int(ts_ms),
+            "exchange": str(exchange),
+            "user": str(user),
+            "epoch": int(ledger.epoch),
+            "symbols": ordered_symbols,
+            "required_surfaces": required,
+            "surfaces": [surface.to_dict() for surface in surfaces],
+            "market_snapshots": [row.to_dict() for row in rows],
+            "market_snapshot_max_age_ms": int(market_snapshot_max_age_ms),
+            "completed_candle_signature": ledger.surface_signature("completed_candles"),
+            "data_packets": [packet.to_dict() for packet in packet_rows],
+        }
         return cls(
             ts_ms=int(ts_ms),
             exchange=str(exchange),
@@ -113,6 +135,8 @@ class PlanningSnapshot:
             market_snapshots=rows,
             market_snapshot_max_age_ms=int(market_snapshot_max_age_ms),
             completed_candle_signature=ledger.surface_signature("completed_candles"),
+            snapshot_id=stable_hash(snapshot_payload)[:24],
+            data_packets=packet_rows,
         )
 
     def invalid_details(self, *, now_ms: int) -> list[dict[str, Any]]:
@@ -173,4 +197,6 @@ class PlanningSnapshot:
             "market_snapshots": [row.to_dict() for row in self.market_snapshots],
             "market_snapshot_max_age_ms": self.market_snapshot_max_age_ms,
             "completed_candle_signature": self.completed_candle_signature,
+            "snapshot_id": self.snapshot_id,
+            "data_packets": [packet.to_dict() for packet in self.data_packets],
         }
