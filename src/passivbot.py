@@ -125,6 +125,13 @@ from procedures import (
 )
 from utils import get_file_mod_ms
 from warmup_utils import compute_per_coin_warmup_minutes
+from strategy_warmup import (
+    STRATEGY_WARMUP_1M_PROBE_KEYS,
+    STRATEGY_WARMUP_H1_PROBE_KEYS,
+    strategy_abs_max_weight,
+    strategy_warmup_requirements,
+    strategy_warmup_value,
+)
 import re
 
 NetworkError = ccxt_errors.NetworkError
@@ -529,14 +536,8 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
-            max_1m_span = max(
-                max_1m_span,
-                _get_strategy(pside, "ema_span_0", sym),
-                _get_strategy(pside, "ema_span_1", sym),
-                _get_strategy(pside, "volatility_ema_span_1m", sym),
-                _get_strategy(pside, "offset_volatility_ema_span_1m", sym),
-                _get_strategy(pside, "entry_volatility_ema_span_1m", sym),
-            )
+            for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
+                max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
                 pside == "short" and is_forager_short
             ):
@@ -545,12 +546,8 @@ def compute_live_warmup_windows(
                     _get_forager(pside, "forager_volume_ema_span_1m", sym),
                     _get_forager(pside, "forager_volatility_ema_span_1m", sym),
                 )
-            max_h1_span = max(
-                max_h1_span,
-                _get_strategy(pside, "volatility_ema_span_1h", sym),
-                _get_strategy(pside, "entry_volatility_ema_span_1h", sym),
-                _get_strategy(pside, "offset_volatility_ema_span_1h", sym),
-            )
+            for key in STRATEGY_WARMUP_H1_PROBE_KEYS:
+                max_h1_span = max(max_h1_span, _get_strategy(pside, key, sym))
 
         if max_1m_span > 0.0:
             win = int(math.ceil(max_1m_span * span_buffer))
@@ -3569,29 +3566,13 @@ class Passivbot:
                 f"{symbol or ''}; got {type(strategy_cfg).__name__}"
             )
 
-        if key in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg[key],
-                context=f"strategy {pside}.{key}",
-                symbol=symbol,
-            )
-
-        if key == "entry_volatility_ema_span_1h" and "volatility_ema_span_1h" in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg["volatility_ema_span_1h"],
-                context=f"strategy {pside}.volatility_ema_span_1h",
-                symbol=symbol,
-            )
-        if key == "entry_volatility_ema_span_1m" and "volatility_ema_span_1m" in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg["volatility_ema_span_1m"],
-                context=f"strategy {pside}.volatility_ema_span_1m",
-                symbol=symbol,
-            )
-
-        # Not every active strategy has every warmup probe key. Missing keys are
-        # treated as not-required; malformed present values still fail above.
-        return 0.0
+        return strategy_warmup_value(
+            strategy_cfg,
+            key,
+            pside=pside,
+            symbol=symbol,
+            error_label="live warmup",
+        )
 
     def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
         """Return grouped forager indicator spans for live candle warmup."""
@@ -11163,64 +11144,6 @@ class Passivbot:
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
-        missing_strategy_path = object()
-
-        def _strategy_lookup(params: dict, *paths):
-            for path in paths:
-                current = params
-                for part in path:
-                    if not isinstance(current, dict) or part not in current:
-                        current = missing_strategy_path
-                        break
-                    current = current[part]
-                if current is not missing_strategy_path:
-                    return current
-            rendered = " | ".join(".".join(path) for path in paths)
-            raise KeyError(f"missing required strategy parameter path: {rendered}")
-
-        def _strategy_lookup_optional(params: dict, default: float, *paths):
-            try:
-                return _strategy_lookup(params, *paths)
-            except KeyError:
-                return default
-
-        def _strategy_abs_max_weight(
-            params: dict,
-            *,
-            context: str,
-            symbol: str,
-            optional: bool,
-            paths: tuple[tuple[str, ...], ...],
-        ) -> float:
-            found = False
-            max_abs = 0.0
-            for path in paths:
-                current = params
-                for part in path:
-                    if not isinstance(current, dict) or part not in current:
-                        current = missing_strategy_path
-                        break
-                    current = current[part]
-                if current is missing_strategy_path:
-                    continue
-                found = True
-                try:
-                    val = float(current)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        f"invalid live warmup value for {context} "
-                        f"symbol={Passivbot._log_symbol(symbol)} path={'.'.join(path)}: {current!r}"
-                    ) from exc
-                if not math.isfinite(val):
-                    raise ValueError(
-                        f"invalid live warmup value for {context} "
-                        f"symbol={Passivbot._log_symbol(symbol)} path={'.'.join(path)}: {current!r}"
-                    )
-                max_abs = max(max_abs, abs(val))
-            if found or optional:
-                return max_abs
-            rendered = " | ".join(".".join(path) for path in paths)
-            raise KeyError(f"missing required strategy parameter path: {rendered}")
 
         strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
 
@@ -11293,33 +11216,22 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                if strategy_kind == "trailing_grid_v7":
-                    m1_span_value = _strategy_lookup_optional(
-                        strategy_params,
-                        0.0,
-                        ("volatility_ema_span_1m",),
-                        ("entry_volatility_ema_span_1m",),
-                        ("offset_volatility_ema_span_1m",),
-                    )
-                else:
-                    m1_span_value = _strategy_lookup(
-                        strategy_params,
-                        ("volatility_ema_span_1m",),
-                        ("entry_volatility_ema_span_1m",),
-                        ("offset_volatility_ema_span_1m",),
-                    )
-                m1_lr_span = Passivbot._positive_finite_warmup_value(
-                    m1_span_value,
-                    context=f"strategy {pside}.volatility_ema_span_1m",
+                requirements = strategy_warmup_requirements(
+                    strategy_params,
+                    pside=pside,
                     symbol=symbol,
+                    error_label="live warmup",
                 )
+                m1_lr_span = requirements.max_m1_log_range_span_minutes
                 m1_lr_weight = 0.0
                 if m1_lr_span > 0.0:
                     m1_lr_weight = max(
-                        _strategy_abs_max_weight(
+                        strategy_abs_max_weight(
                             strategy_params,
                             context=f"strategy {pside}.entry_volatility_1m_weight",
                             symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
                             optional=False,
                             paths=(
                                 ("entry", "threshold_volatility_1m_weight"),
@@ -11328,10 +11240,12 @@ class Passivbot:
                                 ("offset_volatility_1m_weight",),
                             ),
                         ),
-                        _strategy_abs_max_weight(
+                        strategy_abs_max_weight(
                             strategy_params,
                             context=f"strategy {pside}.close_volatility_1m_weight",
                             symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
                             optional=False,
                             paths=(
                                 ("close", "threshold_volatility_1m_weight"),
@@ -11343,24 +11257,16 @@ class Passivbot:
                     )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
-                h1_span = Passivbot._positive_finite_warmup_value(
-                    _strategy_lookup(
-                        strategy_params,
-                        ("volatility_ema_span_1h",),
-                        ("offset_volatility_ema_span_1h",),
-                        ("entry_volatility_ema_span_1h",),
-                        ("entry", "volatility_ema_span_hours"),
-                    ),
-                    context=f"strategy {pside}.volatility_ema_span_1h",
-                    symbol=symbol,
-                )
+                h1_span = requirements.max_h1_span_hours
                 h1_lr_weight = 0.0
                 if h1_span > 0.0:
                     h1_lr_weight = max(
-                        _strategy_abs_max_weight(
+                        strategy_abs_max_weight(
                             strategy_params,
                             context=f"strategy {pside}.entry_volatility_1h_weight",
                             symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
                             optional=False,
                             paths=(
                                 ("entry", "threshold_volatility_1h_weight"),
@@ -11372,10 +11278,12 @@ class Passivbot:
                                 ("offset_volatility_1h_weight",),
                             ),
                         ),
-                        _strategy_abs_max_weight(
+                        strategy_abs_max_weight(
                             strategy_params,
                             context=f"strategy {pside}.close_volatility_1h_weight",
                             symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
                             optional=strategy_kind == "trailing_grid_v7",
                             paths=(
                                 ("close", "threshold_volatility_1h_weight"),

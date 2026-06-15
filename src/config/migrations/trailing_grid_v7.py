@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,7 @@ from config.optimize_bounds import (
 )
 from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
 from config.shared_bot import BOT_GROUP_FIELD_MAP, FLAT_BOT_KEY_TO_GROUP_PATH
+from config.strategy_spec import get_strategy_param_keys
 
 
 TRAILING_GRID_V7_KIND = "trailing_grid_v7"
@@ -61,9 +63,9 @@ STRATEGY_FIELD_MAP = {
     **ROOT_STRATEGY_FIELD_MAP,
 }
 
+V7_DISTINCTIVE_STRATEGY_KEYS = set(ENTRY_FIELD_MAP) | set(CLOSE_FIELD_MAP)
+
 LEGACY_BOUND_ALIASES = {
-    "min_markup": "close_grid_markup_start",
-    "close_grid_min_markup": "close_grid_markup_end",
     "entry_grid_spacing_weight": "entry_grid_spacing_we_weight",
     "entry_grid_spacing_log_span_hours": "entry_volatility_ema_span_hours",
     "entry_log_range_ema_span_hours": "entry_volatility_ema_span_hours",
@@ -88,6 +90,13 @@ OBSOLETE_BOUND_KEYS = {
     "filter_volatility_drop_pct",
 }
 
+MANUAL_REVIEW_BOUND_KEYS = {
+    "min_markup",
+    "close_grid_min_markup",
+    "markup_range",
+    "close_grid_markup_range",
+}
+
 COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
     "wallet_exposure_limit",
 }
@@ -105,11 +114,114 @@ LEGACY_SHARED_SIDE_ALIASES = {
 }
 
 
+AUTHORITATIVE_FORAGER_ALIAS_KEYS = {
+    "forager_volatility_ema_span",
+    "forager_volatility_ema_span_1m",
+    "forager_volume_drop_pct",
+    "forager_volume_ema_span",
+    "forager_volume_ema_span_1m",
+}
+
+
 def _set_path(mapping: dict, path: tuple[str, ...], value: Any) -> None:
     current = mapping
     for part in path[:-1]:
         current = current.setdefault(part, {})
     current[path[-1]] = deepcopy(value)
+
+
+def _iter_leaf_items(mapping: dict, prefix: tuple[str, ...] = ()):
+    for key, value in mapping.items():
+        path = (*prefix, str(key))
+        if isinstance(value, dict):
+            yield from _iter_leaf_items(value, path)
+        else:
+            yield path, value
+
+
+@lru_cache(maxsize=1)
+def _supported_strategy_leaf_paths() -> frozenset[tuple[str, ...]]:
+    return frozenset(
+        tuple(key.split("."))
+        for key in get_strategy_param_keys(TRAILING_GRID_V7_KIND)
+    )
+
+
+def _is_supported_strategy_leaf_path(path: tuple[str, ...]) -> bool:
+    return path in _supported_strategy_leaf_paths()
+
+
+def _canonical_strategy_leaf_path(path: tuple[str, ...]) -> tuple[str, ...] | None:
+    if _is_supported_strategy_leaf_path(path):
+        return path
+    flat_key = "_".join(path)
+    if flat_key in OBSOLETE_BOUND_KEYS or flat_key in MANUAL_REVIEW_BOUND_KEYS:
+        return None
+    canonical_flat_key = LEGACY_BOUND_ALIASES.get(flat_key, flat_key)
+    if canonical_flat_key in OBSOLETE_BOUND_KEYS or canonical_flat_key in MANUAL_REVIEW_BOUND_KEYS:
+        return None
+    mapped_path = STRATEGY_FIELD_MAP.get(canonical_flat_key)
+    if mapped_path is not None and _is_supported_strategy_leaf_path(mapped_path):
+        return mapped_path
+    return None
+
+
+def _path_leaf(path: str) -> str:
+    return path.rsplit(".", 1)[-1]
+
+
+def _shared_alias_source_is_authoritative(source_path: str, canonical_flat_key: str) -> bool:
+    source_key = _path_leaf(source_path)
+    return source_key == canonical_flat_key or source_key in AUTHORITATIVE_FORAGER_ALIAS_KEYS
+
+
+def _bound_source_key(source_path: str) -> str:
+    return source_path.removeprefix("optimize.bounds.")
+
+
+def _bound_local_key(flat_key: str) -> str:
+    if flat_key.startswith(("long_", "short_")):
+        return flat_key.split("_", 1)[1]
+    return flat_key
+
+
+def _bound_alias_source_is_authoritative(source_path: str, canonical_key: str) -> bool:
+    source_key = _bound_source_key(source_path)
+    return source_key == canonical_key or _bound_local_key(source_key) in AUTHORITATIVE_FORAGER_ALIAS_KEYS
+
+
+def _is_old_filter_bound_alias(flat_key: str) -> bool:
+    return _bound_local_key(flat_key).startswith("filter_")
+
+
+def _bound_alias_priority(source_key: str, canonical_key: str) -> int:
+    if source_key == canonical_key:
+        return 0
+    if _bound_local_key(source_key) in AUTHORITATIVE_FORAGER_ALIAS_KEYS:
+        return 1
+    return 2
+
+
+def _record_target_value(
+    records: dict[tuple[str, ...], tuple[str, str, Any]],
+    target_key: tuple[str, ...],
+    *,
+    source_path: str,
+    target_path: str,
+    value: Any,
+    report: dict,
+) -> bool:
+    existing = records.get(target_key)
+    if existing is None:
+        records[target_key] = (source_path, target_path, deepcopy(value))
+        return True
+    existing_source, existing_target, existing_value = existing
+    if existing_value != value:
+        report["manual_review_fields"].append(
+            f"{source_path} conflicts with {existing_source} for {existing_target}; "
+            f"kept {existing_source}"
+        )
+    return False
 
 
 def _copy_supported_top_level_sections(source: dict, target: dict, report: dict) -> None:
@@ -128,6 +240,24 @@ def _copy_supported_top_level_sections(source: dict, target: dict, report: dict)
                 report["manual_review_fields"].append(f"{section}.{key}")
 
 
+def _report_unknown_top_level_sections(source: dict, report: dict) -> None:
+    handled = {
+        "backtest",
+        "bot",
+        "coin_overrides",
+        "config_version",
+        "live",
+        "logging",
+        "monitor",
+        "optimize",
+    }
+    for key in sorted(source):
+        if isinstance(key, str) and key.startswith("_"):
+            continue
+        if key not in handled:
+            report["manual_review_fields"].append(str(key))
+
+
 def _move_shared_side_fields(
     source_side: dict,
     target_side: dict,
@@ -139,18 +269,25 @@ def _move_shared_side_fields(
 ) -> None:
     source_prefix = source_prefix or f"bot.{pside}"
     target_prefix = target_prefix or f"bot.{pside}"
-    written_targets: set[tuple[str, str]] = set()
+    written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
     for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in source_side:
             continue
         value = source_side[flat_key]
-        if flat_key == "hsl_tier_ratios" and isinstance(value, dict):
-            target_side.setdefault(group_name, {})[local_key] = deepcopy(value)
-        else:
-            target_side.setdefault(group_name, {})[local_key] = deepcopy(value)
-        written_targets.add((group_name, local_key))
+        source_path = f"{source_prefix}.{flat_key}"
+        target_path = f"{target_prefix}.{group_name}.{local_key}"
+        if not _record_target_value(
+            written_targets,
+            (group_name, local_key),
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
+        target_side.setdefault(group_name, {})[local_key] = deepcopy(value)
         report["moved_fields"].append(
-            f"{source_prefix}.{flat_key} -> {target_prefix}.{group_name}.{local_key}"
+            f"{source_path} -> {target_path}"
         )
 
     for legacy_key, local_key in (
@@ -159,20 +296,38 @@ def _move_shared_side_fields(
     ):
         if legacy_key not in source_side:
             continue
-        _set_path(target_side.setdefault("hsl", {}), tuple(local_key.split(".")), source_side[legacy_key])
-        written_targets.add(("hsl", local_key.split(".", 1)[0]))
+        value = source_side[legacy_key]
+        source_path = f"{source_prefix}.{legacy_key}"
+        target_path = f"{target_prefix}.hsl.{local_key}"
+        path_parts = tuple(local_key.split("."))
+        if not _record_target_value(
+            written_targets,
+            ("hsl", *path_parts),
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
+        _set_path(target_side.setdefault("hsl", {}), path_parts, value)
         report["moved_fields"].append(
-            f"{source_prefix}.{legacy_key} -> {target_prefix}.hsl.{local_key}"
+            f"{source_path} -> {target_path}"
         )
 
     if isinstance(source_side.get("forager_score_weights"), dict):
-        target_side.setdefault("forager", {})["score_weights"] = deepcopy(
-            source_side["forager_score_weights"]
-        )
-        written_targets.add(("forager", "score_weights"))
-        report["moved_fields"].append(
-            f"{source_prefix}.forager_score_weights -> {target_prefix}.forager.score_weights"
-        )
+        value = source_side["forager_score_weights"]
+        source_path = f"{source_prefix}.forager_score_weights"
+        target_path = f"{target_prefix}.forager.score_weights"
+        if _record_target_value(
+            written_targets,
+            ("forager", "score_weights"),
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            target_side.setdefault("forager", {})["score_weights"] = deepcopy(value)
+            report["moved_fields"].append(f"{source_path} -> {target_path}")
 
     for legacy_key, local_key in (
         ("forager_volatility_ema_span", "volatility_ema_span_1m"),
@@ -180,29 +335,48 @@ def _move_shared_side_fields(
     ):
         if legacy_key not in source_side:
             continue
-        target_side.setdefault("forager", {})[local_key] = deepcopy(source_side[legacy_key])
-        written_targets.add(("forager", local_key))
+        value = source_side[legacy_key]
+        source_path = f"{source_prefix}.{legacy_key}"
+        target_path = f"{target_prefix}.forager.{local_key}"
+        if not _record_target_value(
+            written_targets,
+            ("forager", local_key),
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
+        target_side.setdefault("forager", {})[local_key] = deepcopy(value)
         report["moved_fields"].append(
-            f"{source_prefix}.{legacy_key} -> {target_prefix}.forager.{local_key}"
+            f"{source_path} -> {target_path}"
         )
 
-    seen_alias_targets: set[str] = set()
     for legacy_key, canonical_flat_key in LEGACY_SHARED_SIDE_ALIASES.items():
         if legacy_key not in source_side:
             continue
         group_name, local_key = FLAT_BOT_KEY_TO_GROUP_PATH[canonical_flat_key]
-        target_group = target_side.setdefault(group_name, {})
-        target_path = (group_name, local_key)
-        if (
-            canonical_flat_key not in source_side
-            and canonical_flat_key not in seen_alias_targets
-            and target_path not in written_targets
+        value = source_side[legacy_key]
+        source_path = f"{source_prefix}.{legacy_key}"
+        target_path = f"{target_prefix}.{group_name}.{local_key}"
+        target_key = (group_name, local_key)
+        existing = written_targets.get(target_key)
+        if existing is not None and _shared_alias_source_is_authoritative(
+            existing[0], canonical_flat_key
         ):
-            target_group[local_key] = deepcopy(source_side[legacy_key])
-            seen_alias_targets.add(canonical_flat_key)
-            written_targets.add(target_path)
+            continue
+        if not _record_target_value(
+            written_targets,
+            target_key,
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
+        target_side.setdefault(group_name, {})[local_key] = deepcopy(value)
         report["moved_fields"].append(
-            f"{source_prefix}.{legacy_key} -> {target_prefix}.{group_name}.{local_key}"
+            f"{source_path} -> {target_path}"
         )
 
 
@@ -219,12 +393,27 @@ def _move_strategy_side_fields(
     target_prefix = target_prefix or f"bot.{pside}"
     strategy = target_side.setdefault("strategy", {}).setdefault(TRAILING_GRID_V7_KIND, {})
     moved_any = False
+    written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
     for legacy_key, path in STRATEGY_FIELD_MAP.items():
         if legacy_key not in source_side:
             continue
-        _set_path(strategy, path, source_side[legacy_key])
+        value = source_side[legacy_key]
+        source_path = f"{source_prefix}.{legacy_key}"
+        target_path = (
+            f"{target_prefix}.strategy.{TRAILING_GRID_V7_KIND}.{'.'.join(path)}"
+        )
+        if not _record_target_value(
+            written_targets,
+            path,
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
+        _set_path(strategy, path, value)
         report["moved_fields"].append(
-            f"{source_prefix}.{legacy_key} -> {target_prefix}.strategy.{TRAILING_GRID_V7_KIND}.{'.'.join(path)}"
+            f"{source_path} -> {target_path}"
         )
         moved_any = True
     return moved_any
@@ -259,7 +448,40 @@ def _is_supported_flat_bound_key(key: str) -> bool:
     if not isinstance(key, str) or not key.startswith(("long_", "short_")):
         return False
     _pside, local = key.split("_", 1)
-    return local in BOT_BOUND_GROUP_BY_KEY or local in STRATEGY_FIELD_MAP
+    if local in BOT_BOUND_GROUP_BY_KEY:
+        return True
+    path = STRATEGY_FIELD_MAP.get(local)
+    return path is not None and _is_supported_strategy_leaf_path(path)
+
+
+def _move_nested_strategy_bounds(
+    *,
+    pside: str,
+    strategy_name: str,
+    legacy_strategy: dict,
+    target_bounds: dict,
+    report: dict,
+) -> bool:
+    moved_any = False
+    target_strategy = (
+        target_bounds
+        .setdefault(pside, {})
+        .setdefault("strategy", {})
+        .setdefault(TRAILING_GRID_V7_KIND, {})
+    )
+    for path, value in _iter_leaf_items(legacy_strategy):
+        source_path = f"optimize.bounds.{pside}.strategy.{strategy_name}.{'.'.join(path)}"
+        canonical_path = _canonical_strategy_leaf_path(path)
+        if canonical_path is None:
+            report["manual_review_fields"].append(source_path)
+            continue
+        _set_path(target_strategy, canonical_path, value)
+        report["moved_fields"].append(
+            f"{source_path} -> "
+            f"optimize.bounds.{pside}.strategy.{TRAILING_GRID_V7_KIND}.{'.'.join(canonical_path)}"
+        )
+        moved_any = True
+    return moved_any
 
 
 def _move_bounds(source: dict, target: dict, report: dict) -> None:
@@ -268,21 +490,47 @@ def _move_bounds(source: dict, target: dict, report: dict) -> None:
         return
     target_bounds = target.setdefault("optimize", {}).setdefault("bounds", {})
     if any(isinstance(key, str) and key.startswith(("long_", "short_")) for key in bounds):
-        seen_canonical_keys: set[str] = set()
-        for key, value in bounds.items():
+        bound_items: list[tuple[int, int, str, str, Any]] = []
+        for index, (key, value) in enumerate(bounds.items()):
             if not isinstance(key, str) or not key.startswith(("long_", "short_")):
                 report["manual_review_fields"].append(f"optimize.bounds.{key}")
                 continue
-            canonical_key = _legacy_bound_key(key.split("_", 1)[0], key)
+            pside = key.split("_", 1)[0]
+            local_key = key[len(pside) + 1 :]
+            if local_key in MANUAL_REVIEW_BOUND_KEYS:
+                report["manual_review_fields"].append(f"optimize.bounds.{key}")
+                continue
+            canonical_key = _legacy_bound_key(pside, key)
             if canonical_key is None:
                 report["dropped_unsupported_fields"].append(f"optimize.bounds.{key}")
                 continue
             if not _is_supported_flat_bound_key(canonical_key):
                 report["manual_review_fields"].append(f"optimize.bounds.{key}")
                 continue
-            if canonical_key not in seen_canonical_keys:
-                set_flat_optimize_bound(target_bounds, TRAILING_GRID_V7_KIND, canonical_key, value)
-                seen_canonical_keys.add(canonical_key)
+            priority = _bound_alias_priority(key, canonical_key)
+            bound_items.append((priority, index, key, canonical_key, value))
+        written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
+        for _priority, _index, key, canonical_key, value in sorted(bound_items):
+            source_path = f"optimize.bounds.{key}"
+            target_path = f"optimize.bounds.{canonical_key}"
+            target_key = (canonical_key,)
+            existing = written_targets.get(target_key)
+            if (
+                existing is not None
+                and _is_old_filter_bound_alias(key)
+                and _bound_alias_source_is_authoritative(existing[0], canonical_key)
+            ):
+                continue
+            if not _record_target_value(
+                written_targets,
+                target_key,
+                source_path=source_path,
+                target_path=target_path,
+                value=value,
+                report=report,
+            ):
+                continue
+            set_flat_optimize_bound(target_bounds, TRAILING_GRID_V7_KIND, canonical_key, value)
             report["moved_fields"].append(
                 f"optimize.bounds.{key} -> optimize.bounds.{canonical_key}"
             )
@@ -297,16 +545,26 @@ def _move_bounds(source: dict, target: dict, report: dict) -> None:
                     report["moved_fields"].append(f"optimize.bounds.{pside}.{group_name}")
                     continue
                 if isinstance(group_bounds, dict):
-                    legacy_strategy = group_bounds.get("trailing_grid") or group_bounds.get(
-                        TRAILING_GRID_V7_KIND
-                    )
-                    if isinstance(legacy_strategy, dict):
-                        target_bounds[pside]["strategy"][TRAILING_GRID_V7_KIND] = deepcopy(
-                            legacy_strategy
-                        )
-                        report["moved_fields"].append(
-                            f"optimize.bounds.{pside}.strategy -> optimize.bounds.{pside}.strategy.{TRAILING_GRID_V7_KIND}"
-                        )
+                    handled_strategy_names = {"trailing_grid", TRAILING_GRID_V7_KIND}
+                    for strategy_name in ("trailing_grid", TRAILING_GRID_V7_KIND):
+                        legacy_strategy = group_bounds.get(strategy_name)
+                        if isinstance(legacy_strategy, dict):
+                            _move_nested_strategy_bounds(
+                                pside=pside,
+                                strategy_name=strategy_name,
+                                legacy_strategy=legacy_strategy,
+                                target_bounds=target_bounds,
+                                report=report,
+                            )
+                        elif legacy_strategy is not None:
+                            report["manual_review_fields"].append(
+                                f"optimize.bounds.{pside}.strategy.{strategy_name}"
+                            )
+                    for strategy_name in sorted(group_bounds):
+                        if strategy_name not in handled_strategy_names:
+                            report["manual_review_fields"].append(
+                                f"optimize.bounds.{pside}.strategy.{strategy_name}"
+                            )
     sort_optimize_bounds_in_place(target_bounds, strategy_kind=TRAILING_GRID_V7_KIND)
 
 
@@ -318,8 +576,30 @@ def _known_legacy_side_keys() -> set[str]:
         "hsl_tier_ratio_yellow",
         "hsl_tier_ratio_orange",
         *LEGACY_SHARED_SIDE_ALIASES,
-        *COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS,
     }
+
+
+def _report_source_strategy_subtree(
+    source_side: dict,
+    *,
+    pside: str,
+    report: dict,
+) -> None:
+    if "strategy" not in source_side:
+        return
+    strategy = source_side["strategy"]
+    if strategy:
+        report["manual_review_fields"].append(f"bot.{pside}.strategy")
+
+
+def _has_v7_distinctive_strategy_fields(bot: dict) -> bool:
+    for pside in ("long", "short"):
+        source_side = bot.get(pside)
+        if not isinstance(source_side, dict):
+            continue
+        if any(key in source_side for key in V7_DISTINCTIVE_STRATEGY_KEYS):
+            return True
+    return False
 
 
 def _report_coin_override_leftovers(
@@ -343,7 +623,7 @@ def _report_coin_override_leftovers(
         if key not in ("long", "short"):
             report["manual_review_fields"].append(f"coin_overrides.{coin}.bot.{key}")
 
-    known_side_keys = _known_legacy_side_keys()
+    known_side_keys = _known_legacy_side_keys() | COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS
     for pside in ("long", "short"):
         side = bot.get(pside)
         if side is None:
@@ -360,14 +640,28 @@ def _migrate_coin_overrides(source: dict, target: dict, report: dict) -> None:
     coin_overrides = source.get("coin_overrides")
     if not isinstance(coin_overrides, dict):
         return
+    allowed_live_keys = set(target.get("live", {}))
     result = {}
     for coin, override in coin_overrides.items():
         if not isinstance(override, dict):
             report["manual_review_fields"].append(f"coin_overrides.{coin}")
             continue
         migrated_override = {}
-        if isinstance(override.get("live"), dict):
-            migrated_override["live"] = deepcopy(override["live"])
+        if "live" in override:
+            live_override = override.get("live")
+            if isinstance(live_override, dict):
+                migrated_live = {}
+                for key, value in live_override.items():
+                    path = f"coin_overrides.{coin}.live.{key}"
+                    if key in allowed_live_keys:
+                        migrated_live[key] = deepcopy(value)
+                        report["moved_fields"].append(f"{path} -> {path}")
+                    else:
+                        report["manual_review_fields"].append(path)
+                if migrated_live:
+                    migrated_override["live"] = migrated_live
+            else:
+                report["manual_review_fields"].append(f"coin_overrides.{coin}.live")
         if "override_config_path" in override:
             migrated_override["override_config_path"] = deepcopy(override["override_config_path"])
         bot = override.get("bot")
@@ -426,12 +720,18 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         "manual_review_fields": [],
     }
     _copy_supported_top_level_sections(source, target, report)
+    _report_unknown_top_level_sections(source, report)
     target["live"]["strategy_kind"] = TRAILING_GRID_V7_KIND
     _prune_strategy_store(target)
 
     bot = source.get("bot")
     if not isinstance(bot, dict):
         raise ValueError("v7 config must contain a bot object")
+    if not _has_v7_distinctive_strategy_fields(bot):
+        raise ValueError(
+            "input does not look like a supported v7 trailing-grid config: no v7-distinctive "
+            "entry/close trailing-grid fields found under bot.long/bot.short"
+        )
 
     moved_strategy = False
     for pside in ("long", "short"):
@@ -442,6 +742,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         target_side = target["bot"][pside]
         _move_shared_side_fields(source_side, target_side, pside, report)
         moved_strategy = _move_strategy_side_fields(source_side, target_side, pside, report) or moved_strategy
+        _report_source_strategy_subtree(source_side, pside=pside, report=report)
         known = _known_legacy_side_keys() | {"strategy"}
         for key in sorted(source_side):
             if key not in known and key not in BOT_GROUP_FIELD_MAP:

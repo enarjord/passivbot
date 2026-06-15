@@ -2,7 +2,9 @@ use super::{
     GeneratedOrders, StrategyParams, StrategyRequest, StrategySide, TrailingGridV7CloseParams,
     TrailingGridV7EntryParams, TrailingGridV7Params,
 };
-use crate::closes::{calc_close_qty, calc_wel_auto_reduce_long, calc_wel_auto_reduce_short};
+use crate::closes::{
+    calc_close_qty, calc_wel_auto_reduce_long, calc_wel_auto_reduce_short, sort_closes_by_price,
+};
 use crate::entries::{
     calc_cropped_reentry_qty, calc_min_entry_qty, wallet_exposure_limit_with_allowance,
 };
@@ -1587,7 +1589,7 @@ fn calc_closes_long(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| a.price.total_cmp(&b.price));
+    sort_closes_by_price(&mut closes, false, "trailing_grid_v7::calc_closes_long");
     closes
 }
 
@@ -1648,7 +1650,7 @@ fn calc_closes_short(
         }
         closes.push(close);
     }
-    closes.sort_by(|a, b| b.price.total_cmp(&a.price));
+    sort_closes_by_price(&mut closes, true, "trailing_grid_v7::calc_closes_short");
     closes
 }
 
@@ -2082,6 +2084,54 @@ mod tests {
     }
 
     #[test]
+    fn entry_trailing_grid_ratio_negative_uses_grid_then_trailing_for_short() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let entry = entry_params();
+        let trailing = TrailingPriceBundle::default();
+
+        let grid_first_position = Position {
+            size: -40.0,
+            price: 100.0,
+        };
+        let grid_order = calc_next_entry_short(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &entry,
+            &grid_first_position,
+            &trailing,
+        );
+        assert!(matches!(
+            grid_order.order_type,
+            OrderType::EntryGridNormalShort | OrderType::EntryGridCroppedShort
+        ));
+        assert!(grid_order.qty < 0.0);
+
+        let trailing_position = Position {
+            size: -60.0,
+            price: 100.0,
+        };
+        let trailing_order = calc_next_entry_short(
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &entry,
+            &trailing_position,
+            &trailing,
+        );
+        assert_eq!(
+            trailing_order.order_type,
+            OrderType::EntryTrailingNormalShort
+        );
+        assert_eq!(trailing_order.qty, 0.0);
+    }
+
+    #[test]
     fn close_grid_markup_start_end_interpolates_by_wallet_exposure() {
         let exchange = exchange();
         let mut state = state();
@@ -2105,5 +2155,47 @@ mod tests {
         assert_eq!(close_order.order_type, OrderType::CloseGridLong);
         assert_eq!(close_order.price, 100.6);
         assert!(close_order.qty < 0.0);
+    }
+
+    #[test]
+    fn close_grid_markup_start_end_interpolates_by_wallet_exposure_for_short() {
+        let exchange = exchange();
+        let mut state = state();
+        state.balance = 20_000.0;
+        let bot = bot();
+        let runtime = runtime();
+        let close = TrailingGridV7CloseParams {
+            grid_markup_start: 0.01,
+            grid_markup_end: 0.002,
+            grid_qty_pct: 0.1,
+            ..Default::default()
+        };
+        let position = Position {
+            size: -100.0,
+            price: 100.0,
+        };
+
+        let close_order =
+            calc_grid_close_short(&exchange, &state, &bot, &runtime, &close, &position);
+
+        assert_eq!(close_order.order_type, OrderType::CloseGridShort);
+        assert_eq!(close_order.price, 99.4);
+        assert!(close_order.qty > 0.0);
+    }
+
+    #[test]
+    #[should_panic(expected = "trailing_grid_v7::calc_closes_long: non-finite close price")]
+    fn close_sorting_rejects_non_finite_price_on_v7_path() {
+        let mut closes = vec![Order {
+            qty: -1.0,
+            price: f64::NAN,
+            order_type: OrderType::CloseGridLong,
+        }];
+
+        sort_closes_by_price(
+            &mut closes,
+            false,
+            "trailing_grid_v7::calc_closes_long",
+        );
     }
 }

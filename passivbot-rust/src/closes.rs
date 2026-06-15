@@ -10,7 +10,7 @@ use crate::utils::{
     RoundingMode,
 };
 
-fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
+pub(crate) fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
     for order in closes.iter() {
         assert!(
             order.price.is_finite(),

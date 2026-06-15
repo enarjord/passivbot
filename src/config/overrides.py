@@ -10,7 +10,7 @@ from utils import symbol_to_coin
 from .load import load_prepared_config
 from .log_output import log_config_message
 from .shared_bot import BOT_GROUP_FIELD_MAP
-from .strategy import get_strategy_param_keys
+from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
 from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
 
@@ -75,31 +75,16 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
 }
 
 _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
-    "close_grid_markup_end",
-    "close_grid_markup_start",
-    "close_grid_qty_pct",
-    "close_trailing_grid_ratio",
-    "close_trailing_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_threshold_pct",
     "close_weight_volatility_1h",
     "close_weight_volatility_1m",
     "ema_span_0",
     "ema_span_1",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
     "entry_volatility_ema_span_1h",
     "entry_volatility_ema_span_1m",
     "entry_weight_volatility_1h",
     "entry_weight_volatility_1m",
     "entry_we_weight",
-}
+} | TRAILING_GRID_V7_FLAT_ONLY_KEYS
 
 
 def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:

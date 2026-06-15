@@ -133,6 +133,69 @@ def test_live_strategy_warmup_value_raises_on_malformed_present_span():
         )
 
 
+def test_trailing_grid_v7_startup_warmup_uses_nested_entry_volatility_hours():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            assert pside == "long"
+            assert symbol == "BTC"
+            return {
+                "ema_span_0": 1.0,
+                "ema_span_1": 1.0,
+                "entry": {
+                    "volatility_ema_span_hours": 4.0,
+                    "grid_spacing_volatility_weight": 1.0,
+                    "trailing_threshold_volatility_weight": 0.0,
+                    "trailing_retracement_volatility_weight": 0.0,
+                },
+            }
+
+    bot = FakeBot()
+
+    assert (
+        pb_mod.Passivbot._live_strategy_warmup_value(
+            bot, "long", "entry_volatility_ema_span_1h", "BTC"
+        )
+        == pytest.approx(4.0)
+    )
+
+    wins, h1, skip = compute_live_warmup_windows(
+        {"long": {"BTC"}},
+        lambda _pside, _key, _sym: 0.0,
+        strategy_lookup=lambda pside, key, sym: pb_mod.Passivbot._live_strategy_warmup_value(
+            bot, pside, key, sym
+        ),
+    )
+
+    assert wins["BTC"] == 1
+    assert h1["BTC"] == 4
+    assert skip["BTC"] is True
+
+
+def test_trailing_grid_v7_startup_warmup_rejects_malformed_nested_entry_span():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        def _strategy_params_to_rust_dict(self, _pside, _symbol):
+            return {
+                "ema_span_0": 1.0,
+                "ema_span_1": 1.0,
+                "entry": {
+                    "volatility_ema_span_hours": None,
+                    "grid_spacing_volatility_weight": 1.0,
+                },
+            }
+
+    with pytest.raises(
+        ValueError,
+        match=r"strategy long\.entry\.volatility_ema_span_hours.*None",
+    ):
+        pb_mod.Passivbot._live_strategy_warmup_value(
+            FakeBot(), "long", "entry_volatility_ema_span_1h", "BTC"
+        )
+
+
 def test_live_forager_warmup_value_raises_on_malformed_span():
     import passivbot as pb_mod
 

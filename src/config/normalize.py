@@ -24,7 +24,11 @@ from .migrations import (
 from .optimize_bounds import prune_inactive_optimize_strategy_bounds
 from .scoring import normalize_scoring_config
 from .schema import get_template_config
-from .strategy import prune_inactive_strategy_subtrees, sync_canonical_strategy_config
+from .strategy import (
+    prune_inactive_strategy_subtrees,
+    reject_trailing_grid_v7_flat_fields_for_trailing_martingale,
+    sync_canonical_strategy_config,
+)
 from .transform_log import ConfigTransformTracker, record_transform
 from .access import require_config_dict
 from .validate import validate_config
@@ -69,6 +73,7 @@ def normalize_config(
             tracker.add([section], result[section])
     for path in ("backtest", "bot", "live", "optimize"):
         require_config_dict(result, path)
+    reject_trailing_grid_v7_flat_fields_for_trailing_martingale(result)
     apply_migrations(result, verbose=verbose, tracker=tracker)
     for key in ("approved_coins", "ignored_coins"):
         if isinstance(result.get("live"), dict) and key in result["live"]:
@@ -76,6 +81,7 @@ def normalize_config(
     seed_missing_compatibility_sections(template, result, tracker=tracker)
     for path in ("bot.long", "bot.short", "optimize.bounds"):
         require_config_dict(result, path)
+    reject_trailing_grid_v7_flat_fields_for_trailing_martingale(result)
     apply_backward_compatibility_renames(result, verbose=verbose, tracker=tracker)
     if isinstance(raw_optimize_snapshot, dict):
         raw_optimize_compat = {
