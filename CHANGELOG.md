@@ -4,6 +4,14 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
+  `total[USDC]` payload is the cross-margined account *equity* (it already
+  includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
+  using it directly as `balance`, then recomputing `equity = balance + uPNL` —
+  double-counting unrealized PnL. Balance now subtracts the exchange-reported
+  uPNL across all perp positions (core + HIP-3), matching the non-unified path
+  and the Passivbot `balance = equity - uPNL` contract. Missing/invalid uPNL on
+  a counted position hard-fails rather than defaulting.
 - Added `backtest.market_settings` overrides for historical/rebranded market metadata, including
   exchange-specific overrides before Rust backtests receive market parameters.
 - Fixed live `[pos]` logging so short position size increases are labeled as
