@@ -4,6 +4,15 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live `[pos]` logging so short position size increases are labeled as
+  `added` and short size decreases as `reduced`, matching exposure magnitude
+  instead of signed numeric ordering.
+- Fixed live ignored-coin handling so ignored symbols are sent to the Rust
+  orchestrator as `graceful_stop`, preventing new initial entries after a
+  previously open ignored position becomes fully flat.
+- Added a v8 TWEL/total exposure enforcer policy-contract plan for the future
+  portfolio governor redesign, based on the known v7 threshold/refill behavior
+  but without changing current v8 runtime behavior.
 - Hardened v8 live-safety review follow-ups: ambiguous order-create responses are
   remembered before retry, protective panic bypasses stale normal-mode filters
   while requiring fresh account-critical balance/position/order state, PnL risk

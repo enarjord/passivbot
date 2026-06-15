@@ -375,6 +375,65 @@ async def test_log_position_changes_batches_market_snapshot_request(monkeypatch)
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("pside", "old_size", "new_size", "expected_action"),
+    [
+        ("long", 0.1, 0.3, "added"),
+        ("long", 0.3, 0.1, "reduced"),
+        ("short", -0.1, -0.3, "added"),
+        ("short", -0.3, -0.1, "reduced"),
+    ],
+)
+async def test_log_position_changes_classifies_signed_exposure_changes(
+    monkeypatch, caplog, pside, old_size, new_size, expected_action
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.inverse = False
+    bot.c_mults = {"XMR/USDT:USDT": 1.0}
+    bot.pside_int_map = {"long": 1, "short": -1}
+    bot.get_raw_balance = lambda: 1_000.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bot_value = lambda pside, key: 10.0
+
+    async def _get_live_last_prices(symbols, **kwargs):
+        return {symbol: 0.0 for symbol in symbols}
+
+    bot._get_live_last_prices = _get_live_last_prices
+    monkeypatch.setattr(
+        passivbot_module.pbr,
+        "qty_to_cost",
+        lambda qty, price, c_mult: abs(qty) * price * c_mult,
+    )
+    monkeypatch.setattr(
+        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+    )
+
+    with caplog.at_level(logging.INFO):
+        await bot.log_position_changes(
+            [
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": pside,
+                    "size": old_size,
+                    "price": 100.0,
+                }
+            ],
+            [
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": pside,
+                    "size": new_size,
+                    "price": 100.0,
+                }
+            ],
+        )
+
+    pos_logs = [record.getMessage() for record in caplog.records if "[pos]" in record.getMessage()]
+    assert len(pos_logs) == 1
+    assert " ".join(pos_logs[0].split()).startswith(f"[pos] {expected_action} ")
+
+
+@pytest.mark.asyncio
 async def test_shutdown_gracefully_awaits_cancelled_maintainers():
     bot = Passivbot.__new__(Passivbot)
     bot._shutdown_in_progress = False

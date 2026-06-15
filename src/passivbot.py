@@ -10225,9 +10225,9 @@ class Passivbot:
                 action = "    new"
             elif new["size"] == 0.0:
                 action = " closed"
-            elif new["size"] > old["size"]:
+            elif abs(new["size"]) > abs(old["size"]):
                 action = "  added"
-            elif new["size"] < old["size"]:
+            elif abs(new["size"]) < abs(old["size"]):
                 action = "reduced"
             else:
                 action = "unknown"
@@ -11240,17 +11240,19 @@ class Passivbot:
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
         if runtime_forced:
-            return str(runtime_forced)
+            return self._apply_ignored_coin_mode(pside, symbol, str(runtime_forced))
 
         forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if forced_mode:
-            return expand_PB_mode(forced_mode)
+            return self._apply_ignored_coin_mode(
+                pside, symbol, expand_PB_mode(forced_mode)
+            )
         if not self.markets_dict.get(symbol, {}).get("active", True):
             return "tp_only"
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
-        return None
+        return self._apply_ignored_coin_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
         self, symbols: Iterable[str]
@@ -11278,6 +11280,21 @@ class Passivbot:
                     else None
                 )
         return overrides
+
+    def _apply_ignored_coin_mode(
+        self, pside: str, symbol: str, mode: Optional[str] = None
+    ) -> Optional[str]:
+        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
+        if symbol not in ignored:
+            return mode
+        if str(mode or "").strip().lower() in {
+            "manual",
+            "panic",
+            "tp_only",
+            "tp_only_with_active_entry_cancellation",
+        }:
+            return mode
+        return "graceful_stop"
 
     def _calc_unstuck_allowances_live(
         self, allow_new_unstuck: bool
