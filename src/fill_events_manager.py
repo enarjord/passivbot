@@ -2135,6 +2135,10 @@ class BitgetFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
+        # UTA / Elite (copy-trading) accounts speak the v3 API; the classic
+        # v2 fill-history endpoint returns error 40731 for them.
+        if getattr(self.api, "options", {}).get("uta"):
+            return await self._fetch_uta(since_ms, until_ms, detail_cache, on_batch)
         buffer_step_ms = 24 * 60 * 60 * 1000
         end_time = int(until_ms) if until_ms is not None else self._now_func() + buffer_step_ms
         params: Dict[str, object] = {
@@ -2382,6 +2386,88 @@ class BitgetFetcher(BaseFetcher):
                     pass
             normalized.append(item)
         return normalized
+
+    async def _fetch_uta(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        """UTA/Elite variant: source fills from the v3 trade/fills endpoint.
+        v3 fills already carry clientOid, so no per-order detail enrichment."""
+        end_time = int(until_ms) if until_ms is not None else self._now_func() + 24 * 60 * 60 * 1000
+        params: Dict[str, object] = {
+            "category": self.product_type,
+            "limit": self.history_limit,
+            "endTime": end_time,
+        }
+        if since_ms is not None:
+            params["startTime"] = int(since_ms)
+        events: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        fetch_count = 0
+        while True:
+            if fetch_count >= max_fetches:
+                logger.warning("BitgetFetcher._fetch_uta: reached max pagination depth (%d)", max_fetches)
+                break
+            fetch_count += 1
+            payload = await self.api.private_uta_get_v3_trade_fills(dict(params))
+            rows = (payload.get("data") or {}).get("list") or []
+            if not rows:
+                break
+            batch_ids: List[str] = []
+            for raw in rows:
+                event = self._normalize_fill_uta(raw)
+                event_id = event["id"]
+                if not event_id:
+                    continue
+                batch_ids.append(event_id)
+                if event.get("client_order_id"):
+                    detail_cache[event_id] = (event["client_order_id"], event.get("pb_order_type", ""))
+                events[event_id] = event
+            if on_batch:
+                batch_events = [
+                    dict(events[i]) for i in batch_ids if events[i].get("client_order_id")
+                ]
+                if batch_events:
+                    on_batch(batch_events)
+            oldest = min(int(r.get("createdTime", 0) or 0) for r in rows)
+            if len(rows) < self.history_limit:
+                break
+            if since_ms is not None and oldest <= since_ms:
+                break
+            new_end = oldest - 1
+            if since_ms is not None and new_end <= since_ms:
+                break
+            params["endTime"] = new_end
+        ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
+        if since_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
+        if until_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
+        return ordered
+
+    def _normalize_fill_uta(self, raw: Dict[str, object]) -> Dict[str, object]:
+        timestamp = int(raw.get("createdTime", 0) or 0)
+        cid = raw.get("clientOid")
+        return {
+            "id": raw.get("execId") or raw.get("tradeId"),
+            "order_id": raw.get("orderId"),
+            "timestamp": timestamp,
+            "datetime": ts_to_date(timestamp),
+            "symbol": self._resolve_symbol(raw.get("symbol")),
+            "symbol_external": raw.get("symbol"),
+            "side": str(raw.get("side", "")).lower(),
+            "qty": float(raw.get("execQty", 0.0) or 0.0),
+            "price": float(raw.get("execPrice", 0.0) or 0.0),
+            "pnl": float(raw.get("execPnl", 0.0) or 0.0),
+            "fees": raw.get("feeDetail"),
+            "pb_order_type": custom_id_to_snake(cid) if cid else "",
+            "position_side": str(raw.get("posSide", "")).lower(),
+            "client_order_id": cid,
+            "raw": [{"source": "uta_fills", "data": dict(raw)}],
+        }
 
     def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
         timestamp = int(raw["cTime"])
