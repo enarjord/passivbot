@@ -128,10 +128,22 @@ class BinanceBot(CCXTBot):
     async def _do_fetch_open_orders(self, symbol: str = None, all=False) -> list:
         """Binance: Parallel fetch per-symbol to avoid expensive all-symbols query."""
         if all:
-            self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = False
+            options = getattr(self.cca, "options", None)
+            previous_warn_option = None
+            had_warn_option = False
+            if isinstance(options, dict):
+                had_warn_option = "warnOnFetchOpenOrdersWithoutSymbol" in options
+                previous_warn_option = options.get("warnOnFetchOpenOrdersWithoutSymbol")
+                options["warnOnFetchOpenOrdersWithoutSymbol"] = False
             logging.info("fetching all open orders for binance")
-            fetched = await self.cca.fetch_open_orders()
-            self.cca.options["warnOnFetchOpenOrdersWithoutSymbol"] = True
+            try:
+                fetched = await self.cca.fetch_open_orders()
+            finally:
+                if isinstance(options, dict):
+                    if had_warn_option:
+                        options["warnOnFetchOpenOrdersWithoutSymbol"] = previous_warn_option
+                    else:
+                        options.pop("warnOnFetchOpenOrdersWithoutSymbol", None)
         else:
             symbols_ = {symbol} if symbol is not None else self._select_open_order_symbols()
             fetched = await self._do_fetch_open_orders_for_symbols(symbols_)
@@ -249,8 +261,45 @@ class BinanceBot(CCXTBot):
             raise
 
     async def _fetch_open_orders_for_staged_symbols(self, symbols: set[str]) -> list:
-        fetched = await self._do_fetch_open_orders_for_symbols(symbols)
-        return self._normalize_open_orders(fetched)
+        scoped = await self._do_fetch_open_orders_for_symbols(symbols)
+        if not bool(getattr(self, "_binance_open_orders_all_symbols_swept", False)):
+            broad = await self._do_fetch_open_orders(all=True)
+            self._binance_open_orders_all_symbols_swept = True
+            fetched = self._merge_open_order_fetch_batches(scoped, broad)
+            scoped_ids = {str(order.get("id") or "") for order in scoped if order.get("id")}
+            extra = sum(
+                1
+                for order in broad
+                if str(order.get("id") or "") not in scoped_ids
+            )
+            logging.info(
+                "[state] binance all-symbol open-order sweep complete | scoped_symbols=%d scoped_orders=%d broad_orders=%d extra_orders=%d",
+                len(symbols),
+                len(scoped),
+                len(broad),
+                extra,
+            )
+            return self._normalize_open_orders(fetched)
+        return self._normalize_open_orders(scoped)
+
+    @staticmethod
+    def _merge_open_order_fetch_batches(*batches: list[dict]) -> list[dict]:
+        merged = {}
+        for batch in batches:
+            for order in batch or []:
+                key = str(order.get("id") or "")
+                if not key:
+                    key = repr(
+                        (
+                            order.get("symbol"),
+                            order.get("timestamp"),
+                            order.get("side"),
+                            order.get("price"),
+                            order.get("amount"),
+                        )
+                    )
+                merged[key] = order
+        return list(merged.values())
 
     async def fetch_tickers(self) -> dict:
         """Binance: Use bookticker endpoint for efficiency."""

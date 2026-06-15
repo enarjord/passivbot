@@ -781,11 +781,27 @@ def mark_account_critical_state_dirty(
 
 async def calc_orders_to_cancel_and_create(bot):
     """Determine which existing orders to cancel and which new ones to place."""
+    ideal_orders = await bot.calc_ideal_orders()
+    return await calc_orders_to_cancel_and_create_from_ideal(bot, ideal_orders)
+
+
+async def calc_orders_to_cancel_and_create_from_ideal(
+    bot,
+    ideal_orders,
+    *,
+    actual_symbols: Optional[Iterable[str]] = None,
+    actual_psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+    apply_initial_entry_gate: bool = True,
+    apply_creation_guardrails: bool = True,
+    apply_mode_filters: bool = True,
+):
+    """Reconcile exchange orders against a supplied ideal order map."""
     if not hasattr(bot, "_last_plan_detail"):
         bot._last_plan_detail = {}
-    ideal_orders = await bot.calc_ideal_orders()
 
-    actual_orders = bot._snapshot_actual_orders()
+    actual_orders = bot._snapshot_actual_orders(
+        actual_symbols, psides_by_symbol=actual_psides_by_symbol
+    )
     malformed_actual_symbols = set(
         getattr(bot, "_malformed_actual_order_symbols", set()) or set()
     )
@@ -818,7 +834,11 @@ async def calc_orders_to_cancel_and_create(bot):
             )
             continue
         cancel_, create_ = bot._reconcile_symbol_orders(
-            symbol, symbol_orders, ideal_list, keys
+            symbol,
+            symbol_orders,
+            ideal_list,
+            keys,
+            apply_mode_filters=apply_mode_filters,
         )
         pre_cancel = len(cancel_)
         pre_create = len(create_)
@@ -851,12 +871,18 @@ async def calc_orders_to_cancel_and_create(bot):
         to_cancel += cancel_
         to_create += create_
 
-    to_create, initial_entry_gate_skipped = (
-        await bot._apply_initial_entry_distance_gate(to_create)
-    )
+    if apply_initial_entry_gate:
+        to_create, initial_entry_gate_skipped = (
+            await bot._apply_initial_entry_distance_gate(to_create)
+        )
+    else:
+        initial_entry_gate_skipped = 0
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
-    to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+    if apply_creation_guardrails:
+        to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
+    else:
+        freshness_skipped = 0
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
         total_cancel = sum(p[2] for p in plan_summaries)
@@ -924,13 +950,32 @@ async def calc_orders_to_cancel_and_create(bot):
     return to_cancel, to_create
 
 
-def snapshot_actual_orders(bot) -> dict[str, list[dict]]:
+def snapshot_actual_orders(
+    bot,
+    symbols: Optional[Iterable[str]] = None,
+    *,
+    psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+) -> dict[str, list[dict]]:
     """Return a normalized snapshot of currently open orders keyed by symbol."""
     actual_orders: dict[str, list[dict]] = {}
     malformed_symbols: set[str] = set()
     malformed_counts: dict[str, int] = {}
-    for symbol in bot.active_symbols:
+    if symbols is None:
+        symbols = getattr(bot, "active_symbols", [])
+    pside_filter = None
+    if psides_by_symbol is not None:
+        pside_filter = {
+            str(symbol): {str(pside) for pside in psides if pside}
+            for symbol, psides in psides_by_symbol.items()
+        }
+    for symbol in sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol)):
         symbol_orders = []
+        allowed_psides = (
+            pside_filter.get(symbol, set()) if pside_filter is not None else None
+        )
+        if allowed_psides == set():
+            actual_orders[symbol] = symbol_orders
+            continue
         for order in bot.open_orders.get(symbol, []):
             try:
                 if not isinstance(order, dict):
@@ -963,6 +1008,8 @@ def snapshot_actual_orders(bot) -> dict[str, list[dict]]:
                     raise ValueError("empty symbol or invalid side")
                 if position_side not in {"long", "short"}:
                     raise ValueError("invalid position_side")
+                if allowed_psides is not None and position_side not in allowed_psides:
+                    continue
                 symbol_orders.append(
                     {
                         "symbol": order_symbol,
@@ -1020,10 +1067,13 @@ def reconcile_symbol_orders(
     actual_orders: list[dict],
     ideal_orders: list,
     keys: tuple[str, ...],
+    *,
+    apply_mode_filters: bool = True,
 ) -> tuple[list[dict], list[dict]]:
     """Return cancel/create lists for a single symbol after mode filtering."""
     to_cancel, to_create = filter_orders(actual_orders, ideal_orders, keys)
-    to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
+    if apply_mode_filters:
+        to_cancel, to_create = bot._apply_mode_filters(symbol, to_cancel, to_create)
     return to_cancel, to_create
 
 

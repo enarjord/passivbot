@@ -1511,6 +1511,41 @@ async def test_refresh_does_not_persist_out_of_range_fetcher_rows(tmp_path: Path
 
 
 @pytest.mark.asyncio
+async def test_refresh_rejects_malformed_fetcher_rows_without_partial_persist(tmp_path: Path):
+    valid_event = {
+        "id": "valid",
+        "timestamp": 1_500,
+        "datetime": "",
+        "symbol": "BTC/USDC:USDC",
+        "side": "buy",
+        "qty": 1.0,
+        "price": 100.0,
+        "pnl": 0.0,
+        "fees": {"currency": "USDC", "cost": 0.01},
+        "pb_order_type": "entry_grid_normal_long",
+        "position_side": "long",
+        "client_order_id": "cid-valid",
+    }
+    malformed_event = {
+        "id": "malformed",
+        "timestamp": 1_600,
+        "symbol": "BTC/USDC:USDC",
+    }
+    manager = FillEventsManager(
+        exchange="hyperliquid",
+        user="user",
+        fetcher=_StaticFetcher([valid_event, malformed_event]),
+        cache_path=tmp_path,
+    )
+
+    with pytest.raises(ValueError, match="malformed fill event"):
+        await manager.refresh(start_ms=1_000, end_ms=2_000)
+
+    assert FillEventCache(tmp_path).load() == []
+    assert FillEventCache(tmp_path).load_metadata()["last_refresh_ms"] == 0
+
+
+@pytest.mark.asyncio
 async def test_refresh_range_empty_bounded_window_does_not_fetch_unbounded_latest(
     tmp_path: Path,
 ):

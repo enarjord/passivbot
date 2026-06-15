@@ -966,7 +966,12 @@ pub fn calc_twel_enforcer_actions(
             .max(min_entry_qty)
             .min(candidate.initial_abs_psize);
         abs_qty = round_up(abs_qty, candidate.qty_step);
-        if abs_qty < min_entry_qty - qty_tolerance {
+        if abs_qty > candidate.initial_abs_psize {
+            abs_qty = candidate.initial_abs_psize;
+        }
+        if candidate.initial_abs_psize > min_entry_qty + qty_tolerance
+            && abs_qty < min_entry_qty - qty_tolerance
+        {
             continue;
         }
         let qty = match pside {
@@ -999,6 +1004,13 @@ pub fn calc_twel_enforcer_actions(
             RoundingMode::Nearest,
             "calc_twel_enforcer_actions::qty",
         );
+        if order.qty.abs() > candidate.initial_abs_psize + qty_tolerance {
+            order.qty = match pside {
+                LONG => -candidate.initial_abs_psize,
+                SHORT => candidate.initial_abs_psize,
+                _ => 0.0,
+            };
+        }
         actions.push((candidate.idx, order));
     }
     actions
@@ -1276,6 +1288,22 @@ mod tests {
             exposures[0] < floor - 1e-12,
             "least-stuck position should be allowed below floor in the second pass"
         );
+    }
+
+    #[test]
+    fn test_twel_reducer_never_closes_more_than_position_after_rounding() {
+        let positions = vec![pos(0, 0.26, 100.0, 100.0, 0.1, 1.0, 0.1, 0.1, 0.0, 30.0)];
+
+        let actions = calc_twel_enforcer_actions(LONG, 1.0, 0.0001, 1, 1000.0, &positions, None);
+
+        assert!(!actions.is_empty(), "expected TWEL reducer action");
+        for (_idx, order) in actions {
+            assert!(
+                order.qty.abs() <= 0.26 + 1e-12,
+                "TWEL close qty must not exceed live position size; got {}",
+                order.qty
+            );
+        }
     }
 
     #[test]

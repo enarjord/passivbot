@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-from ccxt.base.errors import RateLimitExceeded
+from ccxt.base.errors import BadRequest, RateLimitExceeded
 
 
 class FreshPlanningSnapshot:
@@ -372,6 +372,100 @@ async def test_binance_update_config_accepts_already_hedged_response():
 
 
 @pytest.mark.asyncio
+async def test_bybit_update_config_accepts_already_hedged_bad_request():
+    from exchanges.bybit import BybitBot
+
+    bot = BybitBot.__new__(BybitBot)
+    bot.cca = SimpleNamespace(
+        set_position_mode=AsyncMock(
+            side_effect=BadRequest(
+                'bybit {"retCode":110025,"retMsg":"position mode is not modified"}'
+            )
+        )
+    )
+
+    await bot.update_exchange_config()
+
+    bot.cca.set_position_mode.assert_awaited_once_with(True)
+
+
+@pytest.mark.asyncio
+async def test_bybit_update_config_reraises_unknown_bad_request():
+    from exchanges.bybit import BybitBot
+
+    bot = BybitBot.__new__(BybitBot)
+    bot.cca = SimpleNamespace(set_position_mode=AsyncMock(side_effect=BadRequest("boom")))
+
+    with pytest.raises(BadRequest, match="boom"):
+        await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetch_pnls_legacy_path_is_disabled():
+    from exchanges.bitget import BitgetBot
+
+    bot = BitgetBot.__new__(BitgetBot)
+
+    with pytest.raises(NotImplementedError, match="fetch_fill_events"):
+        await bot.fetch_pnls()
+
+
+@pytest.mark.asyncio
+async def test_okx_detect_account_config_reraises_unknown_failure():
+    from exchanges.okx import OKXBot
+
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = True
+    bot.hedge_mode = True
+    bot.cca = SimpleNamespace(
+        private_get_account_config=AsyncMock(side_effect=RuntimeError("cfg boom"))
+    )
+
+    with pytest.raises(RuntimeError, match="Unable to detect OKX account configuration"):
+        await bot._detect_account_config()
+
+
+@pytest.mark.asyncio
+async def test_okx_update_config_reraises_unknown_hedge_mode_failure():
+    from exchanges.okx import OKXBot
+
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = True
+    bot.hedge_mode = True
+    bot.cca = SimpleNamespace(
+        private_get_account_config=AsyncMock(
+            return_value={"data": [{"posMode": "long_short_mode"}]}
+        ),
+        set_position_mode=AsyncMock(side_effect=RuntimeError("hedge boom")),
+    )
+
+    with pytest.raises(RuntimeError, match="hedge boom"):
+        await bot.update_exchange_config()
+
+
+@pytest.mark.asyncio
+async def test_okx_update_config_verified_net_mode_fails_loudly():
+    from exchanges.okx import OKXBot
+
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = True
+    bot.hedge_mode = True
+    bot.cca = SimpleNamespace(
+        private_get_account_config=AsyncMock(
+            return_value={"data": [{"posMode": "net_mode"}]}
+        ),
+        set_position_mode=AsyncMock(),
+    )
+
+    with pytest.raises(RuntimeError, match="requires dual-side/hedge mode"):
+        await bot.update_exchange_config()
+
+    assert bot.okx_dual_side is False
+    assert bot.hedge_mode is False
+    bot.cca.set_position_mode.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
     import passivbot as pb_mod
 
@@ -444,7 +538,7 @@ async def test_execute_to_exchange_stops_after_exchange_config_shutdown():
 
 
 @pytest.mark.asyncio
-async def test_execute_to_exchange_skips_all_order_mutations_when_balance_too_low(
+async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
     caplog,
 ):
     import passivbot as pb_mod
@@ -477,7 +571,7 @@ async def test_execute_to_exchange_skips_all_order_mutations_when_balance_too_lo
             ], [
                 {
                     "symbol": "BTC/USDT:USDT",
-                    "side": "buy",
+                    "side": "sell",
                     "position_side": "long",
                     "price": 0.9,
                     "qty": 1.0,
@@ -505,14 +599,108 @@ async def test_execute_to_exchange_skips_all_order_mutations_when_balance_too_lo
     with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot.execute_to_exchange(bot)
 
-    assert not bot.cancel_called
+    assert bot.cancel_called
     assert not bot.config_called
     assert not bot.create_called
     assert bot.execution_scheduled is True
     assert any(
-        "not cancelling or creating orders" in record.message
+        "skipped 1 exposure-increasing order creates" in record.message
         for record in caplog.records
     )
+    assert any("allowing 1 cancellations and 0 protective creates" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_execute_to_exchange_allows_reduce_only_create_when_balance_too_low():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        debug_mode = False
+        balance_threshold = 1.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self.cancel_called = False
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        async def execution_cycle(self):
+            return None
+
+        async def calc_orders_to_cancel_and_create(self):
+            return [], [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                    "reduce_only": True,
+                    "pb_order_type": "close_panic_long",
+                    "type": "market",
+                }
+            ]
+
+        def get_raw_balance(self):
+            return 0.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancel_called = True
+            return []
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = symbols
+            return set(symbols or [])
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return []
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_to_exchange(bot)
+
+    assert bot.cancel_called
+    assert bot.config_symbols == ["BTC/USDT:USDT"]
+    assert [order["pb_order_type"] for order in bot.created_orders] == [
+        "close_panic_long"
+    ]
+    assert bot.execution_scheduled is True
 
 
 @pytest.mark.asyncio
@@ -621,6 +809,103 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
 
     assert bot.config_symbols == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
     assert len(bot.created_orders) == 3
+
+
+@pytest.mark.asyncio
+async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self.cancelled_orders = None
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        def get_raw_balance(self):
+            return 100.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancelled_orders = list(orders)
+            return list(orders)
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = list(symbols or [])
+            return set(symbols or [])
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return list(orders)
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+    symbol = "BTC/USDT:USDT"
+    to_cancel = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "price": 100.0,
+            "qty": 1.0,
+            "reduce_only": True,
+        }
+    ]
+    to_create = [
+        {
+            "symbol": symbol,
+            "side": "sell",
+            "position_side": "long",
+            "price": 100.0,
+            "qty": 1.0,
+            "reduce_only": True,
+            "pb_order_type": "close_grid_long",
+        }
+    ]
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_order_plan_to_exchange(bot, to_cancel, to_create)
+
+    assert bot.cancelled_orders == to_cancel
+    assert bot.config_symbols == [symbol]
+    assert bot.created_orders == to_create
+    assert bot.execution_scheduled is True
 
 
 @pytest.mark.asyncio

@@ -333,6 +333,9 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
     cache = FillEventCache(cache_path)
     events = [FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)]
     cache.save(events)
+    if events:
+        cache.mark_covered_start(min(int(event.timestamp) for event in events))
+        cache.set_history_scope("window")
     return cache_path
 
 

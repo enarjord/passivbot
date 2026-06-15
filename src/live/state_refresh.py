@@ -24,6 +24,51 @@ async def refresh_authoritative_state(bot) -> bool:
     return await bot._refresh_authoritative_state_staged()
 
 
+async def refresh_protective_authoritative_state(bot) -> bool:
+    """Refresh only account state required for protective cancels/reduce-only closes."""
+    if bot.stop_signal_received:
+        return False
+    bot._begin_authoritative_refresh_epoch()
+    bot._last_authoritative_block_reason = None
+    bot._last_authoritative_pending_pnl_count = 0
+    plan = {"balance", "positions", "open_orders"}
+    bot._authoritative_refresh_plan_surfaces = set(plan)
+    snapshot = await bot._fetch_authoritative_state_staged_snapshot(plan)
+    fetched_balance = snapshot.get("balance")
+    fetched_positions = snapshot.get("positions")
+    fetched_open_orders = snapshot.get("open_orders")
+
+    prepared_balance_snapshot = bot._prepare_balance_snapshot(fetched_balance)
+    if prepared_balance_snapshot is None:
+        return False
+    if fetched_positions in [None, False]:
+        return False
+    if fetched_open_orders in [None, False]:
+        return False
+
+    open_orders_ok = await bot._apply_open_orders_snapshot(
+        fetched_open_orders,
+        allow_followup_positions_refresh=False,
+        reconcile_balance=False,
+    )
+    if not open_orders_ok:
+        return False
+    _old_positions, fetched_positions_new = bot._apply_positions_snapshot(fetched_positions)
+    bot._commit_balance_snapshot(prepared_balance_snapshot)
+    bot._record_authoritative_surface(
+        "balance", round(float(bot.get_hysteresis_snapped_balance()), 12)
+    )
+    bot._record_authoritative_surface(
+        "positions",
+        bot._positions_signature(fetched_positions_new),
+    )
+    bot._update_entry_cooldown_position_delta_guard(
+        sorted(bot.positions), now_ms=int(bot.get_exchange_time())
+    )
+    bot._finalize_authoritative_refresh_consistency(plan)
+    return True
+
+
 async def refresh_authoritative_state_staged(bot) -> bool:
     """Refresh live account state through the staged authoritative cohort."""
     bot._last_authoritative_block_reason = None

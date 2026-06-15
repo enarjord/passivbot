@@ -1340,7 +1340,7 @@ class TestOHLCVSourceDir:
             ohlcv_source_dir=str(source_dir),
             gap_tolerance_ohlcvs_minutes=120.0,
         )
-        om.tradfi_for_stock_perps = True
+        assert om.tradfi_for_stock_perps is True
 
         om.markets = {
             "XYZ-AAPL/USDC:USDC": {
@@ -1354,6 +1354,29 @@ class TestOHLCVSourceDir:
                 "precision": {"price": 0.01, "amount": 0.001},
             }
         }
+
+        class FakeCm:
+            def standardize_gaps(self, arr, *, start_ts, end_ts, **_kwargs):
+                ts = np.arange(start_ts, end_ts + 60_000, 60_000, dtype=np.int64)
+                out = np.zeros(len(ts), dtype=CANDLE_DTYPE)
+                out["ts"] = ts
+                by_ts = {int(row["ts"]): row for row in arr}
+                prev_close = float(arr[0]["c"])
+                for i, timestamp in enumerate(ts):
+                    row = by_ts.get(int(timestamp))
+                    if row is not None:
+                        out[i] = row
+                        prev_close = float(row["c"])
+                    else:
+                        out[i]["o"] = prev_close
+                        out[i]["h"] = prev_close
+                        out[i]["l"] = prev_close
+                        out[i]["c"] = prev_close
+                        out[i]["bv"] = 0.0
+                return out
+
+        om.load_cc = lambda: None
+        om.cm = FakeCm()
 
         with patch.object(CandlestickManager, "get_candles") as mock_get_candles:
             mock_get_candles.return_value = np.zeros(0, dtype=CANDLE_DTYPE)

@@ -282,6 +282,88 @@ async def test_get_latest_ema_close_correctness(tmp_path, monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_latest_ema_helpers_reject_short_tail_without_caching(tmp_path, monkeypatch):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    fixed_now_ms = 1725590400000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+    symbol = "SHORTTAIL/USDT"
+    span = 3.0
+    end_ts = fixed_now_ms - ONE_MIN_MS
+    start_ts = end_ts - 2 * ONE_MIN_MS
+    stale = np.array(
+        [
+            (start_ts, 10.0, 11.0, 9.0, 10.0, 1.0),
+            (start_ts + ONE_MIN_MS, 11.0, 12.0, 10.0, 11.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def fake_get_candles(*_args, **_kwargs):
+        return stale
+
+    monkeypatch.setattr(cm, "get_candles", fake_get_candles)
+
+    close = await cm.get_latest_ema_close(symbol, span, max_age_ms=60_000)
+    quote_volume = await cm.get_latest_ema_quote_volume(symbol, span, max_age_ms=60_000)
+    log_range = await cm.get_latest_ema_log_range(symbol, span, max_age_ms=60_000)
+    metrics = await cm.get_latest_ema_metrics(
+        symbol,
+        {"close": span, "qv": span, "log_range": span},
+        max_age_ms=60_000,
+    )
+
+    assert math.isnan(close)
+    assert math.isnan(quote_volume)
+    assert math.isnan(log_range)
+    assert all(math.isnan(metrics[key]) for key in ("close", "qv", "log_range"))
+    assert cm._ema_cache.get(symbol, {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_stock_perp_latest_emas_fill_no_trade_tail(tmp_path, monkeypatch):
+    fixed_now_ms = 1725811200000  # Sunday-style off-hours timestamp.
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="hyperliquid", cache_dir=str(tmp_path / "caches"))
+    symbol = "xyz:DELL/USDC:USDC"
+    last_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    seed_ts = last_final - 60 * ONE_MIN_MS
+    seed_close = 123.45
+    cm._cache[symbol] = np.array(
+        [(seed_ts, seed_close, seed_close, seed_close, seed_close, 10.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    close = await cm.get_latest_ema_close(symbol, 5.0, allow_remote_fetch=False)
+    log_range = await cm.get_latest_ema_log_range(symbol, 5.0, allow_remote_fetch=False)
+
+    assert close == pytest.approx(seed_close)
+    assert log_range == pytest.approx(0.0)
+    assert last_final in cm._synthetic_timestamps.get(symbol, set())
+
+
+@pytest.mark.asyncio
+async def test_crypto_latest_emas_do_not_fill_open_tail_by_default(tmp_path, monkeypatch):
+    fixed_now_ms = 1725811200000
+    monkeypatch.setattr("time.time", lambda: fixed_now_ms / 1000.0)
+
+    cm = CandlestickManager(exchange=None, exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    symbol = "BTC/USDT:USDT"
+    last_final = _floor_minute(fixed_now_ms) - ONE_MIN_MS
+    seed_ts = last_final - 60 * ONE_MIN_MS
+    seed_close = 123.45
+    cm._cache[symbol] = np.array(
+        [(seed_ts, seed_close, seed_close, seed_close, seed_close, 10.0)],
+        dtype=CANDLE_DTYPE,
+    )
+
+    close = await cm.get_latest_ema_close(symbol, 5.0, allow_remote_fetch=False)
+
+    assert math.isnan(close)
+    assert not cm._synthetic_timestamps.get(symbol)
+
+
+@pytest.mark.asyncio
 async def test_get_candles_negative_max_age_raises(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "Z/USDT"
@@ -506,6 +588,7 @@ async def test_get_latest_ema_metrics_calls_get_candles_once_and_caches(monkeypa
         timeframe=None,
         tf=None,
         fill_leading_gaps=False,
+        fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
         ):

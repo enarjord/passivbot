@@ -4,6 +4,22 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `backtest.market_settings` overrides for historical/rebranded market metadata, including
+  exchange-specific overrides before Rust backtests receive market parameters.
+- Fixed live `[pos]` logging so short position size increases are labeled as
+  `added` and short size decreases as `reduced`, matching exposure magnitude
+  instead of signed numeric ordering.
+- Fixed live ignored-coin handling so ignored symbols are sent to the Rust
+  orchestrator as `graceful_stop`, preventing new initial entries after a
+  previously open ignored position becomes fully flat.
+- Added a v8 TWEL/total exposure enforcer policy-contract plan for the future
+  portfolio governor redesign, based on the known v7 threshold/refill behavior
+  but without changing current v8 runtime behavior.
+- Hardened v8 live-safety review follow-ups: ambiguous order-create responses are
+  remembered before retry, protective panic bypasses stale normal-mode filters
+  while requiring fresh account-critical balance/position/order state, PnL risk
+  gates require explicit fill-history coverage including coin HSL, Bitget keeps
+  multiple fills per order, and OKX net-mode accounts fail loudly.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless
@@ -81,6 +97,9 @@ All notable user-facing changes will be documented in this file.
 - Reduced suite-optimizer seed-evaluation memory pressure by passing lazy-sliced coin
   columns to Rust as active indices instead of materializing per-worker HLCV coin-subset
   copies.
+- Fixed live Hyperliquid `xyz:*` stock-perp EMA reads during off-hours/no-trade
+  tails by allowing stock-perp-only flat zero-volume tail candles from the last
+  real close, while preserving fail-loud behavior when no real candle seed exists.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
   `optimize.bounds` are clamped with aggregated source/key logging, while base-config runtime
   policy fields such as HSL/unstuck boolean toggles now win over anchor configs.

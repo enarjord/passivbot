@@ -328,6 +328,77 @@ def _int_or(value, default=0):
         return int(default)
 
 
+def _backtest_market_settings_overrides(config: dict) -> dict:
+    market_settings = config.get("backtest", {}).get("market_settings") or {}
+    if not isinstance(market_settings, dict):
+        raise TypeError("backtest.market_settings must be a dict")
+    overrides = market_settings.get("overrides") or {}
+    if not isinstance(overrides, dict):
+        raise TypeError("backtest.market_settings.overrides must be a dict")
+    overrides_by_exchange = market_settings.get("overrides_by_exchange") or {}
+    if not isinstance(overrides_by_exchange, dict):
+        raise TypeError("backtest.market_settings.overrides_by_exchange must be a dict")
+    normalized = {"global": {}, "by_exchange": {}}
+    for coin, values in overrides.items():
+        coin_key = normalize_backtest_coin(coin)
+        if not coin_key:
+            continue
+        if not isinstance(values, dict):
+            raise TypeError(f"backtest.market_settings.overrides.{coin} must be a dict")
+        normalized["global"][coin_key] = deepcopy(values)
+    for exchange, exchange_overrides in overrides_by_exchange.items():
+        if not isinstance(exchange_overrides, dict):
+            raise TypeError(
+                f"backtest.market_settings.overrides_by_exchange.{exchange} must be a dict"
+            )
+        exchange_key = str(exchange)
+        exchange_normalized = normalized["by_exchange"].setdefault(exchange_key, {})
+        for coin, values in exchange_overrides.items():
+            coin_key = normalize_backtest_coin(coin)
+            if not coin_key:
+                continue
+            if not isinstance(values, dict):
+                raise TypeError(
+                    "backtest.market_settings.overrides_by_exchange."
+                    f"{exchange}.{coin} must be a dict"
+                )
+            exchange_normalized[coin_key] = deepcopy(values)
+    return normalized
+
+
+def _apply_market_settings_override(
+    coin: str,
+    exchange: str,
+    market_settings: dict,
+    overrides: dict,
+) -> dict:
+    result = dict(market_settings)
+    coin_key = normalize_backtest_coin(coin)
+    global_override = overrides.get("global", {}).get(coin_key)
+    if global_override:
+        result.update(deepcopy(global_override))
+    entry_exchange = str(result.get("exchange") or exchange)
+    exchange_override = (
+        overrides.get("by_exchange", {}).get(entry_exchange, {}).get(coin_key)
+        or overrides.get("by_exchange", {}).get(str(exchange), {}).get(coin_key)
+    )
+    if exchange_override:
+        result.update(deepcopy(exchange_override))
+    return result
+
+
+def _required_float(value, *, path: str) -> float:
+    try:
+        if value is None:
+            raise TypeError
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric, got {value!r}") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{path} must be finite, got {value!r}")
+    return result
+
+
 def _build_coin_metadata_entries(
     coins_order,
     exchange,
@@ -1908,14 +1979,38 @@ def prep_backtest_args(
         fee_kind="taker",
         override_value=taker_fee_override,
     )
+    market_settings_overrides = _backtest_market_settings_overrides(config)
+    effective_mss = {
+        coin: _apply_market_settings_override(
+            coin,
+            exchange,
+            mss[coin],
+            market_settings_overrides,
+        )
+        for coin in coins
+    }
     if exchange_params is None:
         exchange_params = [
             {
-                "qty_step": mss[coin]["qty_step"],
-                "price_step": mss[coin]["price_step"],
-                "min_qty": mss[coin]["min_qty"],
-                "min_cost": mss[coin]["min_cost"],
-                "c_mult": mss[coin]["c_mult"],
+                "qty_step": _required_float(
+                    effective_mss[coin].get("qty_step"),
+                    path=f"market settings {coin}.qty_step",
+                ),
+                "price_step": _required_float(
+                    effective_mss[coin].get("price_step"),
+                    path=f"market settings {coin}.price_step",
+                ),
+                "min_qty": _required_float(
+                    effective_mss[coin].get("min_qty"),
+                    path=f"market settings {coin}.min_qty",
+                ),
+                "min_cost": _required_float(
+                    effective_mss[coin].get("min_cost"),
+                    path=f"market settings {coin}.min_cost",
+                ),
+                "c_mult": _required_float(
+                    effective_mss[coin].get("c_mult"), path=f"market settings {coin}.c_mult"
+                ),
                 "maker_fee": float(maker_fee),
                 "taker_fee": float(taker_fee),
             }

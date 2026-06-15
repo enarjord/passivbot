@@ -34,6 +34,7 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
             self._health_orders_placed = 0
             self.debug_mode = False
             self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
 
         def live_value(self, key):
             assert key == "max_n_creations_per_batch"
@@ -43,7 +44,7 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
             return 123456
 
         def add_to_recent_order_executions(self, order):
-            return None
+            self.recent_order_executions.append(dict(order))
 
         def log_order_action(self, *args, **kwargs):
             return None
@@ -98,6 +99,8 @@ async def test_execute_orders_parent_tracks_acknowledged_custom_id():
         "qty": 0.01,
         "price": 100000.0,
     }
+    assert len(bot.recent_order_executions) == 1
+    assert bot.recent_order_executions[0]["custom_id"] == custom_id
 
 
 @pytest.mark.asyncio
@@ -127,6 +130,7 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
             self._health_orders_placed = 0
             self.debug_mode = False
             self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
 
         def live_value(self, key):
             assert key == "max_n_creations_per_batch"
@@ -136,7 +140,7 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
             return 123456
 
         def add_to_recent_order_executions(self, order):
-            return None
+            self.recent_order_executions.append(dict(order))
 
         def log_order_action(self, *args, **kwargs):
             return None
@@ -180,6 +184,297 @@ async def test_execute_orders_parent_tracks_ambiguous_create_error_custom_id():
     assert record["pb_type"] == "entry_grid_normal_long"
     assert record["status"] == "create_error_ambiguous"
     assert bot._health_orders_placed == 0
+    assert len(bot.recent_order_executions) == 1
+    assert bot.recent_order_executions[0]["custom_id"] == custom_id
+
+
+@pytest.mark.asyncio
+async def test_execute_orders_parent_does_not_throttle_rejected_create_response():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
+        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
+        _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
+        _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
+        _extract_order_float = pb_mod.Passivbot._extract_order_float
+        _canonical_passivbot_custom_id = pb_mod.Passivbot._canonical_passivbot_custom_id
+        _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
+        _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
+        _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+        did_create_order = pb_mod.Passivbot.did_create_order
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
+
+        def __init__(self):
+            self.monitor_publisher = None
+            self._health_orders_placed = 0
+            self.debug_mode = False
+            self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
+
+        def live_value(self, key):
+            assert key == "max_n_creations_per_batch"
+            return 5
+
+        def get_exchange_time(self):
+            return 123456
+
+        def add_to_recent_order_executions(self, order):
+            self.recent_order_executions.append(dict(order))
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
+            return None
+
+        async def execute_orders(self, orders):
+            return [{"id": "reject-1", "status": "rejected", **orders[0]}]
+
+        def add_new_order(self, order, source="POST"):
+            raise AssertionError("rejected creates must not be added locally")
+
+    bot = FakeBot()
+    order = {
+        "symbol": "TON/USDT:USDT",
+        "side": "sell",
+        "position_side": "long",
+        "qty": 25.0,
+        "price": 2.495,
+        "reduce_only": True,
+        "custom_id": _pb_custom_id("close_grid_long", "reject"),
+        "pb_order_type": "close_grid_long",
+    }
+
+    res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+
+    assert res == []
+    assert bot.recent_order_executions == []
+    assert bot._health_orders_placed == 0
+
+
+@pytest.mark.asyncio
+async def test_execute_orders_parent_tracks_hard_failed_create_as_ambiguous():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
+        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
+        _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
+        _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
+        _extract_order_float = pb_mod.Passivbot._extract_order_float
+        _canonical_passivbot_custom_id = pb_mod.Passivbot._canonical_passivbot_custom_id
+        _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
+        _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
+        _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
+
+        def __init__(self):
+            self.debug_mode = False
+            self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
+
+        def live_value(self, key):
+            assert key == "max_n_creations_per_batch"
+            return 5
+
+        def get_exchange_time(self):
+            return 123456
+
+        def add_to_recent_order_executions(self, order):
+            self.recent_order_executions.append(dict(order))
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
+            return None
+
+        async def execute_orders(self, orders):
+            raise RuntimeError("exchange create failed before acknowledgement")
+
+    bot = FakeBot()
+    order = {
+        "symbol": "TON/USDT:USDT",
+        "side": "sell",
+        "position_side": "long",
+        "qty": 25.0,
+        "price": 2.495,
+        "reduce_only": True,
+        "custom_id": _pb_custom_id("close_grid_long", "hardfail"),
+        "pb_order_type": "close_grid_long",
+    }
+
+    with pytest.raises(RuntimeError, match="exchange create failed"):
+        await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+
+    assert len(bot.recent_order_executions) == 1
+    assert bot.recent_order_executions[0]["custom_id"] == order["custom_id"]
+    assert len(bot.orders_emitted_to_exchange) == 1
+    assert bot.orders_emitted_to_exchange[0]["status"] == "create_error_ambiguous"
+
+
+@pytest.mark.asyncio
+async def test_execute_orders_parent_tracks_empty_create_response_as_ambiguous():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
+        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
+        _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
+        _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
+        _extract_order_float = pb_mod.Passivbot._extract_order_float
+        _canonical_passivbot_custom_id = pb_mod.Passivbot._canonical_passivbot_custom_id
+        _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
+        _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
+        _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
+
+        def __init__(self):
+            self.debug_mode = False
+            self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
+
+        def live_value(self, key):
+            assert key == "max_n_creations_per_batch"
+            return 5
+
+        def get_exchange_time(self):
+            return 123456
+
+        def add_to_recent_order_executions(self, order):
+            self.recent_order_executions.append(dict(order))
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
+            return None
+
+        async def execute_orders(self, orders):
+            return []
+
+    bot = FakeBot()
+    order = {
+        "symbol": "TON/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 25.0,
+        "price": 2.495,
+        "reduce_only": False,
+        "custom_id": _pb_custom_id("entry_grid_normal_long", "empty"),
+        "pb_order_type": "entry_grid_normal_long",
+    }
+
+    res = await pb_mod.Passivbot.execute_orders_parent(bot, [order])
+
+    assert res == []
+    assert len(bot.recent_order_executions) == 1
+    assert bot.orders_emitted_to_exchange[0]["status"] == "create_response_missing"
+
+
+@pytest.mark.asyncio
+async def test_execute_orders_parent_tracks_partial_create_response_as_ambiguous():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        execute_orders_parent = pb_mod.Passivbot.execute_orders_parent
+        _record_emitted_order_custom_id = pb_mod.Passivbot._record_emitted_order_custom_id
+        _extract_order_custom_id = pb_mod.Passivbot._extract_order_custom_id
+        _extract_order_exchange_id = pb_mod.Passivbot._extract_order_exchange_id
+        _extract_order_reduce_only = pb_mod.Passivbot._extract_order_reduce_only
+        _extract_order_float = pb_mod.Passivbot._extract_order_float
+        _canonical_passivbot_custom_id = pb_mod.Passivbot._canonical_passivbot_custom_id
+        _order_identity_fingerprint = pb_mod.Passivbot._order_identity_fingerprint
+        _build_emitted_order_record = pb_mod.Passivbot._build_emitted_order_record
+        _emitted_order_records = pb_mod.Passivbot._emitted_order_records
+        _resolve_pb_order_type = pb_mod.Passivbot._resolve_pb_order_type
+        _is_market_execution_order = staticmethod(
+            pb_mod.Passivbot._is_market_execution_order
+        )
+
+        def __init__(self):
+            self.debug_mode = False
+            self.orders_emitted_to_exchange = []
+            self.recent_order_executions = []
+
+        def live_value(self, key):
+            assert key == "max_n_creations_per_batch"
+            return 5
+
+        def get_exchange_time(self):
+            return 123456
+
+        def add_to_recent_order_executions(self, order):
+            self.recent_order_executions.append(dict(order))
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        def _log_market_execution_notice(self, *args, **kwargs):
+            return None
+
+        async def execute_orders(self, orders):
+            return [{"id": "only-first", **orders[0]}]
+
+    bot = FakeBot()
+    orders = [
+        {
+            "symbol": "TON/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 25.0,
+            "price": 2.495,
+            "reduce_only": False,
+            "custom_id": _pb_custom_id("entry_grid_normal_long", "partial1"),
+            "pb_order_type": "entry_grid_normal_long",
+        },
+        {
+            "symbol": "SOL/USDT:USDT",
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "reduce_only": False,
+            "custom_id": _pb_custom_id("entry_grid_normal_long", "partial2"),
+            "pb_order_type": "entry_grid_normal_long",
+        },
+    ]
+
+    res = await pb_mod.Passivbot.execute_orders_parent(bot, orders)
+
+    assert res == []
+    assert len(bot.recent_order_executions) == 2
+    assert [rec["status"] for rec in bot.orders_emitted_to_exchange] == [
+        "create_response_partial",
+        "create_response_partial",
+    ]
 
 
 def _make_detection_bot(now_ts: int, start_ts: int):

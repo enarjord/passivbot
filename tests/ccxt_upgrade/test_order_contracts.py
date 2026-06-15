@@ -150,6 +150,8 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
 
     async def fetch_open_orders(symbol=None):
         fetched_symbols.append(symbol)
+        if symbol is None:
+            return []
         return [
             {
                 "id": "order-1",
@@ -169,13 +171,82 @@ async def test_binance_staged_snapshot_uses_fresh_positions_for_open_order_symbo
         {"balance", "positions", "open_orders", "fills"}, {}
     )
 
-    assert fetched_symbols == ["SOL/USDT:USDT"]
+    assert fetched_symbols == ["SOL/USDT:USDT", None]
     assert snapshot["balance"] == 100.0
     assert snapshot["positions"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["symbol"] == "SOL/USDT:USDT"
     assert snapshot["open_orders"][0]["position_side"] == "long"
     assert seen_fill_scope == [["SOL/USDT:USDT"]]
     assert not hasattr(bot, "_fill_symbol_scope")
+
+
+@pytest.mark.asyncio
+async def test_binance_startup_open_order_sweep_includes_unscoped_stale_orders():
+    bot = BinanceBot.__new__(BinanceBot)
+    bot.exchange = "binance"
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.active_symbols = []
+    bot.approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+    bot.markets_dict = {
+        "SOL/USDT:USDT": {"id": "SOLUSDT", "swap": True},
+        "DOGE/USDT:USDT": {"id": "DOGEUSDT", "swap": True},
+    }
+    bot._record_live_margin_mode_from_payload = lambda payload: None
+
+    async def capture_positions_snapshot():
+        return [{"raw": "position"}], [
+            {
+                "symbol": "SOL/USDT:USDT",
+                "position_side": "long",
+                "size": 1.0,
+                "price": 100.0,
+            }
+        ]
+
+    fetched_symbols = []
+
+    async def fetch_open_orders(symbol=None):
+        fetched_symbols.append(symbol)
+        if symbol is None:
+            return [
+                {
+                    "id": "doge-stale",
+                    "symbol": "DOGE/USDT:USDT",
+                    "amount": 2.0,
+                    "timestamp": 2,
+                    "info": {"symbol": "DOGEUSDT", "positionSide": "LONG"},
+                }
+            ]
+        return [
+            {
+                "id": "sol-scoped",
+                "symbol": symbol,
+                "amount": 0.1,
+                "timestamp": 1,
+                "info": {"symbol": "SOLUSDT", "positionSide": "LONG"},
+            }
+        ]
+
+    bot.capture_positions_snapshot = capture_positions_snapshot
+    bot.cca = SimpleNamespace(fetch_open_orders=fetch_open_orders, options={})
+
+    snapshot = await bot.capture_authoritative_state_staged_snapshot(
+        {"positions", "open_orders"}, {}
+    )
+
+    assert fetched_symbols == ["SOL/USDT:USDT", None]
+    assert [order["symbol"] for order in snapshot["open_orders"]] == [
+        "SOL/USDT:USDT",
+        "DOGE/USDT:USDT",
+    ]
+    assert getattr(bot, "_binance_open_orders_all_symbols_swept") is True
+
+    fetched_symbols.clear()
+    orders = await bot._fetch_open_orders_for_staged_symbols({"SOL/USDT:USDT"})
+
+    assert fetched_symbols == ["SOL/USDT:USDT"]
+    assert [order["id"] for order in orders] == ["sol-scoped"]
 
 
 def test_bybit_position_side_uses_determine_pos_side_ccxt_contract():
@@ -284,6 +355,66 @@ def test_bitget_determine_side_uses_trade_side_reduce_only_and_pos_side():
     assert bot._determine_side(open_long) == "buy"
 
 
+@pytest.mark.asyncio
+async def test_bitget_legacy_fill_events_keep_multiple_fills_per_order():
+    class FakeBitgetAPI:
+        def __init__(self):
+            self.history_calls = 0
+            self.detail_calls = []
+
+        async def private_mix_get_v2_mix_order_fill_history(self, params):
+            self.history_calls += 1
+            if self.history_calls > 1:
+                return {"data": {"fillList": []}}
+            return {
+                "data": {
+                    "fillList": [
+                        {
+                            "tradeId": "tid-1",
+                            "orderId": "oid-1",
+                            "cTime": "1000",
+                            "symbol": "BTCUSDT",
+                            "tradeSide": "open",
+                            "posMode": "hedge_mode",
+                            "side": "buy",
+                            "baseVolume": "0.1",
+                            "price": "10",
+                            "profit": "1",
+                        },
+                        {
+                            "tradeId": "tid-2",
+                            "orderId": "oid-1",
+                            "cTime": "1500",
+                            "symbol": "BTCUSDT",
+                            "tradeSide": "open",
+                            "posMode": "hedge_mode",
+                            "side": "buy",
+                            "baseVolume": "0.2",
+                            "price": "11",
+                            "profit": "2",
+                        },
+                    ]
+                }
+            }
+
+        async def private_mix_get_v2_mix_order_detail(self, params):
+            self.detail_calls.append(dict(params))
+            return {"data": {"clientOid": "pb-0x0004-bitget"}}
+
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.cca = FakeBitgetAPI()
+    bot.symbol_ids = {"BTC/USDT:USDT": "BTCUSDT"}
+    bot.symbol_ids_inv = {"BTCUSDT": "BTC/USDT:USDT"}
+
+    events = await bot.fetch_fill_events(start_time=500, end_time=2_000, limit=100)
+
+    assert [event["id"] for event in events] == ["tid-1", "tid-2"]
+    assert [event["order_id"] for event in events] == ["oid-1", "oid-1"]
+    assert sum(event["qty"] for event in events) == pytest.approx(0.3)
+    assert {call["orderId"] for call in bot.cca.detail_calls} == {"oid-1"}
+    assert all(event["client_order_id"] == "pb-0x0004-bitget" for event in events)
+
+
 def test_gateio_order_side_contract_depends_on_reduce_only_flag():
     bot = GateIOBot.__new__(GateIOBot)
     assert bot.determine_pos_side({"side": "buy", "reduceOnly": False}) == "long"
@@ -369,6 +500,21 @@ def test_gateio_get_balance_uses_total_for_classic_margin():
 def test_okx_order_side_uses_info_pos_side():
     bot = OKXBot.__new__(OKXBot)
     assert bot._get_position_side_for_order({"info": {"posSide": "SHORT"}}) == "short"
+
+
+def test_okx_order_params_refuse_net_mode():
+    bot = OKXBot.__new__(OKXBot)
+    bot.okx_dual_side = False
+
+    with pytest.raises(RuntimeError, match="requires dual-side/hedge mode"):
+        bot._build_order_params(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "position_side": "long",
+                "reduce_only": True,
+                "custom_id": "0x0007-okx",
+            }
+        )
 
 
 def test_okx_get_balance_includes_multi_asset_collateral_excluding_upl():

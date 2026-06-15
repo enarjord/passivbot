@@ -8,7 +8,6 @@ from typing import Dict, List, Tuple
 from bitget_normalization import deduce_side_pside
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
-from pure_funcs import calc_hash
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
@@ -128,44 +127,9 @@ class BitgetBot(CCXTBot):
     # ═══════════════════ BITGET-SPECIFIC METHODS ═══════════════════
 
     async def fetch_pnls(self, start_time=None, end_time=None, limit=None):
-        params = {"productType": "USDT-FUTURES"}
-        if start_time:
-            start_time = int(start_time)
-        if end_time:
-            params["endTime"] = int(end_time)
-        if limit:
-            params["limit"] = min(100, limit)
-        side_pos_side_map = {"buy": "long", "sell": "short"}
-        data_d = {}
-        while True:
-            fetched = await self.cca.private_mix_get_v2_mix_order_fill_history(params)
-            end_id = fetched["data"]["endId"]
-            data = fetched["data"]["fillList"]
-            if data is None:
-                break
-            if not data:
-                break
-            with_hashes = {calc_hash(x): x for x in data}
-            if all([h in data_d for h in with_hashes]):
-                break
-            for h, x in with_hashes.items():
-                data_d[h] = x
-                data_d[h]["pnl"] = float(x["profit"])
-                data_d[h]["price"] = float(x["price"])
-                data_d[h]["amount"] = float(x["baseVolume"])
-                data_d[h]["id"] = x["tradeId"]
-                data_d[h]["timestamp"] = float(x["cTime"])
-                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
-                data_d[h]["position_side"] = side_pos_side_map[x["side"]]
-                data_d[h]["symbol"] = self.get_symbol_id_inv(x["symbol"])
-            if start_time is None:
-                break
-            last_ts = float(data[-1]["cTime"])
-            if last_ts < start_time:
-                break
-            logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
-            params["endTime"] = int(last_ts)
-        return sorted(data_d.values(), key=lambda x: x["timestamp"])
+        raise NotImplementedError(
+            "Bitget fetch_pnls legacy PnL path is unsupported; use fetch_fill_events"
+        )
 
     async def _throttled_order_detail(self, order_id: str, symbol: str):
         """Rate limited wrapper for clientOid lookups."""
@@ -192,35 +156,36 @@ class BitgetBot(CCXTBot):
         )
 
     async def _ensure_client_oid_for_event(self, event: dict) -> None:
-        if not event.get("id"):
+        order_id = event.get("order_id") or event.get("id")
+        if not order_id:
             return
         if not hasattr(self, "_client_oid_cache"):
             self._client_oid_cache = {}
-        cached = self._client_oid_cache.get(event["id"])
+        cached = self._client_oid_cache.get(order_id)
         if cached:
             event["client_order_id"], event["pb_order_type"] = cached
             return
         try:
             order_details = await self._throttled_order_detail(
-                event["id"], self.get_symbol_id(event["symbol"])
+                order_id, self.get_symbol_id(event["symbol"])
             )
             client_oid = order_details.get("data", {}).get("clientOid")
             if client_oid:
                 pb_type = custom_id_to_snake(client_oid)
                 event["client_order_id"] = client_oid
                 event["pb_order_type"] = pb_type
-                self._client_oid_cache[event["id"]] = (client_oid, pb_type)
+                self._client_oid_cache[order_id] = (client_oid, pb_type)
             else:
                 logging.debug(
                     "bitget order detail missing clientOid for id=%s symbol=%s",
-                    event["id"],
+                    order_id,
                     symbol_to_coin(event["symbol"] or "", verbose=False)
                     or event["symbol"],
                 )
         except Exception as exc:
             logging.warning(
                 "failed to fetch bitget order detail for id=%s symbol=%s: %s",
-                event["id"],
+                order_id,
                 symbol_to_coin(event["symbol"] or "", verbose=False)
                 or event["symbol"],
                 exc,
@@ -244,7 +209,7 @@ class BitgetBot(CCXTBot):
             except Exception:
                 pass
         for evt in source_events:
-            evt_id = evt.get("id")
+            evt_id = evt.get("order_id") or evt.get("id")
             cid = evt.get("client_order_id")
             pb = evt.get("pb_order_type")
             if evt_id and cid and evt_id not in self._client_oid_cache:
@@ -255,8 +220,30 @@ class BitgetBot(CCXTBot):
         def _extract_fill(elm: dict) -> dict:
             timestamp = int(elm["cTime"])
             side, position_side = deduce_side_pside(elm)
+            order_id = str(elm.get("orderId") or "")
+            fill_id = (
+                elm.get("tradeId")
+                or elm.get("fillId")
+                or elm.get("execId")
+                or elm.get("id")
+            )
+            if fill_id:
+                event_id = str(fill_id)
+            else:
+                event_id = json.dumps(
+                    [
+                        order_id,
+                        timestamp,
+                        side,
+                        position_side,
+                        elm.get("baseVolume"),
+                        elm.get("price"),
+                    ],
+                    separators=(",", ":"),
+                )
             return {
-                "id": elm.get("orderId"),
+                "id": event_id,
+                "order_id": order_id,
                 "timestamp": timestamp,
                 "datetime": ts_to_date(timestamp),
                 "symbol": self.get_symbol_id_inv(elm["symbol"]),
@@ -317,19 +304,20 @@ class BitgetBot(CCXTBot):
                     continue
                 if event_id in events_map:
                     continue
-                cached = self._client_oid_cache.get(event_id)
+                order_id = event.get("order_id") or event_id
+                cached = self._client_oid_cache.get(order_id)
                 if cached:
                     event["client_order_id"], event["pb_order_type"] = cached
                 if not event.get("client_order_id"):
                     pending.append(
                         (
-                            event_id,
+                            order_id,
                             event,
                             asyncio.create_task(self._ensure_client_oid_for_event(event)),
                         )
                     )
                 else:
-                    self._client_oid_cache[event_id] = (
+                    self._client_oid_cache[order_id] = (
                         event["client_order_id"],
                         event.get("pb_order_type"),
                     )

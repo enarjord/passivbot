@@ -12,6 +12,7 @@ these tests need to run in a tight loop when the refactor lands.
 from copy import deepcopy
 
 import numpy as np
+import pytest
 
 from backtest import build_backtest_payload
 from config_utils import get_template_config
@@ -154,6 +155,104 @@ def test_build_backtest_payload_marks_normal_forced_coin_active():
 
     assert payload.bot_params_list[om_idx]["long"]["is_forced_active"] is True
     assert payload.bot_params_list[om_idx]["short"]["is_forced_active"] is False
+
+
+def test_build_backtest_payload_applies_market_settings_override():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {"overrides": {"TON": {"c_mult": 1.0}}}
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert mss["TON"]["c_mult"] is None
+
+
+def test_build_backtest_payload_prefers_exchange_market_settings_override():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"combined": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {
+        "overrides": {"TON": {"c_mult": 1.0}},
+        "overrides_by_exchange": {"bybit": {"TON": {"c_mult": 0.1}}},
+    }
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "bybit",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "combined", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 0.1
+
+
+def test_build_backtest_payload_rejects_missing_required_market_setting():
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    with pytest.raises(TypeError, match=r"market settings TON\.c_mult must be numeric"):
+        build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 
 
 def test_build_backtest_payload_does_not_mutate_mss():
