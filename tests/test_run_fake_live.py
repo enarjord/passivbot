@@ -240,6 +240,9 @@ def test_prime_fake_fill_cache_writes_fake_fill_events(tmp_path):
     cache_path = _prime_fake_fill_cache(bot, client, cache_root=tmp_path)
     payload = next(cache_path.glob("*.json")).read_text(encoding="utf-8")
     assert "boot_entry" in payload
+    cache = FillEventCache(cache_path)
+    assert cache.get_covered_start_ms() == client.get_fill_events(None, None)[0]["timestamp"]
+    assert cache.get_history_scope() == "window"
 
 
 @pytest.mark.fake_live
