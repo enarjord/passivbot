@@ -548,6 +548,8 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
                 ("short", "wallet_exposure_limit"): 0.2,
                 ("long", "risk_we_excess_allowance_pct"): 0.5,
                 ("short", "risk_we_excess_allowance_pct"): 0.5,
+                ("long", "risk_we_excess_allowance_mode"): "bounded",
+                ("short", "risk_we_excess_allowance_mode"): "bounded",
                 ("long", "total_wallet_exposure_limit"): 0.24,
                 ("short", "total_wallet_exposure_limit"): 0.0,
                 ("long", "ema_span_0"): 10.0,

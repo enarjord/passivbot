@@ -137,6 +137,32 @@ def test_snapshot_trailing_diagnostic_caps_excess_by_total_wallet_exposure_limit
     assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.2)
 
 
+def test_snapshot_trailing_diagnostic_legacy_raw_excess_mode_is_unbounded():
+    config = _sample_config()
+    side_cfg = config["bot"]["long"]
+    side_cfg.pop("total_wallet_exposure_limit")
+    side_cfg.pop("n_positions")
+    side_cfg.pop("risk_we_excess_allowance_pct")
+    side_cfg["risk"] = {
+        "total_wallet_exposure_limit": 0.2,
+        "n_positions": 1,
+        "we_excess_allowance_pct": 0.5,
+        "we_excess_allowance_mode": "legacy_raw",
+    }
+    inputs = build_trailing_inputs_from_snapshot(
+        config,
+        _sample_snapshot(),
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    diagnostic = build_trailing_diagnostic(inputs)
+
+    assert inputs["risk_we_excess_allowance_mode"] == "legacy_raw"
+    assert diagnostic["allowed_wallet_exposure_limit"] == pytest.approx(0.3)
+    assert diagnostic["entry"]["limit_cap"] == pytest.approx(0.3)
+
+
 def test_build_trailing_diagnostic_matches_monitor_slice():
     inputs = build_trailing_inputs_from_snapshot(
         _sample_config(),

@@ -189,9 +189,17 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert long_strategy["entry"]["volatility_ema_span_hours"] == pytest.approx(1909.0)
     assert long_strategy["close"]["grid_markup_start"] == pytest.approx(0.01041)
     assert long_strategy["close"]["grid_markup_end"] == pytest.approx(0.00241)
+    assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
+    assert migrated["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(0.0)
+    assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
     assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
     assert migrated["bot"]["long"]["forager"]["volume_ema_span_1m"] == 760
+    assert migrated["optimize"]["bounds"]["long"]["risk"]["entry_cooldown_minutes"] == [
+        0.0,
+        0.0,
+        0.1,
+    ]
     assert (
         migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"]["close"][
             "grid_markup_start"
@@ -214,6 +222,52 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert override["close"]["grid_markup_start"] == pytest.approx(0.02)
     assert report["destination_strategy_kind"] == "trailing_grid_v7"
     assert any("entry_trailing_grid_ratio" in item for item in report["moved_fields"])
+    assert any(
+        "entry_cooldown_minutes was not a v7 parameter" in item
+        for item in report["warnings"]
+    )
+
+
+def test_migrate_v7_trailing_grid_warns_when_v7_raw_excess_would_be_clamped():
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["n_positions"] = 1
+    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.1
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
+    assert any(
+        "bot.long.risk.we_excess_allowance_pct=0.1" in item
+        and "legacy_raw" in item
+        and "above side TWEL" in item
+        for item in report["warnings"]
+    )
+
+
+def test_migrate_v7_trailing_grid_warns_for_coin_override_raw_excess_clamp():
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.0
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 1.0,
+                "risk_we_excess_allowance_pct": 0.1,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
+        "we_excess_allowance_pct"
+    ] == pytest.approx(0.1)
+    assert any(
+        "coin_overrides.BTC.bot.long.risk.we_excess_allowance_pct=0.1" in item
+        and "legacy_raw" in item
+        for item in report["warnings"]
+    )
 
 
 def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
@@ -230,6 +284,23 @@ def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tm
     assert output_path.exists()
     loaded = json.loads(output_path.read_text(encoding="utf-8"))
     assert loaded["live"]["strategy_kind"] == "trailing_grid_v7"
+
+
+def test_migrate_config_v7_cli_prints_migration_warnings(tmp_path, capsys):
+    input_path = tmp_path / "legacy.json"
+    output_path = tmp_path / "migrated.json"
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["n_positions"] = 1
+    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.1
+    input_path.write_text(json.dumps(source), encoding="utf-8")
+
+    rc = migrate_config_v7_main([str(input_path), str(output_path)])
+    captured = capsys.readouterr()
+
+    assert rc == 0
+    assert "warning: bot.long.risk.we_excess_allowance_pct=0.1" in captured.err
+    assert "legacy_raw" in captured.err
 
 
 def test_migrate_config_v7_cli_unresolved_returns_nonzero_without_output_but_writes_report(
@@ -1096,6 +1167,25 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
     source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = -0.1
 
     with pytest.raises(ValueError, match="bot.long.risk.entry_cooldown_minutes"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_normalizes_we_excess_allowance_mode_and_runtime_flattening():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "LEGACY_RAW"
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    compiled = compile_runtime_config(prepared, runtime="backtest")
+
+    assert prepared["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "legacy_raw"
+    assert compiled["bot"]["long"]["risk_we_excess_allowance_mode"] == "legacy_raw"
+
+
+def test_prepare_config_rejects_invalid_we_excess_allowance_mode():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "raw"
+
+    with pytest.raises(ValueError, match="bot.long.risk.we_excess_allowance_mode"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 

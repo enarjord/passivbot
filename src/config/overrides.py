@@ -70,6 +70,7 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "risk_wel_enforcer_enabled": True,
     "risk_wel_enforcer_threshold": True,
     "risk_we_excess_allowance_pct": True,
+    "risk_we_excess_allowance_mode": True,
     "risk_twel_enforcer_enabled": False,
     "risk_twel_enforcer_threshold": False,
 }

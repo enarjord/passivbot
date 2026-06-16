@@ -14,6 +14,7 @@ from config.optimize_bounds import (
 from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
 from config.shared_bot import BOT_GROUP_FIELD_MAP, FLAT_BOT_KEY_TO_GROUP_PATH
 from config.strategy_spec import get_strategy_param_keys
+from risk_limits import WE_EXCESS_ALLOWANCE_MODE_BOUNDED
 
 
 TRAILING_GRID_V7_KIND = "trailing_grid_v7"
@@ -100,6 +101,11 @@ MANUAL_REVIEW_BOUND_KEYS = {
 
 COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
     "wallet_exposure_limit",
+}
+
+V7_ABSENT_RISK_DEFAULTS = {
+    "risk_entry_cooldown_minutes": 0.0,
+    "risk_we_excess_allowance_mode": WE_EXCESS_ALLOWANCE_MODE_BOUNDED,
 }
 
 LEGACY_SHARED_SIDE_ALIASES = {
@@ -264,6 +270,126 @@ def migration_report_has_unresolved(report: dict) -> bool:
         report.get("manual_review_fields")
         or report.get("dropped_unsupported_fields")
     )
+
+
+def _source_side_has_shared_value(source_side: dict, flat_key: str) -> bool:
+    if flat_key in source_side:
+        return True
+    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if group_path is None:
+        return False
+    group_name, local_key = group_path
+    group = source_side.get(group_name)
+    return isinstance(group, dict) and local_key in group
+
+
+def _source_has_shared_bound(source: dict, pside: str, flat_key: str) -> bool:
+    bounds = source.get("optimize", {}).get("bounds")
+    if not isinstance(bounds, dict):
+        return False
+    flat_bound_key = f"{pside}_{flat_key}"
+    if flat_bound_key in bounds:
+        return True
+    side_bounds = bounds.get(pside)
+    if not isinstance(side_bounds, dict):
+        return False
+    group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+    if group_path is None:
+        return False
+    group_name, local_key = group_path
+    group_bounds = side_bounds.get(group_name)
+    return isinstance(group_bounds, dict) and local_key in group_bounds
+
+
+def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> None:
+    bot = source.get("bot", {})
+    for pside in ("long", "short"):
+        source_side = bot.get(pside, {}) if isinstance(bot, dict) else {}
+        if not isinstance(source_side, dict):
+            source_side = {}
+        target_risk = target["bot"][pside].setdefault("risk", {})
+        target_bounds_risk = target["optimize"]["bounds"][pside].setdefault("risk", {})
+        for flat_key, default_value in V7_ABSENT_RISK_DEFAULTS.items():
+            group_name, local_key = FLAT_BOT_KEY_TO_GROUP_PATH[flat_key]
+            if group_name != "risk":
+                continue
+            if _source_side_has_shared_value(source_side, flat_key):
+                value = target_risk.get(local_key)
+            else:
+                value = deepcopy(default_value)
+                old_value = target_risk.get(local_key)
+                target_risk[local_key] = value
+                if old_value != value:
+                    report["warnings"].append(
+                        f"bot.{pside}.risk.{local_key} was not a v7 parameter; "
+                        f"using {value!r} for v7 behavior instead of the v8 template value "
+                        f"{old_value!r}."
+                    )
+            if flat_key == "risk_entry_cooldown_minutes" and not _source_has_shared_bound(
+                source, pside, flat_key
+            ):
+                target_bounds_risk[local_key] = [float(value), float(value), 0.1]
+
+
+def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict) -> None:
+    try:
+        twel = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
+        n_positions = int(round(float(risk.get("n_positions", 0.0) or 0.0)))
+        excess = float(risk.get("we_excess_allowance_pct", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return
+    if twel <= 0.0 or n_positions <= 0 or excess <= 0.0:
+        return
+    base_wel = twel / n_positions
+    raw_allowed_wel = base_wel * (1.0 + excess)
+    if raw_allowed_wel <= twel:
+        return
+    bounded_excess = max(0.0, twel / base_wel - 1.0)
+    report["warnings"].append(
+        f"{path}.we_excess_allowance_pct={excess:g} would give v7 raw per-position "
+        f"WEL {raw_allowed_wel:g}, above side TWEL {twel:g} "
+        f"(TWEL / n_positions = {base_wel:g}). The migrated v8 config keeps "
+        f"{path}.we_excess_allowance_mode='bounded', so the effective excess allowance is "
+        f"capped at {bounded_excess:g}. To intentionally use v7 raw/unclamped behavior, set "
+        f"{path}.we_excess_allowance_mode='legacy_raw' after migration and review the added "
+        f"risk explicitly."
+    )
+
+
+def _warn_if_v7_excess_would_be_clamped(target: dict, report: dict) -> None:
+    base_risks = {
+        pside: target["bot"][pside].get("risk", {})
+        for pside in ("long", "short")
+        if isinstance(target.get("bot", {}).get(pside, {}).get("risk"), dict)
+    }
+    for pside, risk in base_risks.items():
+        _warn_if_risk_excess_would_be_clamped(
+            risk,
+            path=f"bot.{pside}.risk",
+            report=report,
+        )
+
+    coin_overrides = target.get("coin_overrides")
+    if not isinstance(coin_overrides, dict):
+        return
+    for coin, override in coin_overrides.items():
+        bot = override.get("bot") if isinstance(override, dict) else None
+        if not isinstance(bot, dict):
+            continue
+        for pside in ("long", "short"):
+            override_side = bot.get(pside)
+            if not isinstance(override_side, dict):
+                continue
+            override_risk = override_side.get("risk")
+            if not isinstance(override_risk, dict):
+                continue
+            merged_risk = deepcopy(base_risks.get(pside, {}))
+            merged_risk.update(override_risk)
+            _warn_if_risk_excess_would_be_clamped(
+                merged_risk,
+                path=f"coin_overrides.{coin}.bot.{pside}.risk",
+                report=report,
+            )
 
 
 def _move_shared_side_fields(
@@ -759,6 +885,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         "moved_fields": [],
         "dropped_unsupported_fields": [],
         "manual_review_fields": [],
+        "warnings": [],
     }
     _copy_supported_top_level_sections(source, target, report)
     _report_unknown_top_level_sections(source, report)
@@ -799,6 +926,8 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
 
     _move_bounds(source, target, report)
     _migrate_coin_overrides(source, target, report)
+    _force_v7_absent_risk_defaults(source, target, report)
+    _warn_if_v7_excess_would_be_clamped(target, report)
     return target, report
 
 

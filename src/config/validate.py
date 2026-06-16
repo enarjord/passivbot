@@ -9,6 +9,7 @@ from .strategy import (
     get_active_strategy_side,
     normalize_strategy_kind,
 )
+from risk_limits import normalize_we_excess_allowance_mode
 
 
 def validate_config(
@@ -35,6 +36,10 @@ def validate_config(
         )
         if entry_cooldown_minutes < 0.0:
             raise ValueError(f"bot.{pside}.risk.entry_cooldown_minutes must be >= 0.0")
+        normalize_we_excess_allowance_mode(
+            get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
+            path=f"bot.{pside}.risk.we_excess_allowance_mode",
+        )
         active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
         if not isinstance(active_strategy, dict) or not active_strategy:
             raise ValueError(

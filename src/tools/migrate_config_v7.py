@@ -48,6 +48,8 @@ def main(argv: list[str] | None = None) -> int:
         args.report.parent.mkdir(parents=True, exist_ok=True)
         args.report.write_text(payload + "\n", encoding="utf-8")
     print(payload)
+    for warning in report.get("warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
     if migration_report_has_unresolved(report) and not args.allow_manual_review_output:
         print(
             "migration requires manual review; output config was not written. "

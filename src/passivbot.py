@@ -78,6 +78,10 @@ from config.strategy import (
 from config.shared_bot import get_grouped_bot_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
+from risk_limits import (
+    effective_we_excess_allowance_pct,
+    normalize_we_excess_allowance_mode,
+)
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
@@ -7365,12 +7369,16 @@ class Passivbot:
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+        allowance_mode = normalize_we_excess_allowance_mode(
+            self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+        )
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-        effective_allowance_pct = max(0.0, allowance_pct)
-        if base_limit > 0.0 and twel > 0.0:
-            effective_allowance_pct = min(
-                effective_allowance_pct, max(0.0, twel / base_limit - 1.0)
-            )
+        effective_allowance_pct = effective_we_excess_allowance_pct(
+            wallet_exposure_limit=base_limit,
+            risk_we_excess_allowance_pct=allowance_pct,
+            total_wallet_exposure_limit=twel,
+            risk_we_excess_allowance_mode=allowance_mode,
+        )
         allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
         initial_sizing_fraction = self._strategy_initial_sizing_fraction(pside, symbol)
@@ -10234,12 +10242,16 @@ class Passivbot:
             allowance_pct = float(
                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
             )
+            allowance_mode = normalize_we_excess_allowance_mode(
+                self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+            )
             twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-            effective_allowance_pct = max(0.0, allowance_pct)
-            if wel > 0.0 and twel > 0.0:
-                effective_allowance_pct = min(
-                    effective_allowance_pct, max(0.0, twel / wel - 1.0)
-                )
+            effective_allowance_pct = effective_we_excess_allowance_pct(
+                wallet_exposure_limit=wel,
+                risk_we_excess_allowance_pct=allowance_pct,
+                total_wallet_exposure_limit=twel,
+                risk_we_excess_allowance_mode=allowance_mode,
+            )
             effective_wel = wel * (1.0 + effective_allowance_pct)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
@@ -11021,6 +11033,7 @@ class Passivbot:
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
+            "risk_we_excess_allowance_mode",
             "unstuck_enabled",
             "unstuck_close_pct",
             "unstuck_ema_dist",

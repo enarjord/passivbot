@@ -13,6 +13,7 @@ BOT_GROUP_FIELD_MAP = {
         "total_exposure_enforcer_enabled": "risk_twel_enforcer_enabled",
         "total_exposure_enforcer_threshold": "risk_twel_enforcer_threshold",
         "we_excess_allowance_pct": "risk_we_excess_allowance_pct",
+        "we_excess_allowance_mode": "risk_we_excess_allowance_mode",
         "position_exposure_enforcer_enabled": "risk_wel_enforcer_enabled",
         "position_exposure_enforcer_threshold": "risk_wel_enforcer_threshold",
     },

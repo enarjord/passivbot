@@ -28,7 +28,7 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
     EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
     HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
-    StrategyParamsPairValue, TrailingPriceBundle,
+    StrategyParamsPairValue, TrailingPriceBundle, WeExcessAllowanceMode,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -2164,6 +2164,25 @@ fn extract_optional_bool(dict: &PyDict, key: &str, default: bool) -> PyResult<bo
     })
 }
 
+fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcessAllowanceMode> {
+    Ok(match dict.get_item("risk_we_excess_allowance_mode")? {
+        Some(item) => {
+            if item.is_none() {
+                WeExcessAllowanceMode::default()
+            } else {
+                let raw = item.extract::<String>()?;
+                WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
+                        raw
+                    ))
+                })?
+            }
+        }
+        None => WeExcessAllowanceMode::default(),
+    })
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
     let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
@@ -2281,6 +2300,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         )?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
+        risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,

@@ -2296,10 +2296,6 @@ mod tests {
             order_type: OrderType::CloseGridLong,
         }];
 
-        sort_closes_by_price(
-            &mut closes,
-            false,
-            "trailing_grid_v7::calc_closes_long",
-        );
+        sort_closes_by_price(&mut closes, false, "trailing_grid_v7::calc_closes_long");
     }
 }
