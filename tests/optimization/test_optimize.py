@@ -36,6 +36,7 @@ from optimize import (
     individual_to_config,
     config_to_individual,
     validate_array,
+    apply_polish_bounds,
     apply_fine_tune_bounds,
     extract_configs,
     get_starting_configs,
@@ -1450,6 +1451,81 @@ class TestValidateArray:
         arr = np.array([])
         with pytest.raises(ValueError, match="is entirely NaN"):
             validate_array(arr, "test_array")
+
+
+class TestApplyPolishBounds:
+    """Test apply_polish_bounds function."""
+
+    def test_nested_bounds_center_on_current_config_values(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.01, 0.1, 0.001]},
+                                "close": {"threshold_we_weight": [-1.0, 1.0]},
+                            }
+                        }
+                    }
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.0796},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        long_tm_bounds = config["optimize"]["bounds"]["long"]["strategy"]["trailing_martingale"]
+        assert long_tm_bounds["entry"]["threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06, 0.001]
+        )
+        assert long_tm_bounds["close"]["threshold_we_weight"] == pytest.approx(
+            [-0.09552, -0.06368]
+        )
+
+    def test_flat_bounds_keep_flat_shape_and_positive_step(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": [0.01, 0.1, 0.001],
+                    "long_close_threshold_we_weight": [-1.0, 1.0],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.0796},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2)
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06, 0.001]
+        )
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == pytest.approx(
+            [-0.09552, -0.06368]
+        )
+
+    def test_invalid_percentage_raises(self):
+        with pytest.raises(ValueError, match="finite non-negative"):
+            apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
 
 
 class TestApplyFineTuneBounds:
