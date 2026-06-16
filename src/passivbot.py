@@ -2758,6 +2758,25 @@ class Passivbot:
         )
         self._maybe_log_candle_health_summary()
 
+    def _unstuck_loss_allowance_pct_overrides_for_logging(self, pside: str) -> dict[str, float]:
+        base_pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        out: dict[str, float] = {}
+        for symbol in sorted((getattr(self, "coin_overrides", {}) or {}).keys()):
+            pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+            if abs(pct - base_pct) > 1e-15:
+                out[symbol] = pct
+        return out
+
+    @staticmethod
+    def _format_unstuck_override_pcts_for_logging(overrides: dict[str, float]) -> str:
+        if not overrides:
+            return ""
+        items = list(overrides.items())
+        shown = ", ".join(f"{symbol}={pct:.4f}" for symbol, pct in items[:4])
+        if len(items) > 4:
+            shown = f"{shown}, +{len(items) - 4} more"
+        return shown
+
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
@@ -2765,7 +2784,8 @@ class Passivbot:
             return {"status": "disabled"}
 
         pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        if pct <= 0.0:
+        override_pcts = self._unstuck_loss_allowance_pct_overrides_for_logging(pside)
+        if pct <= 0.0 and not any(override_pct > 0.0 for override_pct in override_pcts.values()):
             return {"status": "unstuck_disabled"}
 
         if self._pnls_manager is None:
@@ -2788,12 +2808,19 @@ class Passivbot:
         pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
+        override_allowances = {
+            symbol: balance_peak * (override_pct * twel + pct_from_peak / 100.0)
+            for symbol, override_pct in override_pcts.items()
+        }
 
         return {
             "status": "ok",
             "allowance": allowance_raw,
             "peak": balance_peak,
             "pct_from_peak": pct_from_peak,
+            "loss_allowance_pct": pct,
+            "override_loss_allowance_pcts": override_pcts,
+            "override_allowances": override_allowances,
         }
 
     def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
@@ -2817,21 +2844,26 @@ class Passivbot:
                 snapped_allowance = self._get_hysteresis_snapped_unstuck_allowance(
                     pside, allowance
                 )
+                overrides_str = self._format_unstuck_override_pcts_for_logging(
+                    info.get("override_loss_allowance_pcts", {})
+                )
+                overrides_suffix = f" | overrides={overrides_str}" if overrides_str else ""
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 signature_parts.append(
                     (
                         pside,
                         "over_budget" if allowance < 0 else "ok",
                         round(float(snapped_allowance), 2),
+                        tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
                     )
                 )
         return parts, tuple(signature_parts)
