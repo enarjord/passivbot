@@ -483,8 +483,11 @@ class PymooCheckpointCallback(Callback):
             
             tmp_path = self.path + ".tmp"
             with open(tmp_path, "wb") as f:
-                pickle.dump(algorithm, f)
+                pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
             os.replace(tmp_path, self.path)
+            
+            import gc
+            gc.collect()
                 
             # Restore runner and evaluator
             if runner is not None:
@@ -647,6 +650,7 @@ def run_backend(
         minimize_kwargs = {
             "seed": 1,
             "verbose": False,
+            "copy_algorithm": False,
         }
         if checkpoint_path is not None:
             minimize_kwargs["callback"] = PymooCheckpointCallback(checkpoint_path)

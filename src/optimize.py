@@ -752,7 +752,9 @@ def ea_mu_plus_lambda_stream(
                     "np_random_state": np.random.get_state(),
                 }
                 with open(checkpoint_path, "wb") as f:
-                    pickle.dump(chk, f)
+                    pickle.dump(chk, f, protocol=pickle.HIGHEST_PROTOCOL)
+                import gc
+                gc.collect()
             except Exception as e:
                 logging.warning(f"Failed to save checkpoint: {e}")
 
