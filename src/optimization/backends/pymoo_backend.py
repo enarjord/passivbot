@@ -476,25 +476,41 @@ class PymooCheckpointCallback(Callback):
             adapter = getattr(problem, "evaluator_adapter", None) if problem else None
             evaluator = getattr(adapter, "evaluator", None) if adapter else None
             
-            if runner is not None:
-                algorithm.problem.elementwise_runner = None
-            if evaluator is not None:
-                adapter.evaluator = None
+            alg_evaluator = getattr(algorithm, "evaluator", None)
+            alg_problem = getattr(alg_evaluator, "problem", None) if alg_evaluator else None
+            alg_runner = getattr(alg_problem, "elementwise_runner", None) if alg_problem else None
+            alg_adapter = getattr(alg_problem, "evaluator_adapter", None) if alg_problem else None
             
-            tmp_path = self.path + ".tmp"
-            with open(tmp_path, "wb") as f:
-                pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
-            os.replace(tmp_path, self.path)
-            
-            import gc
-            gc.collect()
+            try:
+                if runner is not None:
+                    algorithm.problem.elementwise_runner = None
+                if evaluator is not None:
+                    adapter.evaluator = None
+                    
+                if alg_runner is not None:
+                    alg_problem.elementwise_runner = None
+                if alg_adapter is not None:
+                    alg_adapter.evaluator = None
                 
-            # Restore runner and evaluator
-            if runner is not None:
-                algorithm.problem.elementwise_runner = runner
-            if evaluator is not None:
-                adapter.evaluator = evaluator
+                tmp_path = self.path + ".tmp"
+                with open(tmp_path, "wb") as f:
+                    pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(tmp_path, self.path)
                 
+                import gc
+                gc.collect()
+            finally:
+                # Restore runner and evaluator
+                if runner is not None:
+                    algorithm.problem.elementwise_runner = runner
+                if evaluator is not None:
+                    adapter.evaluator = evaluator
+                    
+                if alg_runner is not None:
+                    alg_problem.elementwise_runner = alg_runner
+                if alg_adapter is not None and evaluator is not None:
+                    alg_adapter.evaluator = evaluator
+                    
         except Exception as e:
             logging.warning(f"Failed to save pymoo checkpoint: {e}")
 
