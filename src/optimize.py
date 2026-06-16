@@ -2062,6 +2062,14 @@ async def main():
             )
         )
         if args.resume:
+            raw_end_date = str(require_config_value(config, "backtest.end_date")).strip().lower()
+            if raw_end_date == "now" or raw_end_date == "":
+                raise ValueError(
+                    "\n\nERROR: Cannot use --resume with a dynamic end_date ('now'). "
+                    "The shifting time frame would corrupt the optimization scores. "
+                    "Please hard-code the end_date in your config (e.g. '2026-06-16') "
+                    "or start a fresh run.\n"
+                )
             results_dir = make_get_filepath(args.resume)
             if not os.path.isdir(results_dir):
                 raise ValueError(f"Resume directory not found: {results_dir}")
