@@ -576,9 +576,14 @@ def ea_mu_plus_lambda_stream(
     pool,
     duplicate_counter,
     pool_state,
+    start_gen=1,
+    logbook=None,
+    checkpoint_path=None,
 ):
-    logbook = tools.Logbook()
-    logbook.header = "gen", "evals", "min", "max"
+    import pickle
+    if logbook is None:
+        logbook = tools.Logbook()
+        logbook.header = "gen", "evals", "min", "max"
 
     start_time = time.time()
     total_evals = 0
@@ -720,7 +725,7 @@ def ea_mu_plus_lambda_stream(
         )
         return population, logbook
 
-    for gen in range(1, ngen + 1):
+    for gen in range(start_gen, ngen + 1):
         offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
         nevals = evaluate_and_record(invalid_ind)
@@ -733,6 +738,23 @@ def ea_mu_plus_lambda_stream(
         record = stats.compile(population) if stats is not None else {}
         logbook.record(gen=gen, nevals=nevals, **record)
         log_generation(gen, nevals, record)
+        
+        if checkpoint_path is not None:
+            try:
+                import random
+                import numpy as np
+                chk = {
+                    "population": population,
+                    "logbook": logbook,
+                    "gen": gen,
+                    "halloffame": halloffame,
+                    "random_state": random.getstate(),
+                    "np_random_state": np.random.get_state(),
+                }
+                with open(checkpoint_path, "wb") as f:
+                    pickle.dump(chk, f)
+            except Exception as e:
+                logging.warning(f"Failed to save checkpoint: {e}")
 
     logging.info(
         "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
@@ -1436,6 +1458,12 @@ class SuiteEvaluator:
 
 def add_extra_options(parser, *, help_all: bool):
     parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to an existing optimize_results directory to resume exact optimizer state",
+    )
+    parser.add_argument(
         "-t",
         "--start",
         type=str,
@@ -2033,13 +2061,20 @@ async def main():
                 / (1000 * 60 * 60 * 24)
             )
         )
-        results_dir = make_get_filepath(
-            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
-        )
-        os.makedirs(results_dir, exist_ok=True)
+        if args.resume:
+            results_dir = make_get_filepath(args.resume)
+            if not os.path.isdir(results_dir):
+                raise ValueError(f"Resume directory not found: {results_dir}")
+        else:
+            results_dir = make_get_filepath(
+                f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
+            )
+            os.makedirs(results_dir, exist_ok=True)
+            
         config["results_dir"] = results_dir
         results_filename = os.path.join(results_dir, "all_results.bin")
         config["results_filename"] = results_filename
+        checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
         # Shared state used by workers for duplicate detection
@@ -2092,6 +2127,8 @@ async def main():
             overrides_list=overrides_list,
             duplicate_counter=duplicate_counter,
             starting_configs_path=args.starting_configs,
+            checkpoint_path=checkpoint_path,
+            resume=bool(args.resume),
             constraint_fitness_cls=ConstraintAwareFitness,
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,
