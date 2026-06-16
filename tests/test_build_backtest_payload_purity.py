@@ -12,6 +12,7 @@ these tests need to run in a tight loop when the refactor lands.
 from copy import deepcopy
 
 import numpy as np
+import pytest
 
 from backtest import build_backtest_payload
 from config_utils import get_template_config
@@ -186,6 +187,7 @@ def test_build_backtest_payload_applies_market_settings_override():
     payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 
     assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 1.0
     assert mss["TON"]["c_mult"] is None
 
 
@@ -222,6 +224,7 @@ def test_build_backtest_payload_prefers_exchange_market_settings_override():
     payload = build_backtest_payload(hlcvs, mss, config, "combined", btc_usd_prices, timestamps)
 
     assert payload.exchange_params[0]["c_mult"] == 0.1
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 0.1
 
 
 def test_build_backtest_payload_defaults_missing_c_mult_with_warning(caplog):
@@ -255,10 +258,52 @@ def test_build_backtest_payload_defaults_missing_c_mult_with_warning(caplog):
     payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 
     assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert payload.bundle.meta["coins"][0]["c_mult"] == 1.0
     assert "market settings TON.c_mult missing" in caplog.text
     assert "defaulting to c_mult=1.0 for this backtest only" in caplog.text
     assert "forager volume selection" in caplog.text
     assert "backtest.market_settings.overrides_by_exchange.binance.TON.c_mult" in caplog.text
+
+    caplog.clear()
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert "market settings TON.c_mult missing" in caplog.text
+    assert "defaulting to c_mult=1.0 for this backtest only" in caplog.text
+
+
+@pytest.mark.parametrize("bad_c_mult", ["bad", float("nan"), float("inf")])
+def test_build_backtest_payload_rejects_invalid_explicit_c_mult(bad_c_mult):
+    start_ts = 1609459200000
+    n_minutes = 60
+    config = _base_config(candle_interval_minutes=1)
+    config["backtest"]["coins"] = {"binance": ["TON"]}
+    config["live"]["approved_coins"] = {"long": ["TON"], "short": []}
+    config["live"]["ignored_coins"] = {"long": [], "short": []}
+    config["backtest"]["market_settings"] = {
+        "overrides": {"TON": {"c_mult": bad_c_mult}}
+    }
+    mss = {
+        "TON": {
+            "qty_step": 0.01,
+            "price_step": 0.001,
+            "min_qty": 0.01,
+            "min_cost": 5.0,
+            "c_mult": None,
+            "maker": 0.0002,
+            "taker": 0.0005,
+            "exchange": "binance",
+        },
+        "__meta__": {
+            "requested_start_ts": int(start_ts),
+            "requested_start_date": "2021-01-01",
+            "warmup_minutes_requested": 0,
+        },
+    }
+    hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+
+    with pytest.raises((TypeError, ValueError), match=r"market settings TON\.c_mult"):
+        build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 
 
 def test_build_backtest_payload_does_not_mutate_mss():

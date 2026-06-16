@@ -158,7 +158,6 @@ PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
 HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
 HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
-_MISSING_C_MULT_WARNED: set[tuple[str, str, str]] = set()
 
 
 @dataclass(frozen=True)
@@ -388,6 +387,24 @@ def _apply_market_settings_override(
     return result
 
 
+def _effective_backtest_market_settings(
+    config: dict,
+    mss: dict,
+    exchange: str,
+    coins: list[str],
+) -> dict[str, dict]:
+    market_settings_overrides = _backtest_market_settings_overrides(config)
+    return {
+        coin: _apply_market_settings_override(
+            coin,
+            exchange,
+            mss[coin],
+            market_settings_overrides,
+        )
+        for coin in coins
+    }
+
+
 def _required_float(value, *, path: str) -> float:
     try:
         if value is None:
@@ -410,14 +427,16 @@ def _required_backtest_c_mult(
     coin: str,
     payload_exchange: str,
     market_settings: dict,
+    warned: set[tuple[str, str, str]] | None = None,
 ) -> float:
     path = f"market settings {coin}.c_mult"
     if value is None:
         source_exchange = _market_settings_exchange(coin, payload_exchange, market_settings)
         coin_key = normalize_backtest_coin(coin)
         warning_key = (str(payload_exchange), source_exchange, coin_key)
-        if warning_key not in _MISSING_C_MULT_WARNED:
-            _MISSING_C_MULT_WARNED.add(warning_key)
+        if warned is None or warning_key not in warned:
+            if warned is not None:
+                warned.add(warning_key)
             logging.warning(
                 "[backtest] %s missing for exchange=%s payload_exchange=%s; "
                 "defaulting to c_mult=1.0 for this backtest only. Wrong c_mult can distort "
@@ -689,6 +708,12 @@ def build_backtest_payload(
     backtest_params = dict(backtest_params)
     backtest_params["skip_btc_analysis"] = bool(skip_btc_analysis)
     coins_order = backtest_params.get("coins", [])
+    effective_mss = _effective_backtest_market_settings(
+        runtime_config,
+        mss,
+        exchange,
+        coins_order,
+    )
 
     # Read candle interval from config (default to 1m)
     candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
@@ -860,7 +885,7 @@ def build_backtest_payload(
         btc_usd_prices,
         timestamps,
         exchange,
-        mss,
+        effective_mss,
         coins_order,
         first_valid_indices,
         last_valid_indices,
@@ -2016,16 +2041,8 @@ def prep_backtest_args(
         fee_kind="taker",
         override_value=taker_fee_override,
     )
-    market_settings_overrides = _backtest_market_settings_overrides(config)
-    effective_mss = {
-        coin: _apply_market_settings_override(
-            coin,
-            exchange,
-            mss[coin],
-            market_settings_overrides,
-        )
-        for coin in coins
-    }
+    effective_mss = _effective_backtest_market_settings(config, mss, exchange, coins)
+    missing_c_mult_warnings: set[tuple[str, str, str]] = set()
     if exchange_params is None:
         exchange_params = [
             {
@@ -2050,6 +2067,7 @@ def prep_backtest_args(
                     coin=coin,
                     payload_exchange=exchange,
                     market_settings=effective_mss[coin],
+                    warned=missing_c_mult_warnings,
                 ),
                 "maker_fee": float(maker_fee),
                 "taker_fee": float(taker_fee),
