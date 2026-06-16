@@ -1050,15 +1050,13 @@ impl<'a> Backtest<'a> {
         let balance = self.balance.usd_total_balance_rounded;
         let balance_raw = self.balance.usd_total_balance;
         let (effective_cumsum_max, effective_cumsum_last) = self.effective_pnl_cumsum(k);
+        let bp = self.bp(idx, side);
         let allowance = match side {
             LONG => {
-                if self.bot_params_master.long.unstuck_enabled
-                    && self.bot_params_master.long.unstuck_loss_allowance_pct > 0.0
-                {
+                if bp.unstuck_enabled && bp.unstuck_loss_allowance_pct > 0.0 {
                     calc_auto_unstuck_allowance(
                         balance_raw,
-                        self.bot_params_master.long.unstuck_loss_allowance_pct
-                            * self.bot_params_master.long.total_wallet_exposure_limit,
+                        bp.unstuck_loss_allowance_pct * bp.total_wallet_exposure_limit,
                         effective_cumsum_max,
                         effective_cumsum_last,
                     )
@@ -1067,13 +1065,10 @@ impl<'a> Backtest<'a> {
                 }
             }
             SHORT => {
-                if self.bot_params_master.short.unstuck_enabled
-                    && self.bot_params_master.short.unstuck_loss_allowance_pct > 0.0
-                {
+                if bp.unstuck_enabled && bp.unstuck_loss_allowance_pct > 0.0 {
                     calc_auto_unstuck_allowance(
                         balance_raw,
-                        self.bot_params_master.short.unstuck_loss_allowance_pct
-                            * self.bot_params_master.short.total_wallet_exposure_limit,
+                        bp.unstuck_loss_allowance_pct * bp.total_wallet_exposure_limit,
                         effective_cumsum_max,
                         effective_cumsum_last,
                     )
@@ -1084,7 +1079,6 @@ impl<'a> Backtest<'a> {
             _ => 0.0,
         };
 
-        let bp = self.bp(idx, side);
         let runtime_budget = self.runtime_budget(idx, side);
         let ema_bands = self.emas[idx].compute_bands(side);
         let current_price = self.hlcvs_value(k, idx, CLOSE);
@@ -1556,6 +1550,7 @@ impl<'a> Backtest<'a> {
                     .equity_hard_stop_loss
                     .panic_close_order_type
                     == "market",
+                auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
                 max_realized_loss_pct: self.backtest_params.max_realized_loss_pct,

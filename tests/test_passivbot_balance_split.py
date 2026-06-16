@@ -1819,6 +1819,48 @@ def test_hysteresis_snapped_unstuck_allowance_updates_only_after_threshold():
     assert large == pytest.approx(-41.20)
 
 
+def test_unstuck_status_reports_coin_override_loss_allowance_pct():
+    bot = Passivbot.__new__(Passivbot)
+    bot._pnls_manager = object()
+    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
+    bot._unstuck_allowance_log_snap_by_pside = {}
+    bot.coin_overrides = {
+        "HYPE/USDT:USDT": {"bot": {"long": {"unstuck_loss_allowance_pct": 0.005}}},
+        "BTC/USDT:USDT": {"bot": {"long": {}}},
+    }
+    bot.get_raw_balance = lambda: 2_000.0
+    bot._get_effective_pnl_events = lambda: [SimpleNamespace(pnl=0.0, fee_paid=0.0)]
+    bot._assert_no_pending_pnl_events = lambda events, context: None
+
+    def bot_value(pside, key):
+        if key == "total_wallet_exposure_limit":
+            return 1.5 if pside == "long" else 0.0
+        if key == "unstuck_loss_allowance_pct":
+            return 0.02 if pside == "long" else 0.0
+        return 0.0
+
+    def bp(pside, key, symbol=None):
+        if (
+            pside == "long"
+            and key == "unstuck_loss_allowance_pct"
+            and symbol == "HYPE/USDT:USDT"
+        ):
+            return 0.005
+        return bot_value(pside, key)
+
+    bot.bot_value = bot_value
+    bot.bp = bp
+
+    info = bot._calc_unstuck_allowance_for_logging("long")
+    parts, signature = bot._get_unstuck_status_parts_and_signature()
+
+    assert info["allowance"] == pytest.approx(60.0)
+    assert info["override_loss_allowance_pcts"] == {"HYPE/USDT:USDT": pytest.approx(0.005)}
+    assert info["override_allowances"]["HYPE/USDT:USDT"] == pytest.approx(15.0)
+    assert "HYPE/USDT:USDT=0.0050" in parts[0]
+    assert signature[0][3] == (("HYPE/USDT:USDT", pytest.approx(0.005)),)
+
+
 def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000

@@ -285,6 +285,7 @@ def make_input(*, balance: float, global_bp=None, strategy_kind="trailing_martin
         "balance_raw": balance,
         "global": {
             "filter_by_min_effective_cost": False,
+            "auto_unstuck_allowed": True,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
             "max_realized_loss_pct": 1.0,
@@ -1359,6 +1360,73 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     ]
     total_close_qty = -sum(o["qty"] for o in closes if o["qty"] < 0.0)
     assert total_close_qty <= 10.0 + 1e-9
+
+
+def test_unstuck_uses_symbol_loss_allowance_pct_for_loss_cap():
+    import passivbot_rust as pbr
+
+    balance = 2_000.0
+    long_bp = {
+        "total_wallet_exposure_limit": 1.5,
+        "wallet_exposure_limit": 1.5,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.005,
+    }
+    global_bp = bot_params_pair(
+        long_overrides={
+            "total_wallet_exposure_limit": 1.5,
+            "unstuck_loss_allowance_pct": 0.02,
+        }
+    )
+    sym = make_symbol(
+        0,
+        bid=120.0,
+        ask=120.0,
+        long_pos_size=10.0,
+        long_pos_price=130.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=balance, global_bp=global_bp, symbols=[sym])
+    inp["global"]["unstuck_allowance_long"] = 1e9
+
+    out = compute(pbr, inp)
+    unstuck = [o for o in out["orders"] if o["order_type"] == "close_unstuck_long"]
+
+    assert len(unstuck) == 1
+    assert unstuck[0]["qty"] == pytest.approx(-1.5)
+
+
+def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "total_wallet_exposure_limit": 1.5,
+        "wallet_exposure_limit": 1.5,
+        "unstuck_close_pct": 0.5,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.005,
+    }
+    sym = make_symbol(
+        0,
+        bid=120.0,
+        ask=120.0,
+        long_pos_size=10.0,
+        long_pos_price=130.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(
+        balance=2_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
+    inp["global"]["auto_unstuck_allowed"] = False
+
+    out = compute(pbr, inp)
+
+    assert all(o["order_type"] != "close_unstuck_long" for o in out["orders"])
 
 
 def test_orders_include_entries_and_closes():
