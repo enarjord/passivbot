@@ -50,6 +50,9 @@ base values are used.
               }
             }
           },
+          "unstuck": {
+            "loss_allowance_pct": 0.005
+          },
           "wallet_exposure_limit": 0.18
         },
         "short": {
@@ -130,6 +133,9 @@ Main config:
   dropped unless they are rejected flat strategy keys.
 - Don’t expect per-override approved coin lists to take effect; keep the master coin list in the
   main config.
+- A per-coin `unstuck.loss_allowance_pct` overrides only the selected coin+side's loss allowance
+  percentage. It still uses the account-wide unstuck budget formula with `total_wallet_exposure_limit`;
+  it does not create a separate per-coin realized-PnL tracker.
 
 ## Common pitfalls
 

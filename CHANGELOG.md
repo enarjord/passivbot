@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Coin overrides can now set `bot.<side>.unstuck.loss_allowance_pct`. When an
+  overridden coin+side is selected for auto-unstucking, Rust uses that percentage
+  in the existing account-wide allowance formula while preserving the one-position
+  global unstuck selection behavior.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was

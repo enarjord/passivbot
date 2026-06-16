@@ -1183,6 +1183,8 @@ pub fn calc_unstucking_close_py(
             unstuck_threshold,
             unstuck_close_pct,
             unstuck_ema_dist,
+            unstuck_loss_allowance_pct: 0.0,
+            total_wallet_exposure_limit: 0.0,
             ema_band_upper,
             ema_band_lower,
             current_price,

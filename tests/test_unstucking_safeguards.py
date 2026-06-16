@@ -1207,6 +1207,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
     await bot.calc_ideal_orders_orchestrator()
 
     payload = json.loads(captured["input"])
+    assert payload["global"]["auto_unstuck_allowed"] is False
     assert payload["global"]["unstuck_allowance_long"] == 0.0
     assert payload["global"]["unstuck_allowance_short"] == 0.0
 

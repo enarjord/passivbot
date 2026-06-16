@@ -10813,6 +10813,7 @@ class Passivbot:
                     self.live_value("market_order_near_touch_threshold")
                 ),
                 "panic_close_market": False,
+                "auto_unstuck_allowed": False,
                 "unstuck_allowance_long": 0.0,
                 "unstuck_allowance_short": 0.0,
                 "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
@@ -10968,7 +10969,6 @@ class Passivbot:
             "total_wallet_exposure_limit",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
-            "unstuck_loss_allowance_pct",
         }
         bool_keys = {
             "risk_wel_enforcer_enabled",
@@ -11302,6 +11302,34 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances(allow_new_unstuck)
 
+    def _auto_unstuck_allowed_live(self, allow_new_unstuck: bool) -> bool:
+        if not allow_new_unstuck or self._pnls_manager is None:
+            return False
+        start_ms = self._pnls_lookback_start_ms()
+        events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="auto unstuck realized PnL",
+            start_ms=start_ms,
+        )
+        return bool(events)
+
+    def _calc_orchestrator_unstuck_allowance_for_symbol(
+        self, pside: str, symbol: str, realized_pnl_cumsum: dict
+    ) -> float:
+        pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        if pct <= 0.0 or twel <= 0.0:
+            return 0.0
+        return float(
+            pbr.calc_auto_unstuck_allowance(
+                self.get_raw_balance(),
+                pct * twel,
+                float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
+                float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
+            )
+        )
+
     async def calc_ideal_orders_orchestrator_from_snapshot(
         self, snapshot: dict, *, return_snapshot: bool
     ):
@@ -11320,6 +11348,15 @@ class Passivbot:
         )
 
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+        auto_unstuck_allowed = bool(
+            snapshot.get(
+                "auto_unstuck_allowed",
+                any(
+                    float(unstuck_allowances.get(pside, 0.0) or 0.0) > 0.0
+                    for pside in ("long", "short")
+                ),
+            )
+        )
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
         last_increase_fill_timestamps = snapshot.get("last_increase_fill_timestamps", {})
         max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
@@ -11362,6 +11399,7 @@ class Passivbot:
                         if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -11528,7 +11566,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -12569,9 +12609,11 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
+        allow_new_unstuck = not self.has_open_unstuck_order()
         unstuck_allowances = self._calc_unstuck_allowances_live(
-            allow_new_unstuck=not self.has_open_unstuck_order()
+            allow_new_unstuck=allow_new_unstuck
         )
+        auto_unstuck_allowed = self._auto_unstuck_allowed_live(allow_new_unstuck)
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
@@ -12617,6 +12659,7 @@ class Passivbot:
                         if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -12798,7 +12841,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -12822,6 +12867,8 @@ class Passivbot:
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
+                "unstuck_allowances": unstuck_allowances,
                 "realized_pnl_cumsum": realized_pnl_cumsum,
                 "last_increase_fill_timestamps": last_increase_fill_timestamps,
                 "planning_snapshot": (
