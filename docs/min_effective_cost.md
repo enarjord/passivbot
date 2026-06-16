@@ -21,7 +21,7 @@ For most perpetuals, `initial_notional ≈ balance * effective_wel * strategy_in
 With:
 - `balance`: current account balance in quote currency (e.g., USDT/USDC).
 - `twel = total_wallet_exposure_limit`: side-level cap; divided by `n_positions` to get per-position WE.
-- `we_allowance = min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`: optional headroom multiplier on per-position WEL, capped so a single symbol cannot exceed the side-level TWEL.
+- `we_allowance`: optional headroom multiplier on per-position WEL. With the default `we_excess_allowance_mode = "bounded"`, this is `min(max(0, risk_we_excess_allowance_pct), max(0, twel / wallet_exposure_limit - 1))`, capped so a single symbol cannot exceed the side-level TWEL. With `we_excess_allowance_mode = "legacy_raw"`, this is the raw `max(0, risk_we_excess_allowance_pct)` and may exceed that cap.
 - `effective_wel = wallet_exposure_limit * (1 + we_allowance)`.
 - `strategy_initial_sizing_fraction`: fraction of the per-position exposure used for the first
   order. For `live.strategy_kind = "trailing_martingale"`, this is

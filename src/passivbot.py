@@ -10978,6 +10978,9 @@ class Passivbot:
             "risk_twel_enforcer_enabled",
             "unstuck_enabled",
         }
+        string_keys = {
+            "risk_we_excess_allowance_mode",
+        }
         strategy_keys = {
             "close_grid_qty_pct",
             "close_trailing_retracement_pct",
@@ -11078,6 +11081,11 @@ class Passivbot:
                 out[out_key] = int(round(val or 0.0))
             elif key in bool_keys:
                 out[out_key] = bool(val)
+            elif key in string_keys:
+                out[out_key] = normalize_we_excess_allowance_mode(
+                    val,
+                    path=f"bot.{pside}.risk.we_excess_allowance_mode",
+                )
             else:
                 out[out_key] = float(val or 0.0)
         out.update(

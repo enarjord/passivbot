@@ -247,12 +247,12 @@ def test_migrate_v7_trailing_grid_warns_when_v7_raw_excess_would_be_clamped():
 
 def test_migrate_v7_trailing_grid_warns_for_coin_override_raw_excess_clamp():
     source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["n_positions"] = 1
+    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
     source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.0
     source["coin_overrides"]["BTC"] = {
         "bot": {
             "long": {
-                "n_positions": 1,
-                "total_wallet_exposure_limit": 1.0,
                 "risk_we_excess_allowance_pct": 0.1,
             }
         }
@@ -268,6 +268,51 @@ def test_migrate_v7_trailing_grid_warns_for_coin_override_raw_excess_clamp():
         and "legacy_raw" in item
         for item in report["warnings"]
     )
+
+
+def test_migrate_v7_trailing_grid_warns_for_coin_override_explicit_wel_clamp():
+    source = _minimal_v7_trailing_grid_config()
+    source["bot"]["long"]["n_positions"] = 4
+    source["bot"]["long"]["total_wallet_exposure_limit"] = 1.0
+    source["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.0
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "wallet_exposure_limit": 0.8,
+                "risk_we_excess_allowance_pct": 0.5,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["coin_overrides"]["BTC"]["bot"]["long"][
+        "wallet_exposure_limit"
+    ] == pytest.approx(0.8)
+    assert any(
+        "coin_overrides.BTC.bot.long.risk.we_excess_allowance_pct=0.5" in item
+        and "base WEL = 0.8" in item
+        and "above side TWEL 1" in item
+        for item in report["warnings"]
+    )
+
+
+def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
+    source = _minimal_v7_trailing_grid_config()
+    source["backtest"].pop("candle_interval_minutes", None)
+    source["live"].pop("approved_coins", None)
+    source["bot"]["long"].pop("risk_wel_enforcer_enabled", None)
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    assert migrated["backtest"]["candle_interval_minutes"] == 1
+    assert "backtest.candle_interval_minutes" in report["inserted_v8_defaults"]
+    assert "live.approved_coins" in report["inserted_v8_defaults"]
+    assert (
+        "bot.long.risk.position_exposure_enforcer_enabled"
+        in report["inserted_v8_defaults"]
+    )
+    assert any("inserted v8 default values" in item for item in report["warnings"])
 
 
 def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
@@ -381,6 +426,8 @@ def test_migrate_v7_trailing_grid_coin_override_preserves_wallet_exposure_limit(
             "long": {
                 "ema_span_0": 3.0,
                 "wallet_exposure_limit": 0.25,
+                "risk_we_excess_allowance_pct": 0.2,
+                "risk_we_excess_allowance_mode": "LEGACY_RAW",
             }
         }
     }
@@ -389,12 +436,50 @@ def test_migrate_v7_trailing_grid_coin_override_preserves_wallet_exposure_limit(
 
     long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
     assert long_override["wallet_exposure_limit"] == pytest.approx(0.25)
+    assert long_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
+    assert long_override["risk"]["we_excess_allowance_mode"] == "LEGACY_RAW"
     assert long_override["strategy"]["trailing_grid_v7"]["ema_span_0"] == pytest.approx(3.0)
     assert (
         "coin_overrides.BTC.bot.long.wallet_exposure_limit -> "
         "coin_overrides.BTC.bot.long.wallet_exposure_limit"
     ) in report["moved_fields"]
-    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+    parsed = parse_overrides(prepared, verbose=False)
+    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
+    assert parsed_override["wallet_exposure_limit"] == pytest.approx(0.25)
+    assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
+    assert parsed_override["risk"]["we_excess_allowance_mode"] == "legacy_raw"
+
+
+def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk_fields():
+    source = _minimal_v7_trailing_grid_config()
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "n_positions": 1,
+                "total_wallet_exposure_limit": 0.2,
+                "risk_we_excess_allowance_pct": 0.2,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    assert "n_positions" not in long_override.get("risk", {})
+    assert "total_wallet_exposure_limit" not in long_override.get("risk", {})
+    assert long_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
+    assert "coin_overrides.BTC.bot.long.n_positions" in report["manual_review_fields"]
+    assert (
+        "coin_overrides.BTC.bot.long.total_wallet_exposure_limit"
+        in report["manual_review_fields"]
+    )
+    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+    parsed = parse_overrides(prepared, verbose=False)
+    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
+    assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
+    assert "n_positions" not in parsed_override.get("risk", {})
+    assert "total_wallet_exposure_limit" not in parsed_override.get("risk", {})
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():
@@ -1181,11 +1266,79 @@ def test_prepare_config_normalizes_we_excess_allowance_mode_and_runtime_flatteni
     assert compiled["bot"]["long"]["risk_we_excess_allowance_mode"] == "legacy_raw"
 
 
+def test_prepare_config_normalizes_coin_override_we_excess_allowance_mode():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {
+            "bot": {
+                "long": {
+                    "risk": {"we_excess_allowance_mode": "LEGACY_RAW"},
+                },
+                "short": {
+                    "risk_we_excess_allowance_mode": "LEGACY_RAW",
+                },
+            }
+        }
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
+        "we_excess_allowance_mode"
+    ] == "legacy_raw"
+    assert (
+        prepared["coin_overrides"]["BTC"]["bot"]["short"][
+            "risk_we_excess_allowance_mode"
+        ]
+        == "legacy_raw"
+    )
+
+
+def test_parse_overrides_normalizes_coin_override_we_excess_allowance_mode():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {
+            "bot": {
+                "long": {
+                    "risk": {
+                        "we_excess_allowance_mode": "LEGACY_RAW",
+                    }
+                }
+            }
+        }
+    }
+
+    parsed = parse_overrides(source, verbose=False)
+
+    assert parsed["coin_overrides"]["BTC"]["bot"]["long"]["risk"][
+        "we_excess_allowance_mode"
+    ] == "legacy_raw"
+
+
 def test_prepare_config_rejects_invalid_we_excess_allowance_mode():
     source = get_template_config()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "raw"
 
     with pytest.raises(ValueError, match="bot.long.risk.we_excess_allowance_mode"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_invalid_coin_override_we_excess_allowance_mode():
+    source = get_template_config()
+    source["coin_overrides"] = {
+        "BTC": {
+            "bot": {
+                "long": {
+                    "risk": {"we_excess_allowance_mode": "raw"},
+                }
+            }
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="coin_overrides.BTC.bot.long.risk.we_excess_allowance_mode",
+    ):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 

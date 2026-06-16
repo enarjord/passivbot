@@ -13,6 +13,7 @@ from .shared_bot import BOT_GROUP_FIELD_MAP
 from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
 from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
+from risk_limits import normalize_we_excess_allowance_mode
 
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
@@ -50,6 +51,8 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
                 if not return_full and not target_dict[key]:
                     target_dict.pop(key, None)
             elif allowed_value is True:
+                if key in {"risk_we_excess_allowance_mode", "we_excess_allowance_mode"}:
+                    mod_value = normalize_we_excess_allowance_mode(mod_value)
                 if return_full:
                     target_dict[key] = deepcopy(mod_value)
                 else:
@@ -74,6 +77,13 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "risk_twel_enforcer_enabled": False,
     "risk_twel_enforcer_threshold": False,
 }
+
+
+def allowed_flat_bot_side_modification_keys() -> frozenset[str]:
+    return frozenset(
+        key for key, allowed in _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.items() if allowed is True
+    )
+
 
 _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
     "close_weight_volatility_1h",

@@ -11,6 +11,7 @@ from config.optimize_bounds import (
     set_flat_optimize_bound,
     sort_optimize_bounds_in_place,
 )
+from config.overrides import allowed_flat_bot_side_modification_keys
 from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
 from config.shared_bot import BOT_GROUP_FIELD_MAP, FLAT_BOT_KEY_TO_GROUP_PATH
 from config.strategy_spec import get_strategy_param_keys
@@ -102,11 +103,44 @@ MANUAL_REVIEW_BOUND_KEYS = {
 COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
     "wallet_exposure_limit",
 }
+COIN_OVERRIDE_SUPPORTED_SHARED_FLAT_KEYS = allowed_flat_bot_side_modification_keys()
 
 V7_ABSENT_RISK_DEFAULTS = {
     "risk_entry_cooldown_minutes": 0.0,
     "risk_we_excess_allowance_mode": WE_EXCESS_ALLOWANCE_MODE_BOUNDED,
 }
+V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS = (
+    ("backtest", "candle_interval_minutes"),
+    ("backtest", "dynamic_wel_by_tradability"),
+    ("backtest", "exchanges"),
+    ("backtest", "scenarios"),
+    ("live", "approved_coins"),
+)
+V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
+    "risk_entry_cooldown_minutes",
+    "risk_twel_enforcer_enabled",
+    "risk_twel_enforcer_threshold",
+    "risk_wel_enforcer_enabled",
+    "risk_wel_enforcer_threshold",
+    "risk_we_excess_allowance_mode",
+    "forager_score_weights",
+    "forager_volatility_ema_span_1m",
+    "forager_volume_drop_pct",
+    "forager_volume_ema_span_1m",
+    "hsl_cooldown_minutes_after_red",
+    "hsl_ema_span_minutes",
+    "hsl_enabled",
+    "hsl_no_restart_drawdown_threshold",
+    "hsl_orange_tier_mode",
+    "hsl_panic_close_order_type",
+    "hsl_red_threshold",
+    "hsl_tier_ratios",
+    "unstuck_close_pct",
+    "unstuck_ema_dist",
+    "unstuck_enabled",
+    "unstuck_loss_allowance_pct",
+    "unstuck_threshold",
+)
 
 LEGACY_SHARED_SIDE_ALIASES = {
     "filter_volatility_ema_span_1m": "forager_volatility_ema_span_1m",
@@ -301,6 +335,63 @@ def _source_has_shared_bound(source: dict, pside: str, flat_key: str) -> bool:
     return isinstance(group_bounds, dict) and local_key in group_bounds
 
 
+def _path_exists(mapping: dict, path: tuple[str, ...]) -> bool:
+    current = mapping
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            return False
+        current = current[part]
+    return True
+
+
+def _source_side_has_default_source_value(source_side: dict, flat_key: str) -> bool:
+    if _source_side_has_shared_value(source_side, flat_key):
+        return True
+    if flat_key == "hsl_tier_ratios":
+        return (
+            "hsl_tier_ratio_yellow" in source_side
+            or "hsl_tier_ratio_orange" in source_side
+        )
+    return any(
+        legacy_key in source_side
+        for legacy_key, canonical_key in LEGACY_SHARED_SIDE_ALIASES.items()
+        if canonical_key == flat_key
+    )
+
+
+def _record_inserted_v8_defaults(source: dict, target: dict, report: dict) -> None:
+    inserted = report.setdefault("inserted_v8_defaults", [])
+    for path in V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS:
+        if not _path_exists(source, path) and _path_exists(target, path):
+            inserted.append(".".join(path))
+
+    source_bot = source.get("bot", {})
+    target_bot = target.get("bot", {})
+    for pside in ("long", "short"):
+        source_side = source_bot.get(pside) if isinstance(source_bot, dict) else None
+        if not isinstance(source_side, dict):
+            source_side = {}
+        for flat_key in V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS:
+            group_path = FLAT_BOT_KEY_TO_GROUP_PATH.get(flat_key)
+            if group_path is None:
+                continue
+            group_name, local_key = group_path
+            target_path = ("bot", pside, group_name, local_key)
+            if _source_side_has_default_source_value(source_side, flat_key):
+                continue
+            if _path_exists({"bot": target_bot}, target_path):
+                inserted.append(".".join(target_path))
+
+    if inserted:
+        examples = ", ".join(inserted[:8])
+        suffix = "" if len(inserted) <= 8 else f", ... ({len(inserted)} total)"
+        report["warnings"].append(
+            "v7 migration inserted v8 default values for fields absent from the source config; "
+            f"review report.inserted_v8_defaults before running live/large optimizations: "
+            f"{examples}{suffix}."
+        )
+
+
 def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> None:
     bot = source.get("bot", {})
     for pside in ("long", "short"):
@@ -336,11 +427,16 @@ def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict
         twel = float(risk.get("total_wallet_exposure_limit", 0.0) or 0.0)
         n_positions = int(round(float(risk.get("n_positions", 0.0) or 0.0)))
         excess = float(risk.get("we_excess_allowance_pct", 0.0) or 0.0)
+        explicit_wel = (
+            None
+            if risk.get("wallet_exposure_limit") is None
+            else float(risk.get("wallet_exposure_limit") or 0.0)
+        )
     except (TypeError, ValueError):
         return
     if twel <= 0.0 or n_positions <= 0 or excess <= 0.0:
         return
-    base_wel = twel / n_positions
+    base_wel = explicit_wel if explicit_wel is not None and explicit_wel > 0.0 else twel / n_positions
     raw_allowed_wel = base_wel * (1.0 + excess)
     if raw_allowed_wel <= twel:
         return
@@ -348,7 +444,7 @@ def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict
     report["warnings"].append(
         f"{path}.we_excess_allowance_pct={excess:g} would give v7 raw per-position "
         f"WEL {raw_allowed_wel:g}, above side TWEL {twel:g} "
-        f"(TWEL / n_positions = {base_wel:g}). The migrated v8 config keeps "
+        f"(base WEL = {base_wel:g}). The migrated v8 config keeps "
         f"{path}.we_excess_allowance_mode='bounded', so the effective excess allowance is "
         f"capped at {bounded_excess:g}. To intentionally use v7 raw/unclamped behavior, set "
         f"{path}.we_excess_allowance_mode='legacy_raw' after migration and review the added "
@@ -385,6 +481,8 @@ def _warn_if_v7_excess_would_be_clamped(target: dict, report: dict) -> None:
                 continue
             merged_risk = deepcopy(base_risks.get(pside, {}))
             merged_risk.update(override_risk)
+            if "wallet_exposure_limit" in override_side:
+                merged_risk["wallet_exposure_limit"] = override_side["wallet_exposure_limit"]
             _warn_if_risk_excess_would_be_clamped(
                 merged_risk,
                 path=f"coin_overrides.{coin}.bot.{pside}.risk",
@@ -400,6 +498,7 @@ def _move_shared_side_fields(
     *,
     source_prefix: str | None = None,
     target_prefix: str | None = None,
+    allowed_flat_keys: frozenset[str] | None = None,
 ) -> None:
     source_prefix = source_prefix or f"bot.{pside}"
     target_prefix = target_prefix or f"bot.{pside}"
@@ -407,8 +506,11 @@ def _move_shared_side_fields(
     for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in source_side:
             continue
-        value = source_side[flat_key]
         source_path = f"{source_prefix}.{flat_key}"
+        if allowed_flat_keys is not None and flat_key not in allowed_flat_keys:
+            report["manual_review_fields"].append(source_path)
+            continue
+        value = source_side[flat_key]
         target_path = f"{target_prefix}.{group_name}.{local_key}"
         if not _record_target_value(
             written_targets,
@@ -847,6 +949,7 @@ def _migrate_coin_overrides(source: dict, target: dict, report: dict) -> None:
                     report,
                     source_prefix=prefix,
                     target_prefix=prefix,
+                    allowed_flat_keys=COIN_OVERRIDE_SUPPORTED_SHARED_FLAT_KEYS,
                 )
                 _move_strategy_side_fields(
                     side,
@@ -885,6 +988,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
         "moved_fields": [],
         "dropped_unsupported_fields": [],
         "manual_review_fields": [],
+        "inserted_v8_defaults": [],
         "warnings": [],
     }
     _copy_supported_top_level_sections(source, target, report)
@@ -927,6 +1031,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
     _move_bounds(source, target, report)
     _migrate_coin_overrides(source, target, report)
     _force_v7_absent_risk_defaults(source, target, report)
+    _record_inserted_v8_defaults(source, target, report)
     _warn_if_v7_excess_would_be_clamped(target, report)
     return target, report
 

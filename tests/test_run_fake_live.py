@@ -343,6 +343,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "risk_wel_enforcer_threshold": 1.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
+                "risk_we_excess_allowance_mode": "LEGACY_RAW",
                 "unstuck_close_pct": 0.01,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.1,
@@ -366,6 +367,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
+    assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
         "volume": pytest.approx(1.0),
@@ -427,6 +429,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_twel_enforcer_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
+                        "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
                         "unstuck_enabled": True,

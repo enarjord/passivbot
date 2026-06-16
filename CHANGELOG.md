@@ -7,7 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Changed the v8 default backtest candle interval to 1 minute and added
   `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
   allowance; migrated v7 trailing-grid configs also force v7-absent entry
-  cooldowns to `0.0` and warn when v7 raw excess allowance would be clamped.
+  cooldowns to `0.0`, warn when v7 raw excess allowance would be clamped, and
+  report inserted v8 defaults for review.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
