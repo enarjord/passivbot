@@ -356,6 +356,7 @@ class ResultRecorder:
         write_all_results: bool,
         pareto_max_size: int = 1000,
         bounds: Optional[Sequence[Bound]] = None,
+        starting_iters: int = 0,
     ):
         self.store = ParetoStore(
             directory=results_dir,
@@ -365,6 +366,7 @@ class ResultRecorder:
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
         )
+        self.store.n_iters = starting_iters
         self.write_all = write_all_results
         self.compress = compress
         self.results_file = None
@@ -2063,6 +2065,7 @@ async def main():
                 / (1000 * 60 * 60 * 24)
             )
         )
+        previous_evals = 0
         if args.resume:
             results_dir = make_get_filepath(args.resume)
             if not os.path.isdir(results_dir):
@@ -2112,6 +2115,10 @@ async def main():
                                     f"Please restore the original config or start a fresh run.\n"
                                 )
                             break
+                            
+                        # If validation passed, count remaining entries
+                        previous_evals = 1 + sum(1 for _ in unpacker)
+                        logging.info(f"Resuming with {previous_evals} previous evaluations from all_results.bin")
                 except ValueError:
                     raise
                 except Exception as e:
@@ -2166,6 +2173,7 @@ async def main():
             write_all_results=config["optimize"].get("write_all_results", True),
             pareto_max_size=pareto_max,
             bounds=evaluator.bounds,
+            starting_iters=previous_evals,
         )
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)
