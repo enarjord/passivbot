@@ -468,8 +468,21 @@ class PymooCheckpointCallback(Callback):
     def notify(self, algorithm):
         try:
             import pickle
+            
+            # Temporarily detach unpicklable runner/pool
+            problem = getattr(algorithm, "problem", None)
+            runner = getattr(problem, "elementwise_runner", None) if problem else None
+            
+            if runner is not None:
+                algorithm.problem.elementwise_runner = None
+            
             with open(self.path, "wb") as f:
                 pickle.dump(algorithm, f)
+                
+            # Restore runner
+            if runner is not None:
+                algorithm.problem.elementwise_runner = runner
+                
         except Exception as e:
             logging.warning(f"Failed to save pymoo checkpoint: {e}")
 
@@ -576,6 +589,12 @@ def run_backend(
                 with open(checkpoint_path, "rb") as f:
                     algorithm = pickle.load(f)
                     algorithm.has_terminated = False
+                    
+                    # Restore the active runner (pool)
+                    if hasattr(algorithm, "problem"):
+                        algorithm.problem.elementwise_runner = runner
+                    if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
+                        algorithm.evaluator.problem.elementwise_runner = runner
                     
         if algorithm is None:
             algorithm = _build_algorithm(
