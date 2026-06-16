@@ -2084,21 +2084,21 @@ async def main():
                             
                             mismatches = []
                             for key in ["start_date", "end_date", "coins", "exchanges"]:
-                                if str(old_bt.get(key, "")) != str(new_bt.get(key, "")):
+                                if old_bt.get(key) != new_bt.get(key):
                                     mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
                             
                             for key in ["scoring", "passivbot_mode"]:
-                                if str(old_opt.get(key, "")) != str(new_opt.get(key, "")):
+                                if old_opt.get(key) != new_opt.get(key):
                                     mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
                             
                             for side in ["long", "short"]:
-                                old_en = str(old_bot.get(side, {}).get("enabled", "True")).lower()
-                                new_en = str(new_bot.get(side, {}).get("enabled", "True")).lower()
+                                old_en = old_bot.get(side, {}).get("enabled", True)
+                                new_en = new_bot.get(side, {}).get("enabled", True)
                                 if old_en != new_en:
                                     mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
                                     
                             for key in ["approved_coins", "ignored_coins"]:
-                                if str(old_live.get(key, "")) != str(new_live.get(key, "")):
+                                if old_live.get(key) != new_live.get(key):
                                     mismatches.append(f"  - live.{key}: changed")
                             
                             if mismatches:
