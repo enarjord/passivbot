@@ -2077,15 +2077,29 @@ async def main():
                             new_bt = config.get("backtest", {})
                             old_opt = entry.get("optimize", {})
                             new_opt = config.get("optimize", {})
+                            old_bot = entry.get("bot", entry)
+                            new_bot = config.get("bot", config)
+                            old_live = entry.get("live", {})
+                            new_live = config.get("live", {})
                             
                             mismatches = []
                             for key in ["start_date", "end_date", "coins", "exchanges"]:
                                 if str(old_bt.get(key, "")) != str(new_bt.get(key, "")):
                                     mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
                             
-                            for key in ["scoring"]:
+                            for key in ["scoring", "passivbot_mode"]:
                                 if str(old_opt.get(key, "")) != str(new_opt.get(key, "")):
                                     mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
+                            
+                            for side in ["long", "short"]:
+                                old_en = str(old_bot.get(side, {}).get("enabled", "True")).lower()
+                                new_en = str(new_bot.get(side, {}).get("enabled", "True")).lower()
+                                if old_en != new_en:
+                                    mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
+                                    
+                            for key in ["approved_coins", "ignored_coins"]:
+                                if str(old_live.get(key, "")) != str(new_live.get(key, "")):
+                                    mismatches.append(f"  - live.{key}: changed")
                             
                             if mismatches:
                                 mismatch_str = "\n".join(mismatches)
