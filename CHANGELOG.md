@@ -4,6 +4,31 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
+  `total[USDC]` payload is the cross-margined account *equity* (it already
+  includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
+  using it directly as `balance`, then recomputing `equity = balance + uPNL` —
+  double-counting unrealized PnL. Balance now subtracts the exchange-reported
+  uPNL across all perp positions (core + HIP-3), matching the non-unified path
+  and the Passivbot `balance = equity - uPNL` contract. Missing/invalid uPNL on
+  a counted position hard-fails rather than defaulting.
+- Added `backtest.market_settings` overrides for historical/rebranded market metadata, including
+  exchange-specific overrides before Rust backtests receive market parameters; backtests now warn
+  and default missing `c_mult` to 1.0 instead of hard-failing.
+- Fixed live `[pos]` logging so short position size increases are labeled as
+  `added` and short size decreases as `reduced`, matching exposure magnitude
+  instead of signed numeric ordering.
+- Fixed live ignored-coin handling so ignored symbols are sent to the Rust
+  orchestrator as `graceful_stop`, preventing new initial entries after a
+  previously open ignored position becomes fully flat.
+- Added a v8 TWEL/total exposure enforcer policy-contract plan for the future
+  portfolio governor redesign, based on the known v7 threshold/refill behavior
+  but without changing current v8 runtime behavior.
+- Hardened v8 live-safety review follow-ups: ambiguous order-create responses are
+  remembered before retry, protective panic bypasses stale normal-mode filters
+  while requiring fresh account-critical balance/position/order state, PnL risk
+  gates require explicit fill-history coverage including coin HSL, Bitget keeps
+  multiple fills per order, and OKX net-mode accounts fail loudly.
 - Added optimizer polish bounds via `--polish-pct`/`--polish-bounds-pct`, which narrows
   existing optimize bounds around the current config values while preserving positive steps.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
@@ -83,6 +108,9 @@ All notable user-facing changes will be documented in this file.
 - Reduced suite-optimizer seed-evaluation memory pressure by passing lazy-sliced coin
   columns to Rust as active indices instead of materializing per-worker HLCV coin-subset
   copies.
+- Fixed live Hyperliquid `xyz:*` stock-perp EMA reads during off-hours/no-trade
+  tails by allowing stock-perp-only flat zero-volume tail candles from the last
+  real close, while preserving fail-loud behavior when no real candle seed exists.
 - Tightened optimizer starting-config semantics: seed and fine-tune anchor values outside
   `optimize.bounds` are clamped with aggregated source/key logging, while base-config runtime
   policy fields such as HSL/unstuck boolean toggles now win over anchor configs.

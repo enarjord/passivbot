@@ -21,6 +21,7 @@ def _make_fill_event(
     timestamp: float = 0.0,
     pnl_status: str = "complete",
     fee_paid: float = 0.0,
+    pnl_source: str = "authoritative",
 ) -> types.SimpleNamespace:
     """Create a minimal fill-event namespace with a .pnl attribute."""
     return types.SimpleNamespace(
@@ -28,6 +29,7 @@ def _make_fill_event(
         fee_paid=fee_paid,
         timestamp=timestamp,
         pnl_status=pnl_status,
+        pnl_source=pnl_source,
         id="test-fill",
         symbol="BTC/USDT:USDT",
         position_side="long",
@@ -35,7 +37,48 @@ def _make_fill_event(
     )
 
 
-def _make_bot_with_events(events, balance=10000.0):
+class _RiskCache:
+    def __init__(
+        self,
+        *,
+        known_gaps=None,
+        covered_start_ms=0,
+        history_scope="unknown",
+        oldest_event_ts=0,
+        newest_event_ts=0,
+    ):
+        self._known_gaps = list(known_gaps or [])
+        self._covered_start_ms = covered_start_ms
+        self._history_scope = history_scope
+        self._oldest_event_ts = oldest_event_ts
+        self._newest_event_ts = newest_event_ts
+
+    def get_known_gaps(self):
+        return list(self._known_gaps)
+
+    def should_retry_gap(self, gap):
+        return int(gap.get("retry_count", 0) or 0) < 3
+
+    def get_covered_start_ms(self):
+        return self._covered_start_ms
+
+    def get_history_scope(self):
+        return self._history_scope
+
+    def load_metadata(self):
+        return {
+            "known_gaps": list(self._known_gaps),
+            "covered_start_ms": self._covered_start_ms,
+            "history_scope": self._history_scope,
+            "oldest_event_ts": self._oldest_event_ts,
+            "newest_event_ts": self._newest_event_ts,
+        }
+
+
+_DEFAULT_RISK_CACHE = object()
+
+
+def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
     """Return a Passivbot instance with a mocked FillEventsManager."""
     bot = object.__new__(Passivbot)
     bot._pnls_manager = MagicMock()
@@ -50,6 +93,20 @@ def _make_bot_with_events(events, balance=10000.0):
         return out
 
     bot._pnls_manager.get_events.side_effect = _get_events
+    if cache is _DEFAULT_RISK_CACHE:
+        oldest_event_ts = min(
+            (int(getattr(ev, "timestamp", 0) or 0) for ev in events),
+            default=1,
+        )
+        cache = _RiskCache(
+            covered_start_ms=1,
+            history_scope="all",
+            oldest_event_ts=max(1, oldest_event_ts),
+        )
+    bot._pnls_manager.cache = cache
+    if cache is not None:
+        bot._pnls_manager.cache = cache
+        bot._pnls_manager.get_history_scope.side_effect = cache.get_history_scope
     bot.balance = balance
     return bot
 
@@ -201,6 +258,122 @@ class TestGetRealizedPnlCumsumStats:
 
         with pytest.raises(RuntimeError, match="realized PnL pending"):
             bot._get_realized_pnl_cumsum_stats()
+
+    def test_degraded_synthetic_pnl_fails_loudly(self):
+        bot = _make_bot_with_events(
+            [
+                _make_fill_event(
+                    0.0,
+                    pnl_source="synthetic_fill_reconstruction_degraded",
+                )
+            ]
+        )
+
+        with pytest.raises(RuntimeError, match="degraded realized PnL"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_missing_cache_blocks_risk_history_coverage(self):
+        now_ms = 10 * 86_400_000
+        bot = _make_bot_with_events(
+            [_make_fill_event(10.0, timestamp=now_ms - 60_000)],
+            cache=None,
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="missing FillEventsManager cache"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_known_gap_overlapping_lookback_fails_loudly(self):
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        cache = _RiskCache(
+            covered_start_ms=start_ms,
+            oldest_event_ts=start_ms,
+            known_gaps=[
+                {
+                    "start_ts": start_ms + 60_000,
+                    "end_ts": start_ms + 120_000,
+                    "retry_count": 3,
+                    "reason": "fetch_failed",
+                    "confidence": 0.0,
+                }
+            ],
+        )
+        bot = _make_bot_with_events(
+            [_make_fill_event(10.0, timestamp=start_ms + 180_000)],
+            cache=cache,
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="fill history gap overlaps risk lookback"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_uncovered_empty_history_fails_loudly(self):
+        now_ms = 10 * 86_400_000
+        bot = _make_bot_with_events([], cache=_RiskCache(history_scope="window"))
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="fill history coverage unknown"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_oldest_event_without_coverage_does_not_prove_risk_lookback(self):
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        bot = _make_bot_with_events(
+            [_make_fill_event(10.0, timestamp=start_ms - 60_000)],
+            cache=_RiskCache(
+                covered_start_ms=0,
+                history_scope="window",
+                oldest_event_ts=start_ms - 60_000,
+            ),
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="fill history coverage unknown"):
+            bot._get_realized_pnl_cumsum_stats()
+
+    def test_covered_empty_history_returns_zero_cumsum(self):
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        bot = _make_bot_with_events(
+            [],
+            cache=_RiskCache(
+                covered_start_ms=start_ms,
+                history_scope="window",
+            ),
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        assert bot._get_realized_pnl_cumsum_stats() == {"max": 0.0, "last": 0.0}
+
+    def test_coin_hsl_uses_risk_history_gate_for_degraded_pnl(self):
+        hsl = pytest.importorskip(
+            "passivbot_hsl", reason="live HSL dependencies not available"
+        )
+        now_ms = 10 * 86_400_000
+        start_ms = now_ms - 86_400_000
+        bot = _make_bot_with_events(
+            [
+                _make_fill_event(
+                    -10.0,
+                    timestamp=start_ms + 60_000,
+                    pnl_source="synthetic_fill_reconstruction_degraded",
+                )
+            ],
+            cache=_RiskCache(
+                covered_start_ms=start_ms,
+                history_scope="window",
+            ),
+        )
+        _set_pnl_lookback(bot, lookback_days=1.0, now_ms=now_ms)
+
+        with pytest.raises(RuntimeError, match="degraded realized PnL"):
+            hsl._equity_hard_stop_coin_realized_pnl_peak_last(
+                bot,
+                "long",
+                "BTC/USDT:USDT",
+                now_ms,
+            )
 
     def test_equity_hard_stop_uses_net_pnl_with_fee_paid(self):
         bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
@@ -394,6 +567,7 @@ class TestPrepBacktestArgsMaxRealizedLossPct:
                 "min_cost": 10.0,
                 "c_mult": 1.0,
                 "maker": 0.0002,
+                "taker": 0.0005,
             }
         }
 
@@ -503,6 +677,7 @@ class TestPrepBacktestArgsEquityHardStopLoss:
                 "min_cost": 10.0,
                 "c_mult": 1.0,
                 "maker": 0.0002,
+                "taker": 0.0005,
             }
         }
 

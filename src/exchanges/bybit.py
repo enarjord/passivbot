@@ -530,5 +530,12 @@ class BybitBot(CCXTBot):
                 logging.debug(f"{log_symbol}: {to_print.strip()}")
 
     async def update_exchange_config(self):
-        res = await self.cca.set_position_mode(True)
+        try:
+            res = await self.cca.set_position_mode(True)
+        except ccxt.BadRequest as e:
+            err_str = str(e).lower()
+            if "110025" in err_str or "not modified" in err_str:
+                logging.debug("[config] hedge mode already set (not modified)")
+                return
+            raise
         logging.debug("[config] set hedge mode response: %s", res)

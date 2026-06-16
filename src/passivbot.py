@@ -39,6 +39,9 @@ from candlestick_manager import (
 from fill_events_manager import (
     FillEventCacheContractError,
     FillEventsManager,
+    GAP_CONFIDENCE_CONFIRMED,
+    GAP_REASON_CONFIRMED,
+    PNL_SOURCE_SYNTHETIC_DEGRADED,
     _build_fetcher_for_bot,
     _extract_symbol_pool,
     compute_psize_pprice,
@@ -1285,6 +1288,142 @@ class Passivbot:
 
     def _assert_no_pending_pnl_events(self, events: list, *, context: str) -> None:
         FillEventsManager.assert_no_pending_pnl(events, context=context)
+
+    @staticmethod
+    def _pnl_gap_is_confirmed_legitimate(gap: dict) -> bool:
+        reason = str(gap.get("reason") or "").lower()
+        try:
+            confidence = float(gap.get("confidence", 0.0) or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+    @staticmethod
+    def _pnl_gap_overlaps(gap: dict, start_ms: Optional[int], end_ms: Optional[int]) -> bool:
+        try:
+            gap_start = int(gap.get("start_ts", 0) or 0)
+            gap_end = int(gap.get("end_ts", 0) or 0)
+        except (TypeError, ValueError):
+            return True
+        if gap_end <= gap_start:
+            return False
+        start = 0 if start_ms is None else int(start_ms)
+        end = (2**63 - 1) if end_ms is None else int(end_ms)
+        return gap_start < end and gap_end > start
+
+    @staticmethod
+    def _pnl_event_preview(events: Iterable[Any]) -> str:
+        preview = ",".join(
+            f"{str(getattr(ev, 'id', ''))[:12]}:{getattr(ev, 'symbol', '')}:"
+            f"{getattr(ev, 'position_side', '')}:{getattr(ev, 'pb_order_type', '')}"
+            for ev in list(events)[:5]
+        )
+        return preview
+
+    def _assert_pnl_history_safe_for_risk(
+        self,
+        events: list,
+        *,
+        context: str,
+        start_ms: Optional[int],
+        end_ms: Optional[int] = None,
+        require_coverage: bool = True,
+    ) -> None:
+        """Fail before risk gates consume incomplete realized-PnL history."""
+        self._assert_no_pending_pnl_events(events, context=context)
+        degraded = [
+            event
+            for event in events
+            if str(getattr(event, "pnl_source", "") or "").lower()
+            == PNL_SOURCE_SYNTHETIC_DEGRADED
+        ]
+        if degraded:
+            preview = self._pnl_event_preview(degraded)
+            suffix = f", +{len(degraded) - 5} more" if len(degraded) > 5 else ""
+            raise RuntimeError(
+                f"{context}: degraded realized PnL for {len(degraded)} close fill(s): "
+                f"{preview}{suffix}"
+            )
+        if not require_coverage or self._pnls_manager is None:
+            return
+        cache = getattr(self._pnls_manager, "cache", None)
+        if cache is None:
+            raise RuntimeError(
+                f"{context}: fill history coverage unavailable; missing FillEventsManager cache"
+            )
+
+        if end_ms is None:
+            try:
+                end_ms = int(self.get_exchange_time())
+            except (AttributeError, TypeError, ValueError):
+                end_ms = None
+
+        get_known_gaps = getattr(cache, "get_known_gaps", None)
+        known_gaps = list(get_known_gaps() or []) if callable(get_known_gaps) else []
+        blocking_gaps = [
+            gap
+            for gap in known_gaps
+            if not self._pnl_gap_is_confirmed_legitimate(gap)
+            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
+        ]
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            raise RuntimeError(
+                f"{context}: fill history gap overlaps risk lookback "
+                f"start={start_ms if start_ms is not None else 'all'} "
+                f"end={end_ms if end_ms is not None else 'latest'} "
+                f"gap={int(gap.get('start_ts', 0) or 0)}-{int(gap.get('end_ts', 0) or 0)} "
+                f"reason={gap.get('reason', 'unknown')}"
+            )
+
+        metadata = {}
+        load_metadata = getattr(cache, "load_metadata", None)
+        if callable(load_metadata):
+            metadata = load_metadata() or {}
+        if start_ms is None:
+            get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+            if not callable(get_history_scope):
+                get_history_scope = getattr(cache, "get_history_scope", None)
+            raw_history_scope = (
+                get_history_scope()
+                if callable(get_history_scope)
+                else metadata.get("history_scope", "unknown")
+            )
+            history_scope = str(raw_history_scope).lower()
+            if history_scope != "all":
+                raise RuntimeError(
+                    f"{context}: fill history coverage unknown for full-history risk lookback "
+                    f"(history_scope={history_scope})"
+            )
+            return
+
+        get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+        if not callable(get_history_scope):
+            get_history_scope = getattr(cache, "get_history_scope", None)
+        raw_history_scope = (
+            get_history_scope()
+            if callable(get_history_scope)
+            else metadata.get("history_scope", "unknown")
+        )
+        history_scope = str(raw_history_scope or "unknown").lower()
+        if history_scope == "all":
+            return
+
+        covered_start_ms = 0
+        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
+        if callable(get_covered_start_ms):
+            covered_start_ms = int(get_covered_start_ms() or 0)
+        else:
+            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
+            return
+        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
+        raise RuntimeError(
+            f"{context}: fill history coverage unknown for risk lookback "
+            f"start={int(start_ms)} covered_start={covered_start_ms} "
+            f"oldest_event={metadata_oldest} history_scope={history_scope}"
+        )
 
     def _equity_hard_stop_lookback_ms(self) -> Optional[int]:
         lookback = parse_pnls_max_lookback_days(
@@ -5504,6 +5643,10 @@ class Passivbot:
         """Refresh authoritative account state before planning/execution."""
         return await state_refresh.refresh_authoritative_state(self)
 
+    async def refresh_protective_authoritative_state(self) -> bool:
+        """Refresh only account surfaces needed for protective order execution."""
+        return await state_refresh.refresh_protective_authoritative_state(self)
+
     async def _refresh_authoritative_state_staged(self) -> bool:
         """Refresh live account state through the staged authoritative cohort."""
         return await state_refresh.refresh_authoritative_state_staged(self)
@@ -5736,6 +5879,21 @@ class Passivbot:
     async def execute_to_exchange(self, *, prepare_cycle: bool = True):
         """Run one execution cycle including config sync and order placement/cancellation."""
         return await executor.execute_to_exchange(self, prepare_cycle=prepare_cycle)
+
+    async def execute_order_plan_to_exchange(
+        self,
+        to_cancel: list[dict],
+        to_create: list[dict],
+        *,
+        configure_creations: bool = True,
+    ):
+        """Execute a precomputed cancel/create plan against the exchange."""
+        return await executor.execute_order_plan(
+            self,
+            to_cancel,
+            to_create,
+            configure_creations=configure_creations,
+        )
 
     async def _filter_fresh_market_snapshot_creations(
         self, orders: list[dict]
@@ -6025,10 +6183,24 @@ class Passivbot:
 
     def did_create_order(self, executed) -> bool:
         """Return True if the exchange acknowledged order creation."""
-        try:
-            return "id" in executed and executed["id"] is not None
-        except:
+        if not isinstance(executed, dict):
             return False
+        order_id = executed.get("id")
+        if order_id is None or not str(order_id).strip():
+            return False
+        status = str(executed.get("status") or "").strip().lower()
+        info = executed.get("info")
+        if not status and isinstance(info, dict):
+            status = str(
+                info.get("status")
+                or info.get("state")
+                or info.get("ordStatus")
+                or info.get("orderStatus")
+                or ""
+            ).strip().lower()
+        if status in {"rejected", "canceled", "cancelled", "expired", "failed"}:
+            return False
+        return True
         # further tests defined in child class
 
     def did_cancel_order(self, executed, order=None) -> bool:
@@ -8323,6 +8495,10 @@ class Passivbot:
                     "all" if lookback.is_all else "window",
                 )
                 await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if start_ms is not None and callable(mark_covered_start):
+                    mark_covered_start(int(start_ms))
                 self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
 
             # Load cached events
@@ -8500,6 +8676,10 @@ class Passivbot:
                     start_ms=None if age_limit is None else int(age_limit),
                     end_ms=None,
                 )
+                cache = getattr(self._pnls_manager, "cache", None)
+                mark_covered_start = getattr(cache, "mark_covered_start", None)
+                if age_limit is not None and callable(mark_covered_start):
+                    mark_covered_start(int(age_limit))
                 self._pnls_manager.set_history_scope(
                     "all" if lookback.is_all else "window"
                 )
@@ -8758,12 +8938,15 @@ class Passivbot:
         if not allow_new_unstuck or self._pnls_manager is None:
             return {"long": 0.0, "short": 0.0}
 
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="unstuck allowance realized PnL",
+            start_ms=start_ms,
+        )
         if not events:
             return {"long": 0.0, "short": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="unstuck allowance realized PnL"
-        )
 
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         pnls_cumsum_max, pnls_cumsum_last = max(0.0, float(pnls_cumsum.max())), pnls_cumsum[-1]
@@ -8791,12 +8974,15 @@ class Passivbot:
         """Return net realized pnl cumsum peak/current from FillEventsManager history."""
         if self._pnls_manager is None:
             return {"max": 0.0, "last": 0.0}
+        start_ms = self._pnls_lookback_start_ms()
         events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="realized loss gate PnL cumsum",
+            start_ms=start_ms,
+        )
         if not events:
             return {"max": 0.0, "last": 0.0}
-        self._assert_no_pending_pnl_events(
-            events, context="realized loss gate PnL cumsum"
-        )
         pnls_cumsum = np.array([fill_event_net_pnl(ev) for ev in events], dtype=float).cumsum()
         return {"max": max(0.0, float(pnls_cumsum.max())), "last": float(pnls_cumsum[-1])}
 
@@ -10039,9 +10225,9 @@ class Passivbot:
                 action = "    new"
             elif new["size"] == 0.0:
                 action = " closed"
-            elif new["size"] > old["size"]:
+            elif abs(new["size"]) > abs(old["size"]):
                 action = "  added"
-            elif new["size"] < old["size"]:
+            elif abs(new["size"]) < abs(old["size"]):
                 action = "reduced"
             else:
                 action = "unknown"
@@ -10519,6 +10705,232 @@ class Passivbot:
         """Compute desired entry and exit orders for every active symbol."""
         return await self.calc_ideal_orders_orchestrator()
 
+    def _protective_panic_target_psides_by_symbol(self) -> dict[str, set[str]]:
+        """Return symbols/psides whose current live mode explicitly requires panic supervision."""
+        candidate_symbols: set[str] = set()
+
+        def position_size(pos_by_pside: dict, pside: str) -> Optional[float]:
+            side_pos = pos_by_pside.get(pside)
+            if not isinstance(side_pos, dict) or "size" not in side_pos:
+                return None
+            size_raw = side_pos["size"]
+            if size_raw is None:
+                return None
+            return float(size_raw)
+
+        for symbol, pos in (getattr(self, "positions", {}) or {}).items():
+            if not isinstance(pos, dict):
+                continue
+            for pside in ("long", "short"):
+                size = position_size(pos, pside)
+                if size is not None and size != 0.0:
+                    candidate_symbols.add(str(symbol))
+                    break
+        for symbol, orders in (getattr(self, "open_orders", {}) or {}).items():
+            if orders:
+                candidate_symbols.add(str(symbol))
+
+        mode_getter = getattr(self, "_orchestrator_mode_override", None)
+        forced_getter = getattr(self, "get_forced_PB_mode", None)
+        runtime_forced = getattr(self, "_runtime_forced_modes", {}) or {}
+        targets: dict[str, set[str]] = {}
+        for symbol in sorted(candidate_symbols):
+            for pside in ("long", "short"):
+                mode = None
+                if callable(mode_getter):
+                    mode = mode_getter(pside, symbol)
+                elif callable(forced_getter):
+                    mode = forced_getter(pside, symbol)
+                else:
+                    forced_by_pside = runtime_forced.get(pside)
+                    if isinstance(forced_by_pside, dict):
+                        mode = forced_by_pside.get(symbol)
+                if str(mode or "").strip().lower() == "panic":
+                    targets.setdefault(symbol, set()).add(pside)
+        return targets
+
+    async def calc_protective_panic_ideal_orders_orchestrator(self):
+        """Compute panic-close ideal orders without normal EMA/candle/fill prerequisites."""
+        self._current_planning_snapshot = None
+        target_psides_by_symbol = Passivbot._protective_panic_target_psides_by_symbol(
+            self
+        )
+        self._protective_panic_reconcile_psides_by_symbol = {
+            symbol: set(psides) for symbol, psides in target_psides_by_symbol.items()
+        }
+        position_symbols = set()
+        for symbol, pos in (getattr(self, "positions", {}) or {}).items():
+            for pside in ("long", "short"):
+                target_psides = target_psides_by_symbol.get(symbol)
+                if target_psides is None or pside not in target_psides:
+                    continue
+                side_pos = pos.get(pside)
+                if not isinstance(side_pos, dict) or "size" not in side_pos:
+                    continue
+                size_raw = side_pos["size"]
+                if size_raw is None:
+                    continue
+                size = float(size_raw)
+                if size != 0.0:
+                    position_symbols.add(symbol)
+        reconcile_symbols = sorted(target_psides_by_symbol)
+        self._protective_panic_reconcile_symbols = reconcile_symbols
+        symbols = sorted(position_symbols)
+        if not symbols:
+            return {}
+
+        market_snapshots = await self._get_orchestrator_market_snapshots(symbols)
+        planning_snapshot = planning_gates.build_protective_planning_snapshot(
+            self, symbols, market_snapshots
+        )
+        self._current_planning_snapshot = planning_snapshot
+        last_prices = planning_snapshot.last_prices()
+        Passivbot._monitor_record_price_ticks(
+            self,
+            last_prices,
+            ts=utc_ms(),
+            source="protective_panic_market_snapshot_staged",
+        )
+
+        now_ms = int(self.get_exchange_time())
+        global_bp = {
+            "long": self._bot_params_to_rust_dict("long", None),
+            "short": self._bot_params_to_rust_dict("short", None),
+        }
+        effective_hedge_mode = self._config_hedge_mode and self.hedge_mode
+        config = getattr(self, "config", {})
+        strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
+        input_dict = {
+            "timestamp_ms": now_ms,
+            "balance": self.get_hysteresis_snapped_balance(),
+            "balance_raw": self.get_raw_balance(),
+            "global": {
+                "filter_by_min_effective_cost": bool(
+                    self.live_value("filter_by_min_effective_cost")
+                ),
+                "market_orders_allowed": bool(self.live_value("market_orders_allowed")),
+                "market_order_near_touch_threshold": float(
+                    self.live_value("market_order_near_touch_threshold")
+                ),
+                "panic_close_market": False,
+                "unstuck_allowance_long": 0.0,
+                "unstuck_allowance_short": 0.0,
+                "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
+                "realized_pnl_cumsum_max": 0.0,
+                "realized_pnl_cumsum_last": 0.0,
+                "sort_global": True,
+                "global_bot_params": global_bp,
+                "hedge_mode": effective_hedge_mode,
+                "strategy_kind": strategy_kind,
+            },
+            "symbols": [],
+        }
+        symbol_to_idx: dict[str, int] = {s: i for i, s in enumerate(symbols)}
+        idx_to_symbol: dict[int, str] = {i: s for s, i in symbol_to_idx.items()}
+        input_dict.update(
+            Passivbot._build_orchestrator_runtime_hints(self, symbol_to_idx)
+        )
+
+        if not hasattr(self, "effective_min_cost") or self.effective_min_cost is None:
+            self.effective_min_cost = {}
+        target_psides = {
+            pside for psides in target_psides_by_symbol.values() for pside in psides
+        }
+        panic_close_market = bool(
+            any(
+                Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
+                == "market"
+                for pside in target_psides
+                if Passivbot._equity_hard_stop_enabled(self, pside)
+            )
+        )
+        input_dict["global"]["panic_close_market"] = panic_close_market
+        for symbol in symbols:
+            idx = symbol_to_idx[symbol]
+            snap = market_snapshots.get(symbol)
+            mprice = float(last_prices.get(symbol, 0.0))
+            if not math.isfinite(mprice) or mprice <= 0.0:
+                raise RuntimeError(f"invalid market price for {symbol}: {mprice}")
+            bid = float(snap.bid) if snap is not None and snap.is_valid() else mprice
+            ask = float(snap.ask) if snap is not None and snap.is_valid() else mprice
+            active = bool(
+                (getattr(self, "markets_dict", {}) or {}).get(symbol, {}).get(
+                    "active", True
+                )
+            )
+            effective_min_cost = float(self.effective_min_cost.get(symbol, 0.0) or 0.0)
+            if effective_min_cost <= 0.0:
+                effective_min_cost = self._calc_effective_min_cost_at_price(
+                    symbol, mprice
+                )
+
+            def side_input(pside: str) -> dict:
+                pos = self.positions.get(symbol, {}).get(
+                    pside, {"size": 0.0, "price": 0.0}
+                )
+                trailing = _trailing_bundle_default_dict()
+                return {
+                    "mode": (
+                        "panic"
+                        if pside in target_psides_by_symbol.get(symbol, set())
+                        else "manual"
+                    ),
+                    "position": {
+                        "size": float(pos["size"]),
+                        "price": float(pos["price"]),
+                    },
+                    "trailing": {
+                        "min_since_open": float(trailing.get("min_since_open", 0.0)),
+                        "max_since_min": float(trailing.get("max_since_min", 0.0)),
+                        "max_since_open": float(trailing.get("max_since_open", 0.0)),
+                        "min_since_max": float(trailing.get("min_since_max", 0.0)),
+                    },
+                    "last_increase_fill_timestamp_ms": None,
+                    "bot_params": self._bot_params_to_rust_dict(pside, symbol),
+                    "strategy_params": self._strategy_params_to_rust_dict(pside, symbol),
+                }
+
+            input_dict["symbols"].append(
+                {
+                    "symbol_idx": int(idx),
+                    "order_book": {"bid": bid, "ask": ask},
+                    "exchange": Passivbot._orchestrator_exchange_params(self, symbol),
+                    "tradable": active,
+                    "next_candle": None,
+                    "effective_min_cost": float(effective_min_cost),
+                    "emas": {
+                        "m1": {"close": [], "log_range": [], "volume": []},
+                        "h1": {"close": [], "log_range": [], "volume": []},
+                    },
+                    "long": side_input("long"),
+                    "short": side_input("short"),
+                }
+            )
+
+        out = json.loads(pbr.compute_ideal_orders_json(json.dumps(input_dict)))
+        orders = out.get("orders", [])
+        ideal_orders: dict[str, list] = {}
+        for order in orders:
+            symbol = idx_to_symbol.get(int(order["symbol_idx"]))
+            if symbol is None:
+                continue
+            order_type = str(order["order_type"])
+            order_type_id = int(pbr.order_type_snake_to_id(order_type))
+            execution_type = str(order.get("execution_type", "limit"))
+            ideal_orders.setdefault(symbol, []).append(
+                (
+                    float(order["qty"]),
+                    float(order["price"]),
+                    order_type,
+                    order_type_id,
+                    execution_type,
+                )
+            )
+        ideal_orders_f, _wel_blocked = self._to_executable_orders(
+            ideal_orders, last_prices
+        )
+        return self._finalize_reduce_only_orders(ideal_orders_f, last_prices)
+
     def _strategy_params_to_rust_dict(self, pside: str, symbol: str | None) -> dict:
         config = getattr(self, "config", {})
         strategy_kind = normalize_strategy_kind(config.get("live", {}).get("strategy_kind"))
@@ -10828,17 +11240,19 @@ class Passivbot:
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
         )
         if runtime_forced:
-            return str(runtime_forced)
+            return self._apply_ignored_coin_mode(pside, symbol, str(runtime_forced))
 
         forced_mode = self.config_get(["live", f"forced_mode_{pside}"], symbol)
         if forced_mode:
-            return expand_PB_mode(forced_mode)
+            return self._apply_ignored_coin_mode(
+                pside, symbol, expand_PB_mode(forced_mode)
+            )
         if not self.markets_dict.get(symbol, {}).get("active", True):
             return "tp_only"
         ineligible_reason = getattr(self, "ineligible_symbols", {}).get(symbol)
         if ineligible_reason is not None:
             return "tp_only" if ineligible_reason == "not active" else "manual"
-        return None
+        return self._apply_ignored_coin_mode(pside, symbol)
 
     def _build_orchestrator_mode_overrides(
         self, symbols: Iterable[str]
@@ -10866,6 +11280,21 @@ class Passivbot:
                     else None
                 )
         return overrides
+
+    def _apply_ignored_coin_mode(
+        self, pside: str, symbol: str, mode: Optional[str] = None
+    ) -> Optional[str]:
+        ignored = getattr(self, "ignored_coins", {}).get(pside, set())
+        if symbol not in ignored:
+            return mode
+        if str(mode or "").strip().lower() in {
+            "manual",
+            "panic",
+            "tp_only",
+            "tp_only_with_active_entry_cancellation",
+        }:
+            return mode
+        return "graceful_stop"
 
     def _calc_unstuck_allowances_live(
         self, allow_new_unstuck: bool
@@ -12512,9 +12941,36 @@ class Passivbot:
         """Determine which existing orders to cancel and which new ones to place."""
         return await reconciler.calc_orders_to_cancel_and_create(self)
 
-    def _snapshot_actual_orders(self) -> dict[str, list[dict]]:
+    async def calc_protective_panic_orders_to_cancel_and_create(self):
+        """Determine protective cancels/reduce-only creates for RED panic supervision."""
+        ideal_orders = await self.calc_protective_panic_ideal_orders_orchestrator()
+        actual_symbols = sorted(
+            set(getattr(self, "_protective_panic_reconcile_symbols", []) or [])
+            | set(ideal_orders)
+        )
+        actual_psides_by_symbol = getattr(
+            self, "_protective_panic_reconcile_psides_by_symbol", None
+        )
+        return await reconciler.calc_orders_to_cancel_and_create_from_ideal(
+            self,
+            ideal_orders,
+            actual_symbols=actual_symbols,
+            actual_psides_by_symbol=actual_psides_by_symbol,
+            apply_initial_entry_gate=False,
+            apply_creation_guardrails=False,
+            apply_mode_filters=False,
+        )
+
+    def _snapshot_actual_orders(
+        self,
+        symbols: Optional[Iterable[str]] = None,
+        *,
+        psides_by_symbol: Optional[dict[str, Iterable[str]]] = None,
+    ) -> dict[str, list[dict]]:
         """Return a normalized snapshot of currently open orders keyed by symbol."""
-        return reconciler.snapshot_actual_orders(self)
+        return reconciler.snapshot_actual_orders(
+            self, symbols, psides_by_symbol=psides_by_symbol
+        )
 
     def _reconcile_symbol_orders(
         self,
@@ -12522,10 +12978,17 @@ class Passivbot:
         actual_orders: list[dict],
         ideal_orders: list,
         keys: tuple[str, ...],
+        *,
+        apply_mode_filters: bool = True,
     ) -> tuple[list[dict], list[dict]]:
         """Return cancel/create lists for a single symbol after mode filtering."""
         return reconciler.reconcile_symbol_orders(
-            self, symbol, actual_orders, ideal_orders, keys
+            self,
+            symbol,
+            actual_orders,
+            ideal_orders,
+            keys,
+            apply_mode_filters=apply_mode_filters,
         )
 
     def _annotate_order_deltas(

@@ -328,6 +328,133 @@ def _int_or(value, default=0):
         return int(default)
 
 
+def _backtest_market_settings_overrides(config: dict) -> dict:
+    market_settings = config.get("backtest", {}).get("market_settings") or {}
+    if not isinstance(market_settings, dict):
+        raise TypeError("backtest.market_settings must be a dict")
+    overrides = market_settings.get("overrides") or {}
+    if not isinstance(overrides, dict):
+        raise TypeError("backtest.market_settings.overrides must be a dict")
+    overrides_by_exchange = market_settings.get("overrides_by_exchange") or {}
+    if not isinstance(overrides_by_exchange, dict):
+        raise TypeError("backtest.market_settings.overrides_by_exchange must be a dict")
+    normalized = {"global": {}, "by_exchange": {}}
+    for coin, values in overrides.items():
+        coin_key = normalize_backtest_coin(coin)
+        if not coin_key:
+            continue
+        if not isinstance(values, dict):
+            raise TypeError(f"backtest.market_settings.overrides.{coin} must be a dict")
+        normalized["global"][coin_key] = deepcopy(values)
+    for exchange, exchange_overrides in overrides_by_exchange.items():
+        if not isinstance(exchange_overrides, dict):
+            raise TypeError(
+                f"backtest.market_settings.overrides_by_exchange.{exchange} must be a dict"
+            )
+        exchange_key = str(exchange)
+        exchange_normalized = normalized["by_exchange"].setdefault(exchange_key, {})
+        for coin, values in exchange_overrides.items():
+            coin_key = normalize_backtest_coin(coin)
+            if not coin_key:
+                continue
+            if not isinstance(values, dict):
+                raise TypeError(
+                    "backtest.market_settings.overrides_by_exchange."
+                    f"{exchange}.{coin} must be a dict"
+                )
+            exchange_normalized[coin_key] = deepcopy(values)
+    return normalized
+
+
+def _apply_market_settings_override(
+    coin: str,
+    exchange: str,
+    market_settings: dict,
+    overrides: dict,
+) -> dict:
+    result = dict(market_settings)
+    coin_key = normalize_backtest_coin(coin)
+    global_override = overrides.get("global", {}).get(coin_key)
+    if global_override:
+        result.update(deepcopy(global_override))
+    entry_exchange = str(result.get("exchange") or exchange)
+    exchange_override = (
+        overrides.get("by_exchange", {}).get(entry_exchange, {}).get(coin_key)
+        or overrides.get("by_exchange", {}).get(str(exchange), {}).get(coin_key)
+    )
+    if exchange_override:
+        result.update(deepcopy(exchange_override))
+    return result
+
+
+def _effective_backtest_market_settings(
+    config: dict,
+    mss: dict,
+    exchange: str,
+    coins: list[str],
+) -> dict[str, dict]:
+    market_settings_overrides = _backtest_market_settings_overrides(config)
+    return {
+        coin: _apply_market_settings_override(
+            coin,
+            exchange,
+            mss[coin],
+            market_settings_overrides,
+        )
+        for coin in coins
+    }
+
+
+def _required_float(value, *, path: str) -> float:
+    try:
+        if value is None:
+            raise TypeError
+        result = float(value)
+    except (TypeError, ValueError) as exc:
+        raise TypeError(f"{path} must be numeric, got {value!r}") from exc
+    if not math.isfinite(result):
+        raise ValueError(f"{path} must be finite, got {value!r}")
+    return result
+
+
+def _market_settings_exchange(coin: str, payload_exchange: str, market_settings: dict) -> str:
+    return str(market_settings.get("exchange") or payload_exchange)
+
+
+def _required_backtest_c_mult(
+    value,
+    *,
+    coin: str,
+    payload_exchange: str,
+    market_settings: dict,
+    warned: set[tuple[str, str, str]] | None = None,
+) -> float:
+    path = f"market settings {coin}.c_mult"
+    if value is None:
+        source_exchange = _market_settings_exchange(coin, payload_exchange, market_settings)
+        coin_key = normalize_backtest_coin(coin)
+        warning_key = (str(payload_exchange), source_exchange, coin_key)
+        if warned is None or warning_key not in warned:
+            if warned is not None:
+                warned.add(warning_key)
+            logging.warning(
+                "[backtest] %s missing for exchange=%s payload_exchange=%s; "
+                "defaulting to c_mult=1.0 for this backtest only. Wrong c_mult can distort "
+                "notional, PnL, fees, min-cost sizing, wallet exposure, and forager volume "
+                "selection. To set the historical value, configure "
+                "backtest.market_settings.overrides.%s.c_mult or "
+                "backtest.market_settings.overrides_by_exchange.%s.%s.c_mult.",
+                path,
+                source_exchange,
+                payload_exchange,
+                coin_key,
+                source_exchange,
+                coin_key,
+            )
+        return 1.0
+    return _required_float(value, path=path)
+
+
 def _build_coin_metadata_entries(
     coins_order,
     exchange,
@@ -581,6 +708,12 @@ def build_backtest_payload(
     backtest_params = dict(backtest_params)
     backtest_params["skip_btc_analysis"] = bool(skip_btc_analysis)
     coins_order = backtest_params.get("coins", [])
+    effective_mss = _effective_backtest_market_settings(
+        runtime_config,
+        mss,
+        exchange,
+        coins_order,
+    )
 
     # Read candle interval from config (default to 1m)
     candle_interval = config.get("backtest", {}).get("candle_interval_minutes", 1)
@@ -752,7 +885,7 @@ def build_backtest_payload(
         btc_usd_prices,
         timestamps,
         exchange,
-        mss,
+        effective_mss,
         coins_order,
         first_valid_indices,
         last_valid_indices,
@@ -1908,14 +2041,34 @@ def prep_backtest_args(
         fee_kind="taker",
         override_value=taker_fee_override,
     )
+    effective_mss = _effective_backtest_market_settings(config, mss, exchange, coins)
+    missing_c_mult_warnings: set[tuple[str, str, str]] = set()
     if exchange_params is None:
         exchange_params = [
             {
-                "qty_step": mss[coin]["qty_step"],
-                "price_step": mss[coin]["price_step"],
-                "min_qty": mss[coin]["min_qty"],
-                "min_cost": mss[coin]["min_cost"],
-                "c_mult": mss[coin]["c_mult"],
+                "qty_step": _required_float(
+                    effective_mss[coin].get("qty_step"),
+                    path=f"market settings {coin}.qty_step",
+                ),
+                "price_step": _required_float(
+                    effective_mss[coin].get("price_step"),
+                    path=f"market settings {coin}.price_step",
+                ),
+                "min_qty": _required_float(
+                    effective_mss[coin].get("min_qty"),
+                    path=f"market settings {coin}.min_qty",
+                ),
+                "min_cost": _required_float(
+                    effective_mss[coin].get("min_cost"),
+                    path=f"market settings {coin}.min_cost",
+                ),
+                "c_mult": _required_backtest_c_mult(
+                    effective_mss[coin].get("c_mult"),
+                    coin=coin,
+                    payload_exchange=exchange,
+                    market_settings=effective_mss[coin],
+                    warned=missing_c_mult_warnings,
+                ),
                 "maker_fee": float(maker_fee),
                 "taker_fee": float(taker_fee),
             }

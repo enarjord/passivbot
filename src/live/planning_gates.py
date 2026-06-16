@@ -393,6 +393,54 @@ def build_staged_planning_snapshot(
     return snapshot
 
 
+def build_protective_planning_snapshot(
+    bot, symbols: Iterable[str], market_snapshots: dict[str, MarketSnapshot]
+) -> PlanningSnapshot:
+    """Capture the reduced live data contract used for protective panic execution."""
+    ordered_symbols = tuple(
+        sorted(dict.fromkeys(str(symbol) for symbol in symbols if symbol))
+    )
+    required = frozenset({"balance", "positions", "open_orders", "market_snapshot"})
+    ledger = bot._ensure_freshness_ledger()
+    current_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    required_epoch = max(1, current_epoch)
+    min_epochs = {surface: required_epoch for surface in required}
+    missing = sorted(
+        surface
+        for surface in required
+        if ledger.surface_epoch(surface) < int(min_epochs.get(surface, 0) or 0)
+    )
+    invalid: dict[str, list] = {}
+    if "market_snapshot" not in missing and ordered_symbols:
+        market_invalid = bot._market_snapshot_signature_invalid(ordered_symbols)
+        if market_invalid:
+            missing.append("market_snapshot")
+            invalid["market_snapshot"] = market_invalid
+    if missing:
+        raise RuntimeError(
+            "protective planning snapshot invalid before capture: "
+            f"missing current-epoch surfaces={sorted(set(missing))} "
+            f"epoch={current_epoch} "
+            f"required={sorted(required)}"
+            f" invalid={invalid}"
+        )
+    snapshot = PlanningSnapshot.capture(
+        ts_ms=_utc_ms(),
+        exchange=str(getattr(bot, "exchange", "")),
+        user=str(bot.config_get(["live", "user"]) or ""),
+        ledger=ledger,
+        required_surfaces=required,
+        min_epochs=min_epochs,
+        symbols=ordered_symbols,
+        market_snapshots=market_snapshots,
+        market_snapshot_max_age_ms=bot._live_market_snapshot_max_age_ms(),
+    )
+    snapshot.raise_if_invalid(
+        now_ms=_utc_ms(), context="protective panic order calculation"
+    )
+    return snapshot
+
+
 def current_planning_snapshot_invalid_for_creations(
     bot, symbols: Iterable[str]
 ) -> list[dict]:

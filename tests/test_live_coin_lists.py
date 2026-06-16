@@ -1,6 +1,74 @@
 import logging
 
+import pytest
+
 from passivbot import Passivbot
+
+
+def _make_mode_override_bot():
+    ignored_symbol = "DOGE/USDT:USDT"
+    approved_symbol = "BTC/USDT:USDT"
+    bot = Passivbot.__new__(Passivbot)
+    bot.positions = {
+        ignored_symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot.open_orders = {}
+    bot.coin_overrides = {}
+    bot.approved_coins_minus_ignored_coins = {
+        "long": {approved_symbol},
+        "short": set(),
+    }
+    bot.ignored_coins = {"long": {ignored_symbol}, "short": set()}
+    bot.markets_dict = {
+        ignored_symbol: {"active": True},
+        approved_symbol: {"active": True},
+    }
+    bot.ineligible_symbols = {}
+    bot._runtime_forced_modes = {"long": {}, "short": {}}
+    bot._equity_hard_stop_enabled = lambda pside: False
+    bot.config_get = lambda path, symbol=None: ""
+    bot.is_old_enough = lambda pside, symbol: True
+    return bot, ignored_symbol, approved_symbol
+
+
+def test_ignored_coin_retained_flat_position_gets_graceful_stop_override():
+    bot, ignored_symbol, approved_symbol = _make_mode_override_bot()
+
+    universe = bot._build_live_symbol_universe()
+    assert ignored_symbol in universe
+    assert ignored_symbol not in bot.approved_coins_minus_ignored_coins["long"]
+
+    overrides = bot._build_orchestrator_mode_overrides(universe)
+
+    assert overrides["long"][ignored_symbol] == "graceful_stop"
+    assert overrides["short"][ignored_symbol] is None
+    assert overrides["long"][approved_symbol] is None
+
+
+@pytest.mark.parametrize("forced_mode", ["manual", "panic", "tp_only"])
+def test_ignored_coin_preserves_stricter_forced_modes(forced_mode):
+    bot, ignored_symbol, _approved_symbol = _make_mode_override_bot()
+    bot.config_get = (
+        lambda path, symbol=None: forced_mode
+        if path == ["live", "forced_mode_long"] and symbol == ignored_symbol
+        else ""
+    )
+
+    assert bot._orchestrator_mode_override("long", ignored_symbol) == forced_mode
+
+
+def test_ignored_coin_overrides_forced_normal_to_graceful_stop():
+    bot, ignored_symbol, _approved_symbol = _make_mode_override_bot()
+    bot.config_get = (
+        lambda path, symbol=None: "normal"
+        if path == ["live", "forced_mode_long"] and symbol == ignored_symbol
+        else ""
+    )
+
+    assert bot._orchestrator_mode_override("long", ignored_symbol) == "graceful_stop"
 
 
 def test_add_to_coins_lists_skips_symbols_not_in_eligible_markets(caplog):

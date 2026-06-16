@@ -1844,8 +1844,8 @@ def add_extra_options(parser, *, help_all: bool):
         default=None,
         dest="polish_bounds_pct",
         help=(
-            "Narrow each optimize bound around the current bot value by this percentage; "
-            "existing positive steps are preserved"
+            "Narrow each optimize bound around the current bot value by this percentage, "
+            "constrained to the existing bounds; fixed bounds stay fixed"
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1914,6 +1914,13 @@ def _existing_positive_step(raw_bound) -> Any | None:
     return step
 
 
+def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
+    try:
+        return float(step) <= high - low
+    except (TypeError, ValueError):
+        return False
+
+
 def apply_polish_bounds(config: dict, pct: float) -> None:
     if (
         not isinstance(pct, (int, float))
@@ -1944,10 +1951,16 @@ def apply_polish_bounds(config: dict, pct: float) -> None:
                 f"polish bounds: {bound_key!r} must map to a numeric bot value, "
                 f"got {type(value).__name__}"
             )
-        low, high = sorted([float(value) * (1.0 - pct), float(value) * (1.0 + pct)])
+        existing_bound = Bound.from_config(bound_key, raw_bound)
+        if existing_bound.low == existing_bound.high:
+            continue
+        center = max(existing_bound.low, min(existing_bound.high, float(value)))
+        low, high = sorted([center * (1.0 - pct), center * (1.0 + pct)])
+        low = max(existing_bound.low, low)
+        high = min(existing_bound.high, high)
         polished_bound = [low, high]
         step = _existing_positive_step(raw_bound)
-        if step is not None:
+        if step is not None and _step_supported_by_range(step, low, high):
             polished_bound.append(step)
         _set_optimize_bound(config, bound_key, polished_bound)
         narrowed += 1

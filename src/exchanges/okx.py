@@ -24,7 +24,7 @@ class OKXBot(CCXTBot):
     async def _detect_account_config(self):
         """
         Inspect account configuration to detect portfolio margin (PM) and position mode.
-        Falls back silently if the endpoint is unavailable.
+        Startup must know whether OKX is in dual-side or net mode before building orders.
         """
         try:
             cfg = await self.cca.private_get_account_config()
@@ -35,6 +35,10 @@ class OKXBot(CCXTBot):
             if pos_mode == "net_mode":
                 self.okx_dual_side = False
                 self.hedge_mode = False
+                raise RuntimeError(
+                    "OKX account is in net (one-way) mode; Passivbot requires "
+                    "dual-side/hedge mode for live order side safety"
+                )
             elif pos_mode == "long_short_mode":
                 self.okx_dual_side = True
             # If unknown, keep default True and let later failures flip it off.
@@ -43,10 +47,15 @@ class OKXBot(CCXTBot):
                 logging.info(
                     "OKX account detected as Portfolio Margin (PM); mode/leverage changes may be restricted."
                 )
-            if not self.okx_dual_side:
-                logging.info("OKX account is in net (one-way) mode; running without posSide/hedge.")
         except Exception as e:
-            logging.warning(f"Unable to detect OKX account configuration: {e}")
+            if (
+                isinstance(e, RuntimeError)
+                and "Passivbot requires dual-side/hedge mode" in str(e)
+            ):
+                raise
+            raise RuntimeError(
+                "Unable to detect OKX account configuration before live order setup"
+            ) from e
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
@@ -188,6 +197,11 @@ class OKXBot(CCXTBot):
             raise
 
     def _build_order_params(self, order: dict) -> dict:
+        if not bool(getattr(self, "okx_dual_side", True)):
+            raise RuntimeError(
+                "OKX order construction requires dual-side/hedge mode; "
+                "refusing to build net-mode order params"
+            )
         margin_mode = self._get_margin_mode_for_symbol(order["symbol"])
         params = {
             "postOnly": require_live_value(self.config, "time_in_force") == "post_only",
@@ -197,9 +211,7 @@ class OKXBot(CCXTBot):
             "clOrdId": order["custom_id"],
             "marginMode": margin_mode,
         }
-        # Only send positionSide when dual-side mode is confirmed.
-        if self.okx_dual_side:
-            params["positionSide"] = order["position_side"]
+        params["positionSide"] = order["position_side"]
         return params
 
     async def update_exchange_config_by_symbols(self, symbols: [str]):
@@ -243,8 +255,10 @@ class OKXBot(CCXTBot):
         # Detect current account mode; adjust expectations before attempting changes.
         await self._detect_account_config()
         if not self.okx_dual_side:
-            # One-way mode: skip attempting to set hedge mode; orders will omit posSide.
-            return
+            raise RuntimeError(
+                "OKX account is not in dual-side/hedge mode; Passivbot refuses "
+                "to continue in net mode"
+            )
         try:
             res = await self.cca.set_position_mode(True)
             logging.debug("[config] set hedge mode response: %s", res)
@@ -256,11 +270,12 @@ class OKXBot(CCXTBot):
                 # Cannot switch to dual/hedge (often due to PM or open orders/positions).
                 self.okx_dual_side = False
                 self.hedge_mode = False
-                logging.warning(
-                    "[config] OKX rejected hedge/dual-side switch (51039/51000). Continuing in net mode without posSide."
-                )
+                raise RuntimeError(
+                    "OKX rejected hedge/dual-side switch (51039/51000); "
+                    "Passivbot refuses to continue in net mode"
+                ) from e
             else:
-                logging.error("[config] error setting hedge mode: %s", e)
+                raise
 
     async def calc_ideal_orders(self):
         # okx has max 100 open orders. Drop orders whose pprice diff is greatest.

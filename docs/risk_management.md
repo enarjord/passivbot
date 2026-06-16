@@ -174,6 +174,9 @@ Manual-mode positions are outside bot scope: they do not receive bot-created
 orders, bot cancellations, auto unstuck, exposure-enforcer reductions, active
 slot accounting, or bot-scope TWE/TWEL accounting.
 
+The future v8 policy-contract work for this enforcer is tracked in
+[`docs/plans/v8_twel_enforcer_policy_contract.md`](plans/v8_twel_enforcer_policy_contract.md).
+
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
 

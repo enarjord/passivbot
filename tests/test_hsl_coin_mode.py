@@ -4,6 +4,8 @@ from types import MethodType, SimpleNamespace
 
 import pytest
 
+from passivbot import Passivbot
+
 pbr = pytest.importorskip("passivbot_rust", reason="passivbot_rust extension not available")
 hsl = pytest.importorskip("passivbot_hsl", reason="live HSL dependencies not available")
 
@@ -13,6 +15,39 @@ if bool(getattr(pbr, "__is_stub__", False)):
 
 class FakeHslBot(SimpleNamespace):
     pass
+
+
+class FakeRiskCache:
+    def __init__(self, covered_start_ms=1, history_scope="all"):
+        self.covered_start_ms = covered_start_ms
+        self.history_scope = history_scope
+
+    def get_known_gaps(self):
+        return []
+
+    def get_covered_start_ms(self):
+        return self.covered_start_ms
+
+    def get_history_scope(self):
+        return self.history_scope
+
+    def load_metadata(self):
+        return {
+            "known_gaps": [],
+            "covered_start_ms": self.covered_start_ms,
+            "history_scope": self.history_scope,
+            "oldest_event_ts": self.covered_start_ms,
+            "newest_event_ts": 0,
+        }
+
+
+def make_fake_pnls_manager(events, *, covered_start_ms=1, history_scope="all"):
+    cache = FakeRiskCache(covered_start_ms=covered_start_ms, history_scope=history_scope)
+    return SimpleNamespace(
+        get_events=lambda: events,
+        cache=cache,
+        get_history_scope=cache.get_history_scope,
+    )
 
 
 def bind_hsl_methods(bot):
@@ -54,6 +89,14 @@ def bind_hsl_methods(bot):
         "_hsl_coin_state",
     ):
         setattr(bot, name, MethodType(getattr(hsl, name), bot))
+    for name in (
+        "_assert_no_pending_pnl_events",
+        "_pnl_gap_is_confirmed_legitimate",
+        "_pnl_gap_overlaps",
+        "_pnl_event_preview",
+        "_assert_pnl_history_safe_for_risk",
+    ):
+        setattr(bot, name, MethodType(getattr(Passivbot, name), bot))
 
 
 def make_coin_bot(policy="panic"):
@@ -350,8 +393,8 @@ async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
     bot.get_exchange_time = lambda: 180_000
     state = bot._hsl_coin_state("long", symbol)
     state["pending_red_since_ms"] = 120_000
-    bot._pnls_manager = SimpleNamespace(
-        get_events=lambda: [
+    bot._pnls_manager = make_fake_pnls_manager(
+        [
             {
                 "timestamp": 170_000,
                 "symbol": symbol,
@@ -380,7 +423,7 @@ async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points()
         {"timestamp": 120_000, "symbol": symbol, "pside": "long", "pnl": -20.0},
         {"timestamp": 240_000, "symbol": symbol, "pside": "long", "pnl": -35.0},
     ]
-    bot._pnls_manager = SimpleNamespace(get_events=lambda: fill_events)
+    bot._pnls_manager = make_fake_pnls_manager(fill_events)
 
     async def fake_history(current_balance=None):
         return {
