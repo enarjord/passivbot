@@ -468,20 +468,29 @@ class PymooCheckpointCallback(Callback):
     def notify(self, algorithm):
         try:
             import pickle
+            import os
             
-            # Temporarily detach unpicklable runner/pool
+            # Temporarily detach unpicklable runner/pool and evaluator
             problem = getattr(algorithm, "problem", None)
             runner = getattr(problem, "elementwise_runner", None) if problem else None
+            adapter = getattr(problem, "evaluator_adapter", None) if problem else None
+            evaluator = getattr(adapter, "evaluator", None) if adapter else None
             
             if runner is not None:
                 algorithm.problem.elementwise_runner = None
+            if evaluator is not None:
+                adapter.evaluator = None
             
-            with open(self.path, "wb") as f:
+            tmp_path = self.path + ".tmp"
+            with open(tmp_path, "wb") as f:
                 pickle.dump(algorithm, f)
+            os.replace(tmp_path, self.path)
                 
-            # Restore runner
+            # Restore runner and evaluator
             if runner is not None:
                 algorithm.problem.elementwise_runner = runner
+            if evaluator is not None:
+                adapter.evaluator = evaluator
                 
         except Exception as e:
             logging.warning(f"Failed to save pymoo checkpoint: {e}")
@@ -590,11 +599,15 @@ def run_backend(
                     algorithm = pickle.load(f)
                     algorithm.has_terminated = False
                     
-                    # Restore the active runner (pool)
+                    # Restore the active runner (pool) and evaluator
                     if hasattr(algorithm, "problem"):
                         algorithm.problem.elementwise_runner = runner
+                        if hasattr(algorithm.problem, "evaluator_adapter"):
+                            algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
                     if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
                         algorithm.evaluator.problem.elementwise_runner = runner
+                        if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
+                            algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
                     
         if algorithm is None:
             algorithm = _build_algorithm(
