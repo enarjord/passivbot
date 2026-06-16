@@ -307,7 +307,13 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
 
     assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert "backtest.candle_interval_minutes" in report["inserted_v8_defaults"]
+    assert "backtest.liquidation_threshold" in report["inserted_v8_defaults"]
+    assert "backtest.market_order_slippage_pct" in report["inserted_v8_defaults"]
+    assert "backtest.starting_balance" in report["inserted_v8_defaults"]
     assert "live.approved_coins" in report["inserted_v8_defaults"]
+    assert "live.forager_score_hysteresis_pct" in report["inserted_v8_defaults"]
+    assert "live.hsl_position_during_cooldown_policy" in report["inserted_v8_defaults"]
+    assert "live.hsl_signal_mode" in report["inserted_v8_defaults"]
     assert (
         "bot.long.risk.position_exposure_enforcer_enabled"
         in report["inserted_v8_defaults"]
@@ -480,6 +486,52 @@ def test_migrate_v7_trailing_grid_coin_override_reports_runtime_unsupported_risk
     assert parsed_override["risk"]["we_excess_allowance_pct"] == pytest.approx(0.2)
     assert "n_positions" not in parsed_override.get("risk", {})
     assert "total_wallet_exposure_limit" not in parsed_override.get("risk", {})
+
+
+def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_shared_alias_fields():
+    source = _minimal_v7_trailing_grid_config()
+    source["coin_overrides"]["BTC"] = {
+        "bot": {
+            "long": {
+                "entry_trailing_grid_ratio": 0.5,
+                "hsl_tier_ratio_yellow": 0.45,
+                "hsl_tier_ratio_orange": 0.75,
+                "forager_score_weights": {
+                    "volume": 0.2,
+                    "ema_readiness": 0.3,
+                    "volatility": 0.5,
+                },
+                "forager_volatility_ema_span": 222.0,
+                "filter_volume_ema_span": 333.0,
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    long_override = migrated["coin_overrides"]["BTC"]["bot"]["long"]
+    assert "hsl" not in long_override
+    assert "forager" not in long_override
+    for key in (
+        "hsl_tier_ratio_yellow",
+        "hsl_tier_ratio_orange",
+        "forager_score_weights",
+        "forager_volatility_ema_span",
+        "filter_volume_ema_span",
+    ):
+        source_path = f"coin_overrides.BTC.bot.long.{key}"
+        assert source_path in report["manual_review_fields"]
+        assert not any(moved.startswith(f"{source_path} ->") for moved in report["moved_fields"])
+
+    prepared = prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+    parsed = parse_overrides(
+        prepared,
+        verbose=False,
+        symbol_normalizer=lambda coin: coin,
+    )
+    parsed_override = parsed["coin_overrides"]["BTC"]["bot"]["long"]
+    assert "hsl" not in parsed_override
+    assert "forager" not in parsed_override
 
 
 def test_migrate_v7_trailing_grid_coin_override_reports_unsupported_fields():

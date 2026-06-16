@@ -1164,7 +1164,7 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_enabled"] = False
     cfg["bot"]["short"]["hsl_enabled"] = False
-    cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0276
+    cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0276
     cfg["bot"]["long"]["n_positions"] = 5.0
     cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.8
     cfg["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.37

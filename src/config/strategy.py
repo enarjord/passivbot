@@ -192,7 +192,7 @@ def build_runtime_strategy_side(
     return result
 
 
-def reject_trailing_grid_v7_flat_fields_for_trailing_martingale(config: dict) -> None:
+def reject_legacy_flat_strategy_fields(config: dict) -> None:
     live_cfg = config.setdefault("live", {})
     normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
     bot_cfg = config.setdefault("bot", {})
@@ -204,11 +204,15 @@ def reject_trailing_grid_v7_flat_fields_for_trailing_martingale(config: dict) ->
         if legacy_keys:
             joined = ", ".join(f"bot.{pside}.{key}" for key in legacy_keys)
             raise ValueError(
-                f"{joined} are v7 trailing-grid-only flat fields and cannot be used in "
-                f"normal v8 configs with live.strategy_kind={normalized_kind!r}. Run "
-                "`passivbot tool migrate-config-v7`, or move these values under "
-                "bot.<side>.strategy.trailing_grid_v7 before loading."
+                f"{joined} are legacy flat strategy fields and cannot be used at "
+                f"bot.<side> in v8 configs with live.strategy_kind={normalized_kind!r}. "
+                "Run `passivbot tool migrate-config-v7` for v7 configs, or move active "
+                "v8 strategy parameters under "
+                f"bot.<side>.strategy.{normalized_kind} before loading."
             )
+
+
+reject_trailing_grid_v7_flat_fields_for_trailing_martingale = reject_legacy_flat_strategy_fields
 
 
 def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = None) -> None:
@@ -224,7 +228,7 @@ def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = 
         live_cfg["strategy_kind"] = normalized_kind
 
     bot_cfg = config.setdefault("bot", {})
-    reject_trailing_grid_v7_flat_fields_for_trailing_martingale(config)
+    reject_legacy_flat_strategy_fields(config)
     for pside in BOT_POSITION_SIDES:
         bot_side = bot_cfg.setdefault(pside, {})
         if not isinstance(bot_side, dict):

@@ -113,8 +113,14 @@ V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS = (
     ("backtest", "candle_interval_minutes"),
     ("backtest", "dynamic_wel_by_tradability"),
     ("backtest", "exchanges"),
+    ("backtest", "liquidation_threshold"),
+    ("backtest", "market_order_slippage_pct"),
     ("backtest", "scenarios"),
+    ("backtest", "starting_balance"),
     ("live", "approved_coins"),
+    ("live", "forager_score_hysteresis_pct"),
+    ("live", "hsl_position_during_cooldown_policy"),
+    ("live", "hsl_signal_mode"),
 )
 V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "risk_entry_cooldown_minutes",
@@ -503,12 +509,18 @@ def _move_shared_side_fields(
     source_prefix = source_prefix or f"bot.{pside}"
     target_prefix = target_prefix or f"bot.{pside}"
     written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
+
+    def _disallow_if_needed(flat_key: str, source_path: str) -> bool:
+        if allowed_flat_keys is not None and flat_key not in allowed_flat_keys:
+            report["manual_review_fields"].append(source_path)
+            return True
+        return False
+
     for flat_key, (group_name, local_key) in FLAT_BOT_KEY_TO_GROUP_PATH.items():
         if flat_key not in source_side:
             continue
         source_path = f"{source_prefix}.{flat_key}"
-        if allowed_flat_keys is not None and flat_key not in allowed_flat_keys:
-            report["manual_review_fields"].append(source_path)
+        if _disallow_if_needed(flat_key, source_path):
             continue
         value = source_side[flat_key]
         target_path = f"{target_prefix}.{group_name}.{local_key}"
@@ -534,6 +546,8 @@ def _move_shared_side_fields(
             continue
         value = source_side[legacy_key]
         source_path = f"{source_prefix}.{legacy_key}"
+        if _disallow_if_needed("hsl_tier_ratios", source_path):
+            continue
         target_path = f"{target_prefix}.hsl.{local_key}"
         path_parts = tuple(local_key.split("."))
         if not _record_target_value(
@@ -553,17 +567,18 @@ def _move_shared_side_fields(
     if isinstance(source_side.get("forager_score_weights"), dict):
         value = source_side["forager_score_weights"]
         source_path = f"{source_prefix}.forager_score_weights"
-        target_path = f"{target_prefix}.forager.score_weights"
-        if _record_target_value(
-            written_targets,
-            ("forager", "score_weights"),
-            source_path=source_path,
-            target_path=target_path,
-            value=value,
-            report=report,
-        ):
-            target_side.setdefault("forager", {})["score_weights"] = deepcopy(value)
-            report["moved_fields"].append(f"{source_path} -> {target_path}")
+        if not _disallow_if_needed("forager_score_weights", source_path):
+            target_path = f"{target_prefix}.forager.score_weights"
+            if _record_target_value(
+                written_targets,
+                ("forager", "score_weights"),
+                source_path=source_path,
+                target_path=target_path,
+                value=value,
+                report=report,
+            ):
+                target_side.setdefault("forager", {})["score_weights"] = deepcopy(value)
+                report["moved_fields"].append(f"{source_path} -> {target_path}")
 
     for legacy_key, local_key in (
         ("forager_volatility_ema_span", "volatility_ema_span_1m"),
@@ -573,6 +588,9 @@ def _move_shared_side_fields(
             continue
         value = source_side[legacy_key]
         source_path = f"{source_prefix}.{legacy_key}"
+        canonical_flat_key = LEGACY_BOUND_ALIASES[legacy_key]
+        if _disallow_if_needed(canonical_flat_key, source_path):
+            continue
         target_path = f"{target_prefix}.forager.{local_key}"
         if not _record_target_value(
             written_targets,
@@ -594,6 +612,8 @@ def _move_shared_side_fields(
         group_name, local_key = FLAT_BOT_KEY_TO_GROUP_PATH[canonical_flat_key]
         value = source_side[legacy_key]
         source_path = f"{source_prefix}.{legacy_key}"
+        if _disallow_if_needed(canonical_flat_key, source_path):
+            continue
         target_path = f"{target_prefix}.{group_name}.{local_key}"
         target_key = (group_name, local_key)
         existing = written_targets.get(target_key)
