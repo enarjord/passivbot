@@ -12,7 +12,6 @@ these tests need to run in a tight loop when the refactor lands.
 from copy import deepcopy
 
 import numpy as np
-import pytest
 
 from backtest import build_backtest_payload
 from config_utils import get_template_config
@@ -225,7 +224,7 @@ def test_build_backtest_payload_prefers_exchange_market_settings_override():
     assert payload.exchange_params[0]["c_mult"] == 0.1
 
 
-def test_build_backtest_payload_rejects_missing_required_market_setting():
+def test_build_backtest_payload_defaults_missing_c_mult_with_warning(caplog):
     start_ts = 1609459200000
     n_minutes = 60
     config = _base_config(candle_interval_minutes=1)
@@ -251,8 +250,15 @@ def test_build_backtest_payload_rejects_missing_required_market_setting():
     }
     hlcvs, btc_usd_prices, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
 
-    with pytest.raises(TypeError, match=r"market settings TON\.c_mult must be numeric"):
-        build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+    caplog.set_level("WARNING")
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
+
+    assert payload.exchange_params[0]["c_mult"] == 1.0
+    assert "market settings TON.c_mult missing" in caplog.text
+    assert "defaulting to c_mult=1.0 for this backtest only" in caplog.text
+    assert "forager volume selection" in caplog.text
+    assert "backtest.market_settings.overrides_by_exchange.binance.TON.c_mult" in caplog.text
 
 
 def test_build_backtest_payload_does_not_mutate_mss():

@@ -158,6 +158,7 @@ PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
 HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
 HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
+_MISSING_C_MULT_WARNED: set[tuple[str, str, str]] = set()
 
 
 @dataclass(frozen=True)
@@ -397,6 +398,42 @@ def _required_float(value, *, path: str) -> float:
     if not math.isfinite(result):
         raise ValueError(f"{path} must be finite, got {value!r}")
     return result
+
+
+def _market_settings_exchange(coin: str, payload_exchange: str, market_settings: dict) -> str:
+    return str(market_settings.get("exchange") or payload_exchange)
+
+
+def _required_backtest_c_mult(
+    value,
+    *,
+    coin: str,
+    payload_exchange: str,
+    market_settings: dict,
+) -> float:
+    path = f"market settings {coin}.c_mult"
+    if value is None:
+        source_exchange = _market_settings_exchange(coin, payload_exchange, market_settings)
+        coin_key = normalize_backtest_coin(coin)
+        warning_key = (str(payload_exchange), source_exchange, coin_key)
+        if warning_key not in _MISSING_C_MULT_WARNED:
+            _MISSING_C_MULT_WARNED.add(warning_key)
+            logging.warning(
+                "[backtest] %s missing for exchange=%s payload_exchange=%s; "
+                "defaulting to c_mult=1.0 for this backtest only. Wrong c_mult can distort "
+                "notional, PnL, fees, min-cost sizing, wallet exposure, and forager volume "
+                "selection. To set the historical value, configure "
+                "backtest.market_settings.overrides.%s.c_mult or "
+                "backtest.market_settings.overrides_by_exchange.%s.%s.c_mult.",
+                path,
+                source_exchange,
+                payload_exchange,
+                coin_key,
+                source_exchange,
+                coin_key,
+            )
+        return 1.0
+    return _required_float(value, path=path)
 
 
 def _build_coin_metadata_entries(
@@ -2008,8 +2045,11 @@ def prep_backtest_args(
                     effective_mss[coin].get("min_cost"),
                     path=f"market settings {coin}.min_cost",
                 ),
-                "c_mult": _required_float(
-                    effective_mss[coin].get("c_mult"), path=f"market settings {coin}.c_mult"
+                "c_mult": _required_backtest_c_mult(
+                    effective_mss[coin].get("c_mult"),
+                    coin=coin,
+                    payload_exchange=exchange,
+                    market_settings=effective_mss[coin],
                 ),
                 "maker_fee": float(maker_fee),
                 "taker_fee": float(taker_fee),
