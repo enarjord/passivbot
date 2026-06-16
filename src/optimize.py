@@ -2062,17 +2062,44 @@ async def main():
             )
         )
         if args.resume:
-            raw_end_date = str(require_config_value(config, "backtest.end_date")).strip().lower()
-            if raw_end_date == "now" or raw_end_date == "":
-                raise ValueError(
-                    "\n\nERROR: Cannot use --resume with a dynamic end_date ('now'). "
-                    "The shifting time frame would corrupt the optimization scores. "
-                    "Please hard-code the end_date in your config (e.g. '2026-06-16') "
-                    "or start a fresh run.\n"
-                )
             results_dir = make_get_filepath(args.resume)
             if not os.path.isdir(results_dir):
                 raise ValueError(f"Resume directory not found: {results_dir}")
+                
+            results_filename_check = os.path.join(results_dir, "all_results.bin")
+            if os.path.isfile(results_filename_check):
+                try:
+                    import msgpack
+                    with open(results_filename_check, "rb") as f:
+                        unpacker = msgpack.Unpacker(f, max_buffer_size=1024*1024*100)
+                        for entry in unpacker:
+                            old_bt = entry.get("backtest", {})
+                            new_bt = config.get("backtest", {})
+                            old_opt = entry.get("optimize", {})
+                            new_opt = config.get("optimize", {})
+                            
+                            mismatches = []
+                            for key in ["start_date", "end_date", "coins", "exchanges"]:
+                                if str(old_bt.get(key, "")) != str(new_bt.get(key, "")):
+                                    mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
+                            
+                            for key in ["scoring"]:
+                                if str(old_opt.get(key, "")) != str(new_opt.get(key, "")):
+                                    mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
+                            
+                            if mismatches:
+                                mismatch_str = "\n".join(mismatches)
+                                raise ValueError(
+                                    f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                                    f"Mismatches detected:\n{mismatch_str}\n\n"
+                                    f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                                    f"Please restore the original config or start a fresh run.\n"
+                                )
+                            break
+                except ValueError:
+                    raise
+                except Exception as e:
+                    logging.warning(f"Could not verify previous config from all_results.bin: {e}")
         else:
             results_dir = make_get_filepath(
                 f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
