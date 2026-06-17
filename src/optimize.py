@@ -561,6 +561,45 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     _clear_candidate_metrics(individual)
 
 
+def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
+    old_bt = entry.get("backtest") or {}
+    new_bt = config.get("backtest") or {}
+    old_opt = entry.get("optimize") or {}
+    new_opt = config.get("optimize") or {}
+    old_bot = entry.get("bot", entry) or {}
+    new_bot = config.get("bot", config) or {}
+    old_live = entry.get("live") or {}
+    new_live = config.get("live") or {}
+
+    mismatches = []
+    is_suite_result = entry.get("suite_metrics") is not None
+    backtest_keys = ["start_date", "end_date", "exchanges"]
+    if is_suite_result:
+        backtest_keys.append("scenarios")
+        if old_bt.get("coins") is not None:
+            backtest_keys.append("coins")
+    else:
+        backtest_keys.append("coins")
+    for key in backtest_keys:
+        if old_bt.get(key) != new_bt.get(key):
+            mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
+
+    for key in ["scoring", "passivbot_mode"]:
+        if old_opt.get(key) != new_opt.get(key):
+            mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
+
+    for side in ["long", "short"]:
+        old_en = old_bot.get(side, {}).get("enabled", True)
+        new_en = new_bot.get(side, {}).get("enabled", True)
+        if old_en != new_en:
+            mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
+
+    for key in ["approved_coins", "ignored_coins"]:
+        if old_live.get(key) != new_live.get(key):
+            mismatches.append(f"  - live.{key}: changed")
+    return mismatches
+
+
 def ea_mu_plus_lambda_stream(
     population,
     toolbox,
@@ -2078,34 +2117,7 @@ async def main():
                     with open(results_filename_check, "rb") as f:
                         unpacker = msgpack.Unpacker(f, max_buffer_size=1024*1024*100)
                         for entry in unpacker:
-                            old_bt = entry.get("backtest", {})
-                            new_bt = config.get("backtest", {})
-                            old_opt = entry.get("optimize", {})
-                            new_opt = config.get("optimize", {})
-                            old_bot = entry.get("bot", entry)
-                            new_bot = config.get("bot", config)
-                            old_live = entry.get("live", {})
-                            new_live = config.get("live", {})
-                            
-                            mismatches = []
-                            for key in ["start_date", "end_date", "coins", "exchanges"]:
-                                if old_bt.get(key) != new_bt.get(key):
-                                    mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
-                            
-                            for key in ["scoring", "passivbot_mode"]:
-                                if old_opt.get(key) != new_opt.get(key):
-                                    mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
-                            
-                            for side in ["long", "short"]:
-                                old_en = old_bot.get(side, {}).get("enabled", True)
-                                new_en = new_bot.get(side, {}).get("enabled", True)
-                                if old_en != new_en:
-                                    mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
-                                    
-                            for key in ["approved_coins", "ignored_coins"]:
-                                if old_live.get(key) != new_live.get(key):
-                                    mismatches.append(f"  - live.{key}: changed")
-                            
+                            mismatches = _resume_config_mismatches(entry, config)
                             if mismatches:
                                 mismatch_str = "\n".join(mismatches)
                                 raise ValueError(

@@ -1915,6 +1915,69 @@ def test_build_pymoo_record_entry_strips_metadata():
     assert "suite_metrics" in entry
 
 
+def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
+        },
+        "bot": {"long": {"enabled": True}, "short": {"enabled": False}},
+        "live": {
+            "approved_coins": {"long": ["XMR"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "suite_metrics": {"scenario_labels": ["base"]},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["coins"] = {"binance": ["XMR"]}
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
+def test_resume_config_mismatches_rejects_changed_suite_scenarios():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
+        },
+        "bot": {},
+        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "suite_metrics": {"scenario_labels": ["base"]},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["scenarios"][0]["coins"] = ["ETH"]
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("backtest.scenarios" in mismatch for mismatch in mismatches)
+
+
+def test_resume_config_mismatches_plain_result_still_rejects_coin_change():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "coins": {"binance": ["XMR"]},
+        },
+        "bot": {},
+        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "optimize": {},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["coins"] = {"binance": ["ETH"]}
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("backtest.coins" in mismatch for mismatch in mismatches)
+
+
 def test_result_recorder_preserves_unquantized_saved_param_values():
     template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)
