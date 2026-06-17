@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from candlestick_manager import CANDLE_DTYPE
 from config import load_prepared_config
+from config.pnl_lookback import parse_pnls_max_lookback_days
 from exchanges.fake import FakeCCXTClient, load_fake_scenario
 from fill_events_manager import FillEvent, FillEventCache
 from logging_setup import configure_logging
@@ -334,9 +335,39 @@ def _prime_fake_fill_cache(bot, fake_client: FakeCCXTClient, cache_root: Path | 
     events = [FillEvent.from_dict(event) for event in fake_client.get_fill_events(None, None)]
     cache.save(events)
     if events:
-        cache.mark_covered_start(min(int(event.timestamp) for event in events))
+        cache.update_metadata_from_events(events)
+    coverage_start_ms, history_scope = _fake_fill_cache_coverage(bot, fake_client, events)
+    if coverage_start_ms is not None:
+        cache.mark_covered_start(coverage_start_ms)
+    if history_scope is not None:
+        cache.set_history_scope(history_scope)
+    elif coverage_start_ms is not None:
         cache.set_history_scope("window")
     return cache_path
+
+
+def _fake_fill_cache_coverage(
+    bot, fake_client: FakeCCXTClient, events: list[FillEvent]
+) -> tuple[int | None, str | None]:
+    """Return the earliest fake-history start covered by the staged cache."""
+    config = getattr(bot, "config", None)
+    live = config.get("live") if isinstance(config, dict) else None
+    if isinstance(live, dict) and "pnls_max_lookback_days" in live:
+        lookback = parse_pnls_max_lookback_days(
+            live["pnls_max_lookback_days"],
+            field_name="live.pnls_max_lookback_days",
+        )
+        if lookback.is_all:
+            return None, "all"
+        now_ms = int(fake_client.now_ms)
+        starts = [lookback.event_history_start_ms(now_ms)]
+        hsl_window_ms = lookback.hsl_window_ms()
+        if hsl_window_ms is not None:
+            starts.append(now_ms - int(hsl_window_ms))
+        return min(int(start) for start in starts if start is not None), "window"
+    if events:
+        return min(int(event.timestamp) for event in events), "window"
+    return None, None
 
 
 def _prime_fake_candles(bot, fake_client: FakeCCXTClient) -> None:

@@ -8,6 +8,16 @@ import pytest
 from pareto_analyzer import DEFAULT_TOP, analyze_from_args, build_parser, format_analysis
 
 
+def _metric_stats(value: float, *, min_value: float | None = None, max_value: float | None = None) -> dict:
+    return {
+        "mean": value,
+        "min": value if min_value is None else min_value,
+        "max": value if max_value is None else max_value,
+        "std": 0.0,
+        "median": value,
+    }
+
+
 def _write_candidate(
     pareto_dir: Path,
     name: str,
@@ -46,13 +56,16 @@ def _write_candidate(
                 "drawdown_worst_strategy_eq": drawdown,
             },
             "stats": {
-                "adg_strategy_eq": {"mean": adg, "min": adg * 0.5, "max": adg * 1.5, "std": 0.0},
-                "drawdown_worst_strategy_eq": {
-                    "mean": drawdown,
-                    "min": drawdown * 0.8,
-                    "max": drawdown * 1.2,
-                    "std": 0.0,
-                },
+                "adg_strategy_eq": _metric_stats(
+                    adg,
+                    min_value=adg * 0.5,
+                    max_value=adg * 1.5,
+                ),
+                "drawdown_worst_strategy_eq": _metric_stats(
+                    drawdown,
+                    min_value=drawdown * 0.8,
+                    max_value=drawdown * 1.2,
+                ),
             },
         },
     }

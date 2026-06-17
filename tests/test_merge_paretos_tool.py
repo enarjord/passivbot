@@ -14,6 +14,10 @@ SCORING = [
 ]
 
 
+def _metric_stats(value: float) -> dict:
+    return {"mean": value, "min": value, "max": value, "std": 0.0, "median": value}
+
+
 def _side_config(side: str, value: float, *, enabled: bool) -> dict:
     return {
         "n_positions": 1.0 if enabled else 0.0,
@@ -56,8 +60,8 @@ def _write_candidate(
         "metrics": {
             "objectives": {"metric_a": metric_a, "metric_b": metric_b},
             "stats": {
-                "metric_a": {"mean": metric_a},
-                "metric_b": {"mean": metric_b},
+                "metric_a": _metric_stats(metric_a),
+                "metric_b": _metric_stats(metric_b),
             },
         },
     }
@@ -88,8 +92,8 @@ def _write_nested_candidate(
         "metrics": {
             "objectives": {"metric_a": metric_a, "metric_b": metric_b},
             "stats": {
-                "metric_a": {"mean": metric_a},
-                "metric_b": {"mean": metric_b},
+                "metric_a": _metric_stats(metric_a),
+                "metric_b": _metric_stats(metric_b),
             },
         },
     }

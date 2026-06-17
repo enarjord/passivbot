@@ -312,6 +312,7 @@ def make_input(*, balance: float, global_bp=None, symbols):
             "filter_by_min_effective_cost": False,
             "unstuck_allowance_long": 0.0,
             "unstuck_allowance_short": 0.0,
+            "max_realized_loss_pct": 0.0,
             "sort_global": True,
             "global_bot_params": global_bp or bot_params_pair(),
             "strategy_kind": "trailing_martingale",

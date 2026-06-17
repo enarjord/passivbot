@@ -16,6 +16,10 @@ from pareto_explorer import (
 )
 
 
+def _metric_stats(value: float) -> dict:
+    return {"mean": value, "min": value, "max": value, "std": 0.0, "median": value}
+
+
 def _write_candidate(
     path: Path,
     name: str,
@@ -24,12 +28,12 @@ def _write_candidate(
     extra_stats: dict[str, float] | None = None,
 ) -> None:
     stats = {
-        "metric_a": {"mean": objectives["metric_a"]},
-        "metric_b": {"mean": objectives["metric_b"]},
-        "metric_c": {"mean": objectives["metric_c"]},
+        "metric_a": _metric_stats(objectives["metric_a"]),
+        "metric_b": _metric_stats(objectives["metric_b"]),
+        "metric_c": _metric_stats(objectives["metric_c"]),
     }
     for metric, value in (extra_stats or {}).items():
-        stats[metric] = {"mean": value}
+        stats[metric] = _metric_stats(value)
     payload = {
         "optimize": {
             "scoring": [
@@ -81,18 +85,21 @@ def _write_suite_candidate(
                         "min": adg_min,
                         "max": max(adg_mean, adg_min),
                         "std": 0.0,
+                        "median": adg_mean,
                     },
                     "peak_recovery_hours_hsl": {
                         "mean": recovery_mean,
                         "min": recovery_mean,
                         "max": recovery_max,
                         "std": 0.0,
+                        "median": recovery_mean,
                     },
                     "drawdown_worst_hsl": {
                         "mean": drawdown_mean,
                         "min": drawdown_mean,
                         "max": drawdown_max,
                         "std": 0.0,
+                        "median": drawdown_mean,
                     },
                 },
                 "aggregated": {
@@ -125,27 +132,17 @@ def _write_fill_suite_candidate(
         "suite_metrics": {
             "metrics": {
                 "adg_strategy_eq": {
-                    "stats": {"mean": adg, "min": adg, "max": adg, "std": 0.0},
+                    "stats": _metric_stats(adg),
                     "aggregated": adg,
                     "scenarios": {},
                 },
                 "fills_gap_p95_hours": {
-                    "stats": {
-                        "mean": p95_gap,
-                        "min": p95_gap,
-                        "max": p95_gap,
-                        "std": 0.0,
-                    },
+                    "stats": _metric_stats(p95_gap),
                     "aggregated": p95_gap,
                     "scenarios": {},
                 },
                 "fills_gap_p99_hours": {
-                    "stats": {
-                        "mean": p99_gap,
-                        "min": p99_gap,
-                        "max": p99_gap,
-                        "std": 0.0,
-                    },
+                    "stats": _metric_stats(p99_gap),
                     "aggregated": p99_gap,
                     "scenarios": {},
                 },
@@ -460,7 +457,7 @@ def test_select_candidate_accepts_non_scoring_metric_from_stats(sample_pareto_di
     }.items():
         path = sample_pareto_dir / entry_path
         payload = json.loads(path.read_text())
-        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = {"mean": sharpe}
+        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = _metric_stats(sharpe)
         path.write_text(json.dumps(payload, indent=2))
 
     _pareto_dir, candidates, specs = load_candidates(sample_pareto_dir)
@@ -515,7 +512,7 @@ def test_run_from_args_formats_goal_for_non_scoring_metric(sample_pareto_dir: Pa
     }.items():
         path = sample_pareto_dir / entry_path
         payload = json.loads(path.read_text())
-        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = {"mean": sharpe}
+        payload["metrics"]["stats"]["sharpe_ratio_strategy_pnl_rebased"] = _metric_stats(sharpe)
         path.write_text(json.dumps(payload, indent=2))
 
     args = argparse.Namespace(

@@ -647,6 +647,7 @@ async def test_get_latest_ema_close_1h_excludes_current_hour_at_boundary(monkeyp
         timeframe=None,
         tf=None,
         fill_leading_gaps=False,
+        fill_trailing_gaps=None,
         max_lookback_candles=None,
         allow_remote_fetch=True,
         ):
