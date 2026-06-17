@@ -3049,6 +3049,8 @@ def test_effective_min_cost_filter_uses_active_strategy_initial_sizing(monkeypat
     bot.bp = lambda pside, key, symbol=None: (
         0.0
         if key == "risk_we_excess_allowance_pct"
+        else "bounded"
+        if key == "risk_we_excess_allowance_mode"
         else (_ for _ in ()).throw(KeyError(key))
     )
     bot.bot_value = lambda pside, key: 1.0 if key == "total_wallet_exposure_limit" else 0.0
