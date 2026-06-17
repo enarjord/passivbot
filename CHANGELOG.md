@@ -18,7 +18,8 @@ All notable user-facing changes will be documented in this file.
   and the Passivbot `balance = equity - uPNL` contract. Missing/invalid uPNL on
   a counted position hard-fails rather than defaulting.
 - Added `backtest.market_settings` overrides for historical/rebranded market metadata, including
-  exchange-specific overrides before Rust backtests receive market parameters.
+  exchange-specific overrides before Rust backtests receive market parameters; backtests now warn
+  and default missing `c_mult` to 1.0 instead of hard-failing.
 - Fixed live `[pos]` logging so short position size increases are labeled as
   `added` and short size decreases as `reduced`, matching exposure magnitude
   instead of signed numeric ordering.
