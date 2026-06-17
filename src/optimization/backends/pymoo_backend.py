@@ -4,6 +4,8 @@ import functools
 import logging
 import math
 import multiprocessing
+import os
+import pickle
 from typing import Any
 
 import numpy as np
@@ -12,6 +14,7 @@ try:
     from pymoo.algorithms.moo.nsga2 import NSGA2
     from pymoo.algorithms.moo.nsga3 import NSGA3
     from pymoo.core.population import Population
+    from pymoo.core.callback import Callback
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
@@ -21,6 +24,7 @@ except ImportError:  # pragma: no cover
     NSGA2 = None
     NSGA3 = None
     Population = None
+    Callback = object
     get_reference_directions = None
 
 from optimization.backend_shared import (
@@ -456,6 +460,56 @@ def _build_algorithm(
     )
 
 
+class PymooCheckpointCallback(Callback):
+    def __init__(self, path):
+        super().__init__()
+        self.path = path
+
+    def notify(self, algorithm):
+        try:
+            # Temporarily detach unpicklable runner/pool and evaluator
+            problem = getattr(algorithm, "problem", None)
+            runner = getattr(problem, "elementwise_runner", None) if problem else None
+            adapter = getattr(problem, "evaluator_adapter", None) if problem else None
+            evaluator = getattr(adapter, "evaluator", None) if adapter else None
+
+            alg_evaluator = getattr(algorithm, "evaluator", None)
+            alg_problem = getattr(alg_evaluator, "problem", None) if alg_evaluator else None
+            alg_runner = getattr(alg_problem, "elementwise_runner", None) if alg_problem else None
+            alg_adapter = getattr(alg_problem, "evaluator_adapter", None) if alg_problem else None
+            alg_adapter_evaluator = getattr(alg_adapter, "evaluator", None) if alg_adapter else None
+
+            try:
+                if runner is not None:
+                    algorithm.problem.elementwise_runner = None
+                if evaluator is not None:
+                    adapter.evaluator = None
+
+                if alg_runner is not None:
+                    alg_problem.elementwise_runner = None
+                if alg_adapter is not None:
+                    alg_adapter.evaluator = None
+
+                tmp_path = self.path + ".tmp"
+                with open(tmp_path, "wb") as f:
+                    pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(tmp_path, self.path)
+            finally:
+                # Restore runner and evaluator
+                if runner is not None:
+                    algorithm.problem.elementwise_runner = runner
+                if evaluator is not None:
+                    adapter.evaluator = evaluator
+
+                if alg_runner is not None:
+                    alg_problem.elementwise_runner = alg_runner
+                if alg_adapter is not None:
+                    alg_adapter.evaluator = alg_adapter_evaluator
+
+        except Exception as exc:
+            raise RuntimeError(f"Failed to save pymoo checkpoint: {self.path}") from exc
+
+
 def run_backend(
     *,
     config: dict[str, Any],
@@ -476,6 +530,8 @@ def run_backend(
     run_evolution,
     build_config_fn,
     overrides_fn,
+    checkpoint_path: str | None = None,
+    resume: bool = False,
 ) -> dict[str, Any]:
     del evaluator
     del duplicate_counter
@@ -547,45 +603,76 @@ def run_backend(
             evaluator_adapter=evaluator_adapter,
             elementwise_runner=runner,
         )
-        algorithm = _build_algorithm(
-            config=config,
-            sampling=sampling,
-            bounds=bounds,
-            sig_digits=sig_digits,
-            population_plan=population_plan,
-        )
-        if starting_individuals:
-            seed_payloads = _evaluate_starting_individuals(
-                starting_individuals=starting_individuals,
+
+        algorithm = None
+        if resume:
+            if checkpoint_path is None:
+                raise ValueError("PyMoo resume requested without a checkpoint path")
+            if not os.path.isfile(checkpoint_path):
+                raise FileNotFoundError(f"PyMoo checkpoint not found: {checkpoint_path}")
+            logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
+            with open(checkpoint_path, "rb") as f:
+                algorithm = pickle.load(f)
+            algorithm.has_terminated = False
+
+            # Restore the active runner (pool) and evaluator
+            if hasattr(algorithm, "problem"):
+                algorithm.problem.elementwise_runner = runner
+                if hasattr(algorithm.problem, "evaluator_adapter"):
+                    algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
+            if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
+                algorithm.evaluator.problem.elementwise_runner = runner
+                if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
+                    algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
+
+        if algorithm is None:
+            algorithm = _build_algorithm(
                 config=config,
-                evaluator=evaluator_for_pool,
-                overrides_list=overrides_list,
-                runner=runner,
-                n_obj=len(config["optimize"]["scoring"]),
-                has_constraints=evaluator_adapter.has_constraints,
-            )
-            logging.info("Evaluated %d starting configs", len(seed_payloads))
-            log_seed_memory(
-                "pymoo_starting_payloads_ready",
-                count=len(seed_payloads),
-                approx_bytes=approx_object_size(seed_payloads),
-            )
-            algorithm.initialization.sampling = _reduce_starting_population(
-                problem=problem,
-                algorithm=algorithm,
-                starting_individuals=starting_individuals,
-                payloads=seed_payloads,
-                population_size=population_size,
+                sampling=sampling,
                 bounds=bounds,
+                sig_digits=sig_digits,
+                population_plan=population_plan,
             )
+            if starting_individuals:
+                seed_payloads = _evaluate_starting_individuals(
+                    starting_individuals=starting_individuals,
+                    config=config,
+                    evaluator=evaluator_for_pool,
+                    overrides_list=overrides_list,
+                    runner=runner,
+                    n_obj=len(config["optimize"]["scoring"]),
+                    has_constraints=evaluator_adapter.has_constraints,
+                )
+                logging.info("Evaluated %d starting configs", len(seed_payloads))
+                log_seed_memory(
+                    "pymoo_starting_payloads_ready",
+                    count=len(seed_payloads),
+                    approx_bytes=approx_object_size(seed_payloads),
+                )
+                algorithm.initialization.sampling = _reduce_starting_population(
+                    problem=problem,
+                    algorithm=algorithm,
+                    starting_individuals=starting_individuals,
+                    payloads=seed_payloads,
+                    population_size=population_size,
+                    bounds=bounds,
+                )
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
+
+        minimize_kwargs = {
+            "seed": 1,
+            "verbose": False,
+            "copy_algorithm": False,
+        }
+        if checkpoint_path is not None:
+            minimize_kwargs["callback"] = PymooCheckpointCallback(checkpoint_path)
+
         pymoo_minimize(
             problem,
             algorithm,
             get_termination("n_gen", ngen),
-            seed=1,
-            verbose=False,
+            **minimize_kwargs
         )
         logging.info("Optimization complete.")
         return {

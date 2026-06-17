@@ -13,6 +13,9 @@ All notable user-facing changes will be documented in this file.
   overridden coin+side is selected for auto-unstucking, Rust uses that percentage
   in the existing account-wide allowance formula while preserving the one-position
   global unstuck selection behavior.
+- Added Bitget UTA / Elite copy-trading account support with v3 API routing for
+  balance, orders, and fill-event history while keeping classic Bitget accounts
+  on the existing v2/mix paths.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
@@ -187,6 +190,9 @@ All notable user-facing changes will be documented in this file.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.
+- Added optimizer `--resume` checkpoint recovery safeguards: resume now requires a
+  readable checkpoint plus prior `all_results.bin` metadata, rejects changed optimizer
+  search domains before appending results, and exits non-zero on fatal optimizer errors.
 
 ## v7.12.0 - 2026-05-27
 
