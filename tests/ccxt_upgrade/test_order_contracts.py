@@ -598,6 +598,84 @@ async def test_bitget_fetch_fill_events_uta_rejects_malformed_rows():
         await bot._fetch_fill_events_uta(start_time=900, end_time=2000, limit=100)
 
 
+@pytest.mark.asyncio
+async def test_bitget_fetch_closed_orders_routes_uta_to_v3_fills():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+    bot.get_symbol_id_inv = lambda symbol: "BTC/USDT:USDT" if symbol == "BTCUSDT" else symbol
+    calls = []
+
+    async def private_uta_get_v3_trade_fills(params):
+        calls.append(dict(params))
+        if len(calls) > 1:
+            return {"data": {"list": []}}
+        return {
+            "data": {
+                "list": [
+                    {
+                        "execId": "exec-close-long",
+                        "orderId": "order-close-long",
+                        "createdTime": "1000",
+                        "symbol": "BTCUSDT",
+                        "side": "sell",
+                        "tradeSide": "close",
+                        "execQty": "0.1",
+                        "execPrice": "11",
+                        "execPnl": "1",
+                    }
+                ]
+            }
+        }
+
+    async def fetch_closed_orders(*args, **kwargs):
+        raise AssertionError("UTA closed-order history must use v3 trade fills")
+
+    bot.cca = SimpleNamespace(
+        private_uta_get_v3_trade_fills=private_uta_get_v3_trade_fills,
+        fetch_closed_orders=fetch_closed_orders,
+    )
+
+    events = await bot.fetch_closed_orders(start_time=900, end_time=2000, limit=100)
+
+    assert len(events) == 1
+    assert events[0]["id"] == "exec-close-long"
+    assert events[0]["pnl"] == pytest.approx(1.0)
+    assert events[0]["position_side"] == "long"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("info", "match"),
+    [
+        ({"posSide": "long"}, "totalProfits"),
+        ({"totalProfits": "1.0"}, "posSide"),
+    ],
+)
+async def test_bitget_fetch_closed_orders_requires_pnl_and_position_side(info, match):
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = False
+
+    async def fetch_closed_orders(limit=None, params=None):
+        return [
+            {
+                "id": "closed-order",
+                "lastUpdateTimestamp": "1000",
+                "timestamp": 1000,
+                "symbol": "BTC/USDT:USDT",
+                "side": "sell",
+                "price": "11",
+                "filled": "0.1",
+                "clientOrderId": "0x0007abcdef",
+                "info": info,
+            }
+        ]
+
+    bot.cca = SimpleNamespace(fetch_closed_orders=fetch_closed_orders)
+
+    with pytest.raises(ValueError, match=match):
+        await bot.fetch_closed_orders(start_time=900, end_time=2000, limit=100)
+
+
 def test_gateio_order_side_contract_depends_on_reduce_only_flag():
     bot = GateIOBot.__new__(GateIOBot)
     assert bot.determine_pos_side({"side": "buy", "reduceOnly": False}) == "long"

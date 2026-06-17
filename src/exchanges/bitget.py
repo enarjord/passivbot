@@ -861,10 +861,37 @@ class BitgetBot(CCXTBot):
         return sorted(events_map.values(), key=lambda x: x["timestamp"])
 
     async def fetch_closed_orders(self, start_time, end_time, limit=100):
+        if getattr(self, "is_uta", False):
+            return await self._fetch_fill_events_uta(start_time, end_time, limit)
+
         def extract_fill_event_from_co(elm):
             timestamp = int(elm["lastUpdateTimestamp"])
             price = float(elm["price"])
             qty = float(elm["filled"])
+            info = elm.get("info")
+            if not isinstance(info, dict):
+                raise ValueError(
+                    "bitget closed-order payload missing info; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
+            if info.get("totalProfits") in (None, ""):
+                raise ValueError(
+                    "bitget closed-order payload missing info.totalProfits; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
+            try:
+                pnl = float(info["totalProfits"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "bitget closed-order info.totalProfits is not numeric; "
+                    f"value={info.get('totalProfits')!r} context={_bitget_payload_context(elm)}"
+                ) from exc
+            position_side = str(info.get("posSide") or "").lower()
+            if position_side not in ("long", "short"):
+                raise ValueError(
+                    "bitget closed-order payload missing valid info.posSide; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
             pb_order_type = custom_id_to_snake(elm.get("clientOrderId"))
             if not pb_order_type or pb_order_type == "unknown":
                 if not hasattr(self, "pb_order_type_missing_logged"):
@@ -878,7 +905,7 @@ class BitgetBot(CCXTBot):
                         or elm.get("symbol"),
                         elm.get("clientOrderId"),
                         elm.get("side"),
-                        elm.get("info", {}).get("posSide"),
+                        position_side,
                         qty,
                         price,
                     )
@@ -891,10 +918,10 @@ class BitgetBot(CCXTBot):
                 "side": elm["side"],
                 "qty": qty,
                 "price": price,
-                "pnl": float((elm.get("info") or {}).get("totalProfits") or 0.0),
+                "pnl": pnl,
                 "fees": elm.get("fees"),
                 "pb_order_type": pb_order_type,
-                "position_side": (elm.get("info") or {}).get("posSide", "long"),
+                "position_side": position_side,
                 "client_order_id": elm.get("clientOrderId"),
             }
 
