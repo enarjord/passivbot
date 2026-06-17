@@ -7085,6 +7085,16 @@ def _instantiate_bot(config: dict):
     return bot_cls(config)
 
 
+async def _prepare_cli_fetcher_bot(bot) -> None:
+    """Prepare read-only exchange routing needed before building a CLI fetcher."""
+    exchange = str(getattr(bot, "exchange", "") or "").lower()
+    if exchange == "bitget" and hasattr(bot, "_detect_account_mode"):
+        # The standalone fill-events CLI does not run the full live startup
+        # exchange-config path. Bitget UTA detection is a read-only v3 account
+        # assets probe and is required before BitgetFetcher can choose v3 fills.
+        await bot._detect_account_mode()
+
+
 async def _run_cli(args: argparse.Namespace) -> None:
     source_config, base_config_path, raw_snapshot = load_input_config(args.config)
     config = prepare_config(
@@ -7101,6 +7111,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
     bot = _instantiate_bot(config)
     try:
         bot._fill_fetcher_allow_config_symbol_fallback = True
+        await _prepare_cli_fetcher_bot(bot)
         symbol_pool = _extract_symbol_pool(config, args.symbols)
         fetcher = _build_fetcher_for_bot(bot, symbol_pool)
         cache_root = Path(args.cache_root)

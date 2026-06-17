@@ -1993,6 +1993,40 @@ async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_fill_events_cli_prepares_bitget_uta_fetcher_mode():
+    class _Bot:
+        exchange = "bitget"
+
+        def __init__(self):
+            self.cca = types.SimpleNamespace(options={})
+            self.detect_calls = 0
+
+        async def _detect_account_mode(self):
+            self.detect_calls += 1
+            self.cca.options["uta"] = True
+
+    bot = _Bot()
+
+    await fem._prepare_cli_fetcher_bot(bot)
+    fetcher = fem._build_fetcher_for_bot(bot, ["BTC"])
+
+    assert bot.detect_calls == 1
+    assert isinstance(fetcher, BitgetFetcher)
+    assert fetcher.api.options["uta"] is True
+
+
+@pytest.mark.asyncio
+async def test_fill_events_cli_prepare_skips_non_bitget_bot():
+    class _Bot:
+        exchange = "binance"
+
+        async def _detect_account_mode(self):
+            raise AssertionError("non-Bitget CLI fetchers must not probe Bitget UTA mode")
+
+    await fem._prepare_cli_fetcher_bot(_Bot())
+
+
+@pytest.mark.asyncio
 async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     fills = [
         [

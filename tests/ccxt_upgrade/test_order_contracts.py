@@ -474,22 +474,26 @@ async def test_bitget_account_mode_detection_sets_uta_on_v3_success():
 
 @pytest.mark.asyncio
 async def test_bitget_account_mode_detection_uses_classic_only_for_explicit_code():
-    bot = BitgetBot.__new__(BitgetBot)
-    bot.is_uta = True
-    bot._account_mode_detected = False
+    for code in ("40084", "25245"):
+        bot = BitgetBot.__new__(BitgetBot)
+        bot.is_uta = True
+        bot._account_mode_detected = False
 
-    async def private_uta_get_v3_account_assets():
-        raise Exception('bitget {"code":"40084","msg":"Classic Account mode"}')
+        async def private_uta_get_v3_account_assets(error_code=code):
+            raise Exception(f'bitget {{"code":"{error_code}","msg":"Classic Account mode"}}')
 
-    bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=private_uta_get_v3_account_assets)
-    bot.ccp = SimpleNamespace(options={})
+        bot.cca = SimpleNamespace(
+            options={},
+            private_uta_get_v3_account_assets=private_uta_get_v3_account_assets,
+        )
+        bot.ccp = SimpleNamespace(options={})
 
-    await bot._detect_account_mode()
+        await bot._detect_account_mode()
 
-    assert bot.is_uta is False
-    assert bot._account_mode_detected is True
-    assert bot.cca.options["uta"] is False
-    assert bot.ccp.options["uta"] is False
+        assert bot.is_uta is False
+        assert bot._account_mode_detected is True
+        assert bot.cca.options["uta"] is False
+        assert bot.ccp.options["uta"] is False
 
 
 @pytest.mark.asyncio
