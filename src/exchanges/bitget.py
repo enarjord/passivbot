@@ -3,14 +3,150 @@ from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
 import json
 import os
+import re
 from copy import deepcopy
-from typing import Dict, List, Tuple
+from typing import Callable, Dict, List, Tuple
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
 from pure_funcs import calc_hash
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
+
+_CLASSIC_ACCOUNT_MODE_CODES = {"40084", "25245"}
+
+
+def _bitget_payload_context(payload: object) -> str:
+    if isinstance(payload, dict):
+        keys = sorted(str(key) for key in payload.keys())
+        data = payload.get("data")
+        data_keys = sorted(str(key) for key in data.keys()) if isinstance(data, dict) else []
+        code = payload.get("code")
+        msg = payload.get("msg")
+        return f"code={code!r} msg={msg!r} keys={keys!r} data_keys={data_keys!r}"
+    return f"type={type(payload).__name__}"
+
+
+def _bitget_error_code_from_exception(exc: Exception) -> str:
+    payload = getattr(exc, "response", None) or getattr(exc, "body", None)
+    if isinstance(payload, bytes):
+        payload = payload.decode(errors="replace")
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, dict) and decoded.get("code") is not None:
+            return str(decoded["code"])
+    elif isinstance(payload, dict) and payload.get("code") is not None:
+        return str(payload["code"])
+
+    msg = str(exc)
+    match = re.search(r"['\"]code['\"]\s*:\s*['\"]?(\d+)['\"]?", msg)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b(40084|25245)\b", msg)
+    return match.group(1) if match else ""
+
+
+def _require_uta_field(fill: dict, field: str) -> object:
+    if field not in fill or fill[field] in (None, ""):
+        raise ValueError(
+            f"bitget UTA fill missing required field {field!r}; "
+            f"context={_bitget_payload_context(fill)}"
+        )
+    return fill[field]
+
+
+def _require_uta_float(fill: dict, field: str, *, positive: bool = False) -> float:
+    raw = _require_uta_field(fill, field)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"bitget UTA fill field {field!r} is not numeric; "
+            f"value={raw!r} context={_bitget_payload_context(fill)}"
+        ) from exc
+    if positive and value <= 0.0:
+        raise ValueError(
+            f"bitget UTA fill field {field!r} must be positive; "
+            f"value={raw!r} context={_bitget_payload_context(fill)}"
+        )
+    return value
+
+
+def _require_uta_timestamp(fill: dict) -> int:
+    raw = _require_uta_field(fill, "createdTime")
+    try:
+        timestamp = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"bitget UTA fill createdTime is not an integer millisecond timestamp; "
+            f"value={raw!r} context={_bitget_payload_context(fill)}"
+        ) from exc
+    if timestamp <= 0:
+        raise ValueError(
+            f"bitget UTA fill createdTime must be positive; "
+            f"value={raw!r} context={_bitget_payload_context(fill)}"
+        )
+    return timestamp
+
+
+def _bitget_fee_paid_from_fee(raw_fee: object) -> float:
+    fee = float(raw_fee)
+    return fee if fee < 0.0 else -abs(fee)
+
+
+def normalize_bitget_fee_detail(fee_detail: object) -> object:
+    """Normalize Bitget feeDetail rows into canonical signed fee entries."""
+    if fee_detail is None:
+        return fee_detail
+    if isinstance(fee_detail, dict):
+        entries = [fee_detail]
+    elif isinstance(fee_detail, str):
+        try:
+            decoded = json.loads(fee_detail)
+        except Exception:
+            return fee_detail
+        if isinstance(decoded, dict):
+            entries = [decoded]
+        elif isinstance(decoded, list):
+            entries = [entry for entry in decoded if isinstance(entry, dict)]
+        else:
+            return fee_detail
+    else:
+        try:
+            entries = [entry for entry in list(fee_detail) if isinstance(entry, dict)]
+        except Exception:
+            return fee_detail
+    if not entries:
+        return fee_detail
+
+    normalized: List[Dict[str, object]] = []
+    for entry in entries:
+        item = dict(entry)
+        currency = (
+            item.get("currency")
+            or item.get("feeCoin")
+            or item.get("coin")
+            or item.get("asset")
+            or item.get("feeCurrency")
+        )
+        if currency:
+            item["currency"] = str(currency).upper()
+        try:
+            if item.get("fee_paid") not in (None, ""):
+                item["fee_paid"] = float(item["fee_paid"])
+            elif item.get("totalFee") not in (None, ""):
+                item["fee_paid"] = float(item["totalFee"])
+            elif item.get("fee") not in (None, ""):
+                item["fee_paid"] = _bitget_fee_paid_from_fee(item["fee"])
+            elif item.get("totalDeductionFee") not in (None, ""):
+                item["fee_paid"] = float(item["totalDeductionFee"])
+        except (TypeError, ValueError):
+            pass
+        normalized.append(item)
+    return normalized
 
 
 def deduce_side_pside(fill: dict) -> tuple[str, str]:
@@ -105,15 +241,56 @@ def deduce_uta_side_pside(fill: dict) -> tuple[str, str]:
                 pos_side = "short"
 
     if pos_side not in ("long", "short"):
-        pos_side = "long" if raw_side != "sell" else "short"
+        raise ValueError(
+            "bitget UTA fill cannot infer position side; "
+            f"context={_bitget_payload_context(fill)}"
+        )
 
     if raw_side not in ("buy", "sell"):
         if trade_side == "close":
             raw_side = "sell" if pos_side == "long" else "buy"
-        else:
+        elif trade_side == "open":
             raw_side = "buy" if pos_side == "long" else "sell"
+    if raw_side not in ("buy", "sell"):
+        raise ValueError(
+            "bitget UTA fill cannot infer order side; "
+            f"context={_bitget_payload_context(fill)}"
+        )
 
     return raw_side, pos_side
+
+
+def normalize_uta_fill_payload(fill: dict, symbol_resolver: Callable[[str], str]) -> dict:
+    """Validate and normalize a Bitget UTA v3 fill payload."""
+
+    exec_id = str(_require_uta_field(fill, "execId"))
+    order_id = str(_require_uta_field(fill, "orderId"))
+    timestamp = _require_uta_timestamp(fill)
+    symbol_external = str(_require_uta_field(fill, "symbol"))
+    side, position_side = deduce_uta_side_pside(fill)
+    symbol = symbol_resolver(symbol_external)
+    if not symbol:
+        raise ValueError(
+            "bitget UTA fill symbol resolver returned an empty symbol; "
+            f"symbol={symbol_external!r} context={_bitget_payload_context(fill)}"
+        )
+    cid = fill.get("clientOid")
+    return {
+        "id": exec_id,
+        "order_id": order_id,
+        "timestamp": timestamp,
+        "datetime": ts_to_date(timestamp),
+        "symbol": symbol,
+        "symbol_external": symbol_external,
+        "side": side,
+        "qty": _require_uta_float(fill, "execQty", positive=True),
+        "price": _require_uta_float(fill, "execPrice", positive=True),
+        "pnl": _require_uta_float(fill, "execPnl"),
+        "fees": normalize_bitget_fee_detail(fill.get("feeDetail")),
+        "pb_order_type": custom_id_to_snake(cid) if cid else "",
+        "position_side": position_side,
+        "client_order_id": cid,
+    }
 
 
 class BitgetBot(CCXTBot):
@@ -143,31 +320,29 @@ class BitgetBot(CCXTBot):
         """Detect whether this API key is a UTA / Elite (copy-trading) account
         (Bitget v3 API) or a classic v2/mix account, and route ccxt accordingly.
 
-        Probes the v3 account-assets endpoint: it succeeds on UTA/Elite keys and
-        returns code 40084 ("Classic Account mode") on classic keys. On ANY
-        uncertainty we fall back to classic so existing classic accounts are
-        never affected (zero regression). Runs once per process."""
+        Probes the v3 account-assets endpoint: it succeeds on UTA/Elite keys.
+        Explicit classic-account responses select classic mode; any other
+        failure is inconclusive and must fail loudly so a UTA key is not routed
+        into classic v2/mix calls for the whole process lifetime."""
         if getattr(self, "_account_mode_detected", False):
             return
-        is_uta = False
         try:
             await self.cca.private_uta_get_v3_account_assets()
             is_uta = True
         except Exception as e:
-            msg = str(e)
-            if "40084" not in msg:
-                logging.warning(
-                    "[bitget] UTA detection inconclusive, assuming classic account: %s",
-                    msg[:200],
-                )
+            code = _bitget_error_code_from_exception(e)
+            if code not in _CLASSIC_ACCOUNT_MODE_CODES:
+                raise RuntimeError(
+                    "bitget: UTA account-mode detection failed inconclusively; "
+                    f"error_code={code or 'unknown'}"
+                ) from e
             is_uta = False
         self.is_uta = is_uta
         for client in (getattr(self, "cca", None), getattr(self, "ccp", None)):
             if client is not None:
-                try:
-                    client.options["uta"] = is_uta
-                except Exception:
-                    pass
+                if getattr(client, "options", None) is None:
+                    client.options = {}
+                client.options["uta"] = is_uta
         self._account_mode_detected = True
         logging.info(
             "[bitget] account mode: %s",
@@ -283,27 +458,18 @@ class BitgetBot(CCXTBot):
                 # Passivbot balance is wallet balance: equity - upnl.
                 # Bitget UTA's effEquity is discounted effective margin value,
                 # not account balance.
-                if data.get("usdtEquity") is not None:
-                    return float(data["usdtEquity"]) - float(
-                        data.get("usdtUnrealisedPnl") or 0.0
-                    )
-                if data.get("accountEquity") is not None:
-                    return float(data["accountEquity"]) - float(
-                        data.get("unrealisedPnl") or 0.0
-                    )
-                for x in data.get("assets") or []:
-                    if isinstance(x, dict) and x.get("coin") == self.quote:
-                        return float(x.get("balance") or x.get("available") or 0.0)
-            # Backwards-compatible parser for callers/tests that still pass a
-            # CCXT-parsed UTA balance. This is a quote-coin fallback only.
-            if isinstance(fetched, dict):
-                try:
-                    return float(fetched[self.quote]["total"])
-                except Exception:
-                    for x in fetched.get("info") or []:
-                        if isinstance(x, dict) and x.get("coin") == self.quote:
-                            return float(x.get("balance") or x.get("available") or 0.0)
-            raise KeyError("bitget: UTA balance response missing account equity")
+                if data.get("usdtEquity") not in (None, "") and data.get(
+                    "usdtUnrealisedPnl"
+                ) not in (None, ""):
+                    return float(data["usdtEquity"]) - float(data["usdtUnrealisedPnl"])
+                if data.get("accountEquity") not in (None, "") and data.get(
+                    "unrealisedPnl"
+                ) not in (None, ""):
+                    return float(data["accountEquity"]) - float(data["unrealisedPnl"])
+            raise ValueError(
+                "bitget: UTA balance response missing required account equity/upnl fields; "
+                f"context={_bitget_payload_context(fetched)}"
+            )
         balance_info = [x for x in fetched["info"] if x["marginCoin"] == self.quote][0]
         if (
             "assetMode" in balance_info
@@ -375,19 +541,19 @@ class BitgetBot(CCXTBot):
             if all([h in data_d for h in with_hashes]):
                 break
             for h, x in with_hashes.items():
-                _side, position_side = deduce_uta_side_pside(x)
-                data_d[h] = x
-                data_d[h]["pnl"] = float(x.get("execPnl") or 0.0)
-                data_d[h]["price"] = float(x.get("execPrice") or 0.0)
-                data_d[h]["amount"] = float(x.get("execQty") or 0.0)
-                data_d[h]["id"] = x.get("execId") or x.get("orderId")
-                data_d[h]["timestamp"] = float(x.get("createdTime") or 0.0)
-                data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
-                data_d[h]["position_side"] = position_side
-                data_d[h]["symbol"] = self.get_symbol_id_inv(x.get("symbol"))
+                event = normalize_uta_fill_payload(x, self.get_symbol_id_inv)
+                data_d[h] = dict(x)
+                data_d[h]["pnl"] = event["pnl"]
+                data_d[h]["price"] = event["price"]
+                data_d[h]["amount"] = event["qty"]
+                data_d[h]["id"] = event["id"]
+                data_d[h]["timestamp"] = float(event["timestamp"])
+                data_d[h]["datetime"] = event["datetime"]
+                data_d[h]["position_side"] = event["position_side"]
+                data_d[h]["symbol"] = event["symbol"]
             if start_time is None:
                 break
-            last_ts = float(data[-1].get("createdTime") or 0.0)
+            last_ts = float(_require_uta_timestamp(data[-1]))
             if last_ts <= start_time:
                 break
             logging.info(f"fetched {len(data)} fills until {ts_to_date(last_ts)[:19]}")
@@ -621,25 +787,9 @@ class BitgetBot(CCXTBot):
         enrichment is needed. Deduped by execId."""
 
         def _extract(elm: dict) -> dict:
-            ts = int(elm.get("createdTime") or 0)
-            side, pos_side = deduce_uta_side_pside(elm)
-            cid = elm.get("clientOid")
-            return {
-                "id": elm.get("execId") or elm.get("orderId"),
-                "order_id": elm.get("orderId"),
-                "timestamp": ts,
-                "datetime": ts_to_date(ts),
-                "symbol": self.get_symbol_id_inv(elm.get("symbol")),
-                "side": side,
-                "qty": float(elm.get("execQty") or 0.0),
-                "price": float(elm.get("execPrice") or 0.0),
-                "pnl": float(elm.get("execPnl") or 0.0),
-                "fees": elm.get("feeDetail"),
-                "pb_order_type": custom_id_to_snake(cid) if cid else None,
-                "position_side": pos_side,
-                "client_order_id": cid,
-                "info": elm,
-            }
+            event = normalize_uta_fill_payload(elm, self.get_symbol_id_inv)
+            event["info"] = elm
+            return event
 
         limit = 100 if limit is None else min(limit, 100)
         max_n_fetches = 200
@@ -666,7 +816,8 @@ class BitgetBot(CCXTBot):
             fetched = await self.cca.private_uta_get_v3_trade_fills(request_params)
             data = fetched.get("data") or {}
             rows = data.get("list") or []
-            fill_events = sorted([_extract(x) for x in rows], key=lambda x: x["timestamp"])
+            fill_events = [_extract(x) for x in rows]
+            fill_events.sort(key=lambda x: x["timestamp"])
             if not fill_events:
                 if start_time is not None and window_start is not None and window_start > start_time:
                     next_end = int(window_start) - 1
@@ -677,8 +828,8 @@ class BitgetBot(CCXTBot):
                     continue
                 break
             added = False
-            for fe, raw in zip(fill_events, sorted(rows, key=lambda r: int(r.get("createdTime") or 0))):
-                key = raw.get("execId") or f"{fe['id']}_{fe['timestamp']}"
+            for fe in fill_events:
+                key = fe["id"]
                 if key not in events_map:
                     events_map[key] = fe
                     added = True
@@ -830,7 +981,7 @@ class BitgetBot(CCXTBot):
             if use_post_only:
                 params["postOnly"] = True
             else:
-                params["timeInForce"] = "GTC"
+                params["timeInForce"] = "gtc"
             return params
         tif = "PO" if use_post_only else "GTC"
         return {

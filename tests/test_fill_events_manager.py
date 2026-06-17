@@ -1100,6 +1100,26 @@ def test_fee_policy_uses_scalar_quote_fee():
         assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
+def test_fee_policy_uses_bitget_fee_detail_fields():
+    for raw_fee, expected in [
+        ({"feeCoin": "USDT", "fee": "0.01"}, -0.01),
+        ({"feeCoin": "USDT", "fee": "-0.02"}, -0.02),
+        ({"feeCoin": "USDT", "totalFee": "-0.03"}, -0.03),
+    ]:
+        fee_paid, meta = fem._normalize_fee_paid_from_payload(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "qty": 1.0,
+                "price": 1000.0,
+                "fees": [raw_fee],
+            }
+        )
+
+        assert fee_paid == pytest.approx(expected)
+        assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+        assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+
+
 def test_fee_policy_converts_reported_non_quote_fee_to_quote():
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         {
@@ -2270,7 +2290,7 @@ async def test_bitget_uta_fetcher_derives_position_side_without_pos_side(monkeyp
                 "execQty": "0.1",
                 "execPrice": "10",
                 "execPnl": "0",
-                "feeDetail": [{"feeCoin": "USDT", "fee": "0.01"}],
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
             },
             {
                 "execId": "exec-close-short",
@@ -2283,7 +2303,7 @@ async def test_bitget_uta_fetcher_derives_position_side_without_pos_side(monkeyp
                 "execQty": "0.1",
                 "execPrice": "9",
                 "execPnl": "1",
-                "feeDetail": [{"feeCoin": "USDT", "fee": "0.01"}],
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
             },
             {
                 "execId": "exec-close-long",
@@ -2296,7 +2316,7 @@ async def test_bitget_uta_fetcher_derives_position_side_without_pos_side(monkeyp
                 "execQty": "0.1",
                 "execPrice": "11",
                 "execPnl": "1",
-                "feeDetail": [{"feeCoin": "USDT", "fee": "0.01"}],
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
             },
         ]
     ]
@@ -2324,9 +2344,44 @@ async def test_bitget_uta_fetcher_derives_position_side_without_pos_side(monkeyp
     assert by_id["exec-close-short"]["side"] == "buy"
     assert by_id["exec-close-long"]["position_side"] == "long"
     assert by_id["exec-close-long"]["side"] == "sell"
+    assert by_id["exec-open-short"]["fees"][0]["fee_paid"] == pytest.approx(-0.0001)
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(by_id["exec-open-short"])
+    assert fee_paid == pytest.approx(-0.0001)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
     assert api.detail_calls == []
     assert api.history_calls[0]["category"] == "USDT-FUTURES"
     assert api.history_calls[0]["startTime"] == 900
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_fetcher_rejects_malformed_rows():
+    api = _FakeBitgetAPI(
+        [
+            [
+                {
+                    "execId": "exec-bad",
+                    "orderId": "order-bad",
+                    "createdTime": "1000",
+                    "symbol": "BTCUSDT",
+                    "side": "sell",
+                    "tradeSide": "open",
+                    "execPrice": "10",
+                    "execPnl": "0",
+                }
+            ]
+        ],
+        options={"uta": True},
+    )
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=100,
+        now_func=lambda: 2000,
+        symbol_resolver=resolver,
+    )
+
+    with pytest.raises(ValueError, match="execQty"):
+        await fetcher.fetch(since_ms=900, until_ms=2000, detail_cache={}, on_batch=None)
 
 
 @pytest.mark.asyncio

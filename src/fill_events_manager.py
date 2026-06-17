@@ -348,6 +348,13 @@ def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
     """
     if "fee_paid" in fee:
         return float(fee.get("fee_paid") or 0.0)
+    if fee.get("totalFee") not in (None, ""):
+        return float(fee.get("totalFee") or 0.0)
+    if fee.get("fee") not in (None, ""):
+        value = float(fee.get("fee") or 0.0)
+        return value if value < 0.0 else -abs(value)
+    if fee.get("totalDeductionFee") not in (None, ""):
+        return float(fee.get("totalDeductionFee") or 0.0)
     cost = float(fee.get("cost") or 0.0)
     if cost == 0.0:
         return 0.0
@@ -2363,58 +2370,11 @@ class BitgetFetcher(BaseFetcher):
     @staticmethod
     def _normalize_fee_detail(fee_detail: object) -> object:
         """Normalize Bitget feeDetail rows into canonical signed fee entries."""
-        entries = _fee_entries(fee_detail)
-        if not entries:
-            return fee_detail
-        normalized: List[Dict[str, object]] = []
-        for entry in entries:
-            item = dict(entry)
-            currency = _fee_entry_currency(item)
-            if currency:
-                item["currency"] = currency
-            fee_paid_raw = (
-                item.get("fee_paid")
-                if "fee_paid" in item
-                else item.get("totalFee")
-                if item.get("totalFee") not in (None, "")
-                else item.get("totalDeductionFee")
-            )
-            if fee_paid_raw not in (None, ""):
-                try:
-                    item["fee_paid"] = float(fee_paid_raw)
-                except (TypeError, ValueError):
-                    pass
-            normalized.append(item)
-        return normalized
+        return normalize_bitget_fee_detail(fee_detail)
 
     @staticmethod
     def _deduce_uta_side_pside(raw: Dict[str, object]) -> Tuple[str, str]:
-        side = str(raw.get("side") or "").lower()
-        trade_side = str(raw.get("tradeSide") or "").lower()
-        position_side = str(raw.get("posSide") or "").lower()
-
-        if position_side not in ("long", "short"):
-            if trade_side == "close":
-                if side == "buy":
-                    position_side = "short"
-                elif side == "sell":
-                    position_side = "long"
-            elif trade_side == "open":
-                if side == "buy":
-                    position_side = "long"
-                elif side == "sell":
-                    position_side = "short"
-
-        if position_side not in ("long", "short"):
-            position_side = "long" if side != "sell" else "short"
-
-        if side not in ("buy", "sell"):
-            if trade_side == "close":
-                side = "sell" if position_side == "long" else "buy"
-            else:
-                side = "buy" if position_side == "long" else "sell"
-
-        return side, position_side
+        return deduce_uta_side_pside(raw)
 
     async def _fetch_uta(
         self,
@@ -2476,7 +2436,7 @@ class BitgetFetcher(BaseFetcher):
                 ]
                 if batch_events:
                     on_batch(batch_events)
-            oldest = min(int(r.get("createdTime", 0) or 0) for r in rows)
+            oldest = min(int(event["timestamp"]) for event in events.values() if event["id"] in batch_ids)
             next_cursor = data.get("cursor")
             if len(rows) >= self.history_limit and next_cursor:
                 cursor = str(next_cursor)
@@ -2504,26 +2464,9 @@ class BitgetFetcher(BaseFetcher):
         return ordered
 
     def _normalize_fill_uta(self, raw: Dict[str, object]) -> Dict[str, object]:
-        timestamp = int(raw.get("createdTime", 0) or 0)
-        cid = raw.get("clientOid")
-        side, position_side = self._deduce_uta_side_pside(raw)
-        return {
-            "id": raw.get("execId") or raw.get("tradeId"),
-            "order_id": raw.get("orderId"),
-            "timestamp": timestamp,
-            "datetime": ts_to_date(timestamp),
-            "symbol": self._resolve_symbol(raw.get("symbol")),
-            "symbol_external": raw.get("symbol"),
-            "side": side,
-            "qty": float(raw.get("execQty", 0.0) or 0.0),
-            "price": float(raw.get("execPrice", 0.0) or 0.0),
-            "pnl": float(raw.get("execPnl", 0.0) or 0.0),
-            "fees": raw.get("feeDetail"),
-            "pb_order_type": custom_id_to_snake(cid) if cid else "",
-            "position_side": position_side,
-            "client_order_id": cid,
-            "raw": [{"source": "uta_fills", "data": dict(raw)}],
-        }
+        event = normalize_uta_fill_payload(raw, self._resolve_symbol)
+        event["raw"] = [{"source": "uta_fills", "data": dict(raw)}]
+        return event
 
     def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
         timestamp = int(raw["cTime"])
@@ -6924,6 +6867,29 @@ def deduce_side_pside(elm: dict) -> Tuple[str, str]:
     except Exception:
         side = str(elm.get("side", "buy")).lower()
         return side or "buy", "long"
+
+
+def deduce_uta_side_pside(elm: dict) -> Tuple[str, str]:
+    """Import UTA helper from exchanges.bitget so inference cannot diverge."""
+    from exchanges.bitget import deduce_uta_side_pside as _real
+
+    return _real(elm)
+
+
+def normalize_bitget_fee_detail(fee_detail: object) -> object:
+    """Import Bitget feeDetail normalizer from the exchange integration."""
+    from exchanges.bitget import normalize_bitget_fee_detail as _real
+
+    return _real(fee_detail)
+
+
+def normalize_uta_fill_payload(
+    elm: Dict[str, object], symbol_resolver: Callable[[str], str]
+) -> Dict[str, object]:
+    """Import Bitget UTA fill normalizer from the exchange integration."""
+    from exchanges.bitget import normalize_uta_fill_payload as _real
+
+    return _real(elm, symbol_resolver)
 
 
 # ---------------------------------------------------------------------------

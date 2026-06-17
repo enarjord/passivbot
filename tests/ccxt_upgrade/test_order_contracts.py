@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import ccxt
 import pytest
 
 from ccxt_contracts import build_contract_bot
@@ -321,8 +322,70 @@ def test_bitget_uta_order_params_use_ccxt_v3_safe_time_in_force():
     bot.config = {"live": {"time_in_force": "gtc"}}
     gtc_params = bot._build_order_params(order)
 
-    assert gtc_params["timeInForce"] == "GTC"
+    assert gtc_params["timeInForce"] == "gtc"
     assert "postOnly" not in gtc_params
+
+
+def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.config = {"live": {"time_in_force": "gtc"}}
+    bot.is_uta = True
+    params = bot._build_order_params(
+        {
+            "position_side": "short",
+            "reduce_only": True,
+            "custom_id": "0x0007abcdef",
+        }
+    )
+
+    exchange = ccxt.bitget()
+    exchange.markets = {
+        "BTC/USDT:USDT": {
+            "id": "BTCUSDT",
+            "symbol": "BTC/USDT:USDT",
+            "spot": False,
+            "swap": True,
+            "linear": True,
+            "type": "swap",
+            "contract": True,
+            "settle": "USDT",
+        }
+    }
+    exchange.market = lambda symbol: exchange.markets[symbol]
+    exchange.handle_product_type_and_params = lambda market, params: ("USDT-FUTURES", params)
+    exchange.amount_to_precision = lambda symbol, amount: str(amount)
+    exchange.price_to_precision = lambda symbol, price: str(price)
+
+    request = exchange.create_uta_order_request(
+        "BTC/USDT:USDT", "limit", "buy", 0.1, 9.0, params
+    )
+
+    assert request["timeInForce"] == "gtc"
+    assert request["reduceOnly"] == "yes"
+    assert request["posSide"] == "short"
+    assert request["clientOid"] == "0x0007abcdef"
+
+
+def test_bitget_uta_broker_code_is_signed_as_v3_channel_header():
+    exchange = ccxt.bitget({"apiKey": "key", "secret": "secret", "password": "passphrase"})
+    exchange.options["broker"] = "p4sve"
+
+    signed = exchange.sign(
+        "v3/trade/place-order",
+        ["private", "uta"],
+        "POST",
+        {
+            "category": "USDT-FUTURES",
+            "symbol": "BTCUSDT",
+            "qty": "0.1",
+            "side": "buy",
+            "orderType": "limit",
+            "price": "9",
+            "timeInForce": "gtc",
+        },
+    )
+
+    assert signed["headers"]["X-CHANNEL-API-CODE"] == "p4sve"
 
 
 def test_bitget_uta_balance_uses_equity_minus_upnl_not_effective_margin():
@@ -346,6 +409,22 @@ def test_bitget_uta_balance_uses_equity_minus_upnl_not_effective_margin():
     )
 
     assert balance == pytest.approx(1957.52)
+
+
+def test_bitget_uta_balance_rejects_missing_account_equity_fields():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+    bot.quote = "USDT"
+
+    with pytest.raises(ValueError, match="account equity/upnl"):
+        bot._get_balance(
+            {
+                "data": {
+                    "effEquity": "941.70",
+                    "assets": [{"coin": "USDT", "balance": "311.51", "available": "311.51"}],
+                }
+            }
+        )
 
 
 @pytest.mark.asyncio
@@ -373,11 +452,72 @@ async def test_bitget_uta_fetch_balance_uses_raw_account_assets_endpoint():
     assert api.calls == ["private_uta_get_v3_account_assets"]
 
 
+@pytest.mark.asyncio
+async def test_bitget_account_mode_detection_sets_uta_on_v3_success():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = False
+    bot._account_mode_detected = False
+
+    async def private_uta_get_v3_account_assets():
+        return {"data": {"usdtEquity": "10", "usdtUnrealisedPnl": "0"}}
+
+    bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=private_uta_get_v3_account_assets)
+    bot.ccp = SimpleNamespace(options={})
+
+    await bot._detect_account_mode()
+
+    assert bot.is_uta is True
+    assert bot._account_mode_detected is True
+    assert bot.cca.options["uta"] is True
+    assert bot.ccp.options["uta"] is True
+
+
+@pytest.mark.asyncio
+async def test_bitget_account_mode_detection_uses_classic_only_for_explicit_code():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+    bot._account_mode_detected = False
+
+    async def private_uta_get_v3_account_assets():
+        raise Exception('bitget {"code":"40084","msg":"Classic Account mode"}')
+
+    bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=private_uta_get_v3_account_assets)
+    bot.ccp = SimpleNamespace(options={})
+
+    await bot._detect_account_mode()
+
+    assert bot.is_uta is False
+    assert bot._account_mode_detected is True
+    assert bot.cca.options["uta"] is False
+    assert bot.ccp.options["uta"] is False
+
+
+@pytest.mark.asyncio
+async def test_bitget_account_mode_detection_rejects_inconclusive_errors():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = False
+    bot._account_mode_detected = False
+
+    async def private_uta_get_v3_account_assets():
+        raise TimeoutError("temporary network failure")
+
+    bot.cca = SimpleNamespace(options={}, private_uta_get_v3_account_assets=private_uta_get_v3_account_assets)
+    bot.ccp = SimpleNamespace(options={})
+
+    with pytest.raises(RuntimeError, match="inconclusively"):
+        await bot._detect_account_mode()
+
+    assert bot._account_mode_detected is False
+    assert "uta" not in bot.cca.options
+
+
 def test_bitget_uta_fill_side_pside_uses_trade_side_when_pos_side_absent():
     assert deduce_uta_side_pside({"side": "sell", "tradeSide": "open"}) == ("sell", "short")
     assert deduce_uta_side_pside({"side": "buy", "tradeSide": "close"}) == ("buy", "short")
     assert deduce_uta_side_pside({"side": "sell", "tradeSide": "close"}) == ("sell", "long")
     assert deduce_uta_side_pside({"side": "buy", "posSide": "long"}) == ("buy", "long")
+    with pytest.raises(ValueError, match="order side"):
+        deduce_uta_side_pside({"posSide": "long"})
 
 
 @pytest.mark.asyncio
@@ -405,6 +545,7 @@ async def test_bitget_fetch_fill_events_uta_uses_exec_id_and_trade_side():
                         "execQty": "0.1",
                         "execPrice": "9",
                         "execPnl": "1",
+                        "feeDetail": [{"feeCoin": "USDT", "fee": "0.01"}],
                     }
                 ]
             }
@@ -420,6 +561,37 @@ async def test_bitget_fetch_fill_events_uta_uses_exec_id_and_trade_side():
     assert events[0]["position_side"] == "short"
     assert events[0]["side"] == "buy"
     assert events[0]["symbol"] == "BTC/USDT:USDT"
+    assert events[0]["fees"][0]["fee_paid"] == pytest.approx(-0.01)
+
+
+@pytest.mark.asyncio
+async def test_bitget_fetch_fill_events_uta_rejects_malformed_rows():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+    bot.get_symbol_id_inv = lambda symbol: symbol
+
+    async def private_uta_get_v3_trade_fills(params):
+        return {
+            "data": {
+                "list": [
+                    {
+                        "execId": "exec-bad",
+                        "orderId": "order-bad",
+                        "symbol": "BTCUSDT",
+                        "side": "buy",
+                        "tradeSide": "open",
+                        "execQty": "0.1",
+                        "execPrice": "9",
+                        "execPnl": "0",
+                    }
+                ]
+            }
+        }
+
+    bot.cca = SimpleNamespace(private_uta_get_v3_trade_fills=private_uta_get_v3_trade_fills)
+
+    with pytest.raises(ValueError, match="createdTime"):
+        await bot._fetch_fill_events_uta(start_time=900, end_time=2000, limit=100)
 
 
 def test_gateio_order_side_contract_depends_on_reduce_only_flag():
