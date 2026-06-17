@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import logging
 import multiprocessing
+import os
+import pickle
+import random
 from copy import deepcopy
 from typing import Any, Callable
 
@@ -179,28 +182,26 @@ def run_backend(
 
         population_size = _resolve_deap_population_size(config)
         start_gen = 1
-        
+
         # Checkpoint Loading
         chk = None
-        if resume and checkpoint_path is not None:
-            import os, pickle
-            if os.path.isfile(checkpoint_path):
-                logging.info(f"Loading DEAP checkpoint from {checkpoint_path}...")
-                with open(checkpoint_path, "rb") as f:
-                    chk = pickle.load(f)
-                
-                try:
-                    import random
-                    random.setstate(chk["random_state"])
-                    np.random.set_state(chk["np_random_state"])
-                except Exception as e:
-                    logging.warning(f"Could not restore random states: {e}")
-                
-                population = chk["population"]
-                logbook = chk["logbook"]
-                hof = chk["halloffame"]
-                start_gen = chk["gen"] + 1
-                logging.info(f"Resuming DEAP evolution from generation {start_gen}...")
+        if resume:
+            if checkpoint_path is None:
+                raise ValueError("DEAP resume requested without a checkpoint path")
+            if not os.path.isfile(checkpoint_path):
+                raise FileNotFoundError(f"DEAP checkpoint not found: {checkpoint_path}")
+            logging.info(f"Loading DEAP checkpoint from {checkpoint_path}...")
+            with open(checkpoint_path, "rb") as f:
+                chk = pickle.load(f)
+
+            random.setstate(chk["random_state"])
+            np.random.set_state(chk["np_random_state"])
+
+            population = chk["population"]
+            logbook = chk["logbook"]
+            hof = chk["halloffame"]
+            start_gen = chk["gen"] + 1
+            logging.info(f"Resuming DEAP evolution from generation {start_gen}...")
 
         if chk is None:
             starting_individuals = load_starting_individuals(

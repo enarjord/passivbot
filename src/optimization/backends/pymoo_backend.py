@@ -4,6 +4,8 @@ import functools
 import logging
 import math
 import multiprocessing
+import os
+import pickle
 from typing import Any
 
 import numpy as np
@@ -467,52 +469,47 @@ class PymooCheckpointCallback(Callback):
 
     def notify(self, algorithm):
         try:
-            import pickle
-            import os
-            
             # Temporarily detach unpicklable runner/pool and evaluator
             problem = getattr(algorithm, "problem", None)
             runner = getattr(problem, "elementwise_runner", None) if problem else None
             adapter = getattr(problem, "evaluator_adapter", None) if problem else None
             evaluator = getattr(adapter, "evaluator", None) if adapter else None
-            
+
             alg_evaluator = getattr(algorithm, "evaluator", None)
             alg_problem = getattr(alg_evaluator, "problem", None) if alg_evaluator else None
             alg_runner = getattr(alg_problem, "elementwise_runner", None) if alg_problem else None
             alg_adapter = getattr(alg_problem, "evaluator_adapter", None) if alg_problem else None
-            
+            alg_adapter_evaluator = getattr(alg_adapter, "evaluator", None) if alg_adapter else None
+
             try:
                 if runner is not None:
                     algorithm.problem.elementwise_runner = None
                 if evaluator is not None:
                     adapter.evaluator = None
-                    
+
                 if alg_runner is not None:
                     alg_problem.elementwise_runner = None
                 if alg_adapter is not None:
                     alg_adapter.evaluator = None
-                
+
                 tmp_path = self.path + ".tmp"
                 with open(tmp_path, "wb") as f:
                     pickle.dump(algorithm, f, protocol=pickle.HIGHEST_PROTOCOL)
                 os.replace(tmp_path, self.path)
-                
-                import gc
-                gc.collect()
             finally:
                 # Restore runner and evaluator
                 if runner is not None:
                     algorithm.problem.elementwise_runner = runner
                 if evaluator is not None:
                     adapter.evaluator = evaluator
-                    
+
                 if alg_runner is not None:
                     alg_problem.elementwise_runner = alg_runner
-                if alg_adapter is not None and evaluator is not None:
-                    alg_adapter.evaluator = evaluator
-                    
-        except Exception as e:
-            logging.warning(f"Failed to save pymoo checkpoint: {e}")
+                if alg_adapter is not None:
+                    alg_adapter.evaluator = alg_adapter_evaluator
+
+        except Exception as exc:
+            raise RuntimeError(f"Failed to save pymoo checkpoint: {self.path}") from exc
 
 
 def run_backend(
@@ -608,26 +605,28 @@ def run_backend(
             evaluator_adapter=evaluator_adapter,
             elementwise_runner=runner,
         )
-        
+
         algorithm = None
-        if resume and checkpoint_path is not None:
-            import os, pickle
-            if os.path.isfile(checkpoint_path):
-                logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
-                with open(checkpoint_path, "rb") as f:
-                    algorithm = pickle.load(f)
-                    algorithm.has_terminated = False
-                    
-                    # Restore the active runner (pool) and evaluator
-                    if hasattr(algorithm, "problem"):
-                        algorithm.problem.elementwise_runner = runner
-                        if hasattr(algorithm.problem, "evaluator_adapter"):
-                            algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
-                    if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
-                        algorithm.evaluator.problem.elementwise_runner = runner
-                        if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
-                            algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
-                    
+        if resume:
+            if checkpoint_path is None:
+                raise ValueError("PyMoo resume requested without a checkpoint path")
+            if not os.path.isfile(checkpoint_path):
+                raise FileNotFoundError(f"PyMoo checkpoint not found: {checkpoint_path}")
+            logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
+            with open(checkpoint_path, "rb") as f:
+                algorithm = pickle.load(f)
+            algorithm.has_terminated = False
+
+            # Restore the active runner (pool) and evaluator
+            if hasattr(algorithm, "problem"):
+                algorithm.problem.elementwise_runner = runner
+                if hasattr(algorithm.problem, "evaluator_adapter"):
+                    algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
+            if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
+                algorithm.evaluator.problem.elementwise_runner = runner
+                if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
+                    algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
+
         if algorithm is None:
             algorithm = _build_algorithm(
                 config=config,
@@ -662,7 +661,7 @@ def run_backend(
                 )
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
-        
+
         minimize_kwargs = {
             "seed": 1,
             "verbose": False,

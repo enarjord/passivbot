@@ -573,20 +573,16 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
     mismatches = []
     is_suite_result = entry.get("suite_metrics") is not None
-    backtest_keys = ["start_date", "end_date", "exchanges"]
+    old_bt_compare = deepcopy(old_bt)
+    new_bt_compare = deepcopy(new_bt)
     if is_suite_result:
-        backtest_keys.append("scenarios")
-        if old_bt.get("coins") is not None:
-            backtest_keys.append("coins")
-    else:
-        backtest_keys.append("coins")
-    for key in backtest_keys:
-        if old_bt.get(key) != new_bt.get(key):
-            mismatches.append(f"  - backtest.{key}: '{old_bt.get(key)}' -> '{new_bt.get(key)}'")
+        # Suite result entries omit top-level backtest.coins because the
+        # scenario list is the source of truth for per-scenario coins.
+        if old_bt_compare.get("coins") is None:
+            new_bt_compare.pop("coins", None)
+    _append_resume_section_mismatches(mismatches, "backtest", old_bt_compare, new_bt_compare)
 
-    for key in ["scoring", "passivbot_mode"]:
-        if old_opt.get(key) != new_opt.get(key):
-            mismatches.append(f"  - optimize.{key}: '{old_opt.get(key)}' -> '{new_opt.get(key)}'")
+    _append_resume_section_mismatches(mismatches, "optimize", old_opt, new_opt)
 
     for side in ["long", "short"]:
         old_en = old_bot.get(side, {}).get("enabled", True)
@@ -598,6 +594,85 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_live.get(key) != new_live.get(key):
             mismatches.append(f"  - live.{key}: changed")
     return mismatches
+
+
+def _append_resume_section_mismatches(
+    mismatches: list[str], section_name: str, old_section: dict, new_section: dict
+) -> None:
+    keys = sorted(set(old_section) | set(new_section))
+    for key in keys:
+        old_value = old_section.get(key)
+        new_value = new_section.get(key)
+        if old_value != new_value:
+            mismatches.append(f"  - {section_name}.{key}: '{old_value}' -> '{new_value}'")
+
+
+def _resolve_resume_results_dir(resume_path: str) -> str:
+    results_dir = os.path.abspath(os.path.expanduser(resume_path))
+    if not os.path.isdir(results_dir):
+        raise ValueError(f"Resume directory not found: {results_dir}")
+    return results_dir
+
+
+def _require_resume_checkpoint(results_dir: str) -> str:
+    checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
+    if not os.path.isfile(checkpoint_path):
+        raise ValueError(f"Cannot resume: checkpoint not found: {checkpoint_path}")
+    if os.path.getsize(checkpoint_path) <= 0:
+        raise ValueError(f"Cannot resume: checkpoint is empty: {checkpoint_path}")
+    try:
+        with open(checkpoint_path, "rb") as f:
+            f.read(1)
+    except OSError as exc:
+        raise ValueError(f"Cannot resume: checkpoint is not readable: {checkpoint_path}") from exc
+    return checkpoint_path
+
+
+def _validate_resume_results(results_dir: str, config: dict) -> int:
+    results_filename = os.path.join(results_dir, "all_results.bin")
+    if not os.path.isfile(results_filename):
+        raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
+    if os.path.getsize(results_filename) <= 0:
+        raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
+
+    previous_evals = 0
+    try:
+        with open(results_filename, "rb") as f:
+            unpacker = msgpack.Unpacker(f, raw=False, max_buffer_size=1024 * 1024 * 100)
+            for entry in unpacker:
+                previous_evals += 1
+                if previous_evals == 1:
+                    if not isinstance(entry, dict):
+                        raise ValueError(
+                            f"Cannot resume: first all_results.bin entry is not a config object: "
+                            f"{results_filename}"
+                        )
+                    mismatches = _resume_config_mismatches(entry, config)
+                    if mismatches:
+                        mismatch_str = "\n".join(mismatches)
+                        raise ValueError(
+                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                            f"Mismatches detected:\n{mismatch_str}\n\n"
+                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                            f"Please restore the original config or start a fresh run.\n"
+                        )
+    except msgpack.exceptions.UnpackException as exc:
+        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+
+    if previous_evals <= 0:
+        raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
+    logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
+    return previous_evals
+
+
+def _optimizer_exit_code(interrupted: bool, fatal_error: bool) -> int:
+    if interrupted:
+        return 130
+    return 1 if fatal_error else 0
 
 
 def ea_mu_plus_lambda_stream(
@@ -781,23 +856,23 @@ def ea_mu_plus_lambda_stream(
         log_generation(gen, nevals, record)
         
         if checkpoint_path is not None:
+            import random
+
+            chk = {
+                "population": population,
+                "logbook": logbook,
+                "gen": gen,
+                "halloffame": halloffame,
+                "random_state": random.getstate(),
+                "np_random_state": np.random.get_state(),
+            }
+            tmp_path = f"{checkpoint_path}.tmp"
             try:
-                import random
-                import numpy as np
-                chk = {
-                    "population": population,
-                    "logbook": logbook,
-                    "gen": gen,
-                    "halloffame": halloffame,
-                    "random_state": random.getstate(),
-                    "np_random_state": np.random.get_state(),
-                }
-                with open(checkpoint_path, "wb") as f:
+                with open(tmp_path, "wb") as f:
                     pickle.dump(chk, f, protocol=pickle.HIGHEST_PROTOCOL)
-                import gc
-                gc.collect()
-            except Exception as e:
-                logging.warning(f"Failed to save checkpoint: {e}")
+                os.replace(tmp_path, checkpoint_path)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to save checkpoint: {checkpoint_path}") from exc
 
     logging.info(
         "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
@@ -1965,6 +2040,7 @@ async def main():
     backtest_exchanges = require_config_value(config, "backtest.exchanges")
     await format_approved_ignored_coins(config, backtest_exchanges)
     interrupted = False
+    fatal_error = False
     pool = None
     manager = None
     pool_terminated = False
@@ -2105,46 +2181,22 @@ async def main():
             )
         )
         previous_evals = 0
+        checkpoint_path = None
         if args.resume:
-            results_dir = make_get_filepath(args.resume)
-            if not os.path.isdir(results_dir):
-                raise ValueError(f"Resume directory not found: {results_dir}")
-                
-            results_filename_check = os.path.join(results_dir, "all_results.bin")
-            if os.path.isfile(results_filename_check):
-                try:
-                    import msgpack
-                    with open(results_filename_check, "rb") as f:
-                        unpacker = msgpack.Unpacker(f, max_buffer_size=1024*1024*100)
-                        for entry in unpacker:
-                            mismatches = _resume_config_mismatches(entry, config)
-                            if mismatches:
-                                mismatch_str = "\n".join(mismatches)
-                                raise ValueError(
-                                    f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                                    f"Mismatches detected:\n{mismatch_str}\n\n"
-                                    f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                                    f"Please restore the original config or start a fresh run.\n"
-                                )
-                            break
-                            
-                        # If validation passed, count remaining entries
-                        previous_evals = 1 + sum(1 for _ in unpacker)
-                        logging.info(f"Resuming with {previous_evals} previous evaluations from all_results.bin")
-                except ValueError:
-                    raise
-                except Exception as e:
-                    logging.warning(f"Could not verify previous config from all_results.bin: {e}")
+            results_dir = _resolve_resume_results_dir(args.resume)
+            checkpoint_path = _require_resume_checkpoint(results_dir)
+            previous_evals = _validate_resume_results(results_dir, config)
         else:
             results_dir = make_get_filepath(
                 f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
             )
             os.makedirs(results_dir, exist_ok=True)
-            
+
         config["results_dir"] = results_dir
         results_filename = os.path.join(results_dir, "all_results.bin")
         config["results_filename"] = results_filename
-        checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
+        if checkpoint_path is None:
+            checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
         # Shared state used by workers for duplicate detection
@@ -2227,6 +2279,7 @@ async def main():
                 if "pool_state" in locals():
                     pool_state["terminated"] = True
     except Exception as e:
+        fatal_error = True
         logging.error(f"An error occurred: {e}")
         traceback.print_exc()
     finally:
@@ -2266,7 +2319,7 @@ async def main():
                 logging.exception("Failed to release shared memory")
 
         logging.info("Shutdown complete.")
-        sys.exit(130 if interrupted else 0)
+        sys.exit(_optimizer_exit_code(interrupted, fatal_error))
 
 
 if __name__ == "__main__":
