@@ -85,6 +85,37 @@ def deduce_side_pside(fill: dict) -> tuple[str, str]:
     return _canonical(raw_side or "buy", "long")
 
 
+def deduce_uta_side_pside(fill: dict) -> tuple[str, str]:
+    """Infer standard ``(side, pside)`` for Bitget UTA v3 fill payloads."""
+
+    raw_side = str(fill.get("side", "")).lower()
+    trade_side = str(fill.get("tradeSide", "")).lower()
+    pos_side = str(fill.get("posSide", "")).lower()
+
+    if pos_side not in ("long", "short"):
+        if trade_side == "close":
+            if raw_side == "buy":
+                pos_side = "short"
+            elif raw_side == "sell":
+                pos_side = "long"
+        elif trade_side == "open":
+            if raw_side == "buy":
+                pos_side = "long"
+            elif raw_side == "sell":
+                pos_side = "short"
+
+    if pos_side not in ("long", "short"):
+        pos_side = "long" if raw_side != "sell" else "short"
+
+    if raw_side not in ("buy", "sell"):
+        if trade_side == "close":
+            raw_side = "sell" if pos_side == "long" else "buy"
+        else:
+            raw_side = "buy" if pos_side == "long" else "sell"
+
+    return raw_side, pos_side
+
+
 class BitgetBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
@@ -239,19 +270,40 @@ class BitgetBot(CCXTBot):
                 self._record_live_margin_mode(elm["symbol"], margin_mode)
         return fetched
 
+    async def _do_fetch_balance(self) -> dict:
+        if getattr(self, "is_uta", False):
+            return await self.cca.private_uta_get_v3_account_assets()
+        return await super()._do_fetch_balance()
+
     def _get_balance(self, fetched: dict) -> float:
         """Bitget override: handle union margin mode (classic) and UTA/elite."""
         if getattr(self, "is_uta", False):
-            # UTA fetch_balance returns info as a list of asset dicts keyed by
-            # 'coin' (no 'marginCoin'). Use wallet balance (excl. uPnL), which
-            # ccxt exposes as the unified 'total'.
-            try:
-                return float(fetched[self.quote]["total"])
-            except Exception:
-                for x in (fetched.get("info") or []):
+            data = fetched.get("data") if isinstance(fetched, dict) else None
+            if isinstance(data, dict):
+                # Passivbot balance is wallet balance: equity - upnl.
+                # Bitget UTA's effEquity is discounted effective margin value,
+                # not account balance.
+                if data.get("usdtEquity") is not None:
+                    return float(data["usdtEquity"]) - float(
+                        data.get("usdtUnrealisedPnl") or 0.0
+                    )
+                if data.get("accountEquity") is not None:
+                    return float(data["accountEquity"]) - float(
+                        data.get("unrealisedPnl") or 0.0
+                    )
+                for x in data.get("assets") or []:
                     if isinstance(x, dict) and x.get("coin") == self.quote:
                         return float(x.get("balance") or x.get("available") or 0.0)
-                return 0.0
+            # Backwards-compatible parser for callers/tests that still pass a
+            # CCXT-parsed UTA balance. This is a quote-coin fallback only.
+            if isinstance(fetched, dict):
+                try:
+                    return float(fetched[self.quote]["total"])
+                except Exception:
+                    for x in fetched.get("info") or []:
+                        if isinstance(x, dict) and x.get("coin") == self.quote:
+                            return float(x.get("balance") or x.get("available") or 0.0)
+            raise KeyError("bitget: UTA balance response missing account equity")
         balance_info = [x for x in fetched["info"] if x["marginCoin"] == self.quote][0]
         if (
             "assetMode" in balance_info
@@ -323,6 +375,7 @@ class BitgetBot(CCXTBot):
             if all([h in data_d for h in with_hashes]):
                 break
             for h, x in with_hashes.items():
+                _side, position_side = deduce_uta_side_pside(x)
                 data_d[h] = x
                 data_d[h]["pnl"] = float(x.get("execPnl") or 0.0)
                 data_d[h]["price"] = float(x.get("execPrice") or 0.0)
@@ -330,7 +383,7 @@ class BitgetBot(CCXTBot):
                 data_d[h]["id"] = x.get("execId") or x.get("orderId")
                 data_d[h]["timestamp"] = float(x.get("createdTime") or 0.0)
                 data_d[h]["datetime"] = ts_to_date(data_d[h]["timestamp"])
-                data_d[h]["position_side"] = str(x.get("posSide", "long")).lower()
+                data_d[h]["position_side"] = position_side
                 data_d[h]["symbol"] = self.get_symbol_id_inv(x.get("symbol"))
             if start_time is None:
                 break
@@ -569,11 +622,11 @@ class BitgetBot(CCXTBot):
 
         def _extract(elm: dict) -> dict:
             ts = int(elm.get("createdTime") or 0)
-            pos_side = str(elm.get("posSide", "long")).lower()
-            side = str(elm.get("side") or ("buy" if pos_side == "long" else "sell")).lower()
+            side, pos_side = deduce_uta_side_pside(elm)
             cid = elm.get("clientOid")
             return {
-                "id": elm.get("orderId"),
+                "id": elm.get("execId") or elm.get("orderId"),
+                "order_id": elm.get("orderId"),
                 "timestamp": ts,
                 "datetime": ts_to_date(ts),
                 "symbol": self.get_symbol_id_inv(elm.get("symbol")),
@@ -591,19 +644,37 @@ class BitgetBot(CCXTBot):
         limit = 100 if limit is None else min(limit, 100)
         max_n_fetches = 200
         buffer_step_ms = int(1000 * 60 * 60 * 24)
+        max_window_ms = 30 * buffer_step_ms - 1
         end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
         events_map: Dict[str, dict] = {}
-        params = {"category": "USDT-FUTURES", "endTime": end_time, "limit": str(limit)}
+        params = {"category": "USDT-FUTURES", "limit": str(limit)}
         count = 0
+        cursor = None
         while True:
             count += 1
             if count >= max_n_fetches:
                 logging.warning(f"over {count} calls to fetch_fill_events (uta). Breaking.")
                 break
-            fetched = await self.cca.private_uta_get_v3_trade_fills(params)
-            rows = (fetched.get("data") or {}).get("list") or []
+            request_params = dict(params)
+            request_params["endTime"] = end_time
+            window_start = None
+            if start_time is not None:
+                window_start = max(int(start_time), int(end_time) - max_window_ms)
+                request_params["startTime"] = window_start
+            if cursor:
+                request_params["cursor"] = cursor
+            fetched = await self.cca.private_uta_get_v3_trade_fills(request_params)
+            data = fetched.get("data") or {}
+            rows = data.get("list") or []
             fill_events = sorted([_extract(x) for x in rows], key=lambda x: x["timestamp"])
             if not fill_events:
+                if start_time is not None and window_start is not None and window_start > start_time:
+                    next_end = int(window_start) - 1
+                    if next_end <= start_time:
+                        break
+                    end_time = next_end
+                    cursor = None
+                    continue
                 break
             added = False
             for fe, raw in zip(fill_events, sorted(rows, key=lambda r: int(r.get("createdTime") or 0))):
@@ -613,16 +684,29 @@ class BitgetBot(CCXTBot):
                     added = True
             if not added:
                 break
+            next_cursor = data.get("cursor")
+            if len(fill_events) >= limit and next_cursor:
+                cursor = str(next_cursor)
+                continue
+            cursor = None
             if len(fill_events) < limit:
-                if start_time is None or params["endTime"] - start_time < buffer_step_ms:
+                if start_time is None:
                     break
-                params["endTime"] = int(fill_events[0]["timestamp"] + 1)
+                if window_start is not None and window_start > start_time:
+                    next_end = int(window_start) - 1
+                    if next_end <= start_time:
+                        break
+                    end_time = next_end
+                    continue
+                if end_time - start_time < buffer_step_ms:
+                    break
+                end_time = int(fill_events[0]["timestamp"] + 1)
                 continue
             if start_time is None or fill_events[0]["timestamp"] < start_time:
                 break
-            if params["endTime"] == fill_events[0]["timestamp"]:
+            if end_time == fill_events[0]["timestamp"]:
                 break
-            params["endTime"] = int(fill_events[0]["timestamp"])
+            end_time = int(fill_events[0]["timestamp"])
         return sorted(events_map.values(), key=lambda x: x["timestamp"])
 
     async def fetch_closed_orders(self, start_time, end_time, limit=100):
@@ -734,16 +818,21 @@ class BitgetBot(CCXTBot):
         return clip_by_timestamp(deduped, start_time, end_time)
 
     def _build_order_params(self, order: dict) -> dict:
-        tif = "PO" if require_live_value(self.config, "time_in_force") == "post_only" else "GTC"
+        use_post_only = require_live_value(self.config, "time_in_force") == "post_only"
         if getattr(self, "is_uta", False):
             # UTA/elite hedge-mode orders use posSide; holdSide/oneWayMode are
             # v2-only and rejected by v3 with code 25236.
-            return {
-                "timeInForce": tif,
+            params = {
                 "posSide": order["position_side"],
                 "reduceOnly": order["reduce_only"],
                 "clientOid": order["custom_id"],
             }
+            if use_post_only:
+                params["postOnly"] = True
+            else:
+                params["timeInForce"] = "GTC"
+            return params
+        tif = "PO" if use_post_only else "GTC"
         return {
             "timeInForce": tif,
             "holdSide": order["position_side"],
@@ -838,4 +927,6 @@ class BitgetBot(CCXTBot):
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)
+        if getattr(self, "is_uta", False):
+            return formatted[:32]
         return (self.broker_code + "#" + formatted)[: self.custom_id_max_length]

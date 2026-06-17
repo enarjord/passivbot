@@ -2387,6 +2387,35 @@ class BitgetFetcher(BaseFetcher):
             normalized.append(item)
         return normalized
 
+    @staticmethod
+    def _deduce_uta_side_pside(raw: Dict[str, object]) -> Tuple[str, str]:
+        side = str(raw.get("side") or "").lower()
+        trade_side = str(raw.get("tradeSide") or "").lower()
+        position_side = str(raw.get("posSide") or "").lower()
+
+        if position_side not in ("long", "short"):
+            if trade_side == "close":
+                if side == "buy":
+                    position_side = "short"
+                elif side == "sell":
+                    position_side = "long"
+            elif trade_side == "open":
+                if side == "buy":
+                    position_side = "long"
+                elif side == "sell":
+                    position_side = "short"
+
+        if position_side not in ("long", "short"):
+            position_side = "long" if side != "sell" else "short"
+
+        if side not in ("buy", "sell"):
+            if trade_side == "close":
+                side = "sell" if position_side == "long" else "buy"
+            else:
+                side = "buy" if position_side == "long" else "sell"
+
+        return side, position_side
+
     async def _fetch_uta(
         self,
         since_ms: Optional[int],
@@ -2397,24 +2426,39 @@ class BitgetFetcher(BaseFetcher):
         """UTA/Elite variant: source fills from the v3 trade/fills endpoint.
         v3 fills already carry clientOid, so no per-order detail enrichment."""
         end_time = int(until_ms) if until_ms is not None else self._now_func() + 24 * 60 * 60 * 1000
+        max_window_ms = 30 * 24 * 60 * 60 * 1000 - 1
         params: Dict[str, object] = {
             "category": self.product_type,
             "limit": self.history_limit,
-            "endTime": end_time,
         }
-        if since_ms is not None:
-            params["startTime"] = int(since_ms)
         events: Dict[str, Dict[str, object]] = {}
         max_fetches = 400
         fetch_count = 0
+        cursor: Optional[str] = None
         while True:
             if fetch_count >= max_fetches:
                 logger.warning("BitgetFetcher._fetch_uta: reached max pagination depth (%d)", max_fetches)
                 break
             fetch_count += 1
-            payload = await self.api.private_uta_get_v3_trade_fills(dict(params))
-            rows = (payload.get("data") or {}).get("list") or []
+            request_params = dict(params)
+            request_params["endTime"] = end_time
+            window_start = None
+            if since_ms is not None:
+                window_start = max(int(since_ms), int(end_time) - max_window_ms)
+                request_params["startTime"] = window_start
+            if cursor:
+                request_params["cursor"] = cursor
+            payload = await self.api.private_uta_get_v3_trade_fills(request_params)
+            data = payload.get("data") or {}
+            rows = data.get("list") or []
             if not rows:
+                if since_ms is not None and window_start is not None and window_start > since_ms:
+                    next_end = window_start - 1
+                    if next_end <= since_ms:
+                        break
+                    end_time = next_end
+                    cursor = None
+                    continue
                 break
             batch_ids: List[str] = []
             for raw in rows:
@@ -2433,14 +2477,25 @@ class BitgetFetcher(BaseFetcher):
                 if batch_events:
                     on_batch(batch_events)
             oldest = min(int(r.get("createdTime", 0) or 0) for r in rows)
+            next_cursor = data.get("cursor")
+            if len(rows) >= self.history_limit and next_cursor:
+                cursor = str(next_cursor)
+                continue
+            cursor = None
             if len(rows) < self.history_limit:
+                if since_ms is not None and window_start is not None and window_start > since_ms:
+                    next_end = window_start - 1
+                    if next_end <= since_ms:
+                        break
+                    end_time = next_end
+                    continue
                 break
             if since_ms is not None and oldest <= since_ms:
                 break
             new_end = oldest - 1
             if since_ms is not None and new_end <= since_ms:
                 break
-            params["endTime"] = new_end
+            end_time = new_end
         ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
         if since_ms is not None:
             ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
@@ -2451,6 +2506,7 @@ class BitgetFetcher(BaseFetcher):
     def _normalize_fill_uta(self, raw: Dict[str, object]) -> Dict[str, object]:
         timestamp = int(raw.get("createdTime", 0) or 0)
         cid = raw.get("clientOid")
+        side, position_side = self._deduce_uta_side_pside(raw)
         return {
             "id": raw.get("execId") or raw.get("tradeId"),
             "order_id": raw.get("orderId"),
@@ -2458,13 +2514,13 @@ class BitgetFetcher(BaseFetcher):
             "datetime": ts_to_date(timestamp),
             "symbol": self._resolve_symbol(raw.get("symbol")),
             "symbol_external": raw.get("symbol"),
-            "side": str(raw.get("side", "")).lower(),
+            "side": side,
             "qty": float(raw.get("execQty", 0.0) or 0.0),
             "price": float(raw.get("execPrice", 0.0) or 0.0),
             "pnl": float(raw.get("execPnl", 0.0) or 0.0),
             "fees": raw.get("feeDetail"),
             "pb_order_type": custom_id_to_snake(cid) if cid else "",
-            "position_side": str(raw.get("posSide", "")).lower(),
+            "position_side": position_side,
             "client_order_id": cid,
             "raw": [{"source": "uta_fills", "data": dict(raw)}],
         }
