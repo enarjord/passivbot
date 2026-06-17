@@ -1065,6 +1065,47 @@ def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_conflict_reports_l
     prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
+def test_migrate_v7_trailing_grid_nested_strategy_namespace_conflict_reports_loser():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long": {
+            "strategy": {
+                "trailing_grid": {
+                    "entry": {
+                        "grid_spacing_we_weight": [1.0, 1.0, 1.0],
+                    }
+                },
+                "trailing_grid_v7": {
+                    "entry": {
+                        "grid_spacing_we_weight": [2.0, 2.0, 1.0],
+                    }
+                },
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
+        "entry"
+    ]
+    assert entry_bounds["grid_spacing_we_weight"] == [1.0, 1.0, 1.0]
+    assert any(
+        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight "
+        "conflicts with "
+        "optimize.bounds.long.strategy.trailing_grid.entry.grid_spacing_we_weight"
+        in item
+        for item in report["manual_review_fields"]
+    )
+    assert not any(
+        moved.startswith(
+            "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight ->"
+        )
+        for moved in report["moved_fields"]
+    )
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
 @pytest.mark.parametrize(
     ("target", "expected_sections"),
     [

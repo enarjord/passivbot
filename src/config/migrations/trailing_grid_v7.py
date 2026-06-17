@@ -855,6 +855,7 @@ def _move_nested_strategy_bounds(
     legacy_strategy: dict,
     target_bounds: dict,
     report: dict,
+    written_targets: dict[tuple[str, ...], tuple[str, str, Any]],
 ) -> bool:
     moved_any = False
     target_strategy = (
@@ -863,7 +864,6 @@ def _move_nested_strategy_bounds(
         .setdefault("strategy", {})
         .setdefault(TRAILING_GRID_V7_KIND, {})
     )
-    written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
     for path, value in _iter_leaf_items(legacy_strategy):
         source_path = f"optimize.bounds.{pside}.strategy.{strategy_name}.{'.'.join(path)}"
         canonical_path = _canonical_strategy_leaf_path(path)
@@ -986,6 +986,7 @@ def _move_bounds(source: dict, target: dict, report: dict) -> None:
                     continue
                 if isinstance(group_bounds, dict):
                     handled_strategy_names = {"trailing_grid", TRAILING_GRID_V7_KIND}
+                    written_strategy_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
                     for strategy_name in ("trailing_grid", TRAILING_GRID_V7_KIND):
                         legacy_strategy = group_bounds.get(strategy_name)
                         if isinstance(legacy_strategy, dict):
@@ -995,6 +996,7 @@ def _move_bounds(source: dict, target: dict, report: dict) -> None:
                                 legacy_strategy=legacy_strategy,
                                 target_bounds=target_bounds,
                                 report=report,
+                                written_targets=written_strategy_targets,
                             )
                         elif legacy_strategy is not None:
                             report["manual_review_fields"].append(
