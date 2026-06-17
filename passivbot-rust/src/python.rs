@@ -2080,9 +2080,63 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
     }))
 }
 
+fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
+    for (key, _value) in dict.iter() {
+        let key = key.extract::<String>().map_err(|_| {
+            PyValueError::new_err(format!("{} contains a non-string key", context))
+        })?;
+        if !allowed.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{} contains unknown key: {}",
+                context, key
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn trailing_grid_v7_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    validate_py_dict_keys(
+        dict,
+        "trailing_grid_v7 strategy params",
+        &["ema_span_0", "ema_span_1", "entry", "close"],
+    )?;
     let entry = extract_value::<&PyDict>(dict, "entry")?;
     let close = extract_value::<&PyDict>(dict, "close")?;
+    validate_py_dict_keys(
+        entry,
+        "trailing_grid_v7 entry params",
+        &[
+            "grid_double_down_factor",
+            "grid_spacing_pct",
+            "grid_spacing_we_weight",
+            "grid_spacing_volatility_weight",
+            "initial_ema_dist",
+            "initial_qty_pct",
+            "trailing_double_down_factor",
+            "trailing_grid_ratio",
+            "trailing_retracement_pct",
+            "trailing_retracement_we_weight",
+            "trailing_retracement_volatility_weight",
+            "trailing_threshold_pct",
+            "trailing_threshold_we_weight",
+            "trailing_threshold_volatility_weight",
+            "volatility_ema_span_hours",
+        ],
+    )?;
+    validate_py_dict_keys(
+        close,
+        "trailing_grid_v7 close params",
+        &[
+            "grid_markup_start",
+            "grid_markup_end",
+            "grid_qty_pct",
+            "trailing_grid_ratio",
+            "trailing_qty_pct",
+            "trailing_retracement_pct",
+            "trailing_threshold_pct",
+        ],
+    )?;
     Ok(serde_json::json!({
         "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
         "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,

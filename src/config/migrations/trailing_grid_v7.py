@@ -352,6 +352,115 @@ def _path_exists(mapping: dict, path: tuple[str, ...]) -> bool:
     return True
 
 
+def _append_inserted_default(report: dict, path: str) -> None:
+    inserted = report.setdefault("inserted_v8_defaults", [])
+    if path not in inserted:
+        inserted.append(path)
+
+
+def _source_side_has_strategy_path(source_side: dict, strategy_path: tuple[str, ...]) -> bool:
+    return any(
+        legacy_key in source_side and path == strategy_path
+        for legacy_key, path in STRATEGY_FIELD_MAP.items()
+    )
+
+
+def _flat_bound_target_path(pside: str, flat_key: str) -> tuple[str, ...] | None:
+    prefix = f"{pside}_"
+    if not isinstance(flat_key, str) or not flat_key.startswith(prefix):
+        return None
+    local_key = flat_key[len(prefix) :]
+    group_name = BOT_BOUND_GROUP_BY_KEY.get(local_key)
+    if group_name is not None:
+        local_map = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY[group_name]
+        for target_local_key, candidate_flat_key in local_map.items():
+            if candidate_flat_key == local_key:
+                return ("optimize", "bounds", pside, group_name, target_local_key)
+    strategy_path = STRATEGY_FIELD_MAP.get(local_key)
+    if strategy_path is not None:
+        return (
+            "optimize",
+            "bounds",
+            pside,
+            "strategy",
+            TRAILING_GRID_V7_KIND,
+            *strategy_path,
+        )
+    return None
+
+
+def _nested_bound_target_path(
+    pside: str,
+    group_name: str,
+    leaf_path: tuple[str, ...],
+) -> tuple[str, ...] | None:
+    if group_name == "strategy":
+        canonical_path = _canonical_strategy_leaf_path(leaf_path)
+        if canonical_path is None:
+            return None
+        return (
+            "optimize",
+            "bounds",
+            pside,
+            "strategy",
+            TRAILING_GRID_V7_KIND,
+            *canonical_path,
+        )
+    supported_local_keys = SHARED_OPTIMIZE_LOCAL_TO_FLAT_KEY.get(group_name)
+    if supported_local_keys is None:
+        return None
+    flat_local_key = "_".join(leaf_path)
+    if flat_local_key not in supported_local_keys:
+        return None
+    return ("optimize", "bounds", pside, group_name, flat_local_key)
+
+
+def _source_has_optimize_bound_path(source: dict, target_path: tuple[str, ...]) -> bool:
+    if len(target_path) < 4 or target_path[:2] != ("optimize", "bounds"):
+        return False
+    pside = target_path[2]
+    bounds = source.get("optimize", {}).get("bounds")
+    if not isinstance(bounds, dict):
+        return False
+
+    for key in bounds:
+        if not isinstance(key, str):
+            continue
+        canonical_key = _legacy_bound_key(pside, key)
+        if canonical_key is None:
+            continue
+        if _flat_bound_target_path(pside, canonical_key) == target_path:
+            return True
+
+    side_bounds = bounds.get(pside)
+    if not isinstance(side_bounds, dict):
+        return False
+    for group_name, group_bounds in side_bounds.items():
+        if not isinstance(group_bounds, dict):
+            continue
+        if group_name == "strategy":
+            for strategy_name, legacy_strategy in group_bounds.items():
+                if strategy_name not in {"trailing_grid", TRAILING_GRID_V7_KIND}:
+                    continue
+                if not isinstance(legacy_strategy, dict):
+                    continue
+                for leaf_path, _value in _iter_leaf_items(legacy_strategy):
+                    if (
+                        _nested_bound_target_path(
+                            pside,
+                            "strategy",
+                            leaf_path,
+                        )
+                        == target_path
+                    ):
+                        return True
+            continue
+        for leaf_path, _value in _iter_leaf_items(group_bounds):
+            if _nested_bound_target_path(pside, str(group_name), leaf_path) == target_path:
+                return True
+    return False
+
+
 def _source_side_has_default_source_value(source_side: dict, flat_key: str) -> bool:
     if _source_side_has_shared_value(source_side, flat_key):
         return True
@@ -368,10 +477,9 @@ def _source_side_has_default_source_value(source_side: dict, flat_key: str) -> b
 
 
 def _record_inserted_v8_defaults(source: dict, target: dict, report: dict) -> None:
-    inserted = report.setdefault("inserted_v8_defaults", [])
     for path in V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS:
         if not _path_exists(source, path) and _path_exists(target, path):
-            inserted.append(".".join(path))
+            _append_inserted_default(report, ".".join(path))
 
     source_bot = source.get("bot", {})
     target_bot = target.get("bot", {})
@@ -388,8 +496,36 @@ def _record_inserted_v8_defaults(source: dict, target: dict, report: dict) -> No
             if _source_side_has_default_source_value(source_side, flat_key):
                 continue
             if _path_exists({"bot": target_bot}, target_path):
-                inserted.append(".".join(target_path))
+                _append_inserted_default(report, ".".join(target_path))
 
+        target_strategy = (
+            target_bot
+            .get(pside, {})
+            .get("strategy", {})
+            .get(TRAILING_GRID_V7_KIND, {})
+        )
+        if isinstance(target_strategy, dict):
+            for strategy_path, _value in _iter_leaf_items(target_strategy):
+                if _source_side_has_strategy_path(source_side, strategy_path):
+                    continue
+                _append_inserted_default(
+                    report,
+                    ".".join(("bot", pside, "strategy", TRAILING_GRID_V7_KIND, *strategy_path)),
+                )
+
+    target_bounds = target.get("optimize", {}).get("bounds", {})
+    if isinstance(target_bounds, dict):
+        for pside in ("long", "short"):
+            side_bounds = target_bounds.get(pside, {})
+            if not isinstance(side_bounds, dict):
+                continue
+            for bound_path, _value in _iter_leaf_items(side_bounds):
+                target_path = ("optimize", "bounds", pside, *bound_path)
+                if _source_has_optimize_bound_path(source, target_path):
+                    continue
+                _append_inserted_default(report, ".".join(target_path))
+
+    inserted = report.setdefault("inserted_v8_defaults", [])
     if inserted:
         examples = ", ".join(inserted[:8])
         suffix = "" if len(inserted) <= 8 else f", ... ({len(inserted)} total)"
@@ -727,16 +863,29 @@ def _move_nested_strategy_bounds(
         .setdefault("strategy", {})
         .setdefault(TRAILING_GRID_V7_KIND, {})
     )
+    written_targets: dict[tuple[str, ...], tuple[str, str, Any]] = {}
     for path, value in _iter_leaf_items(legacy_strategy):
         source_path = f"optimize.bounds.{pside}.strategy.{strategy_name}.{'.'.join(path)}"
         canonical_path = _canonical_strategy_leaf_path(path)
         if canonical_path is None:
             report["manual_review_fields"].append(source_path)
             continue
+        target_path = (
+            f"optimize.bounds.{pside}.strategy.{TRAILING_GRID_V7_KIND}."
+            f"{'.'.join(canonical_path)}"
+        )
+        if not _record_target_value(
+            written_targets,
+            canonical_path,
+            source_path=source_path,
+            target_path=target_path,
+            value=value,
+            report=report,
+        ):
+            continue
         _set_path(target_strategy, canonical_path, value)
         report["moved_fields"].append(
-            f"{source_path} -> "
-            f"optimize.bounds.{pside}.strategy.{TRAILING_GRID_V7_KIND}.{'.'.join(canonical_path)}"
+            f"{source_path} -> {target_path}"
         )
         moved_any = True
     return moved_any

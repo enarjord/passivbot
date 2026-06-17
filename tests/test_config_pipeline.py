@@ -302,10 +302,17 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
     source["backtest"].pop("candle_interval_minutes", None)
     source["live"].pop("approved_coins", None)
     source["bot"]["long"].pop("risk_wel_enforcer_enabled", None)
+    source["bot"]["long"].pop("close_grid_markup_end", None)
 
     migrated, report = migrate_v7_trailing_grid_config(source)
 
     assert migrated["backtest"]["candle_interval_minutes"] == 1
+    assert (
+        migrated["bot"]["long"]["strategy"]["trailing_grid_v7"]["close"][
+            "grid_markup_end"
+        ]
+        == pytest.approx(0.00241)
+    )
     assert "backtest.candle_interval_minutes" in report["inserted_v8_defaults"]
     assert "backtest.liquidation_threshold" in report["inserted_v8_defaults"]
     assert "backtest.maker_fee_override" in report["inserted_v8_defaults"]
@@ -318,6 +325,18 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
     assert "live.hsl_signal_mode" in report["inserted_v8_defaults"]
     assert (
         "bot.long.risk.position_exposure_enforcer_enabled"
+        in report["inserted_v8_defaults"]
+    )
+    assert (
+        "bot.long.strategy.trailing_grid_v7.close.grid_markup_end"
+        in report["inserted_v8_defaults"]
+    )
+    assert (
+        "optimize.bounds.long.strategy.trailing_grid_v7.ema_span_0"
+        in report["inserted_v8_defaults"]
+    )
+    assert (
+        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_pct"
         in report["inserted_v8_defaults"]
     )
     assert any("inserted v8 default values" in item for item in report["warnings"])
@@ -1006,6 +1025,43 @@ def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_is_canonicalized()
         "optimize.bounds.long.strategy.trailing_grid.entry.volatility_ema_span_1h -> "
         "optimize.bounds.long.strategy.trailing_grid_v7.entry.volatility_ema_span_hours"
     ) in report["moved_fields"]
+    prepare_config(migrated, verbose=False, target="canonical", runtime=None)
+
+
+def test_migrate_v7_trailing_grid_nested_strategy_bound_alias_conflict_reports_loser():
+    source = _minimal_v7_trailing_grid_config()
+    source["optimize"]["bounds"] = {
+        "long": {
+            "strategy": {
+                "trailing_grid_v7": {
+                    "entry": {
+                        "grid_spacing_weight": [0.1, 1.0, 0.1],
+                        "grid_spacing_we_weight": [2.0, 2.0, 0.1],
+                    }
+                }
+            }
+        }
+    }
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    entry_bounds = migrated["optimize"]["bounds"]["long"]["strategy"]["trailing_grid_v7"][
+        "entry"
+    ]
+    assert entry_bounds["grid_spacing_we_weight"] == [0.1, 1.0, 0.1]
+    assert any(
+        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight "
+        "conflicts with "
+        "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_weight"
+        in item
+        for item in report["manual_review_fields"]
+    )
+    assert not any(
+        moved.startswith(
+            "optimize.bounds.long.strategy.trailing_grid_v7.entry.grid_spacing_we_weight ->"
+        )
+        for moved in report["moved_fields"]
+    )
     prepare_config(migrated, verbose=False, target="canonical", runtime=None)
 
 
