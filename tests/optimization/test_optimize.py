@@ -1915,6 +1915,256 @@ def test_build_pymoo_record_entry_strips_metadata():
     assert "suite_metrics" in entry
 
 
+def test_resume_config_mismatches_allows_suite_result_without_top_level_coins():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
+        },
+        "bot": {"long": {"enabled": True}, "short": {"enabled": False}},
+        "live": {
+            "approved_coins": {"long": ["XMR"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "suite_metrics": {"scenario_labels": ["base"]},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["coins"] = {"binance": ["XMR"]}
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
+def test_resume_config_mismatches_rejects_changed_suite_scenarios():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "scenarios": [{"label": "base", "coins": ["XMR"], "exchanges": ["binance"]}],
+        },
+        "bot": {},
+        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "optimize": {"scoring": [{"metric": "adg_strategy_eq", "goal": "max"}]},
+        "suite_metrics": {"scenario_labels": ["base"]},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["scenarios"][0]["coins"] = ["ETH"]
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("backtest.scenarios" in mismatch for mismatch in mismatches)
+
+
+def test_resume_config_mismatches_plain_result_still_rejects_coin_change():
+    entry = {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "coins": {"binance": ["XMR"]},
+        },
+        "bot": {},
+        "live": {"approved_coins": {}, "ignored_coins": {}},
+        "optimize": {},
+    }
+    config = deepcopy(entry)
+    config["backtest"]["coins"] = {"binance": ["ETH"]}
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("backtest.coins" in mismatch for mismatch in mismatches)
+
+
+def _resume_validation_entry():
+    return {
+        "backtest": {
+            "start_date": "2024-01-01",
+            "end_date": "2024-01-10",
+            "exchanges": ["binance"],
+            "coins": {"binance": ["XMR"]},
+        },
+        "bot": {"long": {"enabled": True}, "short": {"enabled": False}},
+        "live": {
+            "approved_coins": {"long": ["XMR"], "short": []},
+            "ignored_coins": {"long": [], "short": []},
+        },
+        "optimize": {
+            "backend": "pymoo",
+            "bounds": {"long_close_grid_markup_range": [0.001, 0.01]},
+            "iters": 2,
+            "population_size": 2,
+            "scoring": [{"metric": "adg_strategy_eq", "goal": "max"}],
+        },
+    }
+
+
+def _write_msgpack_entries(path: Path, entries: list[dict]) -> None:
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    with open(path, "wb") as f:
+        for entry in entries:
+            f.write(packer.pack(entry))
+
+
+def test_resume_config_mismatches_rejects_changed_optimize_bounds():
+    entry = _resume_validation_entry()
+    config = deepcopy(entry)
+    config["optimize"]["bounds"]["long_close_grid_markup_range"] = [0.002, 0.02]
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("optimize.bounds" in mismatch for mismatch in mismatches)
+
+
+def test_resume_config_mismatches_rejects_changed_backend():
+    entry = _resume_validation_entry()
+    config = deepcopy(entry)
+    config["optimize"]["backend"] = "deap"
+
+    mismatches = optimize._resume_config_mismatches(entry, config)
+
+    assert any("optimize.backend" in mismatch for mismatch in mismatches)
+
+
+def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
+    entry = _resume_validation_entry()
+    entry["optimize"]["n_cpus"] = 6
+    entry["optimize"]["pareto_max_size"] = 1000
+    entry["optimize"]["write_all_results"] = True
+    entry["backtest"]["base_dir"] = "/old/backtests"
+    entry["backtest"]["ohlcv_source_dir"] = "/old/ohlcvs"
+    entry["backtest"]["visible_metrics"] = ["adg_strategy_eq"]
+    config = deepcopy(entry)
+    config["optimize"]["n_cpus"] = 8
+    config["optimize"]["pareto_max_size"] = 250
+    config["optimize"]["write_all_results"] = False
+    config["backtest"]["base_dir"] = "/new/backtests"
+    config["backtest"]["ohlcv_source_dir"] = "/new/ohlcvs"
+    config["backtest"]["visible_metrics"] = ["drawdown_worst_strategy_eq"]
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
+def test_resolve_resume_results_dir_does_not_create_missing_directory(tmp_path: Path):
+    missing = tmp_path / "missing_resume_dir"
+
+    with pytest.raises(ValueError, match="Resume directory not found"):
+        optimize._resolve_resume_results_dir(str(missing))
+
+    assert not missing.exists()
+
+
+def test_require_resume_checkpoint_rejects_missing_checkpoint(tmp_path: Path):
+    with pytest.raises(ValueError, match="checkpoint not found"):
+        optimize._require_resume_checkpoint(str(tmp_path))
+
+
+def test_require_resume_checkpoint_rejects_empty_checkpoint(tmp_path: Path):
+    (tmp_path / "checkpoint.pkl").write_bytes(b"")
+
+    with pytest.raises(ValueError, match="checkpoint is empty"):
+        optimize._require_resume_checkpoint(str(tmp_path))
+
+
+def test_validate_resume_results_requires_all_results(tmp_path: Path):
+    config = _resume_validation_entry()
+
+    with pytest.raises(ValueError, match="all_results.bin not found"):
+        optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_rejects_empty_all_results(tmp_path: Path):
+    config = _resume_validation_entry()
+    (tmp_path / "all_results.bin").write_bytes(b"")
+
+    with pytest.raises(ValueError, match="all_results.bin is empty"):
+        optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_rejects_corrupt_all_results(tmp_path: Path):
+    config = _resume_validation_entry()
+    (tmp_path / "all_results.bin").write_bytes(b"\xc1")
+
+    with pytest.raises(ValueError, match="invalid msgpack marker"):
+        optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_rejects_non_config_first_entry(tmp_path: Path):
+    config = _resume_validation_entry()
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(["not", "a", "config"]))
+
+    with pytest.raises(ValueError, match="first all_results.bin entry is not a config object"):
+        optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
+    entry = _resume_validation_entry()
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + packer.pack(1))
+
+    with pytest.raises(ValueError, match="entry 2 is not a result object"):
+        optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
+
+
+def test_validate_resume_results_rejects_truncated_trailing_msgpack(tmp_path: Path):
+    entry = _resume_validation_entry()
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + b"\x81\xa1x")
+
+    with pytest.raises(ValueError, match="truncated msgpack data"):
+        optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
+
+
+def test_validate_resume_results_rejects_changed_search_domain(tmp_path: Path):
+    entry = _resume_validation_entry()
+    config = deepcopy(entry)
+    config["optimize"]["bounds"]["long_close_grid_markup_range"] = [0.002, 0.02]
+    _write_msgpack_entries(tmp_path / "all_results.bin", [entry])
+
+    with pytest.raises(ValueError, match="critical parameters have changed"):
+        optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_counts_entries(tmp_path: Path):
+    entry = _resume_validation_entry()
+    _write_msgpack_entries(tmp_path / "all_results.bin", [entry, deepcopy(entry)])
+
+    assert optimize._validate_resume_results(str(tmp_path), deepcopy(entry)) == 2
+
+
+def test_optimizer_exit_code_is_nonzero_for_fatal_errors():
+    assert optimize._optimizer_exit_code(interrupted=False, fatal_error=True) == 1
+    assert optimize._optimizer_exit_code(interrupted=True, fatal_error=True) == 130
+
+
+def test_result_recorder_all_results_write_failure_is_fatal():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = ResultRecorder(
+            results_dir=tmpdir,
+            sig_digits=6,
+            flush_interval=60,
+            scoring_keys=["metric1"],
+            compress=False,
+            write_all_results=True,
+            bounds=[(0.0, 1.0, 0.0)] * 4,
+        )
+        recorder.results_file.close()
+
+        with pytest.raises(RuntimeError, match="Error writing all_results.bin"):
+            recorder.record(
+                {
+                    "bot": {"long": {}, "short": {}},
+                    "metrics": {
+                        "objectives": {"metric1": 0.5},
+                        "constraint_violation": 0.0,
+                    },
+                }
+            )
+
+
 def test_result_recorder_preserves_unquantized_saved_param_values():
     template = load_prepared_config("configs/examples/default_trailing_grid_long_npos7.json", verbose=False)
     bounds = extract_bounds_tuple_list_from_config(template)

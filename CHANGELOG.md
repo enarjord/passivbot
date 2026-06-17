@@ -57,6 +57,9 @@ All notable user-facing changes will be documented in this file.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.
+- Added optimizer `--resume` checkpoint recovery safeguards: resume now requires a
+  readable checkpoint plus prior `all_results.bin` metadata, rejects changed optimizer
+  search domains before appending results, and exits non-zero on fatal optimizer errors.
 
 ## v7.12.0 - 2026-05-27
 
