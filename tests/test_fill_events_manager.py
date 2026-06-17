@@ -56,8 +56,14 @@ class _Clock:
 
 
 class _FakeBitgetAPI:
-    def __init__(self, batches: List[List[Dict[str, str]]]) -> None:
+    def __init__(
+        self,
+        batches: List[List[Dict[str, str]]],
+        *,
+        options: Optional[Dict[str, object]] = None,
+    ) -> None:
         self._batches = batches
+        self.options = dict(options or {})
         self.history_calls: List[Dict[str, object]] = []
         self.detail_calls: List[Dict[str, object]] = []
         self.details_by_order: Dict[str, Dict[str, object]] = {}
@@ -79,6 +85,12 @@ class _FakeBitgetAPI:
         self.detail_calls.append(dict(params))
         order_id = params["orderId"]
         return self.details_by_order.get(order_id, {"data": {"clientOid": None}})
+
+    async def private_uta_get_v3_trade_fills(self, params: Dict[str, object]):
+        self.history_calls.append(dict(params))
+        if not self._batches:
+            return {"data": {"list": []}}
+        return {"data": {"list": self._batches.pop(0)}}
 
 
 class _StaticFetcher(BaseFetcher):
@@ -1088,6 +1100,26 @@ def test_fee_policy_uses_scalar_quote_fee():
         assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
 
 
+def test_fee_policy_uses_bitget_fee_detail_fields():
+    for raw_fee, expected in [
+        ({"feeCoin": "USDT", "fee": "0.01"}, -0.01),
+        ({"feeCoin": "USDT", "fee": "-0.02"}, -0.02),
+        ({"feeCoin": "USDT", "totalFee": "-0.03"}, -0.03),
+    ]:
+        fee_paid, meta = fem._normalize_fee_paid_from_payload(
+            {
+                "symbol": "BTC/USDT:USDT",
+                "qty": 1.0,
+                "price": 1000.0,
+                "fees": [raw_fee],
+            }
+        )
+
+        assert fee_paid == pytest.approx(expected)
+        assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+        assert meta["fee_quality"] == fem.FEE_QUALITY_EXACT
+
+
 def test_fee_policy_converts_reported_non_quote_fee_to_quote():
     fee_paid, meta = fem._normalize_fee_paid_from_payload(
         {
@@ -1961,6 +1993,40 @@ async def test_kucoin_doctor_repair_applies_contract_multiplier(tmp_path: Path):
 
 
 @pytest.mark.asyncio
+async def test_fill_events_cli_prepares_bitget_uta_fetcher_mode():
+    class _Bot:
+        exchange = "bitget"
+
+        def __init__(self):
+            self.cca = types.SimpleNamespace(options={})
+            self.detect_calls = 0
+
+        async def _detect_account_mode(self):
+            self.detect_calls += 1
+            self.cca.options["uta"] = True
+
+    bot = _Bot()
+
+    await fem._prepare_cli_fetcher_bot(bot)
+    fetcher = fem._build_fetcher_for_bot(bot, ["BTC"])
+
+    assert bot.detect_calls == 1
+    assert isinstance(fetcher, BitgetFetcher)
+    assert fetcher.api.options["uta"] is True
+
+
+@pytest.mark.asyncio
+async def test_fill_events_cli_prepare_skips_non_bitget_bot():
+    class _Bot:
+        exchange = "binance"
+
+        async def _detect_account_mode(self):
+            raise AssertionError("non-Bitget CLI fetchers must not probe Bitget UTA mode")
+
+    await fem._prepare_cli_fetcher_bot(_Bot())
+
+
+@pytest.mark.asyncio
 async def test_bitget_fetcher_enriches_and_deduplicates(monkeypatch):
     fills = [
         [
@@ -2241,6 +2307,174 @@ async def test_bitget_fetcher_reuses_detail_cache(monkeypatch):
     assert events[0]["pb_order_type"] == "cached-type"
     assert len(batch_log) == 1
     assert events[0]["symbol"].endswith(":USDT")
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_fetcher_derives_position_side_without_pos_side(monkeypatch):
+    fills = [
+        [
+            {
+                "execId": "exec-open-short",
+                "orderId": "order-open-short",
+                "clientOid": "0x0001abcdef",
+                "createdTime": "1000",
+                "symbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "open",
+                "execQty": "0.1",
+                "execPrice": "10",
+                "execPnl": "0",
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
+            },
+            {
+                "execId": "exec-close-short",
+                "orderId": "order-close-short",
+                "clientOid": "0x0002abcdef",
+                "createdTime": "1100",
+                "symbol": "BTCUSDT",
+                "side": "buy",
+                "tradeSide": "close",
+                "execQty": "0.1",
+                "execPrice": "9",
+                "execPnl": "1",
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
+            },
+            {
+                "execId": "exec-close-long",
+                "orderId": "order-close-long",
+                "clientOid": "0x0003abcdef",
+                "createdTime": "1200",
+                "symbol": "BTCUSDT",
+                "side": "sell",
+                "tradeSide": "close",
+                "execQty": "0.1",
+                "execPrice": "11",
+                "execPnl": "1",
+                "feeDetail": [{"feeCoin": "USDT", "fee": "0.0001"}],
+            },
+        ]
+    ]
+    api = _FakeBitgetAPI(fills, options={"uta": True})
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=100,
+        now_func=lambda: 2000,
+        symbol_resolver=resolver,
+    )
+
+    events = await fetcher.fetch(
+        since_ms=900,
+        until_ms=2000,
+        detail_cache={},
+        on_batch=None,
+    )
+
+    by_id = {event["id"]: event for event in events}
+    assert by_id["exec-open-short"]["position_side"] == "short"
+    assert by_id["exec-close-short"]["position_side"] == "short"
+    assert by_id["exec-close-short"]["side"] == "buy"
+    assert by_id["exec-close-long"]["position_side"] == "long"
+    assert by_id["exec-close-long"]["side"] == "sell"
+    assert by_id["exec-open-short"]["fees"][0]["fee_paid"] == pytest.approx(-0.0001)
+    fee_paid, meta = fem._normalize_fee_paid_from_payload(by_id["exec-open-short"])
+    assert fee_paid == pytest.approx(-0.0001)
+    assert meta["fee_source"] == fem.FEE_SOURCE_REPORTED_QUOTE
+    assert api.detail_calls == []
+    assert api.history_calls[0]["category"] == "USDT-FUTURES"
+    assert api.history_calls[0]["startTime"] == 900
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_fetcher_rejects_malformed_rows():
+    api = _FakeBitgetAPI(
+        [
+            [
+                {
+                    "execId": "exec-bad",
+                    "orderId": "order-bad",
+                    "createdTime": "1000",
+                    "symbol": "BTCUSDT",
+                    "side": "sell",
+                    "tradeSide": "open",
+                    "execPrice": "10",
+                    "execPnl": "0",
+                }
+            ]
+        ],
+        options={"uta": True},
+    )
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=100,
+        now_func=lambda: 2000,
+        symbol_resolver=resolver,
+    )
+
+    with pytest.raises(ValueError, match="execQty"):
+        await fetcher.fetch(since_ms=900, until_ms=2000, detail_cache={}, on_batch=None)
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_fetcher_splits_long_lookback_into_30_day_windows(monkeypatch):
+    day_ms = 24 * 60 * 60 * 1000
+    api = _FakeBitgetAPI(
+        [
+            [
+                {
+                    "execId": "exec-new",
+                    "orderId": "order-new",
+                    "clientOid": "0x0001abcdef",
+                    "createdTime": str(59 * day_ms),
+                    "symbol": "BTCUSDT",
+                    "side": "sell",
+                    "tradeSide": "open",
+                    "execQty": "0.1",
+                    "execPrice": "10",
+                    "execPnl": "0",
+                }
+            ],
+            [
+                {
+                    "execId": "exec-old",
+                    "orderId": "order-old",
+                    "clientOid": "0x0002abcdef",
+                    "createdTime": str(10 * day_ms),
+                    "symbol": "BTCUSDT",
+                    "side": "buy",
+                    "tradeSide": "close",
+                    "execQty": "0.1",
+                    "execPrice": "9",
+                    "execPnl": "1",
+                }
+            ],
+        ],
+        options={"uta": True},
+    )
+    resolver = lambda s: f"{s[:-4]}/USDT:USDT" if s and s.endswith("USDT") else s
+    monkeypatch.setattr("src.fill_events_manager.custom_id_to_snake", lambda value: value)
+
+    fetcher = BitgetFetcher(
+        api,
+        history_limit=100,
+        now_func=lambda: 60 * day_ms,
+        symbol_resolver=resolver,
+    )
+
+    events = await fetcher.fetch(
+        since_ms=0,
+        until_ms=60 * day_ms,
+        detail_cache={},
+        on_batch=None,
+    )
+
+    assert [event["id"] for event in events] == ["exec-old", "exec-new"]
+    assert len(api.history_calls) == 2
+    for call in api.history_calls:
+        assert int(call["endTime"]) - int(call["startTime"]) < 30 * day_ms
 
 
 @pytest.mark.asyncio

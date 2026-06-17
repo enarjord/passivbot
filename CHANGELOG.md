@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added Bitget UTA / Elite copy-trading account support with v3 API routing for
+  balance, orders, and fill-event history while keeping classic Bitget accounts
+  on the existing v2/mix paths.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was

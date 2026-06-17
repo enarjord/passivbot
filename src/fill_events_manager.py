@@ -348,6 +348,13 @@ def _fee_entry_signed_fee_paid(fee: Dict[str, object]) -> float:
     """
     if "fee_paid" in fee:
         return float(fee.get("fee_paid") or 0.0)
+    if fee.get("totalFee") not in (None, ""):
+        return float(fee.get("totalFee") or 0.0)
+    if fee.get("fee") not in (None, ""):
+        value = float(fee.get("fee") or 0.0)
+        return value if value < 0.0 else -abs(value)
+    if fee.get("totalDeductionFee") not in (None, ""):
+        return float(fee.get("totalDeductionFee") or 0.0)
     cost = float(fee.get("cost") or 0.0)
     if cost == 0.0:
         return 0.0
@@ -2135,6 +2142,10 @@ class BitgetFetcher(BaseFetcher):
         detail_cache: Dict[str, Tuple[str, str]],
         on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
     ) -> List[Dict[str, object]]:
+        # UTA / Elite (copy-trading) accounts speak the v3 API; the classic
+        # v2 fill-history endpoint returns error 40731 for them.
+        if getattr(self.api, "options", {}).get("uta"):
+            return await self._fetch_uta(since_ms, until_ms, detail_cache, on_batch)
         buffer_step_ms = 24 * 60 * 60 * 1000
         end_time = int(until_ms) if until_ms is not None else self._now_func() + buffer_step_ms
         params: Dict[str, object] = {
@@ -2359,29 +2370,103 @@ class BitgetFetcher(BaseFetcher):
     @staticmethod
     def _normalize_fee_detail(fee_detail: object) -> object:
         """Normalize Bitget feeDetail rows into canonical signed fee entries."""
-        entries = _fee_entries(fee_detail)
-        if not entries:
-            return fee_detail
-        normalized: List[Dict[str, object]] = []
-        for entry in entries:
-            item = dict(entry)
-            currency = _fee_entry_currency(item)
-            if currency:
-                item["currency"] = currency
-            fee_paid_raw = (
-                item.get("fee_paid")
-                if "fee_paid" in item
-                else item.get("totalFee")
-                if item.get("totalFee") not in (None, "")
-                else item.get("totalDeductionFee")
-            )
-            if fee_paid_raw not in (None, ""):
-                try:
-                    item["fee_paid"] = float(fee_paid_raw)
-                except (TypeError, ValueError):
-                    pass
-            normalized.append(item)
-        return normalized
+        return normalize_bitget_fee_detail(fee_detail)
+
+    @staticmethod
+    def _deduce_uta_side_pside(raw: Dict[str, object]) -> Tuple[str, str]:
+        return deduce_uta_side_pside(raw)
+
+    async def _fetch_uta(
+        self,
+        since_ms: Optional[int],
+        until_ms: Optional[int],
+        detail_cache: Dict[str, Tuple[str, str]],
+        on_batch: Optional[Callable[[List[Dict[str, object]]], None]] = None,
+    ) -> List[Dict[str, object]]:
+        """UTA/Elite variant: source fills from the v3 trade/fills endpoint.
+        v3 fills already carry clientOid, so no per-order detail enrichment."""
+        end_time = int(until_ms) if until_ms is not None else self._now_func() + 24 * 60 * 60 * 1000
+        max_window_ms = 30 * 24 * 60 * 60 * 1000 - 1
+        params: Dict[str, object] = {
+            "category": self.product_type,
+            "limit": self.history_limit,
+        }
+        events: Dict[str, Dict[str, object]] = {}
+        max_fetches = 400
+        fetch_count = 0
+        cursor: Optional[str] = None
+        while True:
+            if fetch_count >= max_fetches:
+                logger.warning("BitgetFetcher._fetch_uta: reached max pagination depth (%d)", max_fetches)
+                break
+            fetch_count += 1
+            request_params = dict(params)
+            request_params["endTime"] = end_time
+            window_start = None
+            if since_ms is not None:
+                window_start = max(int(since_ms), int(end_time) - max_window_ms)
+                request_params["startTime"] = window_start
+            if cursor:
+                request_params["cursor"] = cursor
+            payload = await self.api.private_uta_get_v3_trade_fills(request_params)
+            data = payload.get("data") or {}
+            rows = data.get("list") or []
+            if not rows:
+                if since_ms is not None and window_start is not None and window_start > since_ms:
+                    next_end = window_start - 1
+                    if next_end <= since_ms:
+                        break
+                    end_time = next_end
+                    cursor = None
+                    continue
+                break
+            batch_ids: List[str] = []
+            for raw in rows:
+                event = self._normalize_fill_uta(raw)
+                event_id = event["id"]
+                if not event_id:
+                    continue
+                batch_ids.append(event_id)
+                if event.get("client_order_id"):
+                    detail_cache[event_id] = (event["client_order_id"], event.get("pb_order_type", ""))
+                events[event_id] = event
+            if on_batch:
+                batch_events = [
+                    dict(events[i]) for i in batch_ids if events[i].get("client_order_id")
+                ]
+                if batch_events:
+                    on_batch(batch_events)
+            oldest = min(int(event["timestamp"]) for event in events.values() if event["id"] in batch_ids)
+            next_cursor = data.get("cursor")
+            if len(rows) >= self.history_limit and next_cursor:
+                cursor = str(next_cursor)
+                continue
+            cursor = None
+            if len(rows) < self.history_limit:
+                if since_ms is not None and window_start is not None and window_start > since_ms:
+                    next_end = window_start - 1
+                    if next_end <= since_ms:
+                        break
+                    end_time = next_end
+                    continue
+                break
+            if since_ms is not None and oldest <= since_ms:
+                break
+            new_end = oldest - 1
+            if since_ms is not None and new_end <= since_ms:
+                break
+            end_time = new_end
+        ordered = sorted(events.values(), key=lambda ev: ev["timestamp"])
+        if since_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] >= since_ms]
+        if until_ms is not None:
+            ordered = [ev for ev in ordered if ev["timestamp"] <= until_ms]
+        return ordered
+
+    def _normalize_fill_uta(self, raw: Dict[str, object]) -> Dict[str, object]:
+        event = normalize_uta_fill_payload(raw, self._resolve_symbol)
+        event["raw"] = [{"source": "uta_fills", "data": dict(raw)}]
+        return event
 
     def _normalize_fill(self, raw: Dict[str, object]) -> Dict[str, object]:
         timestamp = int(raw["cTime"])
@@ -6784,6 +6869,29 @@ def deduce_side_pside(elm: dict) -> Tuple[str, str]:
         return side or "buy", "long"
 
 
+def deduce_uta_side_pside(elm: dict) -> Tuple[str, str]:
+    """Import UTA helper from exchanges.bitget so inference cannot diverge."""
+    from exchanges.bitget import deduce_uta_side_pside as _real
+
+    return _real(elm)
+
+
+def normalize_bitget_fee_detail(fee_detail: object) -> object:
+    """Import Bitget feeDetail normalizer from the exchange integration."""
+    from exchanges.bitget import normalize_bitget_fee_detail as _real
+
+    return _real(fee_detail)
+
+
+def normalize_uta_fill_payload(
+    elm: Dict[str, object], symbol_resolver: Callable[[str], str]
+) -> Dict[str, object]:
+    """Import Bitget UTA fill normalizer from the exchange integration."""
+    from exchanges.bitget import normalize_uta_fill_payload as _real
+
+    return _real(elm, symbol_resolver)
+
+
 # ---------------------------------------------------------------------------
 # CLI helpers
 # ---------------------------------------------------------------------------
@@ -6977,6 +7085,16 @@ def _instantiate_bot(config: dict):
     return bot_cls(config)
 
 
+async def _prepare_cli_fetcher_bot(bot) -> None:
+    """Prepare read-only exchange routing needed before building a CLI fetcher."""
+    exchange = str(getattr(bot, "exchange", "") or "").lower()
+    if exchange == "bitget" and hasattr(bot, "_detect_account_mode"):
+        # The standalone fill-events CLI does not run the full live startup
+        # exchange-config path. Bitget UTA detection is a read-only v3 account
+        # assets probe and is required before BitgetFetcher can choose v3 fills.
+        await bot._detect_account_mode()
+
+
 async def _run_cli(args: argparse.Namespace) -> None:
     source_config, base_config_path, raw_snapshot = load_input_config(args.config)
     config = prepare_config(
@@ -6993,6 +7111,7 @@ async def _run_cli(args: argparse.Namespace) -> None:
     bot = _instantiate_bot(config)
     try:
         bot._fill_fetcher_allow_config_symbol_fallback = True
+        await _prepare_cli_fetcher_bot(bot)
         symbol_pool = _extract_symbol_pool(config, args.symbols)
         fetcher = _build_fetcher_for_bot(bot, symbol_pool)
         cache_root = Path(args.cache_root)
