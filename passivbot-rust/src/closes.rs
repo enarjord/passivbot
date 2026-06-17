@@ -10,7 +10,7 @@ use crate::utils::{
     RoundingMode,
 };
 
-fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
+pub(crate) fn sort_closes_by_price(closes: &mut [Order], descending: bool, context: &str) {
     for order in closes.iter() {
         assert!(
             order.price.is_finite(),
@@ -63,7 +63,7 @@ pub fn calc_close_qty(
     }
 }
 
-fn calc_wel_auto_reduce_long(
+pub(crate) fn calc_wel_auto_reduce_long(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,
@@ -147,7 +147,7 @@ fn calc_wel_auto_reduce_long(
     })
 }
 
-fn calc_wel_auto_reduce_short(
+pub(crate) fn calc_wel_auto_reduce_short(
     exchange_params: &ExchangeParams,
     state_params: &StateParams,
     bot_params: &BotParams,

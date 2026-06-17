@@ -40,10 +40,15 @@ Decision: v8 replaces the v7 `trailing_grid` schema with canonical strategy kind
 `trailing_martingale`. Do not add dev-branch compatibility aliases, migrations, duplicate schema
 support, or silent shims for removed trailing-grid fields unless explicitly requested.
 
+Explicit 2026-06 carve-out: `trailing_grid_v7` is a bounded, deprecated compatibility strategy kind
+for v7 trailing-grid configs that are migrated with `passivbot tool migrate-config-v7`. This is not
+a broad v7 runtime mode and must not make `trailing_martingale` accept old flat trailing-grid fields.
+
 Impact:
 - canonical config path is `bot.<side>.strategy.trailing_martingale`
 - removed v7 fields such as `entry_trailing_grid_ratio`, `close_trailing_grid_ratio`,
-  `close_grid_markup_start`, and `close_grid_markup_end` are not part of v8 semantics
+  `close_grid_markup_start`, and `close_grid_markup_end` are not part of `trailing_martingale`
+  semantics; they are supported only under `bot.<side>.strategy.trailing_grid_v7`
 - optimizer fixed/fine-tune selectors are dotted config paths such as `long.strategy`, not
   flattened underscore optimize keys
 - Rust order behavior remains the source of truth when docs or Python adapters disagree

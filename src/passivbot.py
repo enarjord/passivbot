@@ -84,6 +84,10 @@ from config.strategy import (
 from config.shared_bot import get_grouped_bot_value
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from config.overrides import parse_overrides
+from risk_limits import (
+    effective_we_excess_allowance_pct,
+    normalize_we_excess_allowance_mode,
+)
 from logging_setup import (
     configure_logging,
     get_last_log_activity_monotonic,
@@ -134,6 +138,13 @@ from procedures import (
 )
 from utils import get_file_mod_ms
 from warmup_utils import compute_per_coin_warmup_minutes
+from strategy_warmup import (
+    STRATEGY_WARMUP_1M_PROBE_KEYS,
+    STRATEGY_WARMUP_H1_PROBE_KEYS,
+    strategy_abs_max_weight,
+    strategy_warmup_requirements,
+    strategy_warmup_value,
+)
 import re
 
 NetworkError = ccxt_errors.NetworkError
@@ -538,14 +549,8 @@ def compute_live_warmup_windows(
         for pside in ("long", "short"):
             if sym not in symbols_by_side.get(pside, set()):
                 continue
-            max_1m_span = max(
-                max_1m_span,
-                _get_strategy(pside, "ema_span_0", sym),
-                _get_strategy(pside, "ema_span_1", sym),
-                _get_strategy(pside, "volatility_ema_span_1m", sym),
-                _get_strategy(pside, "offset_volatility_ema_span_1m", sym),
-                _get_strategy(pside, "entry_volatility_ema_span_1m", sym),
-            )
+            for key in STRATEGY_WARMUP_1M_PROBE_KEYS:
+                max_1m_span = max(max_1m_span, _get_strategy(pside, key, sym))
             if (pside == "long" and is_forager_long) or (
                 pside == "short" and is_forager_short
             ):
@@ -554,12 +559,8 @@ def compute_live_warmup_windows(
                     _get_forager(pside, "forager_volume_ema_span_1m", sym),
                     _get_forager(pside, "forager_volatility_ema_span_1m", sym),
                 )
-            max_h1_span = max(
-                max_h1_span,
-                _get_strategy(pside, "volatility_ema_span_1h", sym),
-                _get_strategy(pside, "entry_volatility_ema_span_1h", sym),
-                _get_strategy(pside, "offset_volatility_ema_span_1h", sym),
-            )
+            for key in STRATEGY_WARMUP_H1_PROBE_KEYS:
+                max_h1_span = max(max_h1_span, _get_strategy(pside, key, sym))
 
         if max_1m_span > 0.0:
             win = int(math.ceil(max_1m_span * span_buffer))
@@ -2767,6 +2768,25 @@ class Passivbot:
         )
         self._maybe_log_candle_health_summary()
 
+    def _unstuck_loss_allowance_pct_overrides_for_logging(self, pside: str) -> dict[str, float]:
+        base_pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
+        out: dict[str, float] = {}
+        for symbol in sorted((getattr(self, "coin_overrides", {}) or {}).keys()):
+            pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+            if abs(pct - base_pct) > 1e-15:
+                out[symbol] = pct
+        return out
+
+    @staticmethod
+    def _format_unstuck_override_pcts_for_logging(overrides: dict[str, float]) -> str:
+        if not overrides:
+            return ""
+        items = list(overrides.items())
+        shown = ", ".join(f"{symbol}={pct:.4f}" for symbol, pct in items[:4])
+        if len(items) > 4:
+            shown = f"{shown}, +{len(items) - 4} more"
+        return shown
+
     def _calc_unstuck_allowance_for_logging(self, pside: str) -> dict:
         """Calculate raw unstuck allowance values for logging (including negative)."""
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
@@ -2774,7 +2794,8 @@ class Passivbot:
             return {"status": "disabled"}
 
         pct = float(self.bot_value(pside, "unstuck_loss_allowance_pct") or 0.0)
-        if pct <= 0.0:
+        override_pcts = self._unstuck_loss_allowance_pct_overrides_for_logging(pside)
+        if pct <= 0.0 and not any(override_pct > 0.0 for override_pct in override_pcts.values()):
             return {"status": "unstuck_disabled"}
 
         if self._pnls_manager is None:
@@ -2797,12 +2818,19 @@ class Passivbot:
         pct_from_peak = (balance_raw / balance_peak - 1.0) * 100.0
         # Raw allowance WITHOUT .max(0.0) - can be negative
         allowance_raw = balance_peak * (pct * twel + pct_from_peak / 100.0)
+        override_allowances = {
+            symbol: balance_peak * (override_pct * twel + pct_from_peak / 100.0)
+            for symbol, override_pct in override_pcts.items()
+        }
 
         return {
             "status": "ok",
             "allowance": allowance_raw,
             "peak": balance_peak,
             "pct_from_peak": pct_from_peak,
+            "loss_allowance_pct": pct,
+            "override_loss_allowance_pcts": override_pcts,
+            "override_allowances": override_allowances,
         }
 
     def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
@@ -2826,21 +2854,26 @@ class Passivbot:
                 snapped_allowance = self._get_hysteresis_snapped_unstuck_allowance(
                     pside, allowance
                 )
+                overrides_str = self._format_unstuck_override_pcts_for_logging(
+                    info.get("override_loss_allowance_pcts", {})
+                )
+                overrides_suffix = f" | overrides={overrides_str}" if overrides_str else ""
                 if allowance < 0:
                     parts.append(
-                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f (over budget) | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 else:
                     parts.append(
-                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%"
-                        % (pside, allowance, info["peak"], info["pct_from_peak"])
+                        "%s: allowance=%.2f | peak=%.2f | pct_from_peak=%.1f%%%s"
+                        % (pside, allowance, info["peak"], info["pct_from_peak"], overrides_suffix)
                     )
                 signature_parts.append(
                     (
                         pside,
                         "over_budget" if allowance < 0 else "ok",
                         round(float(snapped_allowance), 2),
+                        tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
                     )
                 )
         return parts, tuple(signature_parts)
@@ -3717,29 +3750,13 @@ class Passivbot:
                 f"{symbol or ''}; got {type(strategy_cfg).__name__}"
             )
 
-        if key in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg[key],
-                context=f"strategy {pside}.{key}",
-                symbol=symbol,
-            )
-
-        if key == "entry_volatility_ema_span_1h" and "volatility_ema_span_1h" in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg["volatility_ema_span_1h"],
-                context=f"strategy {pside}.volatility_ema_span_1h",
-                symbol=symbol,
-            )
-        if key == "entry_volatility_ema_span_1m" and "volatility_ema_span_1m" in strategy_cfg:
-            return Passivbot._positive_finite_warmup_value(
-                strategy_cfg["volatility_ema_span_1m"],
-                context=f"strategy {pside}.volatility_ema_span_1m",
-                symbol=symbol,
-            )
-
-        # Not every active strategy has every warmup probe key. Missing keys are
-        # treated as not-required; malformed present values still fail above.
-        return 0.0
+        return strategy_warmup_value(
+            strategy_cfg,
+            key,
+            pside=pside,
+            symbol=symbol,
+            error_label="live warmup",
+        )
 
     def _live_forager_warmup_value(self, pside: str, key: str, symbol: str) -> float:
         """Return grouped forager indicator spans for live candle warmup."""
@@ -6380,7 +6397,17 @@ class Passivbot:
         """Return True when trailing logic is active for the given symbol and side."""
         if pside is None:
             return self.is_trailing(symbol, "long") or self.is_trailing(symbol, "short")
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+            if isinstance(getattr(self, "config", None), dict)
+            else None
+        )
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
+        if strategy_kind == "trailing_grid_v7":
+            return (
+                float(strategy_cfg.get("entry", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+                or float(strategy_cfg.get("close", {}).get("trailing_grid_ratio", 0.0) or 0.0) != 0.0
+            )
         return (
             float(strategy_cfg.get("entry", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
             or float(strategy_cfg.get("close", {}).get("retracement_base_pct", 0.0) or 0.0) > 0.0
@@ -7370,7 +7397,7 @@ class Passivbot:
         strategy_cfg = self._strategy_params_to_rust_dict(pside, symbol)
         if strategy_kind == "ema_anchor":
             return float(strategy_cfg["base_qty_pct"])
-        if strategy_kind == "trailing_martingale":
+        if strategy_kind in {"trailing_martingale", "trailing_grid_v7"}:
             entry_cfg = strategy_cfg.get("entry")
             if not isinstance(entry_cfg, dict) or "initial_qty_pct" not in entry_cfg:
                 raise KeyError(f"missing required strategy key {pside}.entry.initial_qty_pct")
@@ -7383,12 +7410,16 @@ class Passivbot:
             return True
         base_limit = self.get_wallet_exposure_limit(pside, symbol)
         allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+        allowance_mode = normalize_we_excess_allowance_mode(
+            self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+        )
         twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-        effective_allowance_pct = max(0.0, allowance_pct)
-        if base_limit > 0.0 and twel > 0.0:
-            effective_allowance_pct = min(
-                effective_allowance_pct, max(0.0, twel / base_limit - 1.0)
-            )
+        effective_allowance_pct = effective_we_excess_allowance_pct(
+            wallet_exposure_limit=base_limit,
+            risk_we_excess_allowance_pct=allowance_pct,
+            total_wallet_exposure_limit=twel,
+            risk_we_excess_allowance_mode=allowance_mode,
+        )
         allowance_multiplier = 1.0 + effective_allowance_pct
         effective_limit = base_limit * allowance_multiplier
         initial_sizing_fraction = self._strategy_initial_sizing_fraction(pside, symbol)
@@ -10409,12 +10440,16 @@ class Passivbot:
             allowance_pct = float(
                 self.bp(pside, "risk_we_excess_allowance_pct", symbol)
             )
+            allowance_mode = normalize_we_excess_allowance_mode(
+                self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+            )
             twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-            effective_allowance_pct = max(0.0, allowance_pct)
-            if wel > 0.0 and twel > 0.0:
-                effective_allowance_pct = min(
-                    effective_allowance_pct, max(0.0, twel / wel - 1.0)
-                )
+            effective_allowance_pct = effective_we_excess_allowance_pct(
+                wallet_exposure_limit=wel,
+                risk_we_excess_allowance_pct=allowance_pct,
+                total_wallet_exposure_limit=twel,
+                risk_we_excess_allowance_mode=allowance_mode,
+            )
             effective_wel = wel * (1.0 + effective_allowance_pct)
             # WEL% = ratio against base WEL, WELe% = ratio against effective WEL (with excess allowance)
             WEL_ratio = wallet_exposure / wel if wel > 0.0 else 0.0
@@ -10979,6 +11014,7 @@ class Passivbot:
                     self.live_value("market_order_near_touch_threshold")
                 ),
                 "panic_close_market": False,
+                "auto_unstuck_allowed": False,
                 "unstuck_allowance_long": 0.0,
                 "unstuck_allowance_short": 0.0,
                 "max_realized_loss_pct": float(Passivbot._live_max_realized_loss_pct(self)),
@@ -11134,12 +11170,14 @@ class Passivbot:
             "total_wallet_exposure_limit",
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
-            "unstuck_loss_allowance_pct",
         }
         bool_keys = {
             "risk_wel_enforcer_enabled",
             "risk_twel_enforcer_enabled",
             "unstuck_enabled",
+        }
+        string_keys = {
+            "risk_we_excess_allowance_mode",
         }
         strategy_keys = {
             "close_grid_qty_pct",
@@ -11196,6 +11234,7 @@ class Passivbot:
             "risk_twel_enforcer_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
+            "risk_we_excess_allowance_mode",
             "unstuck_enabled",
             "unstuck_close_pct",
             "unstuck_ema_dist",
@@ -11240,6 +11279,11 @@ class Passivbot:
                 out[out_key] = int(round(val or 0.0))
             elif key in bool_keys:
                 out[out_key] = bool(val)
+            elif key in string_keys:
+                out[out_key] = normalize_we_excess_allowance_mode(
+                    val,
+                    path=f"bot.{pside}.risk.we_excess_allowance_mode",
+                )
             else:
                 out[out_key] = float(val or 0.0)
         out.update(
@@ -11468,6 +11512,34 @@ class Passivbot:
         """Calculate unstuck allowances using FillEventsManager."""
         return self._calc_unstuck_allowances(allow_new_unstuck)
 
+    def _auto_unstuck_allowed_live(self, allow_new_unstuck: bool) -> bool:
+        if not allow_new_unstuck or self._pnls_manager is None:
+            return False
+        start_ms = self._pnls_lookback_start_ms()
+        events = self._get_effective_pnl_events()
+        self._assert_pnl_history_safe_for_risk(
+            events,
+            context="auto unstuck realized PnL",
+            start_ms=start_ms,
+        )
+        return bool(events)
+
+    def _calc_orchestrator_unstuck_allowance_for_symbol(
+        self, pside: str, symbol: str, realized_pnl_cumsum: dict
+    ) -> float:
+        pct = float(self.bp(pside, "unstuck_loss_allowance_pct", symbol) or 0.0)
+        twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
+        if pct <= 0.0 or twel <= 0.0:
+            return 0.0
+        return float(
+            pbr.calc_auto_unstuck_allowance(
+                self.get_raw_balance(),
+                pct * twel,
+                float(realized_pnl_cumsum.get("max", 0.0) or 0.0),
+                float(realized_pnl_cumsum.get("last", 0.0) or 0.0),
+            )
+        )
+
     async def calc_ideal_orders_orchestrator_from_snapshot(
         self, snapshot: dict, *, return_snapshot: bool
     ):
@@ -11486,6 +11558,15 @@ class Passivbot:
         )
 
         unstuck_allowances = snapshot.get("unstuck_allowances", {"long": 0.0, "short": 0.0})
+        auto_unstuck_allowed = bool(
+            snapshot.get(
+                "auto_unstuck_allowed",
+                any(
+                    float(unstuck_allowances.get(pside, 0.0) or 0.0) > 0.0
+                    for pside in ("long", "short")
+                ),
+            )
+        )
         realized_pnl_cumsum = snapshot.get("realized_pnl_cumsum", {"max": 0.0, "last": 0.0})
         last_increase_fill_timestamps = snapshot.get("last_increase_fill_timestamps", {})
         max_realized_loss_pct = float(Passivbot._live_max_realized_loss_pct(self))
@@ -11528,6 +11609,7 @@ class Passivbot:
                         if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -11694,7 +11776,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -11749,18 +11833,7 @@ class Passivbot:
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
 
-        def _strategy_lookup(params: dict, *paths):
-            for path in paths:
-                current = params
-                for part in path:
-                    if not isinstance(current, dict) or part not in current:
-                        current = None
-                        break
-                    current = current[part]
-                if current is not None:
-                    return current
-            rendered = " | ".join(".".join(path) for path in paths)
-            raise KeyError(f"missing required strategy parameter path: {rendered}")
+        strategy_kind = normalize_strategy_kind(self.config.get("live", {}).get("strategy_kind"))
 
         def _legacy_bp_warmup_value(pside: str, key: str, symbol: str) -> float:
             try:
@@ -11831,86 +11904,81 @@ class Passivbot:
                 for sp in (span0, span1, span2):
                     if sp > 0.0 and math.isfinite(sp):
                         need_close_spans[symbol].add(sp)
-                m1_lr_span = Passivbot._positive_finite_warmup_value(
-                    _strategy_lookup(
-                        strategy_params,
-                        ("volatility_ema_span_1m",),
-                        ("entry_volatility_ema_span_1m",),
-                        ("offset_volatility_ema_span_1m",),
-                    ),
-                    context=f"strategy {pside}.volatility_ema_span_1m",
+                requirements = strategy_warmup_requirements(
+                    strategy_params,
+                    pside=pside,
                     symbol=symbol,
+                    error_label="live warmup",
                 )
+                m1_lr_span = requirements.max_m1_log_range_span_minutes
                 m1_lr_weight = 0.0
                 if m1_lr_span > 0.0:
                     m1_lr_weight = max(
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("entry", "threshold_volatility_1m_weight"),
-                                    ("entry", "retracement_volatility_1m_weight"),
-                                    ("entry_weight_volatility_1m",),
-                                    ("offset_volatility_1m_weight",),
-                                ),
-                                context=f"strategy {pside}.entry_volatility_1m_weight",
-                                symbol=symbol,
-                            )
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1m_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1m_weight"),
+                                ("entry", "retracement_volatility_1m_weight"),
+                                ("entry_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
                         ),
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("close", "threshold_volatility_1m_weight"),
-                                    ("close", "retracement_volatility_1m_weight"),
-                                    ("close_weight_volatility_1m",),
-                                    ("offset_volatility_1m_weight",),
-                                ),
-                                context=f"strategy {pside}.close_volatility_1m_weight",
-                                symbol=symbol,
-                            )
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1m_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("close", "threshold_volatility_1m_weight"),
+                                ("close", "retracement_volatility_1m_weight"),
+                                ("close_weight_volatility_1m",),
+                                ("offset_volatility_1m_weight",),
+                            ),
                         ),
                     )
                 if m1_lr_weight > 0.0 and m1_lr_span > 0.0 and math.isfinite(m1_lr_span):
                     need_m1_lr_spans[symbol].add(m1_lr_span)
-                h1_span = Passivbot._positive_finite_warmup_value(
-                    _strategy_lookup(
-                        strategy_params,
-                        ("volatility_ema_span_1h",),
-                        ("offset_volatility_ema_span_1h",),
-                        ("entry_volatility_ema_span_1h",),
-                    ),
-                    context=f"strategy {pside}.volatility_ema_span_1h",
-                    symbol=symbol,
-                )
+                h1_span = requirements.max_h1_span_hours
                 h1_lr_weight = 0.0
                 if h1_span > 0.0:
                     h1_lr_weight = max(
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("entry", "threshold_volatility_1h_weight"),
-                                    ("entry", "retracement_volatility_1h_weight"),
-                                    ("entry_weight_volatility_1h",),
-                                    ("offset_volatility_1h_weight",),
-                                ),
-                                context=f"strategy {pside}.entry_volatility_1h_weight",
-                                symbol=symbol,
-                            )
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.entry_volatility_1h_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=False,
+                            paths=(
+                                ("entry", "threshold_volatility_1h_weight"),
+                                ("entry", "retracement_volatility_1h_weight"),
+                                ("entry", "grid_spacing_volatility_weight"),
+                                ("entry", "trailing_threshold_volatility_weight"),
+                                ("entry", "trailing_retracement_volatility_weight"),
+                                ("entry_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
                         ),
-                        abs(
-                            Passivbot._positive_finite_warmup_value(
-                                _strategy_lookup(
-                                    strategy_params,
-                                    ("close", "threshold_volatility_1h_weight"),
-                                    ("close", "retracement_volatility_1h_weight"),
-                                    ("close_weight_volatility_1h",),
-                                    ("offset_volatility_1h_weight",),
-                                ),
-                                context=f"strategy {pside}.close_volatility_1h_weight",
-                                symbol=symbol,
-                            )
+                        strategy_abs_max_weight(
+                            strategy_params,
+                            context=f"strategy {pside}.close_volatility_1h_weight",
+                            symbol=symbol,
+                            pside=pside,
+                            error_label="live warmup",
+                            optional=strategy_kind == "trailing_grid_v7",
+                            paths=(
+                                ("close", "threshold_volatility_1h_weight"),
+                                ("close", "retracement_volatility_1h_weight"),
+                                ("close_weight_volatility_1h",),
+                                ("offset_volatility_1h_weight",),
+                            ),
                         ),
                     )
                 if h1_lr_weight > 0.0 and h1_span > 0.0 and math.isfinite(h1_span):
@@ -12735,9 +12803,11 @@ class Passivbot:
             self, last_prices, ts=utc_ms(), source=monitor_source
         )
 
+        allow_new_unstuck = not self.has_open_unstuck_order()
         unstuck_allowances = self._calc_unstuck_allowances_live(
-            allow_new_unstuck=not self.has_open_unstuck_order()
+            allow_new_unstuck=allow_new_unstuck
         )
+        auto_unstuck_allowed = self._auto_unstuck_allowed_live(allow_new_unstuck)
         realized_pnl_cumsum = self._get_realized_pnl_cumsum_stats()
         now_ms = int(self.get_exchange_time())
         fill_increase_timestamps = self._get_last_increase_fill_timestamps(
@@ -12783,6 +12853,7 @@ class Passivbot:
                         if Passivbot._equity_hard_stop_enabled(self, pside)
                     )
                 ),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
                 "max_realized_loss_pct": max_realized_loss_pct,
@@ -12964,7 +13035,9 @@ class Passivbot:
                     pos = self.positions.get(symbol, {}).get(pside, {})
                     entry_price = pos.get("price", 0.0)
                     current_price = last_prices.get(symbol, 0.0)
-                    allowance = unstuck_allowances.get(pside, 0.0)
+                    allowance = self._calc_orchestrator_unstuck_allowance_for_symbol(
+                        pside, symbol, realized_pnl_cumsum
+                    )
                     self._maybe_log_unstuck_selection(
                         symbol=symbol,
                         pside=pside,
@@ -12988,6 +13061,8 @@ class Passivbot:
                 "exchange": str(getattr(self, "exchange", "")),
                 "user": str(self.config_get(["live", "user"]) or ""),
                 "active_symbols": list(symbols),
+                "auto_unstuck_allowed": auto_unstuck_allowed,
+                "unstuck_allowances": unstuck_allowances,
                 "realized_pnl_cumsum": realized_pnl_cumsum,
                 "last_increase_fill_timestamps": last_increase_fill_timestamps,
                 "planning_snapshot": (

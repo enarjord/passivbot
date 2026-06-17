@@ -2,9 +2,9 @@ use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
 use crate::types::{ExchangeParams, Order, OrderType};
 use crate::utils::{
-    calc_new_psize_pprice, calc_pnl_long, calc_pnl_short, calc_pprice_diff_int,
-    calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty, quantize_price, quantize_qty,
-    round_dn, round_up, RoundingMode,
+    calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
+    calc_pprice_diff_int, calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty,
+    quantize_price, quantize_qty, round_dn, round_up, RoundingMode,
 };
 use std::collections::HashMap;
 
@@ -323,6 +323,8 @@ pub struct UnstuckPositionInput {
     pub unstuck_threshold: f64,
     pub unstuck_close_pct: f64,
     pub unstuck_ema_dist: f64,
+    pub unstuck_loss_allowance_pct: f64,
+    pub total_wallet_exposure_limit: f64,
     pub ema_band_upper: f64,
     pub ema_band_lower: f64,
     pub current_price: f64,
@@ -339,6 +341,44 @@ pub fn calc_unstucking_action(
     allowance_short: f64,
     positions: &[UnstuckPositionInput],
 ) -> Option<(usize, usize, Order)> {
+    calc_unstucking_action_with_allowance(balance, positions, |input| match input.side {
+        LONG => allowance_long,
+        SHORT => allowance_short,
+        _ => 0.0,
+    })
+}
+
+pub fn calc_unstucking_action_with_position_allowances(
+    balance: f64,
+    pnl_cumsum_max: f64,
+    pnl_cumsum_last: f64,
+    positions: &[UnstuckPositionInput],
+) -> Option<(usize, usize, Order)> {
+    calc_unstucking_action_with_allowance(balance, positions, |input| {
+        if input.unstuck_loss_allowance_pct <= 0.0
+            || input.total_wallet_exposure_limit <= 0.0
+            || !input.unstuck_loss_allowance_pct.is_finite()
+            || !input.total_wallet_exposure_limit.is_finite()
+        {
+            return 0.0;
+        }
+        calc_auto_unstuck_allowance(
+            balance,
+            input.unstuck_loss_allowance_pct * input.total_wallet_exposure_limit,
+            pnl_cumsum_max,
+            pnl_cumsum_last,
+        )
+    })
+}
+
+fn calc_unstucking_action_with_allowance<F>(
+    balance: f64,
+    positions: &[UnstuckPositionInput],
+    mut allowance_for: F,
+) -> Option<(usize, usize, Order)>
+where
+    F: FnMut(&UnstuckPositionInput) -> f64,
+{
     if balance <= 0.0 || positions.is_empty() {
         return None;
     }
@@ -352,11 +392,7 @@ pub fn calc_unstucking_action(
     let mut stuck_positions: Vec<Candidate> = Vec::new();
 
     for input in positions {
-        let allowance = match input.side {
-            LONG => allowance_long,
-            SHORT => allowance_short,
-            _ => 0.0,
-        };
+        let allowance = allowance_for(input);
         if allowance <= 0.0 {
             continue;
         }
@@ -462,11 +498,7 @@ pub fn calc_unstucking_action(
 
     for candidate_idx in candidate_order {
         let input = stuck_positions[candidate_idx].input;
-        let allowance = match input.side {
-            LONG => allowance_long,
-            SHORT => allowance_short,
-            _ => 0.0,
-        };
+        let allowance = allowance_for(input);
         if allowance <= 0.0 {
             continue;
         }

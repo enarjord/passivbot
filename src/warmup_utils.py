@@ -9,26 +9,34 @@ from config.strategy import (
     get_active_strategy_config,
     normalize_strategy_kind,
 )
+from strategy_warmup import (
+    iter_strategy_warmup_flat_bound_keys,
+    strategy_warmup_requirements,
+)
 
 
-def _to_float(value) -> float:
+def _to_float(value, *, context: str) -> float:
     try:
-        return float(value)
+        numeric = float(value)
     except (TypeError, ValueError):
-        return 0.0
+        raise ValueError(f"invalid warmup value for {context}: {value!r}") from None
+    if not math.isfinite(numeric):
+        raise ValueError(f"invalid warmup value for {context}: {value!r}")
+    return numeric
 
 
 def _require_max_warmup_minutes(config: dict) -> float:
-    return _to_float(require_live_value(config, "max_warmup_minutes"))
+    return _to_float(
+        require_live_value(config, "max_warmup_minutes"),
+        context="live.max_warmup_minutes",
+    )
 
 
-def _accumulate_max_minutes(max_minutes: float, *values) -> tuple[float, bool]:
+def _accumulate_max_minutes(max_minutes: float, *values, context: str) -> float:
     for value in values:
-        numeric = _to_float(value)
-        if not math.isfinite(numeric):
-            return max_minutes, False
+        numeric = _to_float(value, context=context)
         max_minutes = max(max_minutes, numeric)
-    return max_minutes, True
+    return max_minutes
 
 
 def _iter_param_sets(config: dict) -> Iterator[Tuple[str, dict, dict]]:
@@ -108,9 +116,13 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
         max_val = 0.0
         for candidate in candidates:
             for val in candidate:
-                max_val, is_valid = _accumulate_max_minutes(max_val, val)
-                if not is_valid:
-                    return max_val, False
+                try:
+                    numeric = float(val)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}") from exc
+                if not math.isfinite(numeric):
+                    raise ValueError(f"invalid optimize warmup bound {key}: {val!r}")
+                max_val = max(max_val, numeric)
         return max_val, True
 
     max_minutes = 0.0
@@ -122,56 +134,42 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
     ]
 
     for _, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
-        strategy_params = (long_strategy, short_strategy)
-        for params, strategy in zip((long_params, short_params), strategy_params):
+        side_sets = (
+            ("long", long_params, long_strategy),
+            ("short", short_params, short_strategy),
+        )
+        for pside, params, strategy in side_sets:
             for field in minute_fields:
-                max_minutes, is_valid = _accumulate_max_minutes(max_minutes, params.get(field))
-                if not is_valid:
-                    return 0
-            max_minutes, is_valid = _accumulate_max_minutes(
+                if field not in params:
+                    continue
+                max_minutes = _accumulate_max_minutes(
+                    max_minutes,
+                    params[field],
+                    context=f"{pside}.{field}",
+                )
+            requirements = strategy_warmup_requirements(
+                strategy,
+                pside=pside,
+                error_label="warmup",
+            )
+            max_minutes = max(
                 max_minutes,
-                _to_float(strategy.get("ema_span_0")),
-                _to_float(strategy.get("ema_span_1")),
-                _to_float(strategy.get("offset_volatility_ema_span_1m")),
-                _to_float(strategy.get("volatility_ema_span_1m")),
+                requirements.max_1m_span_minutes,
+                requirements.max_h1_span_hours * 60.0,
             )
-            if not is_valid:
-                return 0
-            log_span_minutes = max(
-                _to_float(strategy.get("offset_volatility_ema_span_1h")) * 60.0,
-                _to_float(strategy.get("entry_volatility_ema_span_1h")) * 60.0,
-                _to_float(strategy.get("volatility_ema_span_1h")) * 60.0,
-            )
-            max_minutes, is_valid = _accumulate_max_minutes(max_minutes, log_span_minutes)
-            if not is_valid:
-                return 0
 
     bounds = flatten_optimize_bounds(
         config.get("optimize", {}).get("bounds", {}),
         strategy_kind=config.get("live", {}).get("strategy_kind"),
     )
     bound_keys_minutes = [
-        "long_ema_span_0",
-        "long_ema_span_1",
-        "long_offset_volatility_ema_span_1m",
-        "long_volatility_ema_span_1m",
         "long_forager_volume_ema_span_1m",
         "long_forager_volatility_ema_span_1m",
-        "short_ema_span_0",
-        "short_ema_span_1",
-        "short_offset_volatility_ema_span_1m",
-        "short_volatility_ema_span_1m",
         "short_forager_volume_ema_span_1m",
         "short_forager_volatility_ema_span_1m",
     ]
-    bound_keys_hours = [
-        "long_entry_volatility_ema_span_1h",
-        "long_offset_volatility_ema_span_1h",
-        "long_volatility_ema_span_1h",
-        "short_entry_volatility_ema_span_1h",
-        "short_offset_volatility_ema_span_1h",
-        "short_volatility_ema_span_1h",
-    ]
+    bound_keys_minutes.extend(iter_strategy_warmup_flat_bound_keys("1m"))
+    bound_keys_hours = iter_strategy_warmup_flat_bound_keys("1h")
 
     for key in bound_keys_minutes:
         extracted, is_valid = _extract_bound_max(bounds, key)
@@ -184,11 +182,12 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
             return 0
         max_minutes = max(max_minutes, extracted * 60.0)
 
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
+    warmup_ratio = _to_float(
+        require_config_value(config, "live.warmup_ratio"),
+        context="live.warmup_ratio",
+    )
     limit = _require_max_warmup_minutes(config)
 
-    if not math.isfinite(max_minutes):
-        return 0
     warmup_minutes = max_minutes * max(0.0, warmup_ratio)
     if limit > 0:
         warmup_minutes = min(warmup_minutes, limit)
@@ -196,7 +195,10 @@ def compute_backtest_warmup_minutes(config: dict) -> int:
 
 
 def compute_per_coin_warmup_minutes(config: dict) -> dict:
-    warmup_ratio = float(require_config_value(config, "live.warmup_ratio"))
+    warmup_ratio = _to_float(
+        require_config_value(config, "live.warmup_ratio"),
+        context="live.warmup_ratio",
+    )
     limit = _require_max_warmup_minutes(config)
     per_coin = {}
     minute_fields = [
@@ -207,42 +209,30 @@ def compute_per_coin_warmup_minutes(config: dict) -> dict:
     ]
     for coin, long_params, short_params, long_strategy, short_strategy in _iter_param_sets(config):
         max_minutes = 0.0
-        strategy_params = (long_strategy, short_strategy)
-        for params, strategy in zip((long_params, short_params), strategy_params):
+        side_sets = (
+            ("long", long_params, long_strategy),
+            ("short", short_params, short_strategy),
+        )
+        for pside, params, strategy in side_sets:
             for field in minute_fields:
-                max_minutes, is_valid = _accumulate_max_minutes(max_minutes, params.get(field))
-                if not is_valid:
-                    per_coin[coin] = 0
-                    break
-            else:
-                max_minutes, is_valid = _accumulate_max_minutes(
+                if field not in params:
+                    continue
+                max_minutes = _accumulate_max_minutes(
                     max_minutes,
-                    _to_float(strategy.get("ema_span_0")),
-                    _to_float(strategy.get("ema_span_1")),
-                    _to_float(strategy.get("offset_volatility_ema_span_1m")),
-                    _to_float(strategy.get("volatility_ema_span_1m")),
+                    params[field],
+                    context=f"{coin}.{pside}.{field}",
                 )
-                if not is_valid:
-                    per_coin[coin] = 0
-                    break
-                max_minutes, is_valid = _accumulate_max_minutes(
-                    max_minutes,
-                    max(
-                        _to_float(strategy.get("entry_volatility_ema_span_1h")) * 60.0,
-                        _to_float(strategy.get("offset_volatility_ema_span_1h")) * 60.0,
-                        _to_float(strategy.get("volatility_ema_span_1h")) * 60.0,
-                    ),
-                )
-                if not is_valid:
-                    per_coin[coin] = 0
-                    break
-                continue
-            break
-        if coin in per_coin:
-            continue
-        if not math.isfinite(max_minutes):
-            per_coin[coin] = 0
-            continue
+            requirements = strategy_warmup_requirements(
+                strategy,
+                pside=pside,
+                symbol=coin if coin != "__default__" else None,
+                error_label="warmup",
+            )
+            max_minutes = max(
+                max_minutes,
+                requirements.max_1m_span_minutes,
+                requirements.max_h1_span_hours * 60.0,
+            )
         warmup_minutes = max_minutes * max(0.0, warmup_ratio)
         if limit > 0:
             warmup_minutes = min(warmup_minutes, limit)

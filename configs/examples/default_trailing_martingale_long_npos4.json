@@ -8,7 +8,7 @@
         "base_dir": "backtests",
         "btc_collateral_cap": 0.0,
         "btc_collateral_ltv_cap": null,
-        "candle_interval_minutes": 2,
+        "candle_interval_minutes": 1,
         "coin_sources": {},
         "compress_cache": true,
         "dynamic_wel_by_tradability": true,
@@ -203,6 +203,7 @@
                 "total_exposure_enforcer_enabled": true,
                 "total_exposure_enforcer_threshold": 0.985,
                 "we_excess_allowance_pct": 0.1,
+                "we_excess_allowance_mode": "bounded",
                 "position_exposure_enforcer_enabled": true,
                 "position_exposure_enforcer_threshold": 0.99
             },
@@ -288,6 +289,7 @@
                 "total_exposure_enforcer_enabled": true,
                 "total_exposure_enforcer_threshold": 0.8,
                 "we_excess_allowance_pct": 0,
+                "we_excess_allowance_mode": "bounded",
                 "position_exposure_enforcer_enabled": true,
                 "position_exposure_enforcer_threshold": 0.8
             },

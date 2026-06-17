@@ -297,6 +297,40 @@ class TestPerCoinWarmupCalculation:
         # Warmup = 3000 * 3.0 = 9000
         assert per_coin_warmup["BTC"] == 9000
 
+    def test_per_coin_warmup_with_trailing_grid_v7_nested_entry_volatility_hours(
+        self, base_config
+    ):
+        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+        for pside in ("long", "short"):
+            side = base_config["bot"][pside]
+            side["forager_volume_ema_span_1m"] = 1.0
+            side["forager_volatility_ema_span_1m"] = 1.0
+            side["strategy"] = {
+                "trailing_grid_v7": {
+                    "ema_span_0": 1.0,
+                    "ema_span_1": 1.0,
+                    "entry": {"volatility_ema_span_hours": 4.0},
+                }
+            }
+        base_config["coin_overrides"] = {
+            "BTC": {
+                "bot": {
+                    "long": {
+                        "strategy": {
+                            "trailing_grid_v7": {
+                                "entry": {"volatility_ema_span_hours": 10.0}
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        per_coin = compute_per_coin_warmup_minutes(base_config)
+
+        assert per_coin["__default__"] == 720
+        assert per_coin["BTC"] == 1800
+
 
 # ============================================================================
 # Test Class: EMA Span Extraction
@@ -361,6 +395,27 @@ class TestEMASpanExtraction:
         # New max is 20000, warmup = 60000
         assert warmup == 60000
 
+    def test_trailing_grid_v7_entry_volatility_hours_bound_is_considered(self, base_config):
+        base_config["live"]["strategy_kind"] = "trailing_grid_v7"
+        for pside in ("long", "short"):
+            side = base_config["bot"][pside]
+            side["forager_volume_ema_span_1m"] = 1.0
+            side["forager_volatility_ema_span_1m"] = 1.0
+            side["strategy"] = {
+                "trailing_grid_v7": {
+                    "ema_span_0": 1.0,
+                    "ema_span_1": 1.0,
+                    "entry": {"volatility_ema_span_hours": 1.0},
+                }
+            }
+        base_config["optimize"]["bounds"] = {
+            "long_entry_volatility_ema_span_hours": [4.0, 20.0, 1.0],
+        }
+
+        warmup = compute_backtest_warmup_minutes(base_config)
+
+        assert warmup == 3600
+
 
 # ============================================================================
 # Test Class: Edge Cases
@@ -413,8 +468,8 @@ class TestWarmupEdgeCases:
         # All spans are missing/0, so warmup should be 0
         assert warmup == 0
 
-    def test_inf_span_returns_zero_warmup(self):
-        """Test that infinite spans result in 0 warmup."""
+    def test_inf_span_raises(self):
+        """Test that infinite strategy spans fail loudly."""
         config = {
             "bot": {
                 "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.inf}}},
@@ -424,13 +479,11 @@ class TestWarmupEdgeCases:
             "optimize": {"bounds": {}},
         }
 
-        warmup = compute_backtest_warmup_minutes(config)
+        with pytest.raises(ValueError, match="invalid warmup value"):
+            compute_backtest_warmup_minutes(config)
 
-        # math.isfinite(inf) is False, should return 0
-        assert warmup == 0
-
-    def test_nan_span_returns_zero_warmup(self):
-        """Test that NaN spans result in 0 warmup."""
+    def test_nan_span_raises(self):
+        """Test that NaN strategy spans fail loudly."""
         config = {
             "bot": {
                 "long": {"strategy": {"trailing_martingale": {"ema_span_0": math.nan}}},
@@ -440,10 +493,30 @@ class TestWarmupEdgeCases:
             "optimize": {"bounds": {}},
         }
 
-        warmup = compute_backtest_warmup_minutes(config)
+        with pytest.raises(ValueError, match="invalid warmup value"):
+            compute_backtest_warmup_minutes(config)
 
-        # math.isfinite(nan) is False, should return 0
-        assert warmup == 0
+    def test_malformed_shared_span_raises(self, base_config):
+        """Shared/forager warmup spans must fail loudly when present and malformed."""
+        base_config["bot"]["long"]["forager_volume_ema_span_1m"] = "not-a-number"
+
+        with pytest.raises(
+            ValueError,
+            match=r"invalid warmup value for long\.forager_volume_ema_span_1m",
+        ):
+            compute_backtest_warmup_minutes(base_config)
+
+    def test_per_coin_malformed_shared_span_raises_with_coin_context(self, base_config):
+        """Per-coin shared warmup spans must not silently collapse to zero."""
+        base_config["coin_overrides"] = {
+            "BTC": {"bot": {"long": {"forager_volume_ema_span_1m": None}}}
+        }
+
+        with pytest.raises(
+            ValueError,
+            match=r"invalid warmup value for BTC\.long\.forager_volume_ema_span_1m",
+        ):
+            compute_per_coin_warmup_minutes(base_config)
 
 
 # ============================================================================

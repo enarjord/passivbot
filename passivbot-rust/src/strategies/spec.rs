@@ -225,6 +225,201 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     },
 ];
 
+const TRAILING_GRID_V7_PARAM_SEEDS: &[NestedParamSeed] = &[
+    NestedParamSeed {
+        name: "ema_span_0",
+        path: &["ema_span_0"],
+        long_default: 385.0,
+        short_default: 300.0,
+        long_bounds: &[200.0, 1440.0, 1.0],
+        short_bounds: &[200.0, 1440.0, 1.0],
+    },
+    NestedParamSeed {
+        name: "ema_span_1",
+        path: &["ema_span_1"],
+        long_default: 620.0,
+        short_default: 700.0,
+        long_bounds: &[200.0, 1440.0, 1.0],
+        short_bounds: &[200.0, 1440.0, 1.0],
+    },
+    NestedParamSeed {
+        name: "entry_grid_double_down_factor",
+        path: &["entry", "grid_double_down_factor"],
+        long_default: 1.39,
+        short_default: 1.0,
+        long_bounds: &[0.0, 2.0, 0.01],
+        short_bounds: &[0.0, 2.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_grid_spacing_pct",
+        path: &["entry", "grid_spacing_pct"],
+        long_default: 0.02312,
+        short_default: 0.02,
+        long_bounds: &[0.001, 0.03, 0.0001],
+        short_bounds: &[0.001, 0.03, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_grid_spacing_we_weight",
+        path: &["entry", "grid_spacing_we_weight"],
+        long_default: 0.6766,
+        short_default: 1.0,
+        long_bounds: &[0.0, 10.0, 0.001],
+        short_bounds: &[0.0, 10.0, 0.001],
+    },
+    NestedParamSeed {
+        name: "entry_grid_spacing_volatility_weight",
+        path: &["entry", "grid_spacing_volatility_weight"],
+        long_default: 17.8,
+        short_default: 10.0,
+        long_bounds: &[0.0, 50.0, 0.01],
+        short_bounds: &[0.0, 50.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_initial_ema_dist",
+        path: &["entry", "initial_ema_dist"],
+        long_default: 0.0078,
+        short_default: 0.01,
+        long_bounds: &[-0.1, 0.02, 0.0001],
+        short_bounds: &[-0.1, 0.02, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_initial_qty_pct",
+        path: &["entry", "initial_qty_pct"],
+        long_default: 0.0122,
+        short_default: 0.01,
+        long_bounds: &[0.005, 0.1, 0.0001],
+        short_bounds: &[0.005, 0.1, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_double_down_factor",
+        path: &["entry", "trailing_double_down_factor"],
+        long_default: 1.0,
+        short_default: 1.0,
+        long_bounds: &[0.0, 2.0, 0.01],
+        short_bounds: &[0.0, 2.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_grid_ratio",
+        path: &["entry", "trailing_grid_ratio"],
+        long_default: -0.32,
+        short_default: -0.7,
+        long_bounds: &[-0.8, -0.2, 0.01],
+        short_bounds: &[-0.8, -0.2, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_retracement_pct",
+        path: &["entry", "trailing_retracement_pct"],
+        long_default: 0.01498,
+        short_default: 0.01,
+        long_bounds: &[0.0, 0.1, 0.0001],
+        short_bounds: &[0.0, 0.1, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_retracement_we_weight",
+        path: &["entry", "trailing_retracement_we_weight"],
+        long_default: 4.958,
+        short_default: 1.0,
+        long_bounds: &[0.0, 10.0, 0.001],
+        short_bounds: &[0.0, 10.0, 0.001],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_retracement_volatility_weight",
+        path: &["entry", "trailing_retracement_volatility_weight"],
+        long_default: 37.9,
+        short_default: 10.0,
+        long_bounds: &[0.0, 50.0, 0.01],
+        short_bounds: &[0.0, 50.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_threshold_pct",
+        path: &["entry", "trailing_threshold_pct"],
+        long_default: 0.00215,
+        short_default: 0.002,
+        long_bounds: &[0.0, 0.1, 0.0001],
+        short_bounds: &[0.0, 0.1, 0.0001],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_threshold_we_weight",
+        path: &["entry", "trailing_threshold_we_weight"],
+        long_default: 4.243,
+        short_default: 1.0,
+        long_bounds: &[0.0, 10.0, 0.001],
+        short_bounds: &[0.0, 10.0, 0.001],
+    },
+    NestedParamSeed {
+        name: "entry_trailing_threshold_volatility_weight",
+        path: &["entry", "trailing_threshold_volatility_weight"],
+        long_default: 15.2,
+        short_default: 10.0,
+        long_bounds: &[0.0, 50.0, 0.01],
+        short_bounds: &[0.0, 50.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "entry_volatility_ema_span_hours",
+        path: &["entry", "volatility_ema_span_hours"],
+        long_default: 1909.0,
+        short_default: 1000.0,
+        long_bounds: &[672.0, 2016.0, 1.0],
+        short_bounds: &[672.0, 2016.0, 1.0],
+    },
+    NestedParamSeed {
+        name: "close_grid_markup_start",
+        path: &["close", "grid_markup_start"],
+        long_default: 0.01041,
+        short_default: 0.00402,
+        long_bounds: &[0.0015, 0.012, 1e-05],
+        short_bounds: &[0.0015, 0.012, 1e-05],
+    },
+    NestedParamSeed {
+        name: "close_grid_markup_end",
+        path: &["close", "grid_markup_end"],
+        long_default: 0.00241,
+        short_default: 0.00223,
+        long_bounds: &[-0.1, 0.012, 1e-05],
+        short_bounds: &[-0.1, 0.012, 1e-05],
+    },
+    NestedParamSeed {
+        name: "close_grid_qty_pct",
+        path: &["close", "grid_qty_pct"],
+        long_default: 0.88,
+        short_default: 0.5,
+        long_bounds: &[0.05, 1.0, 0.01],
+        short_bounds: &[0.05, 1.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "close_trailing_grid_ratio",
+        path: &["close", "trailing_grid_ratio"],
+        long_default: -0.07,
+        short_default: -0.03,
+        long_bounds: &[-1.0, 1.0, 0.01],
+        short_bounds: &[-1.0, 1.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "close_trailing_qty_pct",
+        path: &["close", "trailing_qty_pct"],
+        long_default: 0.89,
+        short_default: 0.5,
+        long_bounds: &[0.05, 1.0, 0.01],
+        short_bounds: &[0.05, 1.0, 0.01],
+    },
+    NestedParamSeed {
+        name: "close_trailing_retracement_pct",
+        path: &["close", "trailing_retracement_pct"],
+        long_default: 0.00413,
+        short_default: 0.005,
+        long_bounds: &[0.0, 0.1, 0.0001],
+        short_bounds: &[0.0, 0.1, 0.0001],
+    },
+    NestedParamSeed {
+        name: "close_trailing_threshold_pct",
+        path: &["close", "trailing_threshold_pct"],
+        long_default: 0.0125,
+        short_default: 0.005,
+        long_bounds: &[-0.05, 0.1, 0.0001],
+        short_bounds: &[-0.05, 0.1, 0.0001],
+    },
+];
+
 const EMA_ANCHOR_PARAM_SEEDS: &[ParamSeed] = &[
     ParamSeed {
         name: "base_qty_pct",
@@ -393,6 +588,10 @@ fn build_nested_strategy_spec(
 
 pub fn trailing_martingale_spec() -> StrategySpec {
     build_nested_strategy_spec("trailing_martingale", TRAILING_MARTINGALE_PARAM_SEEDS)
+}
+
+pub fn trailing_grid_v7_spec() -> StrategySpec {
+    build_nested_strategy_spec("trailing_grid_v7", TRAILING_GRID_V7_PARAM_SEEDS)
 }
 
 pub fn ema_anchor_spec() -> StrategySpec {

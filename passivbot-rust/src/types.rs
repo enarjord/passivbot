@@ -450,6 +450,17 @@ fn default_true() -> bool {
     true
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum WeExcessAllowanceMode {
+    #[default]
+    Bounded,
+    LegacyRaw,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ForagerScoreWeights {
@@ -576,6 +587,8 @@ pub struct BotParams {
     pub risk_twel_enforcer_enabled: bool,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
+    #[serde(default)]
+    pub risk_we_excess_allowance_mode: WeExcessAllowanceMode,
     #[serde(default = "default_true")]
     pub unstuck_enabled: bool,
     pub unstuck_close_pct: f64,
@@ -631,6 +644,7 @@ impl Default for BotParams {
             risk_twel_enforcer_enabled: true,
             risk_twel_enforcer_threshold: 0.0,
             risk_we_excess_allowance_pct: 0.0,
+            risk_we_excess_allowance_mode: WeExcessAllowanceMode::default(),
             unstuck_enabled: true,
             unstuck_close_pct: 0.0,
             unstuck_ema_dist: 0.0,

@@ -315,3 +315,42 @@ def test_build_backtest_payload_compiles_runtime_config_once(monkeypatch):
     build_backtest_payload(hlcvs, mss, config, "binance", btc_usd_prices, timestamps)
 
     assert call_count["count"] == 1
+
+
+def test_run_backtest_bundle_rejects_unknown_trailing_grid_v7_strategy_param():
+    pbr = backtest_module.pbr
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    config = _base_config()
+    config["live"]["strategy_kind"] = "trailing_grid_v7"
+    config["backtest"]["candle_interval_minutes"] = 1
+    mss = _base_mss()
+    hlcvs = np.array(
+        [
+            [[101.0, 99.0, 100.0, 1.0]],
+            [[102.0, 98.0, 101.0, 1.0]],
+        ],
+        dtype=np.float64,
+    )
+    btc_usd_prices = np.array([20_000.0, 20_000.0], dtype=np.float64)
+    timestamps = np.array([1_609_459_200_000, 1_609_459_260_000], dtype=np.int64)
+    payload = build_backtest_payload(
+        hlcvs,
+        mss,
+        config,
+        "binance",
+        btc_usd_prices,
+        timestamps,
+        skip_btc_analysis=True,
+    )
+    payload.strategy_params_list[0]["long"]["entry"]["typo_unknown_key"] = 1.0
+
+    with pytest.raises(ValueError, match="typo_unknown_key"):
+        pbr.run_backtest_bundle(
+            payload.bundle,
+            payload.bot_params_list,
+            payload.strategy_params_list,
+            payload.exchange_params,
+            payload.backtest_params,
+        )

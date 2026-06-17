@@ -1059,3 +1059,88 @@ def test_create_forager_hard_stop_drawdown_figure_plots_both_sides(monkeypatch):
     assert "RED Proximity" in short_labels
     assert 0.10 in axes[0].hlines
     assert 0.03 in axes[2].hlines
+
+
+def test_create_forager_hard_stop_drawdown_figure_labels_coin_mode_max_drawdown(monkeypatch):
+    class _Axis:
+        def __init__(self):
+            self.titles = []
+            self.ylabels = []
+
+        def plot(self, *args, **kwargs):
+            return None
+
+        def axhline(self, *args, **kwargs):
+            return None
+
+        def set_title(self, *args, **kwargs):
+            if args:
+                self.titles.append(args[0])
+            return None
+
+        def set_ylabel(self, *args, **kwargs):
+            if args:
+                self.ylabels.append(args[0])
+            return None
+
+        def set_xlabel(self, *args, **kwargs):
+            return None
+
+        def grid(self, *args, **kwargs):
+            return None
+
+        def legend(self, *args, **kwargs):
+            return None
+
+        def fill_between(self, *args, **kwargs):
+            return None
+
+    class _Figure:
+        def tight_layout(self):
+            return None
+
+    axes = [_Axis(), _Axis()]
+    monkeypatch.setattr(plotting.plt, "subplots", lambda *args, **kwargs: (_Figure(), axes))
+
+    idx = pd.date_range("2024-10-01", periods=3, freq="1h")
+    timestamps_ms = (idx.view("int64") // 10**6).tolist()
+    bal_eq = pd.DataFrame({"usd_total_equity": [1000.0, 990.0, 995.0]}, index=idx)
+    config = {
+        "live": {"hsl_signal_mode": "coin", "pnls_max_lookback_days": 30.0},
+        "bot": {
+            "long": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.247,
+                "hsl_ema_span_minutes": 60.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                "n_positions": 3,
+                "total_wallet_exposure_limit": 1.5,
+            },
+            "short": {
+                "hsl_enabled": True,
+                "hsl_red_threshold": 0.01,
+                "hsl_ema_span_minutes": 1.0,
+                "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+                "n_positions": 3,
+                "total_wallet_exposure_limit": 0.0,
+            },
+        },
+    }
+    hard_stop_plot_data = {
+        "timestamps_ms_long": timestamps_ms,
+        "drawdown_raw_long": [0.0, 0.20, 0.05],
+        "drawdown_ema_long": [0.0, 0.10, 0.08],
+        "drawdown_score_long": [0.0, 0.10, 0.05],
+    }
+
+    figs = create_forager_hard_stop_drawdown_figure(
+        bal_eq,
+        config,
+        hard_stop_plot_data=hard_stop_plot_data,
+        autoplot=False,
+        return_figures=True,
+    )
+
+    assert "hard_stop_drawdown" in figs
+    assert "Long Coin HSL Max Drawdown" in axes[0].titles
+    assert "Max Coin Drawdown" in axes[0].ylabels

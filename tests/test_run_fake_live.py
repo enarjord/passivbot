@@ -343,6 +343,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "risk_wel_enforcer_threshold": 1.0,
                 "risk_twel_enforcer_threshold": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
+                "risk_we_excess_allowance_mode": "LEGACY_RAW",
                 "unstuck_close_pct": 0.01,
                 "unstuck_ema_dist": 0.0,
                 "unstuck_loss_allowance_pct": 0.1,
@@ -366,6 +367,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
+    assert out["risk_we_excess_allowance_mode"] == "legacy_raw"
     assert "entry_grid_inflation_enabled" not in out
     assert out["forager_score_weights"] == {
         "volume": pytest.approx(1.0),
@@ -427,6 +429,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "risk_twel_enforcer_enabled": True,
                         "risk_twel_enforcer_threshold": 1.0,
                         "risk_we_excess_allowance_pct": 0.0,
+                        "risk_we_excess_allowance_mode": "bounded",
                         "unstuck_close_pct": 0.01,
                         "unstuck_ema_dist": 0.0,
                         "unstuck_enabled": True,
@@ -437,7 +440,14 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                 }
             }
             self.coin_overrides = {
-                "BTC/USDT:USDT": {"bot": {"long": {"entry_grid_inflation_enabled": False}}}
+                "BTC/USDT:USDT": {
+                    "bot": {
+                        "long": {
+                            "entry_grid_inflation_enabled": False,
+                            "unstuck_loss_allowance_pct": 0.025,
+                        }
+                    }
+                }
             }
 
         def bot_value(self, _pside, key):
@@ -459,6 +469,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
+    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_sets_exchange_time_override():
@@ -807,7 +818,6 @@ async def test_hsl_replay_scenarios_run_end_to_end(
     if scenario_rel.endswith("hsl_long_terminal_no_restart.hjson"):
         cfg["bot"]["long"]["hsl_no_restart_drawdown_threshold"] = 0.02
         cfg["bot"]["long"].setdefault("hsl", {})["no_restart_drawdown_threshold"] = 0.02
-        cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0
         cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0
         cfg["bot"]["long"]["total_wallet_exposure_limit"] = 2.5
         cfg["bot"]["long"].setdefault("risk", {})["total_wallet_exposure_limit"] = 2.5
@@ -1161,7 +1171,7 @@ async def test_fake_live_min_effective_cost_blocks_zero_min_qty_integer_step_sym
     cfg = load_config(str(REPO_ROOT / "configs" / "fake_live_hsl_btc.hjson"), verbose=False)
     cfg["bot"]["long"]["hsl_enabled"] = False
     cfg["bot"]["short"]["hsl_enabled"] = False
-    cfg["bot"]["long"]["entry_initial_qty_pct"] = 0.0276
+    cfg["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["initial_qty_pct"] = 0.0276
     cfg["bot"]["long"]["n_positions"] = 5.0
     cfg["bot"]["long"]["total_wallet_exposure_limit"] = 1.8
     cfg["bot"]["long"]["risk_we_excess_allowance_pct"] = 0.37

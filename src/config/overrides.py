@@ -10,9 +10,10 @@ from utils import symbol_to_coin
 from .load import load_prepared_config
 from .log_output import log_config_message
 from .shared_bot import BOT_GROUP_FIELD_MAP
-from .strategy import get_strategy_param_keys
+from .strategy import TRAILING_GRID_V7_FLAT_ONLY_KEYS, get_strategy_param_keys
 from .strategy_spec import get_supported_strategy_kinds
 from .transform_log import record_transform
+from risk_limits import normalize_we_excess_allowance_mode
 
 
 def apply_allowed_modifications(src, modifications, allowed_overrides, return_full=True):
@@ -50,6 +51,8 @@ def apply_allowed_modifications(src, modifications, allowed_overrides, return_fu
                 if not return_full and not target_dict[key]:
                     target_dict.pop(key, None)
             elif allowed_value is True:
+                if key in {"risk_we_excess_allowance_mode", "we_excess_allowance_mode"}:
+                    mod_value = normalize_we_excess_allowance_mode(mod_value)
                 if return_full:
                     target_dict[key] = deepcopy(mod_value)
                 else:
@@ -65,41 +68,35 @@ _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS = {
     "unstuck_close_pct": True,
     "unstuck_ema_dist": True,
     "unstuck_enabled": True,
+    "unstuck_loss_allowance_pct": True,
     "unstuck_threshold": True,
     "wallet_exposure_limit": True,
     "risk_wel_enforcer_enabled": True,
     "risk_wel_enforcer_threshold": True,
     "risk_we_excess_allowance_pct": True,
+    "risk_we_excess_allowance_mode": True,
     "risk_twel_enforcer_enabled": False,
     "risk_twel_enforcer_threshold": False,
 }
 
+
+def allowed_flat_bot_side_modification_keys() -> frozenset[str]:
+    return frozenset(
+        key for key, allowed in _ALLOWED_FLAT_BOT_SIDE_MODIFICATIONS.items() if allowed is True
+    )
+
+
 _UNSUPPORTED_FLAT_STRATEGY_OVERRIDE_KEYS = {
-    "close_grid_markup_end",
-    "close_grid_markup_start",
-    "close_grid_qty_pct",
-    "close_trailing_grid_ratio",
-    "close_trailing_qty_pct",
-    "close_trailing_retracement_pct",
-    "close_trailing_threshold_pct",
     "close_weight_volatility_1h",
     "close_weight_volatility_1m",
     "ema_span_0",
     "ema_span_1",
-    "entry_grid_double_down_factor",
-    "entry_grid_spacing_pct",
-    "entry_initial_ema_dist",
-    "entry_initial_qty_pct",
-    "entry_trailing_double_down_factor",
-    "entry_trailing_grid_ratio",
-    "entry_trailing_retracement_pct",
-    "entry_trailing_threshold_pct",
     "entry_volatility_ema_span_1h",
     "entry_volatility_ema_span_1m",
     "entry_weight_volatility_1h",
     "entry_weight_volatility_1m",
     "entry_we_weight",
-}
+} | TRAILING_GRID_V7_FLAT_ONLY_KEYS
 
 
 def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
@@ -125,8 +122,8 @@ def _reject_flat_strategy_coin_overrides(overrides: dict, *, coin: str) -> None:
             joined = ", ".join(bad_keys)
             raise ValueError(
                 f"coin_overrides.{coin}.bot.{pside} contains unsupported flat strategy "
-                f"override key(s): {joined}. Use "
-                f"coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
+                f"override key(s): {joined}. Run `passivbot tool migrate-config-v7`, "
+                f"or use coin_overrides.{coin}.bot.{pside}.strategy.<strategy_kind>.* in v8."
             )
 
 

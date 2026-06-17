@@ -3,20 +3,54 @@ from passivbot import logging, custom_id_to_snake, clip_by_timestamp
 import asyncio
 import json
 import os
+import re
 from copy import deepcopy
 from typing import Dict, List, Tuple
-from bitget_normalization import deduce_side_pside
+from bitget_normalization import (
+    bitget_payload_context as _bitget_payload_context,
+    deduce_side_pside,
+    normalize_uta_fill_payload,
+)
 from utils import symbol_to_coin, utc_ms, ts_to_date
 from config.access import require_live_value
 import passivbot_rust as pbr
 
 calc_order_price_diff = pbr.calc_order_price_diff
 
+_CLASSIC_ACCOUNT_MODE_CODES = {"40084", "25245"}
+
+
+def _bitget_error_code_from_exception(exc: Exception) -> str:
+    payload = getattr(exc, "response", None) or getattr(exc, "body", None)
+    if isinstance(payload, bytes):
+        payload = payload.decode(errors="replace")
+    if isinstance(payload, str):
+        try:
+            decoded = json.loads(payload)
+        except Exception:
+            decoded = None
+        if isinstance(decoded, dict) and decoded.get("code") is not None:
+            return str(decoded["code"])
+    elif isinstance(payload, dict) and payload.get("code") is not None:
+        return str(payload["code"])
+
+    msg = str(exc)
+    match = re.search(r"['\"]code['\"]\s*:\s*['\"]?(\d+)['\"]?", msg)
+    if match:
+        return match.group(1)
+    match = re.search(r"\b(40084|25245)\b", msg)
+    return match.group(1) if match else ""
+
 
 class BitgetBot(CCXTBot):
     def __init__(self, config: dict):
         super().__init__(config)
         self.custom_id_max_length = 64
+        # Whether this API key drives a UTA / Elite (copy-trading) account.
+        # Auto-detected once in update_exchange_config(); classic accounts keep
+        # is_uta == False and every code path below behaves exactly as before.
+        self.is_uta = False
+        self._account_mode_detected = False
 
     def create_ccxt_sessions(self):
         """Bitget: set Passivbot channel code for broker rebate attribution."""
@@ -26,6 +60,43 @@ class BitgetBot(CCXTBot):
         for client in [self.cca, self.ccp]:
             if client is not None:
                 client.options["broker"] = self.broker_code
+                # Preserve UTA routing across ccxt session re-creation (reconnects)
+                # once the account mode has been detected.
+                if getattr(self, "is_uta", False):
+                    client.options["uta"] = True
+
+    async def _detect_account_mode(self):
+        """Detect whether this API key is a UTA / Elite (copy-trading) account
+        (Bitget v3 API) or a classic v2/mix account, and route ccxt accordingly.
+
+        Probes the v3 account-assets endpoint: it succeeds on UTA/Elite keys.
+        Explicit classic-account responses select classic mode; any other
+        failure is inconclusive and must fail loudly so a UTA key is not routed
+        into classic v2/mix calls for the whole process lifetime."""
+        if getattr(self, "_account_mode_detected", False):
+            return
+        try:
+            await self.cca.private_uta_get_v3_account_assets()
+            is_uta = True
+        except Exception as e:
+            code = _bitget_error_code_from_exception(e)
+            if code not in _CLASSIC_ACCOUNT_MODE_CODES:
+                raise RuntimeError(
+                    "bitget: UTA account-mode detection failed inconclusively; "
+                    f"error_code={code or 'unknown'}"
+                ) from e
+            is_uta = False
+        self.is_uta = is_uta
+        for client in (getattr(self, "cca", None), getattr(self, "ccp", None)):
+            if client is not None:
+                if getattr(client, "options", None) is None:
+                    client.options = {}
+                client.options["uta"] = is_uta
+        self._account_mode_detected = True
+        logging.info(
+            "[bitget] account mode: %s",
+            "UTA / Elite copy-trading (v3)" if is_uta else "Classic (v2/mix)",
+        )
 
     # ═══════════════════ HOOK OVERRIDES ═══════════════════
 
@@ -57,6 +128,16 @@ class BitgetBot(CCXTBot):
         return order
 
     def _determine_side(self, order: dict) -> str:
+        if getattr(self, "is_uta", False):
+            # UTA orders carry posSide (long/short) and reduceOnly (yes/no) but
+            # no tradeSide. Derive the order side from those.
+            info = order.get("info", {})
+            pos_side = str(info.get("posSide", order.get("position_side", "long"))).lower()
+            reduce_raw = info.get("reduceOnly", order.get("reduceOnly", False))
+            reduce_only = str(reduce_raw).strip().lower() in ("yes", "true", "1")
+            if reduce_only:
+                return "sell" if pos_side == "long" else "buy"
+            return "buy" if pos_side == "long" else "sell"
         if "info" in order:
             if all([x in order["info"] for x in ["tradeSide", "reduceOnly", "posSide"]]):
                 if order["info"]["tradeSide"] == "close":
@@ -113,8 +194,31 @@ class BitgetBot(CCXTBot):
                 self._record_live_margin_mode(elm["symbol"], margin_mode)
         return fetched
 
+    async def _do_fetch_balance(self) -> dict:
+        if getattr(self, "is_uta", False):
+            return await self.cca.private_uta_get_v3_account_assets()
+        return await super()._do_fetch_balance()
+
     def _get_balance(self, fetched: dict) -> float:
-        """Bitget override: handle union margin mode."""
+        """Bitget override: handle union margin mode (classic) and UTA/elite."""
+        if getattr(self, "is_uta", False):
+            data = fetched.get("data") if isinstance(fetched, dict) else None
+            if isinstance(data, dict):
+                # Passivbot balance is wallet balance: equity - upnl.
+                # Bitget UTA's effEquity is discounted effective margin value,
+                # not account balance.
+                if data.get("usdtEquity") not in (None, "") and data.get(
+                    "usdtUnrealisedPnl"
+                ) not in (None, ""):
+                    return float(data["usdtEquity"]) - float(data["usdtUnrealisedPnl"])
+                if data.get("accountEquity") not in (None, "") and data.get(
+                    "unrealisedPnl"
+                ) not in (None, ""):
+                    return float(data["accountEquity"]) - float(data["unrealisedPnl"])
+            raise ValueError(
+                "bitget: UTA balance response missing required account equity/upnl fields; "
+                f"context={_bitget_payload_context(fetched)}"
+            )
         balance_info = [x for x in fetched["info"] if x["marginCoin"] == self.quote][0]
         if (
             "assetMode" in balance_info
@@ -147,6 +251,13 @@ class BitgetBot(CCXTBot):
                 break
             await asyncio.sleep(0.1)
         logging.debug(f"fetching order detail for {symbol} {order_id}")
+        if getattr(self, "is_uta", False):
+            return await self.cca.private_uta_get_v3_trade_order_info(
+                params={
+                    "category": "USDT-FUTURES",
+                    "orderId": order_id,
+                }
+            )
         return await self.cca.private_mix_get_v2_mix_order_detail(
             params={
                 "productType": "USDT-FUTURES",
@@ -216,6 +327,8 @@ class BitgetBot(CCXTBot):
                 self._client_oid_cache[evt_id] = (cid, pb)
 
     async def fetch_fill_events(self, start_time=None, end_time=None, limit=None):
+        if getattr(self, "is_uta", False):
+            return await self._fetch_fill_events_uta(start_time, end_time, limit)
 
         def _extract_fill(elm: dict) -> dict:
             timestamp = int(elm["cTime"])
@@ -366,11 +479,118 @@ class BitgetBot(CCXTBot):
         final_result = sorted(events_map.values(), key=lambda x: x["timestamp"])
         return final_result
 
+    async def _fetch_fill_events_uta(self, start_time=None, end_time=None, limit=None):
+        """UTA/elite variant of fetch_fill_events using v3 trade fills.
+
+        v3 fills already include clientOid and execPnl, so no per-order detail
+        enrichment is needed. Deduped by execId."""
+
+        def _extract(elm: dict) -> dict:
+            event = normalize_uta_fill_payload(elm, self.get_symbol_id_inv, custom_id_to_snake)
+            event["info"] = elm
+            return event
+
+        limit = 100 if limit is None else min(limit, 100)
+        max_n_fetches = 200
+        buffer_step_ms = int(1000 * 60 * 60 * 24)
+        max_window_ms = 30 * buffer_step_ms - 1
+        end_time = int(utc_ms() + 3600000 if end_time is None else end_time)
+        events_map: Dict[str, dict] = {}
+        params = {"category": "USDT-FUTURES", "limit": str(limit)}
+        count = 0
+        cursor = None
+        while True:
+            count += 1
+            if count >= max_n_fetches:
+                logging.warning(f"over {count} calls to fetch_fill_events (uta). Breaking.")
+                break
+            request_params = dict(params)
+            request_params["endTime"] = end_time
+            window_start = None
+            if start_time is not None:
+                window_start = max(int(start_time), int(end_time) - max_window_ms)
+                request_params["startTime"] = window_start
+            if cursor:
+                request_params["cursor"] = cursor
+            fetched = await self.cca.private_uta_get_v3_trade_fills(request_params)
+            data = fetched.get("data") or {}
+            rows = data.get("list") or []
+            fill_events = [_extract(x) for x in rows]
+            fill_events.sort(key=lambda x: x["timestamp"])
+            if not fill_events:
+                if start_time is not None and window_start is not None and window_start > start_time:
+                    next_end = int(window_start) - 1
+                    if next_end <= start_time:
+                        break
+                    end_time = next_end
+                    cursor = None
+                    continue
+                break
+            added = False
+            for fe in fill_events:
+                key = fe["id"]
+                if key not in events_map:
+                    events_map[key] = fe
+                    added = True
+            if not added:
+                break
+            next_cursor = data.get("cursor")
+            if len(fill_events) >= limit and next_cursor:
+                cursor = str(next_cursor)
+                continue
+            cursor = None
+            if len(fill_events) < limit:
+                if start_time is None:
+                    break
+                if window_start is not None and window_start > start_time:
+                    next_end = int(window_start) - 1
+                    if next_end <= start_time:
+                        break
+                    end_time = next_end
+                    continue
+                if end_time - start_time < buffer_step_ms:
+                    break
+                end_time = int(fill_events[0]["timestamp"] + 1)
+                continue
+            if start_time is None or fill_events[0]["timestamp"] < start_time:
+                break
+            if end_time == fill_events[0]["timestamp"]:
+                break
+            end_time = int(fill_events[0]["timestamp"])
+        return sorted(events_map.values(), key=lambda x: x["timestamp"])
+
     async def fetch_closed_orders(self, start_time, end_time, limit=100):
+        if getattr(self, "is_uta", False):
+            return await self._fetch_fill_events_uta(start_time, end_time, limit)
+
         def extract_fill_event_from_co(elm):
             timestamp = int(elm["lastUpdateTimestamp"])
             price = float(elm["price"])
             qty = float(elm["filled"])
+            info = elm.get("info")
+            if not isinstance(info, dict):
+                raise ValueError(
+                    "bitget closed-order payload missing info; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
+            if info.get("totalProfits") in (None, ""):
+                raise ValueError(
+                    "bitget closed-order payload missing info.totalProfits; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
+            try:
+                pnl = float(info["totalProfits"])
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "bitget closed-order info.totalProfits is not numeric; "
+                    f"value={info.get('totalProfits')!r} context={_bitget_payload_context(elm)}"
+                ) from exc
+            position_side = str(info.get("posSide") or "").lower()
+            if position_side not in ("long", "short"):
+                raise ValueError(
+                    "bitget closed-order payload missing valid info.posSide; "
+                    f"context={_bitget_payload_context(elm)}"
+                )
             pb_order_type = custom_id_to_snake(elm.get("clientOrderId"))
             if not pb_order_type or pb_order_type == "unknown":
                 if not hasattr(self, "pb_order_type_missing_logged"):
@@ -384,7 +604,7 @@ class BitgetBot(CCXTBot):
                         or elm.get("symbol"),
                         elm.get("clientOrderId"),
                         elm.get("side"),
-                        elm.get("info", {}).get("posSide"),
+                        position_side,
                         qty,
                         price,
                     )
@@ -397,10 +617,10 @@ class BitgetBot(CCXTBot):
                 "side": elm["side"],
                 "qty": qty,
                 "price": price,
-                "pnl": float(elm["info"]["totalProfits"]),
+                "pnl": pnl,
                 "fees": elm.get("fees"),
                 "pb_order_type": pb_order_type,
-                "position_side": elm["info"]["posSide"],
+                "position_side": position_side,
                 "client_order_id": elm.get("clientOrderId"),
             }
 
@@ -475,10 +695,23 @@ class BitgetBot(CCXTBot):
         return clip_by_timestamp(deduped, start_time, end_time)
 
     def _build_order_params(self, order: dict) -> dict:
+        use_post_only = require_live_value(self.config, "time_in_force") == "post_only"
+        if getattr(self, "is_uta", False):
+            # UTA/elite hedge-mode orders use posSide; holdSide/oneWayMode are
+            # v2-only and rejected by v3 with code 25236.
+            params = {
+                "posSide": order["position_side"],
+                "reduceOnly": order["reduce_only"],
+                "clientOid": order["custom_id"],
+            }
+            if use_post_only:
+                params["postOnly"] = True
+            else:
+                params["timeInForce"] = "gtc"
+            return params
+        tif = "PO" if use_post_only else "GTC"
         return {
-            "timeInForce": (
-                "PO" if require_live_value(self.config, "time_in_force") == "post_only" else "GTC"
-            ),
+            "timeInForce": tif,
             "holdSide": order["position_side"],
             "reduceOnly": order["reduce_only"],
             "oneWayMode": False,
@@ -490,15 +723,18 @@ class BitgetBot(CCXTBot):
         for symbol in symbols:
             margin_mode = self._get_margin_mode_for_symbol(symbol)
             log_symbol = symbol_to_coin(symbol, verbose=False) or symbol
-            try:
-                coros_to_call_margin_mode[symbol] = asyncio.create_task(
-                    self.cca.set_margin_mode(
-                        margin_mode,
-                        symbol=symbol,
+            # UTA/elite: ccxt has no v3 routing for set_margin_mode and the elite
+            # portfolio is cross-only, so skip it (avoids a failing v2 call).
+            if not getattr(self, "is_uta", False):
+                try:
+                    coros_to_call_margin_mode[symbol] = asyncio.create_task(
+                        self.cca.set_margin_mode(
+                            margin_mode,
+                            symbol=symbol,
+                        )
                     )
-                )
-            except Exception as e:
-                logging.error(f"{log_symbol}: error setting {margin_mode} mode {e}")
+                except Exception as e:
+                    logging.error(f"{log_symbol}: error setting {margin_mode} mode {e}")
             try:
                 coros_to_call_lev[symbol] = asyncio.create_task(
                     self.cca.set_leverage(self._calc_leverage_for_symbol(symbol), symbol=symbol)
@@ -515,13 +751,14 @@ class BitgetBot(CCXTBot):
             except Exception as e:
                 logging.error(f"{log_symbol} error setting leverage {e}")
             res = None
-            try:
-                res = await coros_to_call_margin_mode[symbol]
-                to_print += f"margin={format_exchange_config_response(res)}"
-            except Exception as e:
-                logging.error(
-                    f"{log_symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
-                )
+            if symbol in coros_to_call_margin_mode:
+                try:
+                    res = await coros_to_call_margin_mode[symbol]
+                    to_print += f"margin={format_exchange_config_response(res)}"
+                except Exception as e:
+                    logging.error(
+                        f"{log_symbol} error setting {self._get_margin_mode_for_symbol(symbol)} mode {e}"
+                    )
             if to_print:
                 logging.info(f"{log_symbol}: {to_print}")
 
@@ -556,6 +793,8 @@ class BitgetBot(CCXTBot):
         return ideal_orders
 
     async def update_exchange_config(self):
+        # Detect classic vs UTA/elite once, before any balance/position/order call.
+        await self._detect_account_mode()
         res = None
         try:
             res = await self.cca.set_position_mode(True)
@@ -566,4 +805,6 @@ class BitgetBot(CCXTBot):
 
     def format_custom_id_single(self, order_type_id: int) -> str:
         formatted = super().format_custom_id_single(order_type_id)
+        if getattr(self, "is_uta", False):
+            return formatted[:32]
         return (self.broker_code + "#" + formatted)[: self.custom_id_max_length]

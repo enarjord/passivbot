@@ -28,7 +28,7 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
     EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
     HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
-    StrategyParamsPairValue, TrailingPriceBundle,
+    StrategyParamsPairValue, TrailingPriceBundle, WeExcessAllowanceMode,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -1183,6 +1183,8 @@ pub fn calc_unstucking_close_py(
             unstuck_threshold,
             unstuck_close_pct,
             unstuck_ema_dist,
+            unstuck_loss_allowance_pct: 0.0,
+            total_wallet_exposure_limit: 0.0,
             ema_band_upper,
             ema_band_lower,
             current_price,
@@ -2078,6 +2080,95 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
     }))
 }
 
+fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
+    for (key, _value) in dict.iter() {
+        let key = key.extract::<String>().map_err(|_| {
+            PyValueError::new_err(format!("{} contains a non-string key", context))
+        })?;
+        if !allowed.contains(&key.as_str()) {
+            return Err(PyValueError::new_err(format!(
+                "{} contains unknown key: {}",
+                context, key
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn trailing_grid_v7_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
+    validate_py_dict_keys(
+        dict,
+        "trailing_grid_v7 strategy params",
+        &["ema_span_0", "ema_span_1", "entry", "close"],
+    )?;
+    let entry = extract_value::<&PyDict>(dict, "entry")?;
+    let close = extract_value::<&PyDict>(dict, "close")?;
+    validate_py_dict_keys(
+        entry,
+        "trailing_grid_v7 entry params",
+        &[
+            "grid_double_down_factor",
+            "grid_spacing_pct",
+            "grid_spacing_we_weight",
+            "grid_spacing_volatility_weight",
+            "initial_ema_dist",
+            "initial_qty_pct",
+            "trailing_double_down_factor",
+            "trailing_grid_ratio",
+            "trailing_retracement_pct",
+            "trailing_retracement_we_weight",
+            "trailing_retracement_volatility_weight",
+            "trailing_threshold_pct",
+            "trailing_threshold_we_weight",
+            "trailing_threshold_volatility_weight",
+            "volatility_ema_span_hours",
+        ],
+    )?;
+    validate_py_dict_keys(
+        close,
+        "trailing_grid_v7 close params",
+        &[
+            "grid_markup_start",
+            "grid_markup_end",
+            "grid_qty_pct",
+            "trailing_grid_ratio",
+            "trailing_qty_pct",
+            "trailing_retracement_pct",
+            "trailing_threshold_pct",
+        ],
+    )?;
+    Ok(serde_json::json!({
+        "ema_span_0": extract_value::<f64>(dict, "ema_span_0")?,
+        "ema_span_1": extract_value::<f64>(dict, "ema_span_1")?,
+        "entry": {
+            "grid_double_down_factor": extract_value::<f64>(entry, "grid_double_down_factor")?,
+            "grid_spacing_pct": extract_value::<f64>(entry, "grid_spacing_pct")?,
+            "grid_spacing_we_weight": extract_value::<f64>(entry, "grid_spacing_we_weight")?,
+            "grid_spacing_volatility_weight": extract_value::<f64>(entry, "grid_spacing_volatility_weight")?,
+            "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
+            "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
+            "trailing_double_down_factor": extract_value::<f64>(entry, "trailing_double_down_factor")?,
+            "trailing_grid_ratio": extract_value::<f64>(entry, "trailing_grid_ratio")?,
+            "trailing_retracement_pct": extract_value::<f64>(entry, "trailing_retracement_pct")?,
+            "trailing_retracement_we_weight": extract_value::<f64>(entry, "trailing_retracement_we_weight")?,
+            "trailing_retracement_volatility_weight": extract_value::<f64>(entry, "trailing_retracement_volatility_weight")?,
+            "trailing_threshold_pct": extract_value::<f64>(entry, "trailing_threshold_pct")?,
+            "trailing_threshold_we_weight": extract_value::<f64>(entry, "trailing_threshold_we_weight")?,
+            "trailing_threshold_volatility_weight": extract_value::<f64>(entry, "trailing_threshold_volatility_weight")?,
+            "volatility_ema_span_hours": extract_value::<f64>(entry, "volatility_ema_span_hours")?,
+        },
+        "close": {
+            "grid_markup_start": extract_value::<f64>(close, "grid_markup_start")?,
+            "grid_markup_end": extract_value::<f64>(close, "grid_markup_end")?,
+            "grid_qty_pct": extract_value::<f64>(close, "grid_qty_pct")?,
+            "trailing_grid_ratio": extract_value::<f64>(close, "trailing_grid_ratio")?,
+            "trailing_qty_pct": extract_value::<f64>(close, "trailing_qty_pct")?,
+            "trailing_retracement_pct": extract_value::<f64>(close, "trailing_retracement_pct")?,
+            "trailing_threshold_pct": extract_value::<f64>(close, "trailing_threshold_pct")?,
+        },
+    }))
+}
+
 fn strategy_params_pair_from_dict(
     dict: &PyDict,
     strategy_kind: &str,
@@ -2101,6 +2192,10 @@ fn strategy_params_pair_from_dict(
             ema_anchor_strategy_params_from_dict(long_dict)?,
             ema_anchor_strategy_params_from_dict(short_dict)?,
         ),
+        "trailing_grid_v7" => (
+            trailing_grid_v7_strategy_params_from_dict(long_dict)?,
+            trailing_grid_v7_strategy_params_from_dict(short_dict)?,
+        ),
         _ => {
             return Err(PyValueError::new_err(format!(
                 "unknown strategy kind for strategy params: {}",
@@ -2122,6 +2217,25 @@ fn extract_optional_bool(dict: &PyDict, key: &str, default: bool) -> PyResult<bo
     Ok(match dict.get_item(key)? {
         Some(item) => item.extract::<bool>()?,
         None => default,
+    })
+}
+
+fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcessAllowanceMode> {
+    Ok(match dict.get_item("risk_we_excess_allowance_mode")? {
+        Some(item) => {
+            if item.is_none() {
+                WeExcessAllowanceMode::default()
+            } else {
+                let raw = item.extract::<String>()?;
+                WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
+                        raw
+                    ))
+                })?
+            }
+        }
+        None => WeExcessAllowanceMode::default(),
     })
 }
 
@@ -2242,6 +2356,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         )?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
+        risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,

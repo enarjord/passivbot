@@ -62,7 +62,9 @@ from backtest import (
 )
 import asyncio
 import argparse
+import mmap
 import multiprocessing
+import random
 import time
 from collections import Counter, defaultdict
 from cli_utils import (
@@ -369,6 +371,7 @@ class ResultRecorder:
         write_all_results: bool,
         pareto_max_size: int = 1000,
         bounds: Optional[Sequence[Bound]] = None,
+        starting_iters: int = 0,
     ):
         self.store = ParetoStore(
             directory=results_dir,
@@ -378,6 +381,7 @@ class ResultRecorder:
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
         )
+        self.store.n_iters = starting_iters
         self.write_all = write_all_results
         self.compress = compress
         self.results_file = None
@@ -407,7 +411,7 @@ class ResultRecorder:
                 self.results_file.write(self.packer.pack(output_data))
                 self.results_file.flush()
             except Exception as exc:
-                logging.error(f"Error writing results: {exc}")
+                raise RuntimeError("Error writing all_results.bin") from exc
         metrics_block = data.get("metrics", {}) or {}
         violation = metrics_block.get("constraint_violation")
         try:
@@ -632,6 +636,279 @@ def _record_individual_result(individual, evaluator_config, overrides_list, reco
     _clear_candidate_metrics(individual)
 
 
+def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
+    old_bt = entry.get("backtest") or {}
+    new_bt = config.get("backtest") or {}
+    old_opt = entry.get("optimize") or {}
+    new_opt = config.get("optimize") or {}
+    old_bot = entry.get("bot", entry) or {}
+    new_bot = config.get("bot", config) or {}
+    old_live = entry.get("live") or {}
+    new_live = config.get("live") or {}
+
+    mismatches = []
+    is_suite_result = entry.get("suite_metrics") is not None
+    old_bt_compare = _resume_subset(
+        old_bt,
+        {
+            "aggregate",
+            "balance_sample_divider",
+            "btc_collateral_cap",
+            "btc_collateral_ltv_cap",
+            "candle_interval_minutes",
+            "coins",
+            "dynamic_wel_by_tradability",
+            "end_date",
+            "exchanges",
+            "filter_by_min_effective_cost",
+            "liquidation_threshold",
+            "maker_fee_override",
+            "market_order_slippage_pct",
+            "scenarios",
+            "start_date",
+            "starting_balance",
+            "suite_enabled",
+            "taker_fee_override",
+            "volume_normalization",
+        },
+    )
+    new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
+    if is_suite_result:
+        # Suite result entries omit top-level backtest.coins because the
+        # scenario list is the source of truth for per-scenario coins.
+        if old_bt_compare.get("coins") is None:
+            new_bt_compare.pop("coins", None)
+    _append_resume_section_mismatches(mismatches, "backtest", old_bt_compare, new_bt_compare)
+
+    old_opt_compare = _resume_subset(
+        old_opt,
+        {
+            "backend",
+            "bounds",
+            "compress_results_file",
+            "crossover_eta",
+            "crossover_probability",
+            "enable_overrides",
+            "fixed_params",
+            "fixed_runtime_overrides",
+            "limits",
+            "mutation_eta",
+            "mutation_indpb",
+            "mutation_probability",
+            "offspring_multiplier",
+            "population_size",
+            "pymoo",
+            "round_to_n_significant_digits",
+            "scoring",
+        },
+    )
+    new_opt_compare = _resume_subset(new_opt, old_opt_compare.keys())
+    _append_resume_section_mismatches(mismatches, "optimize", old_opt_compare, new_opt_compare)
+
+    for side in ["long", "short"]:
+        old_en = old_bot.get(side, {}).get("enabled", True)
+        new_en = new_bot.get(side, {}).get("enabled", True)
+        if old_en != new_en:
+            mismatches.append(f"  - {side}.enabled: '{old_en}' -> '{new_en}'")
+
+    for key in ["approved_coins", "ignored_coins"]:
+        if old_live.get(key) != new_live.get(key):
+            mismatches.append(f"  - live.{key}: changed")
+    return mismatches
+
+
+def _resume_subset(section: dict, keys) -> dict:
+    return {key: deepcopy(section.get(key)) for key in keys if key in section}
+
+
+def _append_resume_section_mismatches(
+    mismatches: list[str], section_name: str, old_section: dict, new_section: dict
+) -> None:
+    keys = sorted(set(old_section) | set(new_section))
+    for key in keys:
+        old_value = old_section.get(key)
+        new_value = new_section.get(key)
+        if old_value != new_value:
+            mismatches.append(f"  - {section_name}.{key}: '{old_value}' -> '{new_value}'")
+
+
+def _resolve_resume_results_dir(resume_path: str) -> str:
+    results_dir = os.path.abspath(os.path.expanduser(resume_path))
+    if not os.path.isdir(results_dir):
+        raise ValueError(f"Resume directory not found: {results_dir}")
+    return results_dir
+
+
+def _require_resume_checkpoint(results_dir: str) -> str:
+    checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
+    if not os.path.isfile(checkpoint_path):
+        raise ValueError(f"Cannot resume: checkpoint not found: {checkpoint_path}")
+    if os.path.getsize(checkpoint_path) <= 0:
+        raise ValueError(f"Cannot resume: checkpoint is empty: {checkpoint_path}")
+    try:
+        with open(checkpoint_path, "rb") as f:
+            f.read(1)
+    except OSError as exc:
+        raise ValueError(f"Cannot resume: checkpoint is not readable: {checkpoint_path}") from exc
+    return checkpoint_path
+
+
+def _validate_resume_results(results_dir: str, config: dict) -> int:
+    results_filename = os.path.join(results_dir, "all_results.bin")
+    if not os.path.isfile(results_filename):
+        raise ValueError(f"Cannot resume: all_results.bin not found: {results_filename}")
+    if os.path.getsize(results_filename) <= 0:
+        raise ValueError(f"Cannot resume: all_results.bin is empty: {results_filename}")
+
+    previous_evals = 0
+    try:
+        with open(results_filename, "rb") as f:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as raw:
+                for entry in _iter_strict_msgpack_objects(raw, results_filename):
+                    previous_evals += 1
+                    if not isinstance(entry, dict):
+                        if previous_evals == 1:
+                            raise ValueError(
+                                f"Cannot resume: first all_results.bin entry is not a config object: "
+                                f"{results_filename}"
+                            )
+                        raise ValueError(
+                            f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
+                            f"{results_filename}"
+                        )
+                    if previous_evals == 1:
+                        mismatches = _resume_config_mismatches(entry, config)
+                        if mismatches:
+                            mismatch_str = "\n".join(mismatches)
+                            raise ValueError(
+                                f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                                f"Mismatches detected:\n{mismatch_str}\n\n"
+                                f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                                f"Please restore the original config or start a fresh run.\n"
+                            )
+    except msgpack.exceptions.UnpackException as exc:
+        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+    except ValueError:
+        raise
+    except Exception as exc:
+        raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
+
+    if previous_evals <= 0:
+        raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
+    logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
+    return previous_evals
+
+
+def _iter_strict_msgpack_objects(raw: bytes, filename: str):
+    offset = 0
+    while offset < len(raw):
+        next_offset = _skip_msgpack_object(raw, offset, filename)
+        try:
+            yield msgpack.unpackb(raw[offset:next_offset], raw=False, strict_map_key=False)
+        except Exception as exc:
+            raise ValueError(f"Cannot resume: failed to decode all_results.bin: {filename}") from exc
+        offset = next_offset
+
+
+def _skip_msgpack_object(raw: bytes, offset: int, filename: str, depth: int = 0) -> int:
+    if depth > 512:
+        raise ValueError(f"Cannot resume: all_results.bin nesting is too deep: {filename}")
+    if offset >= len(raw):
+        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
+    marker = raw[offset]
+    offset += 1
+
+    if marker <= 0x7F or marker >= 0xE0:
+        return offset
+    if 0x80 <= marker <= 0x8F:
+        return _skip_msgpack_map(raw, offset, marker & 0x0F, filename, depth)
+    if 0x90 <= marker <= 0x9F:
+        return _skip_msgpack_array(raw, offset, marker & 0x0F, filename, depth)
+    if 0xA0 <= marker <= 0xBF:
+        return _require_msgpack_bytes(raw, offset, marker & 0x1F, filename)
+
+    fixed_size = {
+        0xC0: 0,
+        0xC2: 0,
+        0xC3: 0,
+        0xCA: 4,
+        0xCB: 8,
+        0xCC: 1,
+        0xCD: 2,
+        0xCE: 4,
+        0xCF: 8,
+        0xD0: 1,
+        0xD1: 2,
+        0xD2: 4,
+        0xD3: 8,
+        0xD4: 2,
+        0xD5: 3,
+        0xD6: 5,
+        0xD7: 9,
+        0xD8: 17,
+    }
+    if marker in fixed_size:
+        return _require_msgpack_bytes(raw, offset, fixed_size[marker], filename)
+    if marker == 0xC1:
+        raise ValueError(f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}")
+    if marker in (0xC4, 0xD9):
+        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker in (0xC5, 0xDA):
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker in (0xC6, 0xDB):
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker == 0xC7:
+        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xC8:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xC9:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xDC:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _skip_msgpack_array(raw, offset, size, filename, depth)
+    if marker == 0xDD:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _skip_msgpack_array(raw, offset, size, filename, depth)
+    if marker == 0xDE:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _skip_msgpack_map(raw, offset, size, filename, depth)
+    if marker == 0xDF:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _skip_msgpack_map(raw, offset, size, filename, depth)
+    raise ValueError(f"Cannot resume: all_results.bin contains unknown msgpack marker: {filename}")
+
+
+def _skip_msgpack_array(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
+    for _ in range(size):
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+    return offset
+
+
+def _skip_msgpack_map(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
+    for _ in range(size):
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+    return offset
+
+
+def _read_msgpack_uint(raw: bytes, offset: int, size: int, filename: str) -> tuple[int, int]:
+    end = _require_msgpack_bytes(raw, offset, size, filename)
+    return int.from_bytes(raw[offset:end], "big"), end
+
+
+def _require_msgpack_bytes(raw: bytes, offset: int, size: int, filename: str) -> int:
+    end = offset + size
+    if end > len(raw):
+        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
+    return end
+
+
 def ea_mu_plus_lambda_stream(
     population,
     toolbox,
@@ -649,9 +926,14 @@ def ea_mu_plus_lambda_stream(
     pool,
     duplicate_counter,
     pool_state,
+    start_gen=1,
+    logbook=None,
+    checkpoint_path=None,
 ):
-    logbook = tools.Logbook()
-    logbook.header = "gen", "evals", "min", "max"
+    import pickle
+    if logbook is None:
+        logbook = tools.Logbook()
+        logbook.header = "gen", "evals", "min", "max"
 
     start_time = time.time()
     total_evals = 0
@@ -793,7 +1075,7 @@ def ea_mu_plus_lambda_stream(
         )
         return population, logbook
 
-    for gen in range(1, ngen + 1):
+    for gen in range(start_gen, ngen + 1):
         offspring = algorithms.varOr(population, toolbox, lambda_, cxpb, mutpb)
         invalid_ind = [ind for ind in offspring if not ind.fitness.valid]
         nevals = evaluate_and_record(invalid_ind)
@@ -806,6 +1088,23 @@ def ea_mu_plus_lambda_stream(
         record = stats.compile(population) if stats is not None else {}
         logbook.record(gen=gen, nevals=nevals, **record)
         log_generation(gen, nevals, record)
+
+        if checkpoint_path is not None:
+            chk = {
+                "population": population,
+                "logbook": logbook,
+                "gen": gen,
+                "halloffame": halloffame,
+                "random_state": random.getstate(),
+                "np_random_state": np.random.get_state(),
+            }
+            tmp_path = f"{checkpoint_path}.tmp"
+            try:
+                with open(tmp_path, "wb") as f:
+                    pickle.dump(chk, f, protocol=pickle.HIGHEST_PROTOCOL)
+                os.replace(tmp_path, checkpoint_path)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to save checkpoint: {checkpoint_path}") from exc
 
     logging.info(
         "Optimization summary | generations=%d | total_evals=%d | front=%d | duration=%.1fs",
@@ -1812,6 +2111,12 @@ class SuiteEvaluator:
 
 def add_extra_options(parser, *, help_all: bool):
     parser.add_argument(
+        "--resume",
+        type=str,
+        default=None,
+        help="Path to an existing optimize_results directory to resume exact optimizer state",
+    )
+    parser.add_argument(
         "-t",
         "--start",
         type=str,
@@ -1833,6 +2138,19 @@ def add_extra_options(parser, *, help_all: bool):
         dest="fine_tune_params",
         help=(
             "Comma-separated dotted config-path selectors to tune; other parameters are fixed to their current config values"
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
+    parser.add_argument(
+        "--polish-pct",
+        "--polish-bounds-pct",
+        type=float,
+        default=None,
+        dest="polish_bounds_pct",
+        help=(
+            "Narrow each optimize bound around the current bot value by this percentage, "
+            "constrained to the existing bounds; fixed bounds stay fixed"
             if help_all
             else argparse.SUPPRESS
         ),
@@ -1876,6 +2194,82 @@ def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
         bounds[bound_key] = value
     else:
         set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
+
+
+def _get_config_value_at_path(config: dict, path) -> Any:
+    current = config
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(path)
+        current = current[part]
+    return current
+
+
+def _existing_positive_step(raw_bound) -> Any | None:
+    if not isinstance(raw_bound, (list, tuple)) or len(raw_bound) < 3:
+        return None
+    step = raw_bound[2]
+    if step is None:
+        return None
+    try:
+        if float(step) <= 0.0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return step
+
+
+def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
+    try:
+        return float(step) <= high - low
+    except (TypeError, ValueError):
+        return False
+
+
+def apply_polish_bounds(config: dict, pct: float) -> None:
+    if (
+        not isinstance(pct, (int, float))
+        or not math.isfinite(float(pct))
+        or float(pct) < 0.0
+    ):
+        raise ValueError("polish bounds percentage must be a finite non-negative number")
+    pct = float(pct)
+    flat_bounds, _ = _flat_optimize_bounds_for_config(config)
+    if not flat_bounds:
+        logging.info("polish bounds: no optimize bounds to narrow")
+        return
+    narrowed = 0
+    for bound_key, raw_bound in sorted(flat_bounds.items()):
+        path = resolve_optimization_bound_path(config, bound_key)
+        if path is None:
+            raise KeyError(
+                f"polish bounds: optimize bound {bound_key!r} does not map to a bot parameter"
+            )
+        try:
+            value = _get_config_value_at_path(config, path)
+        except KeyError as exc:
+            raise KeyError(
+                f"polish bounds: missing current config value for {bound_key!r} at {'.'.join(path)}"
+            ) from exc
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(
+                f"polish bounds: {bound_key!r} must map to a numeric bot value, "
+                f"got {type(value).__name__}"
+            )
+        existing_bound = Bound.from_config(bound_key, raw_bound)
+        if existing_bound.low == existing_bound.high:
+            continue
+        center = max(existing_bound.low, min(existing_bound.high, float(value)))
+        low, high = sorted([center * (1.0 - pct), center * (1.0 + pct)])
+        low = max(existing_bound.low, low)
+        high = min(existing_bound.high, high)
+        polished_bound = [low, high]
+        step = _existing_positive_step(raw_bound)
+        if step is not None and _step_supported_by_range(step, low, high):
+            polished_bound.append(step)
+        _set_optimize_bound(config, bound_key, polished_bound)
+        narrowed += 1
+    logging.info("polish bounds narrowed %d optimize bounds with pct=%s", narrowed, pct)
 
 
 def _format_bound_path_for_log(path) -> str:
@@ -2401,6 +2795,11 @@ async def main():
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
+    if polish_bounds_pct is not None and (
+        not math.isfinite(float(polish_bounds_pct)) or float(polish_bounds_pct) < 0.0
+    ):
+        parser.error("--polish-pct must be a finite non-negative number")
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
@@ -2439,6 +2838,8 @@ async def main():
         for key, value in vars(args).items()
         if key.startswith("optimize.bounds.") and value is not None
     }
+    if polish_bounds_pct is not None:
+        apply_polish_bounds(config, polish_bounds_pct)
     if fine_tune_params and args.starting_configs:
         install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
     else:
@@ -2616,13 +3017,25 @@ async def main():
                 / (1000 * 60 * 60 * 24)
             )
         )
-        results_dir = make_get_filepath(
-            f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
-        )
-        os.makedirs(results_dir, exist_ok=True)
+        previous_evals = 0
+        checkpoint_path = None
+        if args.resume:
+            if not config["optimize"].get("write_all_results", True):
+                raise ValueError("Cannot resume with optimize.write_all_results=false")
+            results_dir = _resolve_resume_results_dir(args.resume)
+            checkpoint_path = _require_resume_checkpoint(results_dir)
+            previous_evals = _validate_resume_results(results_dir, config)
+        else:
+            results_dir = make_get_filepath(
+                f"optimize_results/{date_fname}_{exchanges_fname}_{n_days}days_{coins_fname}_{hash_snippet}/"
+            )
+            os.makedirs(results_dir, exist_ok=True)
+
         config["results_dir"] = results_dir
         results_filename = os.path.join(results_dir, "all_results.bin")
         config["results_filename"] = results_filename
+        if checkpoint_path is None:
+            checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
 
         # Shared state used by workers for duplicate detection
@@ -2663,6 +3076,7 @@ async def main():
             write_all_results=config["optimize"].get("write_all_results", True),
             pareto_max_size=pareto_max,
             bounds=evaluator.bounds,
+            starting_iters=previous_evals,
         )
         backend_name = config["optimize"]["backend"]
         logging.info("Selected optimizer backend: %s", backend_name)
@@ -2678,6 +3092,8 @@ async def main():
             overrides_list=overrides_list,
             duplicate_counter=duplicate_counter,
             starting_configs_path=args.starting_configs,
+            checkpoint_path=checkpoint_path,
+            resume=bool(args.resume),
             constraint_fitness_cls=ConstraintAwareFitness,
             ignore_sigint_in_worker=ignore_sigint_in_worker,
             get_starting_configs=get_starting_configs,

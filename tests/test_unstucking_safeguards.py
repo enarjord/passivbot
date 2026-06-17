@@ -411,10 +411,11 @@ def _dummy_config():
         cfg["bot"][side]["unstuck_threshold"] = 0.5
         cfg["bot"][side]["unstuck_close_pct"] = 0.1
         cfg["bot"][side]["unstuck_ema_dist"] = 0.0
-        cfg["bot"][side]["ema_span_0"] = 1
-        cfg["bot"][side]["ema_span_1"] = 1
-        cfg["bot"][side]["entry_grid_spacing_pct"] = 0.01
-        cfg["bot"][side]["close_trailing_threshold_pct"] = 0.01
+        strategy = cfg["bot"][side]["strategy"]["trailing_martingale"]
+        strategy["ema_span_0"] = 1
+        strategy["ema_span_1"] = 1
+        strategy["entry"]["grid_spacing_pct"] = 0.01
+        strategy["close"]["trailing_threshold_pct"] = 0.01
     cfg = format_config(cfg, live_only=True, verbose=False)
     return cfg
 
@@ -529,6 +530,7 @@ def _make_dummy_bot(config, *, last_price=100.0):
                 "entry_trailing_threshold_pct": 0.0,
                 "wallet_exposure_limit": 1.0,
                 "risk_we_excess_allowance_pct": 0.0,
+                "risk_we_excess_allowance_mode": "bounded",
                 "close_grid_qty_pct": 0.0,
                 "close_trailing_qty_pct": 0.0,
                 "close_trailing_retracement_pct": 0.0,
@@ -1207,6 +1209,7 @@ async def test_existing_unstuck_blocks_new(monkeypatch):
     await bot.calc_ideal_orders_orchestrator()
 
     payload = json.loads(captured["input"])
+    assert payload["global"]["auto_unstuck_allowed"] is False
     assert payload["global"]["unstuck_allowance_long"] == 0.0
     assert payload["global"]["unstuck_allowance_short"] == 0.0
 

@@ -260,6 +260,39 @@ def _rust_strategy_params(**overrides):
     return params
 
 
+def _rust_trailing_grid_v7_strategy_params():
+    return {
+        "ema_span_0": 10.0,
+        "ema_span_1": 20.0,
+        "entry": {
+            "grid_double_down_factor": 1.0,
+            "grid_spacing_pct": 0.01,
+            "grid_spacing_we_weight": 0.0,
+            "grid_spacing_volatility_weight": 0.0,
+            "initial_ema_dist": 0.0,
+            "initial_qty_pct": 0.1,
+            "trailing_double_down_factor": 1.0,
+            "trailing_grid_ratio": 0.0,
+            "trailing_retracement_pct": 0.01,
+            "trailing_retracement_we_weight": 0.0,
+            "trailing_retracement_volatility_weight": 0.0,
+            "trailing_threshold_pct": 0.01,
+            "trailing_threshold_we_weight": 0.0,
+            "trailing_threshold_volatility_weight": 0.0,
+            "volatility_ema_span_hours": 1.0,
+        },
+        "close": {
+            "grid_markup_start": 0.01,
+            "grid_markup_end": 0.005,
+            "grid_qty_pct": 0.2,
+            "trailing_grid_ratio": 0.0,
+            "trailing_qty_pct": 0.1,
+            "trailing_retracement_pct": 0.005,
+            "trailing_threshold_pct": 0.01,
+        },
+    }
+
+
 def _make_orchestrator_payload(symbol, m1_close_pairs, m1_volume_pairs, m1_lr_pairs):
     trailing = {
         "min_since_open": 0.0,
@@ -554,6 +587,35 @@ async def test_kucoin_avax_bundle_drop_reproduces_missing_ema_symbol_idx_0(close
         pbr.compute_ideal_orders_json(json.dumps(payload))
 
 
+def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
+    try:
+        import passivbot_rust as pbr
+    except ImportError:
+        pytest.skip("passivbot_rust module not importable in test environment")
+
+    if getattr(pbr, "__is_stub__", False):
+        pytest.skip("requires real passivbot_rust extension")
+
+    symbol = "BTC/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    payload = _make_orchestrator_payload(
+        symbol,
+        m1_close_pairs=[[span0, 30.0], [span1, 30.0], [span2, 30.0]],
+        m1_volume_pairs=[],
+        m1_lr_pairs=[],
+    )
+    payload["global"]["strategy_kind"] = "trailing_grid_v7"
+    params = _rust_trailing_grid_v7_strategy_params()
+    params["close"].pop("trailing_threshold_pct")
+    payload["symbols"][0]["long"]["strategy_params"] = params
+    payload["symbols"][0]["short"]["strategy_params"] = _rust_trailing_grid_v7_strategy_params()
+
+    with pytest.raises(ValueError, match="trailing_threshold_pct"):
+        pbr.compute_ideal_orders_json(json.dumps(payload))
+
+
 @pytest.mark.asyncio
 async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
     try:
@@ -801,6 +863,240 @@ async def test_required_h1_log_range_ema_present_in_bundle():
         h1_log_range_value=0.0042,
         entry_h1_span_hours=4.0,
     )
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert h1_log_range_emas[symbol][4.0] == pytest.approx(0.0042)
+
+
+@pytest.mark.asyncio
+async def test_trailing_grid_v7_grid_spacing_volatility_requires_h1_log_range():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        h1_mode="value",
+        h1_log_range_value=0.0042,
+        entry_h1_span_hours=0.0,
+    )
+    bot.config = {
+        "live": {
+            "strategy_kind": "trailing_grid_v7",
+            "max_forager_candle_staleness_minutes": 10,
+        }
+    }
+
+    def trailing_grid_v7_params(_pside, _symbol=None):
+        return {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
+            "entry": {
+                "volatility_ema_span_hours": 4.0,
+                "grid_spacing_volatility_weight": 1.0,
+                "trailing_threshold_volatility_weight": 0.0,
+                "trailing_retracement_volatility_weight": 0.0,
+            },
+            "close": {},
+        }
+
+    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        _m1_log_range_emas,
+        h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert h1_log_range_emas[symbol][4.0] == pytest.approx(0.0042)
+
+
+@pytest.mark.asyncio
+async def test_trailing_grid_v7_grid_spacing_h1_log_range_missing_fails_loudly():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        h1_mode="nan",
+        entry_h1_span_hours=0.0,
+    )
+    bot.config = {
+        "live": {
+            "strategy_kind": "trailing_grid_v7",
+            "max_forager_candle_staleness_minutes": 10,
+        }
+    }
+
+    def trailing_grid_v7_params(_pside, _symbol=None):
+        return {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
+            "entry": {
+                "volatility_ema_span_hours": 4.0,
+                "grid_spacing_volatility_weight": 1.0,
+                "trailing_threshold_volatility_weight": 0.0,
+                "trailing_retracement_volatility_weight": 0.0,
+            },
+            "close": {},
+        }
+
+    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+
+    with pytest.raises(RuntimeError, match=r"missing required h1_log_range EMA for AVAX/USDT:USDT"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+
+@pytest.mark.asyncio
+async def test_trailing_grid_v7_present_none_grid_spacing_weight_fails_loudly():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        h1_mode="value",
+        entry_h1_span_hours=0.0,
+    )
+    bot.config = {
+        "live": {
+            "strategy_kind": "trailing_grid_v7",
+            "max_forager_candle_staleness_minutes": 10,
+        }
+    }
+
+    def trailing_grid_v7_params(_pside, _symbol=None):
+        return {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
+            "entry": {
+                "volatility_ema_span_hours": 4.0,
+                "grid_spacing_volatility_weight": None,
+                "trailing_threshold_volatility_weight": 0.0,
+                "trailing_retracement_volatility_weight": 0.0,
+            },
+            "close": {},
+        }
+
+    bot._strategy_params_to_rust_dict = trailing_grid_v7_params
+
+    with pytest.raises(
+        ValueError,
+        match=r"entry\.grid_spacing_volatility_weight.*None",
+    ):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+
+@pytest.mark.asyncio
+async def test_trailing_martingale_weight_group_uses_later_nonzero_path():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        entry_h1_span_hours=0.0,
+    )
+
+    def trailing_martingale_params(_pside, _symbol=None):
+        return {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
+            "volatility_ema_span_1m": 6.0,
+            "volatility_ema_span_1h": 0.0,
+            "entry": {
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_volatility_1m_weight": 1.0,
+                "threshold_volatility_1h_weight": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+            },
+            "close": {
+                "threshold_volatility_1m_weight": 0.0,
+                "retracement_volatility_1m_weight": 0.0,
+                "threshold_volatility_1h_weight": 0.0,
+                "retracement_volatility_1h_weight": 0.0,
+            },
+        }
+
+    bot._strategy_params_to_rust_dict = trailing_martingale_params
+
+    (
+        _m1_close_emas,
+        _m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert m1_log_range_emas[symbol][6.0] == pytest.approx(0.0015)
+
+
+@pytest.mark.asyncio
+async def test_ema_anchor_h1_offset_weight_path_is_tuple_not_character_path():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AVAX/USDT:USDT"
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        h1_mode="value",
+        h1_log_range_value=0.0042,
+        entry_h1_span_hours=0.0,
+    )
+    bot.config = {
+        "live": {
+            "strategy_kind": "ema_anchor",
+            "max_forager_candle_staleness_minutes": 10,
+        }
+    }
+
+    def ema_anchor_params(_pside, _symbol=None):
+        return {
+            "ema_span_0": 10.0,
+            "ema_span_1": 20.0,
+            "base_qty_pct": 0.01,
+            "inventory_skew_factor": 0.0,
+            "entry_double_down_factor": 1.0,
+            "entry_initial_ema_dist": 0.0,
+            "entry_initial_qty_pct": 0.01,
+            "entry_spacing_pct": 0.01,
+            "offset_base_pct": 0.01,
+            "offset_wallet_exposure_weight": 0.0,
+            "offset_volatility_ema_span_1m": 0.0,
+            "offset_volatility_ema_span_1h": 4.0,
+            "offset_volatility_1m_weight": 0.0,
+            "offset_volatility_1h_weight": 1.0,
+        }
+
+    bot._strategy_params_to_rust_dict = ema_anchor_params
+
     (
         _m1_close_emas,
         _m1_volume_emas,

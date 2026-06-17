@@ -142,6 +142,7 @@ def test_format_config_current_roundtrip_basic():
         assert k in out
     assert isinstance(out["bot"]["long"]["risk"]["position_exposure_enforcer_threshold"], (int, float))
     assert isinstance(out["bot"]["long"]["risk"]["we_excess_allowance_pct"], float)
+    assert out["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
     assert isinstance(out["bot"]["long"]["risk"]["total_exposure_enforcer_threshold"], (int, float))
     assert isinstance(out["bot"]["short"]["risk"]["position_exposure_enforcer_threshold"], (int, float))
     assert isinstance(out["bot"]["short"]["risk"]["total_exposure_enforcer_threshold"], (int, float))
@@ -420,6 +421,9 @@ def test_format_config_legacy_omissions_disable_newer_bot_features():
     assert long_cfg["risk"]["we_excess_allowance_pct"] == pytest.approx(
         default_long["risk"]["we_excess_allowance_pct"]
     )
+    assert long_cfg["risk"]["we_excess_allowance_mode"] == default_long["risk"][
+        "we_excess_allowance_mode"
+    ]
     assert long_cfg["risk"]["position_exposure_enforcer_threshold"] == pytest.approx(
         default_long["risk"]["position_exposure_enforcer_threshold"]
     )

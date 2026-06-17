@@ -20,6 +20,7 @@ from .shared_bot import (
 from .schema import get_template_config
 from .access import require_config_dict
 from .tree_ops import add_missing_keys_recursively
+from risk_limits import normalize_we_excess_allowance_mode
 
 DEFAULT_FORAGER_SCORE_WEIGHTS = {"volume": 0.0, "ema_readiness": 0.0, "volatility": 1.0}
 DEFAULT_HSL_TIER_RATIOS = {"yellow": 0.5, "orange": 0.75}
@@ -543,6 +544,77 @@ def normalize_position_counts(result: dict, *, tracker: Optional[object] = None)
         risk_cfg["n_positions"] = rounded
 
 
+def normalize_risk_config(result: dict, *, tracker: Optional[object] = None) -> None:
+    for pside in BOT_POSITION_SIDES:
+        risk_cfg = get_bot_group(result["bot"][pside], "risk")
+        current = risk_cfg.get("we_excess_allowance_mode")
+        normalized = normalize_we_excess_allowance_mode(
+            current,
+            path=f"bot.{pside}.risk.we_excess_allowance_mode",
+        )
+        if tracker is not None and current != normalized:
+            tracker.update(
+                ["bot", pside, "risk", "we_excess_allowance_mode"],
+                current,
+                normalized,
+            )
+        risk_cfg["we_excess_allowance_mode"] = normalized
+
+
+def normalize_coin_override_risk_config(
+    result: dict, *, tracker: Optional[object] = None
+) -> None:
+    coin_overrides = result.get("coin_overrides")
+    if not isinstance(coin_overrides, dict):
+        return
+    for coin, override in coin_overrides.items():
+        if not isinstance(override, dict):
+            continue
+        override_bot = override.get("bot")
+        if not isinstance(override_bot, dict):
+            continue
+        for pside in BOT_POSITION_SIDES:
+            side_cfg = override_bot.get(pside)
+            if not isinstance(side_cfg, dict):
+                continue
+            flat_key = "risk_we_excess_allowance_mode"
+            if flat_key in side_cfg:
+                current = side_cfg.get(flat_key)
+                normalized = normalize_we_excess_allowance_mode(
+                    current,
+                    path=f"coin_overrides.{coin}.bot.{pside}.{flat_key}",
+                )
+                if tracker is not None and current != normalized:
+                    tracker.update(
+                        ["coin_overrides", coin, "bot", pside, flat_key],
+                        current,
+                        normalized,
+                    )
+                side_cfg[flat_key] = normalized
+            risk_cfg = get_bot_group(side_cfg, "risk")
+            if "we_excess_allowance_mode" not in risk_cfg:
+                continue
+            current = risk_cfg.get("we_excess_allowance_mode")
+            normalized = normalize_we_excess_allowance_mode(
+                current,
+                path=f"coin_overrides.{coin}.bot.{pside}.risk.we_excess_allowance_mode",
+            )
+            if tracker is not None and current != normalized:
+                tracker.update(
+                    [
+                        "coin_overrides",
+                        coin,
+                        "bot",
+                        pside,
+                        "risk",
+                        "we_excess_allowance_mode",
+                    ],
+                    current,
+                    normalized,
+                )
+            risk_cfg["we_excess_allowance_mode"] = normalized
+
+
 def _parse_entry_grid_inflation_flag(raw_value, *, path: str) -> bool:
     if isinstance(raw_value, bool):
         return raw_value
@@ -702,6 +774,7 @@ def format_bot_config(
     normalize_cliff_edge_thresholds(result, verbose=verbose, tracker=tracker)
     normalize_bot_forager_config(result, verbose=verbose, tracker=tracker)
     normalize_position_counts(result, tracker=tracker)
+    normalize_risk_config(result, tracker=tracker)
     strip_deprecated_entry_grid_inflation_flags(
         result,
         verbose=verbose and warn_deprecations,

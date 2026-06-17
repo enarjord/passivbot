@@ -103,6 +103,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "migrate historical data layout (requires full install)",
         requires_full=True,
     ),
+    "migrate-config-v7": CommandSpec(
+        "tools.migrate_config_v7",
+        "migrate a v7 trailing-grid config to v8 trailing_grid_v7",
+    ),
     "merge-paretos": CommandSpec(
         "tools.merge_paretos",
         "merge Pareto fronts into starting configs (requires full install)",

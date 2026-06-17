@@ -13,6 +13,39 @@ from .strategy_spec import (
 )
 
 
+TRAILING_GRID_V7_FLAT_ONLY_KEYS = {
+    "close_grid_markup_end",
+    "close_grid_markup_start",
+    "close_grid_qty_pct",
+    "close_trailing_grid_ratio",
+    "close_trailing_qty_pct",
+    "close_trailing_retracement_pct",
+    "close_trailing_threshold_pct",
+    "entry_grid_double_down_factor",
+    "entry_grid_spacing_log_span_hours",
+    "entry_grid_spacing_log_weight",
+    "entry_grid_spacing_pct",
+    "entry_grid_spacing_weight",
+    "entry_grid_spacing_we_weight",
+    "entry_grid_spacing_volatility_weight",
+    "entry_initial_ema_dist",
+    "entry_initial_qty_pct",
+    "entry_log_range_ema_span_hours",
+    "entry_trailing_double_down_factor",
+    "entry_trailing_grid_ratio",
+    "entry_trailing_retracement_log_weight",
+    "entry_trailing_retracement_pct",
+    "entry_trailing_retracement_we_weight",
+    "entry_trailing_retracement_volatility_weight",
+    "entry_trailing_threshold_log_weight",
+    "entry_trailing_threshold_pct",
+    "entry_trailing_threshold_we_weight",
+    "entry_trailing_threshold_volatility_weight",
+    "entry_volatility_ema_span_1h",
+    "entry_volatility_ema_span_hours",
+}
+
+
 def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
     return value
 
@@ -159,6 +192,29 @@ def build_runtime_strategy_side(
     return result
 
 
+def reject_legacy_flat_strategy_fields(config: dict) -> None:
+    live_cfg = config.setdefault("live", {})
+    normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
+    bot_cfg = config.setdefault("bot", {})
+    for pside in BOT_POSITION_SIDES:
+        bot_side = bot_cfg.get(pside)
+        if not isinstance(bot_side, dict):
+            continue
+        legacy_keys = sorted(TRAILING_GRID_V7_FLAT_ONLY_KEYS & set(bot_side))
+        if legacy_keys:
+            joined = ", ".join(f"bot.{pside}.{key}" for key in legacy_keys)
+            raise ValueError(
+                f"{joined} are legacy flat strategy fields and cannot be used at "
+                f"bot.<side> in v8 configs with live.strategy_kind={normalized_kind!r}. "
+                "Run `passivbot tool migrate-config-v7` for v7 configs, or move active "
+                "v8 strategy parameters under "
+                f"bot.<side>.strategy.{normalized_kind} before loading."
+            )
+
+
+reject_trailing_grid_v7_flat_fields_for_trailing_martingale = reject_legacy_flat_strategy_fields
+
+
 def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = None) -> None:
     live_cfg = config.setdefault("live", {})
     normalized_kind = normalize_strategy_kind(live_cfg.get("strategy_kind"))
@@ -172,6 +228,7 @@ def sync_canonical_strategy_config(config: dict, *, tracker: Optional[object] = 
         live_cfg["strategy_kind"] = normalized_kind
 
     bot_cfg = config.setdefault("bot", {})
+    reject_legacy_flat_strategy_fields(config)
     for pside in BOT_POSITION_SIDES:
         bot_side = bot_cfg.setdefault(pside, {})
         if not isinstance(bot_side, dict):

@@ -15,6 +15,10 @@ from trailing_diagnostics import (
     build_trailing_entry_diagnostic,
     normalize_trailing_extrema,
 )
+from risk_limits import (
+    effective_we_excess_allowance_pct,
+    normalize_we_excess_allowance_mode,
+)
 from utils import utc_ms
 
 try:
@@ -656,6 +660,19 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
         for key in ("allowance", "peak", "pct_from_peak"):
             if key in info:
                 side_payload[key] = float(info[key])
+        if "loss_allowance_pct" in info:
+            side_payload["configured_loss_allowance_pct"] = float(info["loss_allowance_pct"])
+        override_pcts = info.get("override_loss_allowance_pcts")
+        if isinstance(override_pcts, dict) and override_pcts:
+            side_payload["override_loss_allowance_pcts"] = {
+                str(symbol): float(pct) for symbol, pct in override_pcts.items()
+            }
+        override_allowances = info.get("override_allowances")
+        if isinstance(override_allowances, dict) and override_allowances:
+            side_payload["override_allowances"] = {
+                str(symbol): float(allowance)
+                for symbol, allowance in override_allowances.items()
+            }
         hint = runtime_hints.get(pside, {})
         if isinstance(hint, dict):
             for key in (
@@ -803,10 +820,16 @@ def _build_monitor_recent_section(self) -> dict[str, Any]:
 def _monitor_wallet_exposure_limit_with_allowance(self, pside: str, symbol: str) -> float:
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+    allowance_mode = normalize_we_excess_allowance_mode(
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
     twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = max(0.0, allowance_pct)
-    if wel > 0.0 and twel > 0.0:
-        effective_allowance_pct = min(effective_allowance_pct, max(0.0, twel / wel - 1.0))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=wel,
+        risk_we_excess_allowance_pct=allowance_pct,
+        total_wallet_exposure_limit=twel,
+        risk_we_excess_allowance_mode=allowance_mode,
+    )
     return wel * (1.0 + effective_allowance_pct)
 
 
@@ -978,6 +1001,9 @@ def _build_monitor_trailing_entry_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
+    inputs["risk_we_excess_allowance_mode"] = self.bp(
+        pside, "risk_we_excess_allowance_mode", symbol
+    ) or None
     payload = build_trailing_entry_diagnostic(inputs)
     if payload is None:
         return None
@@ -1034,6 +1060,9 @@ def _build_monitor_trailing_close_payload(
     inputs["total_wallet_exposure_limit"] = float(
         self.bot_value(pside, "total_wallet_exposure_limit") or 0.0
     )
+    inputs["risk_we_excess_allowance_mode"] = self.bp(
+        pside, "risk_we_excess_allowance_mode", symbol
+    ) or None
     payload = build_trailing_close_diagnostic(inputs)
     if payload is None:
         return None
@@ -1046,6 +1075,18 @@ def _build_monitor_trailing_section(
     balance_raw: float,
     market: dict[str, dict[str, Any]],
 ) -> dict[str, dict[str, Any]]:
+    config = getattr(self, "config", {})
+    live_cfg = config.get("live", {}) if isinstance(config, dict) else {}
+    strategy_kind = str(live_cfg.get("strategy_kind") or "").strip().lower()
+    if strategy_kind == "trailing_grid_v7":
+        return {
+            "_meta": {
+                "diagnostics_supported": False,
+                "strategy_kind": "trailing_grid_v7",
+                "reason": "monitor trailing diagnostics use trailing_martingale helper formulas",
+            }
+        }
+
     out: dict[str, dict[str, Any]] = {}
     for symbol, market_entry in sorted(market.items()):
         if not isinstance(market_entry, dict):
@@ -1116,10 +1157,16 @@ def _build_monitor_position_side_payload(
         wallet_exposure = float(pbr.qty_to_cost(size, price, self.c_mults[symbol]) / balance_raw)
     wel = float(self.bp(pside, "wallet_exposure_limit", symbol))
     allowance_pct = float(self.bp(pside, "risk_we_excess_allowance_pct", symbol))
+    allowance_mode = normalize_we_excess_allowance_mode(
+        self.bp(pside, "risk_we_excess_allowance_mode", symbol) or None
+    )
     twel = float(self.bot_value(pside, "total_wallet_exposure_limit") or 0.0)
-    effective_allowance_pct = max(0.0, allowance_pct)
-    if wel > 0.0 and twel > 0.0:
-        effective_allowance_pct = min(effective_allowance_pct, max(0.0, twel / wel - 1.0))
+    effective_allowance_pct = effective_we_excess_allowance_pct(
+        wallet_exposure_limit=wel,
+        risk_we_excess_allowance_pct=allowance_pct,
+        total_wallet_exposure_limit=twel,
+        risk_we_excess_allowance_mode=allowance_mode,
+    )
     effective_wel = wel * (1.0 + effective_allowance_pct)
 
     payload: dict[str, Any] = {

@@ -102,11 +102,13 @@ unstuck's EMA gate or loss allowance.
 #### Excess Allowance (`risk_we_excess_allowance_pct`)
 In practice, the bot rarely fills all positions simultaneously. Therefore, the bot can be configured to allow exceeding individual WELs by setting `risk_we_excess_allowance_pct > 0.0` (e.g., 20% excess allowance). This can be thought of as the bot "borrowing" capacity from unfilled positions. The per-position WEL enforcer respects this expanded limit and only trims when the *effective* WEL is breached.
 
-The raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
+With the default `we_excess_allowance_mode = "bounded"`, the raw excess is capped before use so a single position cannot receive more headroom than the side's total configured exposure:
 
 `effective_we_excess_allowance_pct = min(max(0, risk_we_excess_allowance_pct), max(0, total_wallet_exposure_limit / wallet_exposure_limit - 1))`
 
 `effective_limit = wallet_exposure_limit * (1 + effective_we_excess_allowance_pct)`
+
+Set `we_excess_allowance_mode = "legacy_raw"` only when intentionally preserving v7-style behavior where the configured excess percentage is used raw and may expand one symbol above side TWEL.
 
 * **Example:** If WEL is `0.20` and allowance is `0.10` (10%), the position can grow to `0.22` before the bot considers it "full."
 * **Motivation:** In a multi-coin setup, this lets the bot boost performance on active positions by utilizing the unused capacity of inactive positions.

@@ -16,8 +16,11 @@ Throughout:
 * `wel_base` abbreviates `wallet_exposure_limit` for the symbol and pside.
   In live mode this is derived from a fixed denominator (`n_positions`); in backtests it may be
   fixed or tradability-driven depending on `backtest.dynamic_wel_by_tradability`.
-* `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
+* With the default `we_excess_allowance_mode = "bounded"`,
+  `we_excess_effective = min(max(0, risk_we_excess_allowance_pct),
   max(0, total_wallet_exposure_limit / wel_base - 1))`.
+  With `we_excess_allowance_mode = "legacy_raw"`, the raw
+  `max(0, risk_we_excess_allowance_pct)` is used instead.
 * `wel_allowed = wel_base * (1 + we_excess_effective)`, so per-position excess allowance never
   expands a symbol above the side's configured `total_wallet_exposure_limit`.
 
@@ -119,6 +122,11 @@ unstuck thresholds remain in the config but do not create orders.
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is
 selected for loss realization:
+
+If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
+coin+side uses the override percentage in the same account-wide allowance formula
+when it is selected for unstucking. The override does not switch unstuck to a
+per-slot budget and does not create separate per-coin realized-PnL tracking.
 
 ```text
 unstuck_allowed = peak_balance * (1 - unstuck_loss_allowance_pct *

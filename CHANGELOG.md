@@ -4,6 +4,18 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed the v8 default backtest candle interval to 1 minute and added
+  `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
+  allowance; migrated v7 trailing-grid configs also force v7-absent entry
+  cooldowns to `0.0`, warn when v7 raw excess allowance would be clamped, and
+  report inserted v8 defaults for review.
+- Coin overrides can now set `bot.<side>.unstuck.loss_allowance_pct`. When an
+  overridden coin+side is selected for auto-unstucking, Rust uses that percentage
+  in the existing account-wide allowance formula while preserving the one-position
+  global unstuck selection behavior.
+- Added Bitget UTA / Elite copy-trading account support with v3 API routing for
+  balance, orders, and fill-event history while keeping classic Bitget accounts
+  on the existing v2/mix paths.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
@@ -13,7 +25,8 @@ All notable user-facing changes will be documented in this file.
   and the Passivbot `balance = equity - uPNL` contract. Missing/invalid uPNL on
   a counted position hard-fails rather than defaulting.
 - Added `backtest.market_settings` overrides for historical/rebranded market metadata, including
-  exchange-specific overrides before Rust backtests receive market parameters.
+  exchange-specific overrides before Rust backtests receive market parameters; backtests now warn
+  and default missing `c_mult` to 1.0 instead of hard-failing.
 - Fixed live `[pos]` logging so short position size increases are labeled as
   `added` and short size decreases as `reduced`, matching exposure magnitude
   instead of signed numeric ordering.
@@ -28,6 +41,8 @@ All notable user-facing changes will be documented in this file.
   while requiring fresh account-critical balance/position/order state, PnL risk
   gates require explicit fill-history coverage including coin HSL, Bitget keeps
   multiple fills per order, and OKX net-mode accounts fail loudly.
+- Added optimizer polish bounds via `--polish-pct`/`--polish-bounds-pct`, which narrows
+  existing optimize bounds around the current config values while preserving positive steps.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless
@@ -162,6 +177,9 @@ All notable user-facing changes will be documented in this file.
 - Changed the v8 strategy runtime to use Rust-owned `trailing_martingale` and `ema_anchor`
   strategy parameters end-to-end, with no production fallback bridge from removed v7
   `trailing_grid` fields.
+- Added deprecated v8 compatibility strategy kind `trailing_grid_v7` plus
+  `passivbot tool migrate-config-v7` for explicitly converting v7 trailing-grid configs into
+  canonical v8 shape without reinterpreting them as `trailing_martingale`.
 - Fixed live v8 EMA warmup sizing to fail loudly on malformed strategy/forager span values
   instead of silently shrinking the warmup window and risking missing orchestrator EMA inputs.
 - Hardened `trailing_martingale` close recursion against non-finite close prices before
@@ -172,6 +190,9 @@ All notable user-facing changes will be documented in this file.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.
+- Added optimizer `--resume` checkpoint recovery safeguards: resume now requires a
+  readable checkpoint plus prior `all_results.bin` metadata, rejects changed optimizer
+  search domains before appending results, and exits non-zero on fatal optimizer errors.
 
 ## v7.12.0 - 2026-05-27
 
