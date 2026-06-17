@@ -660,6 +660,19 @@ def _build_monitor_unstuck_section(self) -> dict[str, Any]:
         for key in ("allowance", "peak", "pct_from_peak"):
             if key in info:
                 side_payload[key] = float(info[key])
+        if "loss_allowance_pct" in info:
+            side_payload["configured_loss_allowance_pct"] = float(info["loss_allowance_pct"])
+        override_pcts = info.get("override_loss_allowance_pcts")
+        if isinstance(override_pcts, dict) and override_pcts:
+            side_payload["override_loss_allowance_pcts"] = {
+                str(symbol): float(pct) for symbol, pct in override_pcts.items()
+            }
+        override_allowances = info.get("override_allowances")
+        if isinstance(override_allowances, dict) and override_allowances:
+            side_payload["override_allowances"] = {
+                str(symbol): float(allowance)
+                for symbol, allowance in override_allowances.items()
+            }
         hint = runtime_hints.get(pside, {})
         if isinstance(hint, dict):
             for key in (

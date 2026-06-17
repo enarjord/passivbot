@@ -686,7 +686,15 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
 
         def _calc_unstuck_allowance_for_logging(self, pside):
             if pside == "long":
-                return {"status": "ok", "allowance": -20.0, "peak": 1100.0, "pct_from_peak": -9.1}
+                return {
+                    "status": "ok",
+                    "allowance": -20.0,
+                    "peak": 1100.0,
+                    "pct_from_peak": -9.1,
+                    "loss_allowance_pct": 0.02,
+                    "override_loss_allowance_pcts": {"BTC/USDT:USDT": 0.005},
+                    "override_allowances": {"BTC/USDT:USDT": -44.75},
+                }
             return {"status": "disabled"}
 
         def _calc_unstuck_allowances_live(self, allow_new_unstuck):
@@ -786,6 +794,12 @@ async def test_build_monitor_snapshot_includes_market_forager_unstuck_and_recent
     assert snapshot["forager"]["long"]["ranking"]["top_ema_readiness"]["symbol"] == "ETH/USDT:USDT"
     assert snapshot["unstuck"]["has_open_order"] is True
     assert snapshot["unstuck"]["sides"]["long"]["allowance"] == pytest.approx(-20.0)
+    assert snapshot["unstuck"]["sides"]["long"]["override_loss_allowance_pcts"] == {
+        "BTC/USDT:USDT": pytest.approx(0.005)
+    }
+    assert snapshot["unstuck"]["sides"]["long"]["override_allowances"] == {
+        "BTC/USDT:USDT": pytest.approx(-44.75)
+    }
     assert snapshot["unstuck"]["sides"]["long"]["next_symbol"] == "BTC/USDT:USDT"
     assert snapshot["unstuck"]["sides"]["long"]["next_target_price"] == pytest.approx(101000.0)
     assert snapshot["unstuck"]["sides"]["long"]["next_target_distance_ratio"] == pytest.approx(

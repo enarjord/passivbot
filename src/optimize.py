@@ -1837,6 +1837,19 @@ def add_extra_options(parser, *, help_all: bool):
             else argparse.SUPPRESS
         ),
     )
+    parser.add_argument(
+        "--polish-pct",
+        "--polish-bounds-pct",
+        type=float,
+        default=None,
+        dest="polish_bounds_pct",
+        help=(
+            "Narrow each optimize bound around the current bot value by this percentage, "
+            "constrained to the existing bounds; fixed bounds stay fixed"
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
 
 
 def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | None:
@@ -1876,6 +1889,82 @@ def _set_optimize_bound(config: dict, bound_key: str, value) -> None:
         bounds[bound_key] = value
     else:
         set_flat_optimize_bound(bounds, strategy_kind, bound_key, value)
+
+
+def _get_config_value_at_path(config: dict, path) -> Any:
+    current = config
+    for part in path:
+        if not isinstance(current, dict) or part not in current:
+            raise KeyError(path)
+        current = current[part]
+    return current
+
+
+def _existing_positive_step(raw_bound) -> Any | None:
+    if not isinstance(raw_bound, (list, tuple)) or len(raw_bound) < 3:
+        return None
+    step = raw_bound[2]
+    if step is None:
+        return None
+    try:
+        if float(step) <= 0.0:
+            return None
+    except (TypeError, ValueError):
+        return None
+    return step
+
+
+def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
+    try:
+        return float(step) <= high - low
+    except (TypeError, ValueError):
+        return False
+
+
+def apply_polish_bounds(config: dict, pct: float) -> None:
+    if (
+        not isinstance(pct, (int, float))
+        or not math.isfinite(float(pct))
+        or float(pct) < 0.0
+    ):
+        raise ValueError("polish bounds percentage must be a finite non-negative number")
+    pct = float(pct)
+    flat_bounds, _ = _flat_optimize_bounds_for_config(config)
+    if not flat_bounds:
+        logging.info("polish bounds: no optimize bounds to narrow")
+        return
+    narrowed = 0
+    for bound_key, raw_bound in sorted(flat_bounds.items()):
+        path = resolve_optimization_bound_path(config, bound_key)
+        if path is None:
+            raise KeyError(
+                f"polish bounds: optimize bound {bound_key!r} does not map to a bot parameter"
+            )
+        try:
+            value = _get_config_value_at_path(config, path)
+        except KeyError as exc:
+            raise KeyError(
+                f"polish bounds: missing current config value for {bound_key!r} at {'.'.join(path)}"
+            ) from exc
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise TypeError(
+                f"polish bounds: {bound_key!r} must map to a numeric bot value, "
+                f"got {type(value).__name__}"
+            )
+        existing_bound = Bound.from_config(bound_key, raw_bound)
+        if existing_bound.low == existing_bound.high:
+            continue
+        center = max(existing_bound.low, min(existing_bound.high, float(value)))
+        low, high = sorted([center * (1.0 - pct), center * (1.0 + pct)])
+        low = max(existing_bound.low, low)
+        high = min(existing_bound.high, high)
+        polished_bound = [low, high]
+        step = _existing_positive_step(raw_bound)
+        if step is not None and _step_supported_by_range(step, low, high):
+            polished_bound.append(step)
+        _set_optimize_bound(config, bound_key, polished_bound)
+        narrowed += 1
+    logging.info("polish bounds narrowed %d optimize bounds with pct=%s", narrowed, pct)
 
 
 def _format_bound_path_for_log(path) -> str:
@@ -2401,6 +2490,11 @@ async def main():
     raw_args = merge_negative_cli_values(expand_help_all_argv(raw_argv))
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
+    polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
+    if polish_bounds_pct is not None and (
+        not math.isfinite(float(polish_bounds_pct)) or float(polish_bounds_pct) < 0.0
+    ):
+        parser.error("--polish-pct must be a finite non-negative number")
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
@@ -2439,6 +2533,8 @@ async def main():
         for key, value in vars(args).items()
         if key.startswith("optimize.bounds.") and value is not None
     }
+    if polish_bounds_pct is not None:
+        apply_polish_bounds(config, polish_bounds_pct)
     if fine_tune_params and args.starting_configs:
         install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
     else:

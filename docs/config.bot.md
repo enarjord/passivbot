@@ -123,6 +123,11 @@ When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is
 selected for loss realization:
 
+If `coin_overrides.<coin>.bot.<side>.unstuck.loss_allowance_pct` is set, that
+coin+side uses the override percentage in the same account-wide allowance formula
+when it is selected for unstucking. The override does not switch unstuck to a
+per-slot budget and does not create separate per-coin realized-PnL tracking.
+
 ```text
 unstuck_allowed = peak_balance * (1 - unstuck_loss_allowance_pct *
                                   total_wallet_exposure_limit)

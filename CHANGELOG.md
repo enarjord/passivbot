@@ -9,6 +9,10 @@ All notable user-facing changes will be documented in this file.
   allowance; migrated v7 trailing-grid configs also force v7-absent entry
   cooldowns to `0.0`, warn when v7 raw excess allowance would be clamped, and
   report inserted v8 defaults for review.
+- Coin overrides can now set `bot.<side>.unstuck.loss_allowance_pct`. When an
+  overridden coin+side is selected for auto-unstucking, Rust uses that percentage
+  in the existing account-wide allowance formula while preserving the one-position
+  global unstuck selection behavior.
 - Fixed Hyperliquid balance on unified/portfolio-margin accounts. The unified
   `total[USDC]` payload is the cross-margined account *equity* (it already
   includes perp unrealized PnL for core and every HIP-3 dex), but Passivbot was
@@ -34,6 +38,8 @@ All notable user-facing changes will be documented in this file.
   while requiring fresh account-critical balance/position/order state, PnL risk
   gates require explicit fill-history coverage including coin HSL, Bitget keeps
   multiple fills per order, and OKX net-mode accounts fail loudly.
+- Added optimizer polish bounds via `--polish-pct`/`--polish-bounds-pct`, which narrows
+  existing optimize bounds around the current config values while preserving positive steps.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless
