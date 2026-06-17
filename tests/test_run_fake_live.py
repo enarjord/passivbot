@@ -437,7 +437,14 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                 }
             }
             self.coin_overrides = {
-                "BTC/USDT:USDT": {"bot": {"long": {"entry_grid_inflation_enabled": False}}}
+                "BTC/USDT:USDT": {
+                    "bot": {
+                        "long": {
+                            "entry_grid_inflation_enabled": False,
+                            "unstuck_loss_allowance_pct": 0.025,
+                        }
+                    }
+                }
             }
 
         def bot_value(self, _pside, key):
@@ -459,6 +466,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
     out = Passivbot._bot_params_to_rust_dict(_Stub(), "long", "BTC/USDT:USDT")
 
     assert "entry_grid_inflation_enabled" not in out
+    assert out["unstuck_loss_allowance_pct"] == pytest.approx(0.025)
 
 
 def test_install_runtime_overrides_sets_exchange_time_override():

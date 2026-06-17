@@ -38,8 +38,8 @@ mod core {
         wallet_exposure_limit_with_allowance_from_base,
     };
     use crate::risk::{
-        calc_twel_enforcer_actions, calc_unstucking_action, GateEntriesPosition,
-        TwelEnforcerInputPosition, UnstuckPositionInput,
+        calc_twel_enforcer_actions, calc_unstucking_action_with_position_allowances,
+        GateEntriesPosition, TwelEnforcerInputPosition, UnstuckPositionInput,
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
@@ -294,6 +294,8 @@ mod core {
         pub market_order_slippage_pct: f64,
         #[serde(default)]
         pub panic_close_market: bool,
+        #[serde(default)]
+        pub auto_unstuck_allowed: Option<bool>,
         pub unstuck_allowance_long: f64,
         pub unstuck_allowance_short: f64,
         /// Fraction of peak balance that may be realized as drawdown before lossy closes are blocked.
@@ -2865,6 +2867,8 @@ mod core {
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
+                unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
+                total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
                 ema_band_upper: ema_bands.upper,
                 ema_band_lower: ema_bands.lower,
                 current_price: sym.order_book.ask,
@@ -2915,6 +2919,8 @@ mod core {
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
+                unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
+                total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
                 ema_band_upper: ema_bands.upper,
                 ema_band_lower: ema_bands.lower,
                 current_price: sym.order_book.bid,
@@ -2925,32 +2931,37 @@ mod core {
                 c_mult: sym.exchange.c_mult,
             });
         }
-        if let Some((idx, side, order)) = calc_unstucking_action(
-            input_balance_raw(input),
-            input.global.unstuck_allowance_long,
-            input.global.unstuck_allowance_short,
-            &workspace.unstuck_inputs,
-        ) {
-            let ideal = IdealOrder {
-                symbol_idx: idx,
-                pside: if side == LONG {
-                    PositionSide::Long
-                } else {
-                    PositionSide::Short
-                },
-                qty: order.qty,
-                price: order.price,
-                order_type: order.order_type,
-            };
-            match ideal.pside {
-                PositionSide::Long => {
-                    if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                        s.closes.push(ideal);
+        let auto_unstuck_allowed = input.global.auto_unstuck_allowed.unwrap_or(
+            input.global.unstuck_allowance_long > 0.0 || input.global.unstuck_allowance_short > 0.0,
+        );
+        if auto_unstuck_allowed {
+            if let Some((idx, side, order)) = calc_unstucking_action_with_position_allowances(
+                input_balance_raw(input),
+                input.global.realized_pnl_cumsum_max,
+                input.global.realized_pnl_cumsum_last,
+                &workspace.unstuck_inputs,
+            ) {
+                let ideal = IdealOrder {
+                    symbol_idx: idx,
+                    pside: if side == LONG {
+                        PositionSide::Long
+                    } else {
+                        PositionSide::Short
+                    },
+                    qty: order.qty,
+                    price: order.price,
+                    order_type: order.order_type,
+                };
+                match ideal.pside {
+                    PositionSide::Long => {
+                        if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
+                            s.closes.push(ideal);
+                        }
                     }
-                }
-                PositionSide::Short => {
-                    if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                        s.closes.push(ideal);
+                    PositionSide::Short => {
+                        if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
+                            s.closes.push(ideal);
+                        }
                     }
                 }
             }
@@ -3658,6 +3669,7 @@ mod core {
                 market_order_near_touch_threshold: 0.001,
                 market_order_slippage_pct: 0.0,
                 panic_close_market: false,
+                auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: 0.0,
                 unstuck_allowance_short: 0.0,
                 max_realized_loss_pct: 1.0,
@@ -3708,6 +3720,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -3847,6 +3860,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4163,6 +4177,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4202,6 +4217,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4250,6 +4266,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4310,6 +4327,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4367,6 +4385,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4423,6 +4442,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4473,6 +4493,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4523,6 +4544,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4638,6 +4660,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -4690,6 +4713,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -5021,6 +5045,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -5096,6 +5121,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
@@ -5159,6 +5185,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.1,
@@ -5291,6 +5318,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.01,
@@ -5353,6 +5381,7 @@ mod core {
                         market_order_near_touch_threshold: 0.001,
                         market_order_slippage_pct: 0.0,
                         panic_close_market: false,
+                        auto_unstuck_allowed: Some(true),
                         unstuck_allowance_long: 0.0,
                         unstuck_allowance_short: 0.0,
                         max_realized_loss_pct: 0.01,
@@ -5419,6 +5448,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -5478,6 +5508,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 1.0,
@@ -5549,6 +5580,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 0.0,
                     unstuck_allowance_short: 0.0,
                     max_realized_loss_pct: 0.0,
@@ -5599,6 +5631,7 @@ mod core {
                     market_order_near_touch_threshold: 0.001,
                     market_order_slippage_pct: 0.0,
                     panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
                     unstuck_allowance_long: 1000.0,
                     unstuck_allowance_short: 1000.0,
                     max_realized_loss_pct: 1.0,

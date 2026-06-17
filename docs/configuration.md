@@ -307,6 +307,7 @@ If a position is stuck, the bot uses profits from other positions to realize los
   - Weighted percentage below past peak balance to allow losses.
   - `loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)`
   - Example: If past peak balance was `$10,000`, `unstuck_loss_allowance_pct = 0.02`, and `total_wallet_exposure_limit = 1.5`, the bot stops taking losses when balance reaches `$10,000 * (1 - 0.02 * 1.5) = $9,700`.
+  - Per-coin overrides may set `bot.<side>.unstuck.loss_allowance_pct`; the selected coin+side then uses that percentage in the same account-wide formula.
 - **unstuck_threshold**:
   - If a position is larger than the threshold, consider it stuck and activate unstucking.
   - `if wallet_exposure / wallet_exposure_limit > unstuck_threshold: unstucking enabled`
