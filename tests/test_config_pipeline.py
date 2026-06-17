@@ -308,8 +308,10 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
     assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert "backtest.candle_interval_minutes" in report["inserted_v8_defaults"]
     assert "backtest.liquidation_threshold" in report["inserted_v8_defaults"]
+    assert "backtest.maker_fee_override" in report["inserted_v8_defaults"]
     assert "backtest.market_order_slippage_pct" in report["inserted_v8_defaults"]
     assert "backtest.starting_balance" in report["inserted_v8_defaults"]
+    assert "backtest.taker_fee_override" in report["inserted_v8_defaults"]
     assert "live.approved_coins" in report["inserted_v8_defaults"]
     assert "live.forager_score_hysteresis_pct" in report["inserted_v8_defaults"]
     assert "live.hsl_position_during_cooldown_policy" in report["inserted_v8_defaults"]
