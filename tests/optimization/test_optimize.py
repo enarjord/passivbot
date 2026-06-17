@@ -2028,6 +2028,25 @@ def test_resume_config_mismatches_rejects_changed_backend():
     assert any("optimize.backend" in mismatch for mismatch in mismatches)
 
 
+def test_resume_config_mismatches_allows_machine_local_optimizer_settings():
+    entry = _resume_validation_entry()
+    entry["optimize"]["n_cpus"] = 6
+    entry["optimize"]["pareto_max_size"] = 1000
+    entry["optimize"]["write_all_results"] = True
+    entry["backtest"]["base_dir"] = "/old/backtests"
+    entry["backtest"]["ohlcv_source_dir"] = "/old/ohlcvs"
+    entry["backtest"]["visible_metrics"] = ["adg_strategy_eq"]
+    config = deepcopy(entry)
+    config["optimize"]["n_cpus"] = 8
+    config["optimize"]["pareto_max_size"] = 250
+    config["optimize"]["write_all_results"] = False
+    config["backtest"]["base_dir"] = "/new/backtests"
+    config["backtest"]["ohlcv_source_dir"] = "/new/ohlcvs"
+    config["backtest"]["visible_metrics"] = ["drawdown_worst_strategy_eq"]
+
+    assert optimize._resume_config_mismatches(entry, config) == []
+
+
 def test_resolve_resume_results_dir_does_not_create_missing_directory(tmp_path: Path):
     missing = tmp_path / "missing_resume_dir"
 
@@ -2068,7 +2087,7 @@ def test_validate_resume_results_rejects_corrupt_all_results(tmp_path: Path):
     config = _resume_validation_entry()
     (tmp_path / "all_results.bin").write_bytes(b"\xc1")
 
-    with pytest.raises(ValueError, match="failed to read all_results.bin"):
+    with pytest.raises(ValueError, match="invalid msgpack marker"):
         optimize._validate_resume_results(str(tmp_path), config)
 
 
@@ -2079,6 +2098,24 @@ def test_validate_resume_results_rejects_non_config_first_entry(tmp_path: Path):
 
     with pytest.raises(ValueError, match="first all_results.bin entry is not a config object"):
         optimize._validate_resume_results(str(tmp_path), config)
+
+
+def test_validate_resume_results_rejects_non_dict_second_entry(tmp_path: Path):
+    entry = _resume_validation_entry()
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + packer.pack(1))
+
+    with pytest.raises(ValueError, match="entry 2 is not a result object"):
+        optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
+
+
+def test_validate_resume_results_rejects_truncated_trailing_msgpack(tmp_path: Path):
+    entry = _resume_validation_entry()
+    packer = optimize.msgpack.Packer(use_bin_type=True)
+    (tmp_path / "all_results.bin").write_bytes(packer.pack(entry) + b"\x81\xa1x")
+
+    with pytest.raises(ValueError, match="truncated msgpack data"):
+        optimize._validate_resume_results(str(tmp_path), deepcopy(entry))
 
 
 def test_validate_resume_results_rejects_changed_search_domain(tmp_path: Path):
@@ -2101,6 +2138,31 @@ def test_validate_resume_results_counts_entries(tmp_path: Path):
 def test_optimizer_exit_code_is_nonzero_for_fatal_errors():
     assert optimize._optimizer_exit_code(interrupted=False, fatal_error=True) == 1
     assert optimize._optimizer_exit_code(interrupted=True, fatal_error=True) == 130
+
+
+def test_result_recorder_all_results_write_failure_is_fatal():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        recorder = ResultRecorder(
+            results_dir=tmpdir,
+            sig_digits=6,
+            flush_interval=60,
+            scoring_keys=["metric1"],
+            compress=False,
+            write_all_results=True,
+            bounds=[(0.0, 1.0, 0.0)] * 4,
+        )
+        recorder.results_file.close()
+
+        with pytest.raises(RuntimeError, match="Error writing all_results.bin"):
+            recorder.record(
+                {
+                    "bot": {"long": {}, "short": {}},
+                    "metrics": {
+                        "objectives": {"metric1": 0.5},
+                        "constraint_violation": 0.0,
+                    },
+                }
+            )
 
 
 def test_result_recorder_preserves_unquantized_saved_param_values():

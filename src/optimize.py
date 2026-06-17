@@ -61,7 +61,9 @@ from backtest import (
 )
 import asyncio
 import argparse
+import mmap
 import multiprocessing
+import random
 import time
 from collections import defaultdict
 from cli_utils import (
@@ -396,7 +398,7 @@ class ResultRecorder:
                 self.results_file.write(self.packer.pack(output_data))
                 self.results_file.flush()
             except Exception as exc:
-                logging.error(f"Error writing results: {exc}")
+                raise RuntimeError("Error writing all_results.bin") from exc
         metrics_block = data.get("metrics", {}) or {}
         violation = metrics_block.get("constraint_violation")
         try:
@@ -573,8 +575,31 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
 
     mismatches = []
     is_suite_result = entry.get("suite_metrics") is not None
-    old_bt_compare = deepcopy(old_bt)
-    new_bt_compare = deepcopy(new_bt)
+    old_bt_compare = _resume_subset(
+        old_bt,
+        {
+            "aggregate",
+            "balance_sample_divider",
+            "btc_collateral_cap",
+            "btc_collateral_ltv_cap",
+            "candle_interval_minutes",
+            "coins",
+            "dynamic_wel_by_tradability",
+            "end_date",
+            "exchanges",
+            "filter_by_min_effective_cost",
+            "liquidation_threshold",
+            "maker_fee_override",
+            "market_order_slippage_pct",
+            "scenarios",
+            "start_date",
+            "starting_balance",
+            "suite_enabled",
+            "taker_fee_override",
+            "volume_normalization",
+        },
+    )
+    new_bt_compare = _resume_subset(new_bt, old_bt_compare.keys())
     if is_suite_result:
         # Suite result entries omit top-level backtest.coins because the
         # scenario list is the source of truth for per-scenario coins.
@@ -582,7 +607,30 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
             new_bt_compare.pop("coins", None)
     _append_resume_section_mismatches(mismatches, "backtest", old_bt_compare, new_bt_compare)
 
-    _append_resume_section_mismatches(mismatches, "optimize", old_opt, new_opt)
+    old_opt_compare = _resume_subset(
+        old_opt,
+        {
+            "backend",
+            "bounds",
+            "compress_results_file",
+            "crossover_eta",
+            "crossover_probability",
+            "enable_overrides",
+            "fixed_params",
+            "fixed_runtime_overrides",
+            "limits",
+            "mutation_eta",
+            "mutation_indpb",
+            "mutation_probability",
+            "offspring_multiplier",
+            "population_size",
+            "pymoo",
+            "round_to_n_significant_digits",
+            "scoring",
+        },
+    )
+    new_opt_compare = _resume_subset(new_opt, old_opt_compare.keys())
+    _append_resume_section_mismatches(mismatches, "optimize", old_opt_compare, new_opt_compare)
 
     for side in ["long", "short"]:
         old_en = old_bot.get(side, {}).get("enabled", True)
@@ -594,6 +642,10 @@ def _resume_config_mismatches(entry: dict, config: dict) -> list[str]:
         if old_live.get(key) != new_live.get(key):
             mismatches.append(f"  - live.{key}: changed")
     return mismatches
+
+
+def _resume_subset(section: dict, keys) -> dict:
+    return {key: deepcopy(section.get(key)) for key in keys if key in section}
 
 
 def _append_resume_section_mismatches(
@@ -638,24 +690,29 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
     previous_evals = 0
     try:
         with open(results_filename, "rb") as f:
-            unpacker = msgpack.Unpacker(f, raw=False, max_buffer_size=1024 * 1024 * 100)
-            for entry in unpacker:
-                previous_evals += 1
-                if previous_evals == 1:
+            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as raw:
+                for entry in _iter_strict_msgpack_objects(raw, results_filename):
+                    previous_evals += 1
                     if not isinstance(entry, dict):
+                        if previous_evals == 1:
+                            raise ValueError(
+                                f"Cannot resume: first all_results.bin entry is not a config object: "
+                                f"{results_filename}"
+                            )
                         raise ValueError(
-                            f"Cannot resume: first all_results.bin entry is not a config object: "
+                            f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
                             f"{results_filename}"
                         )
-                    mismatches = _resume_config_mismatches(entry, config)
-                    if mismatches:
-                        mismatch_str = "\n".join(mismatches)
-                        raise ValueError(
-                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                            f"Mismatches detected:\n{mismatch_str}\n\n"
-                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                            f"Please restore the original config or start a fresh run.\n"
-                        )
+                    if previous_evals == 1:
+                        mismatches = _resume_config_mismatches(entry, config)
+                        if mismatches:
+                            mismatch_str = "\n".join(mismatches)
+                            raise ValueError(
+                                f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                                f"Mismatches detected:\n{mismatch_str}\n\n"
+                                f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                                f"Please restore the original config or start a fresh run.\n"
+                            )
     except msgpack.exceptions.UnpackException as exc:
         raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
     except ValueError:
@@ -667,6 +724,116 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
         raise ValueError(f"Cannot resume: all_results.bin contains no entries: {results_filename}")
     logging.info("Resuming with %d previous evaluations from all_results.bin", previous_evals)
     return previous_evals
+
+
+def _iter_strict_msgpack_objects(raw: bytes, filename: str):
+    offset = 0
+    while offset < len(raw):
+        next_offset = _skip_msgpack_object(raw, offset, filename)
+        try:
+            yield msgpack.unpackb(raw[offset:next_offset], raw=False, strict_map_key=False)
+        except Exception as exc:
+            raise ValueError(f"Cannot resume: failed to decode all_results.bin: {filename}") from exc
+        offset = next_offset
+
+
+def _skip_msgpack_object(raw: bytes, offset: int, filename: str, depth: int = 0) -> int:
+    if depth > 512:
+        raise ValueError(f"Cannot resume: all_results.bin nesting is too deep: {filename}")
+    if offset >= len(raw):
+        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
+    marker = raw[offset]
+    offset += 1
+
+    if marker <= 0x7F or marker >= 0xE0:
+        return offset
+    if 0x80 <= marker <= 0x8F:
+        return _skip_msgpack_map(raw, offset, marker & 0x0F, filename, depth)
+    if 0x90 <= marker <= 0x9F:
+        return _skip_msgpack_array(raw, offset, marker & 0x0F, filename, depth)
+    if 0xA0 <= marker <= 0xBF:
+        return _require_msgpack_bytes(raw, offset, marker & 0x1F, filename)
+
+    fixed_size = {
+        0xC0: 0,
+        0xC2: 0,
+        0xC3: 0,
+        0xCA: 4,
+        0xCB: 8,
+        0xCC: 1,
+        0xCD: 2,
+        0xCE: 4,
+        0xCF: 8,
+        0xD0: 1,
+        0xD1: 2,
+        0xD2: 4,
+        0xD3: 8,
+        0xD4: 2,
+        0xD5: 3,
+        0xD6: 5,
+        0xD7: 9,
+        0xD8: 17,
+    }
+    if marker in fixed_size:
+        return _require_msgpack_bytes(raw, offset, fixed_size[marker], filename)
+    if marker == 0xC1:
+        raise ValueError(f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}")
+    if marker in (0xC4, 0xD9):
+        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker in (0xC5, 0xDA):
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker in (0xC6, 0xDB):
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _require_msgpack_bytes(raw, offset, size, filename)
+    if marker == 0xC7:
+        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xC8:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xC9:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _require_msgpack_bytes(raw, offset, size + 1, filename)
+    if marker == 0xDC:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _skip_msgpack_array(raw, offset, size, filename, depth)
+    if marker == 0xDD:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _skip_msgpack_array(raw, offset, size, filename, depth)
+    if marker == 0xDE:
+        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
+        return _skip_msgpack_map(raw, offset, size, filename, depth)
+    if marker == 0xDF:
+        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
+        return _skip_msgpack_map(raw, offset, size, filename, depth)
+    raise ValueError(f"Cannot resume: all_results.bin contains unknown msgpack marker: {filename}")
+
+
+def _skip_msgpack_array(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
+    for _ in range(size):
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+    return offset
+
+
+def _skip_msgpack_map(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
+    for _ in range(size):
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
+    return offset
+
+
+def _read_msgpack_uint(raw: bytes, offset: int, size: int, filename: str) -> tuple[int, int]:
+    end = _require_msgpack_bytes(raw, offset, size, filename)
+    return int.from_bytes(raw[offset:end], "big"), end
+
+
+def _require_msgpack_bytes(raw: bytes, offset: int, size: int, filename: str) -> int:
+    end = offset + size
+    if end > len(raw):
+        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
+    return end
 
 
 def _optimizer_exit_code(interrupted: bool, fatal_error: bool) -> int:
@@ -854,10 +1021,8 @@ def ea_mu_plus_lambda_stream(
         record = stats.compile(population) if stats is not None else {}
         logbook.record(gen=gen, nevals=nevals, **record)
         log_generation(gen, nevals, record)
-        
-        if checkpoint_path is not None:
-            import random
 
+        if checkpoint_path is not None:
             chk = {
                 "population": population,
                 "logbook": logbook,
@@ -2183,6 +2348,8 @@ async def main():
         previous_evals = 0
         checkpoint_path = None
         if args.resume:
+            if not config["optimize"].get("write_all_results", True):
+                raise ValueError("Cannot resume with optimize.write_all_results=false")
             results_dir = _resolve_resume_results_dir(args.resume)
             checkpoint_path = _require_resume_checkpoint(results_dir)
             previous_evals = _validate_resume_results(results_dir, config)
