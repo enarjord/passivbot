@@ -380,15 +380,14 @@ class BitgetBot(CCXTBot):
 
     def _determine_side(self, order: dict) -> str:
         if getattr(self, "is_uta", False):
-            # UTA orders carry posSide (long/short) and reduceOnly (yes/no) but
-            # no tradeSide. Derive the order side from those.
+            # UTA hedge-mode orders carry both side (buy/sell) and posSide
+            # (long/short). reduceOnly is one-way-only for UTA and must not be
+            # used to infer hedge-mode close direction.
             info = order.get("info", {})
-            pos_side = str(info.get("posSide", order.get("position_side", "long"))).lower()
-            reduce_raw = info.get("reduceOnly", order.get("reduceOnly", False))
-            reduce_only = str(reduce_raw).strip().lower() in ("yes", "true", "1")
-            if reduce_only:
-                return "sell" if pos_side == "long" else "buy"
-            return "buy" if pos_side == "long" else "sell"
+            side = str(order.get("side") or info.get("side") or "").lower()
+            if side in ("buy", "sell"):
+                return side
+            raise Exception(f"failed to determine UTA side {order}")
         if "info" in order:
             if all([x in order["info"] for x in ["tradeSide", "reduceOnly", "posSide"]]):
                 if order["info"]["tradeSide"] == "close":
@@ -998,11 +997,11 @@ class BitgetBot(CCXTBot):
     def _build_order_params(self, order: dict) -> dict:
         use_post_only = require_live_value(self.config, "time_in_force") == "post_only"
         if getattr(self, "is_uta", False):
-            # UTA/elite hedge-mode orders use posSide; holdSide/oneWayMode are
-            # v2-only and rejected by v3 with code 25236.
+            # UTA/elite hedge-mode orders use side + posSide for both entries and
+            # closes. reduceOnly is one-way-only on Bitget UTA and is rejected
+            # when combined with posSide.
             params = {
                 "posSide": order["position_side"],
-                "reduceOnly": order["reduce_only"],
                 "clientOid": order["custom_id"],
             }
             if use_post_only:

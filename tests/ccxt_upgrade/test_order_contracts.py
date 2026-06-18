@@ -285,6 +285,23 @@ def test_bitget_determine_side_uses_trade_side_reduce_only_and_pos_side():
     assert bot._determine_side(open_long) == "buy"
 
 
+def test_bitget_uta_determine_side_uses_explicit_side_not_reduce_only():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.is_uta = True
+
+    close_long = {
+        "side": "sell",
+        "info": {"side": "sell", "posSide": "long", "reduceOnly": "NO"},
+    }
+    close_short = {
+        "side": "buy",
+        "info": {"side": "buy", "posSide": "short", "reduceOnly": "NO"},
+    }
+
+    assert bot._determine_side(close_long) == "sell"
+    assert bot._determine_side(close_short) == "buy"
+
+
 def test_bitget_uta_custom_id_respects_v3_client_oid_contract():
     bot = BitgetBot.__new__(BitgetBot)
     bot.broker_code = "p4sve"
@@ -301,7 +318,7 @@ def test_bitget_uta_custom_id_respects_v3_client_oid_contract():
     assert custom_id_to_snake(custom_id) != "unknown"
 
 
-def test_bitget_uta_order_params_use_ccxt_v3_safe_time_in_force():
+def test_bitget_uta_order_params_use_hedge_mode_side_posside_contract():
     bot = BitgetBot.__new__(BitgetBot)
     bot.config = {"live": {"time_in_force": "post_only"}}
     bot.is_uta = True
@@ -316,7 +333,7 @@ def test_bitget_uta_order_params_use_ccxt_v3_safe_time_in_force():
     assert post_only_params["postOnly"] is True
     assert "timeInForce" not in post_only_params
     assert post_only_params["posSide"] == "short"
-    assert post_only_params["reduceOnly"] is True
+    assert "reduceOnly" not in post_only_params
     assert post_only_params["clientOid"] == "0x0007abcdef"
 
     bot.config = {"live": {"time_in_force": "gtc"}}
@@ -324,6 +341,8 @@ def test_bitget_uta_order_params_use_ccxt_v3_safe_time_in_force():
 
     assert gtc_params["timeInForce"] == "gtc"
     assert "postOnly" not in gtc_params
+    assert gtc_params["posSide"] == "short"
+    assert "reduceOnly" not in gtc_params
 
 
 def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
@@ -361,9 +380,29 @@ def test_bitget_uta_order_params_survive_ccxt_v3_request_construction():
     )
 
     assert request["timeInForce"] == "gtc"
-    assert request["reduceOnly"] == "yes"
+    assert "reduceOnly" not in request
     assert request["posSide"] == "short"
     assert request["clientOid"] == "0x0007abcdef"
+
+
+def test_bitget_classic_order_params_keep_reduce_only_contract():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.config = {"live": {"time_in_force": "post_only"}}
+    bot.is_uta = False
+
+    params = bot._build_order_params(
+        {
+            "position_side": "long",
+            "reduce_only": True,
+            "custom_id": "0x0007abcdef",
+        }
+    )
+
+    assert params["timeInForce"] == "PO"
+    assert params["holdSide"] == "long"
+    assert params["reduceOnly"] is True
+    assert params["oneWayMode"] is False
+    assert params["clientOid"] == "0x0007abcdef"
 
 
 def test_bitget_uta_broker_code_is_signed_as_v3_channel_header():
@@ -887,3 +926,38 @@ async def test_bitget_fetch_open_orders_preserves_raw_pos_side_and_client_order_
     assert orders[0]["qty"] == 0.5
     assert orders[0]["custom_id"] == "entry_long_01"
     assert orders[0]["side"] == "buy"
+
+
+@pytest.mark.asyncio
+async def test_bitget_uta_fetch_open_orders_preserves_close_side():
+    bot = BitgetBot.__new__(BitgetBot)
+    bot.quote = "USDT"
+    bot.is_uta = True
+    bot._live_margin_modes = {}
+    bot._record_live_margin_mode_from_payload = lambda payload: None
+    bot.cca = SimpleNamespace()
+
+    async def _fetch_open_orders(symbol=None):
+        return [
+            {
+                "id": "1",
+                "symbol": "ASTER/USDT:USDT",
+                "amount": 96.0,
+                "timestamp": 10,
+                "side": "sell",
+                "clientOrderId": "close_grid_long_01",
+                "info": {
+                    "side": "sell",
+                    "posSide": "long",
+                    "reduceOnly": "NO",
+                },
+            }
+        ]
+
+    bot.cca.fetch_open_orders = _fetch_open_orders
+    orders = await bot.fetch_open_orders(symbol="ASTER/USDT:USDT")
+
+    assert orders[0]["position_side"] == "long"
+    assert orders[0]["qty"] == 96.0
+    assert orders[0]["custom_id"] == "close_grid_long_01"
+    assert orders[0]["side"] == "sell"

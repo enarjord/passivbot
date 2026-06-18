@@ -59,6 +59,24 @@ Handling:
 
 ## Bitget Futures
 
+### UTA / Elite hedge-mode order direction
+
+Problem:
+
+1. Bitget UTA hedge-mode orders use `side` plus `posSide` for entries and closes.
+2. `reduceOnly` is one-way-only in UTA and is rejected when combined with `posSide`.
+3. UTA open-order responses may report close orders with `side=sell`, `posSide=long`,
+   and `reduceOnly=NO`; deriving close direction from `reduceOnly` misclassifies them
+   as entries.
+
+Handling in Passivbot:
+
+1. Send `posSide` and `clientOid` for UTA hedge-mode orders, but do not send
+   `reduceOnly`.
+2. Normalize UTA open orders from the explicit exchange/CCXT `side` field for
+   buy/sell direction, and from `posSide` for long/short position side.
+3. Keep classic Bitget v2/mix `tradeSide`/`reduceOnly` handling separate.
+
 ### `since` is effectively exclusive for OHLCV paging
 
 Problem: naive paging can miss first candle in each page.

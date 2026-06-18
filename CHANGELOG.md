@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Bitget UTA / Elite close-order placement by omitting the one-way-only
+  `reduceOnly` flag from hedge-mode v3 orders that already send `posSide`.
+- Fixed Bitget UTA / Elite open-order normalization so hedge-mode close orders
+  keep their exchange-reported `side` instead of being misread as entries.
 - Added Bitget UTA / Elite copy-trading account support with v3 API routing for
   balance, orders, and fill-event history while keeping classic Bitget accounts
   on the existing v2/mix paths.
