@@ -18,6 +18,7 @@ try:
     from pymoo.optimize import minimize as pymoo_minimize
     from pymoo.operators.crossover.sbx import SBX
     from pymoo.operators.mutation.pm import PM
+    from pymoo.operators.selection.tournament import TournamentSelection
     from pymoo.termination import get_termination
     from pymoo.util.ref_dirs import get_reference_directions
 except ImportError:  # pragma: no cover
@@ -25,6 +26,7 @@ except ImportError:  # pragma: no cover
     NSGA3 = None
     Population = None
     Callback = object
+    TournamentSelection = None
     get_reference_directions = None
 
 from optimization.backend_shared import (
@@ -268,6 +270,30 @@ def _resolve_mutation_prob(shared: dict[str, Any], n_params: int) -> float:
     return max(0.0, min(1.0, float(raw)))
 
 
+def _cv_scalar(value) -> float:
+    return float(np.asarray(value, dtype=np.float64).reshape(-1)[0])
+
+
+def _nsga3_comp_by_cv_then_random(pop, P, random_state=None, **kwargs):
+    if random_state is None:
+        random_state = np.random.default_rng()
+    selections = np.full(P.shape[0], np.nan)
+    for idx in range(P.shape[0]):
+        a, b = int(P[idx, 0]), int(P[idx, 1])
+        a_cv = _cv_scalar(pop[a].CV)
+        b_cv = _cv_scalar(pop[b].CV)
+        if a_cv > 0.0 or b_cv > 0.0:
+            if a_cv < b_cv:
+                selections[idx] = a
+            elif b_cv < a_cv:
+                selections[idx] = b
+            else:
+                selections[idx] = random_state.choice([a, b])
+        else:
+            selections[idx] = random_state.choice([a, b])
+    return selections[:, None].astype(int)
+
+
 def _reference_direction_count(n_obj: int, n_partitions: int) -> int:
     return math.comb(int(n_obj) + int(n_partitions) - 1, int(n_partitions))
 
@@ -436,6 +462,7 @@ def _build_algorithm(
             ref_dirs=ref_dirs,
             pop_size=actual_population_size,
             sampling=sampling,
+            selection=TournamentSelection(func_comp=_nsga3_comp_by_cv_then_random),
             crossover=crossover,
             mutation=mutation,
             repair=repair,
