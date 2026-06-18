@@ -43,6 +43,8 @@ All notable user-facing changes will be documented in this file.
   multiple fills per order, and OKX net-mode accounts fail loudly.
 - Added optimizer polish bounds via `--polish-pct`/`--polish-bounds-pct`, which narrows
   existing optimize bounds around the current config values while preserving positive steps.
+  `--polish-bounds-mode` can now choose the default clamped behavior, allow tunable
+  polished bounds to escape the original bounds, or expand fixed bounds too.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless

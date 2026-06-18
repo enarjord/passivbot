@@ -1706,6 +1706,8 @@ def add_arguments_recursively(
             elif "scoring" in full_name:
                 type_ = comma_separated_values
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif isinstance(value, list) and "bounds" not in full_name:
+                type_ = comma_separated_values
             elif value is None:
                 if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float

@@ -1187,6 +1187,33 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--bot.short.hsl.panic_close_order_type VALUE" in help_text
 
 
+def test_optimize_fixed_params_cli_parses_csv_selectors():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+    parser = argparse.ArgumentParser(prog="optimize")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS["optimize"]
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="optimize",
+        help_all=True,
+        group_map=group_map,
+    )
+
+    args = parser.parse_args(
+        [
+            "--optimize.fixed_params",
+            "bot.long.risk.n_positions,bot.long.risk.total_wallet_exposure_limit",
+        ]
+    )
+
+    assert getattr(args, "optimize.fixed_params") == [
+        "bot.long.risk.n_positions",
+        "bot.long.risk.total_wallet_exposure_limit",
+    ]
+
+
 def test_live_default_help_shows_curated_groups():
     config = get_template_config()
     del config["optimize"]

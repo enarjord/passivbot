@@ -2155,6 +2155,19 @@ def add_extra_options(parser, *, help_all: bool):
             else argparse.SUPPRESS
         ),
     )
+    parser.add_argument(
+        "--polish-bounds-mode",
+        choices=("clamp", "override-tunable", "override-all"),
+        default="clamp",
+        dest="polish_bounds_mode",
+        help=(
+            "How --polish-pct treats existing optimize bounds: clamp keeps current behavior, "
+            "override-tunable lets tunable bounds escape the existing bounds, and override-all "
+            "also expands fixed bounds"
+            if help_all
+            else argparse.SUPPRESS
+        ),
+    )
 
 
 def _resolve_cli_limits_override(args, existing_limits=None) -> list[dict] | None:
@@ -2226,14 +2239,20 @@ def _step_supported_by_range(step: Any, low: float, high: float) -> bool:
         return False
 
 
-def apply_polish_bounds(config: dict, pct: float) -> None:
+def apply_polish_bounds(config: dict, pct: float, *, bounds_mode: str = "clamp") -> None:
     if (
         not isinstance(pct, (int, float))
         or not math.isfinite(float(pct))
         or float(pct) < 0.0
     ):
         raise ValueError("polish bounds percentage must be a finite non-negative number")
+    if bounds_mode not in ("clamp", "override-tunable", "override-all"):
+        raise ValueError(
+            "polish bounds mode must be one of: clamp, override-tunable, override-all"
+        )
     pct = float(pct)
+    override_bounds = bounds_mode in ("override-tunable", "override-all")
+    expand_fixed_bounds = bounds_mode == "override-all"
     flat_bounds, _ = _flat_optimize_bounds_for_config(config)
     if not flat_bounds:
         logging.info("polish bounds: no optimize bounds to narrow")
@@ -2257,19 +2276,28 @@ def apply_polish_bounds(config: dict, pct: float) -> None:
                 f"got {type(value).__name__}"
             )
         existing_bound = Bound.from_config(bound_key, raw_bound)
-        if existing_bound.low == existing_bound.high:
+        if existing_bound.low == existing_bound.high and not expand_fixed_bounds:
             continue
-        center = max(existing_bound.low, min(existing_bound.high, float(value)))
+        if override_bounds:
+            center = float(value)
+        else:
+            center = max(existing_bound.low, min(existing_bound.high, float(value)))
         low, high = sorted([center * (1.0 - pct), center * (1.0 + pct)])
-        low = max(existing_bound.low, low)
-        high = min(existing_bound.high, high)
+        if not override_bounds:
+            low = max(existing_bound.low, low)
+            high = min(existing_bound.high, high)
         polished_bound = [low, high]
         step = _existing_positive_step(raw_bound)
         if step is not None and _step_supported_by_range(step, low, high):
             polished_bound.append(step)
         _set_optimize_bound(config, bound_key, polished_bound)
         narrowed += 1
-    logging.info("polish bounds narrowed %d optimize bounds with pct=%s", narrowed, pct)
+    logging.info(
+        "polish bounds narrowed %d optimize bounds with pct=%s mode=%s",
+        narrowed,
+        pct,
+        bounds_mode,
+    )
 
 
 def _format_bound_path_for_log(path) -> str:
@@ -2796,10 +2824,13 @@ async def main():
     raw_args = _normalize_optional_bool_flag(raw_args, "--suite")
     args = parser.parse_args(raw_args)
     polish_bounds_pct = getattr(args, "polish_bounds_pct", None)
+    polish_bounds_mode = getattr(args, "polish_bounds_mode", "clamp")
     if polish_bounds_pct is not None and (
         not math.isfinite(float(polish_bounds_pct)) or float(polish_bounds_pct) < 0.0
     ):
         parser.error("--polish-pct must be a finite non-negative number")
+    if polish_bounds_pct is None and polish_bounds_mode != "clamp":
+        parser.error("--polish-bounds-mode requires --polish-pct")
     initial_log_level = resolve_log_level(args.log_level, None, fallback=1)
     configure_logging(debug=initial_log_level)
     source_config, base_config_path, raw_snapshot = load_input_config(args.config_path)
@@ -2839,7 +2870,7 @@ async def main():
         if key.startswith("optimize.bounds.") and value is not None
     }
     if polish_bounds_pct is not None:
-        apply_polish_bounds(config, polish_bounds_pct)
+        apply_polish_bounds(config, polish_bounds_pct, bounds_mode=polish_bounds_mode)
     if fine_tune_params and args.starting_configs:
         install_anchored_fine_tune_plan(config, fine_tune_params, args.starting_configs)
     else:

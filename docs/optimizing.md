@@ -314,6 +314,35 @@ This fixes only the active long strategy's close subtree plus long HSL bounds.
 Internally, `--fine_tune_params` and `optimize.fixed_params` are merged into one effective
 fixed-parameter set before bounds are collapsed.
 
+### Polishing Around A Selected Config
+
+Use `--polish-pct` to narrow every configured optimizer bound around the current config
+value before the run starts:
+
+```bash
+passivbot optimize path/to/config.json --polish-pct 0.25
+```
+
+By default this keeps the polished bounds inside the original `optimize.bounds` domain and
+leaves fixed bounds fixed. `--polish-bounds-mode` changes that policy:
+
+- `clamp`: default behavior; intersect polished bounds with the original bounds.
+- `override-tunable`: allow tunable bounds to escape the original bounds; fixed bounds stay fixed.
+- `override-all`: allow tunable bounds to escape the original bounds and expand fixed bounds too.
+
+Polish still uses relative bounds: `[value * (1 - pct), value * (1 + pct)]`. A current
+value of `0.0` therefore remains fixed at `[0.0, 0.0]`.
+
+`optimize.fixed_params` is applied after polish. That makes it the right way to polish all
+bounds while pinning selected parameters to the config value:
+
+```bash
+passivbot optimize path/to/config.json \
+  --polish-pct 0.25 \
+  --polish-bounds-mode override-all \
+  --optimize.fixed_params long.risk.n_positions,long.risk.total_wallet_exposure_limit
+```
+
 When `--fine_tune_params` is combined with `--start`, the base optimizer config remains the run
 policy. Anchor configs provide values only for optimizer-bound bot parameters that are fixed by the
 anchor plan; boolean toggles and other non-bound runtime policy fields such as
