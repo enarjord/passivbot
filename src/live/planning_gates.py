@@ -7,6 +7,7 @@ from typing import Iterable
 
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES
 from live.market_snapshot import MarketSnapshot
+from live.events import run_diagnostic_step
 from live.planning_snapshot import PlanningSnapshot
 from utils import utc_ms
 
@@ -264,7 +265,10 @@ def log_staged_execution_defer(bot, details: dict) -> None:
     bot._staged_execution_defer_last_log_ms = now_ms
     emitter = getattr(bot, "_emit_planning_unavailable_diagnostic", None)
     if callable(emitter):
-        emitter(details)
+        run_diagnostic_step(
+            "emit planning_unavailable diagnostic",
+            lambda: emitter(details),
+        )
     logging.log(
         logging.DEBUG if routine_candle_target else logging.INFO,
         "[state] %s",
@@ -382,7 +386,17 @@ def build_staged_planning_snapshot(
     required = bot._staged_planner_required_surfaces(include_market_snapshot=True)
     min_epochs = bot._staged_planner_surface_min_epochs(required)
     packet_getter = getattr(bot, "_planning_data_packets", None)
-    data_packets = packet_getter(required) if callable(packet_getter) else {}
+    data_packets = (
+        run_diagnostic_step(
+            "collect staged planning data packet metadata",
+            lambda: packet_getter(required),
+            default={},
+        )
+        if callable(packet_getter)
+        else {}
+    )
+    if not isinstance(data_packets, dict):
+        data_packets = {}
     snapshot = PlanningSnapshot.capture(
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
@@ -398,7 +412,10 @@ def build_staged_planning_snapshot(
     snapshot.raise_if_invalid(now_ms=_utc_ms(), context="rust order calculation")
     emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
     if callable(emitter):
-        emitter(snapshot, context="rust_order_calculation")
+        run_diagnostic_step(
+            "emit snapshot.built diagnostic",
+            lambda: emitter(snapshot, context="rust_order_calculation"),
+        )
     return snapshot
 
 
@@ -434,7 +451,17 @@ def build_protective_planning_snapshot(
             f" invalid={invalid}"
         )
     packet_getter = getattr(bot, "_planning_data_packets", None)
-    data_packets = packet_getter(required) if callable(packet_getter) else {}
+    data_packets = (
+        run_diagnostic_step(
+            "collect protective planning data packet metadata",
+            lambda: packet_getter(required),
+            default={},
+        )
+        if callable(packet_getter)
+        else {}
+    )
+    if not isinstance(data_packets, dict):
+        data_packets = {}
     snapshot = PlanningSnapshot.capture(
         ts_ms=_utc_ms(),
         exchange=str(getattr(bot, "exchange", "")),
@@ -452,7 +479,10 @@ def build_protective_planning_snapshot(
     )
     emitter = getattr(bot, "_emit_snapshot_built_diagnostic", None)
     if callable(emitter):
-        emitter(snapshot, context="protective_panic_order_calculation")
+        run_diagnostic_step(
+            "emit snapshot.built diagnostic",
+            lambda: emitter(snapshot, context="protective_panic_order_calculation"),
+        )
     return snapshot
 
 

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
-import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+import logging
+from typing import Any, Iterable, Mapping, TypeVar
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -60,3 +64,18 @@ class DiagnosticEvent:
 
 def emit_diagnostic_event(bot, event: DiagnosticEvent) -> Any:
     return event.emit(bot)
+
+
+def run_diagnostic_step(
+    label: str, func: Callable[[], T], *, default: T | None = None
+) -> T | None:
+    """Run best-effort diagnostic work without letting it affect live behavior."""
+    try:
+        return func()
+    except Exception as exc:
+        logging.debug(
+            "[diagnostic] %s failed: %s",
+            str(label),
+            exc,
+        )
+        return default

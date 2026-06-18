@@ -57,9 +57,10 @@ from live.data_packets import (
     build_data_packet_metadata,
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
-from live.events import DiagnosticEvent, emit_diagnostic_event
+from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from monitor_publisher import MonitorPublisher
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
+from live.planning_availability import PlanningAvailability
 from live.planning_snapshot import PlanningSnapshot
 from passivbot_exceptions import RestartBotException, FatalBotException
 import passivbot_hsl as pb_hsl
@@ -7629,6 +7630,17 @@ class Passivbot:
             stage("open_orders", result, None)
 
     def _finalize_live_data_packet_metadata(self, surface: str, *, signature) -> None:
+        def finalize() -> None:
+            self._finalize_live_data_packet_metadata_inner(surface, signature=signature)
+
+        run_diagnostic_step(
+            f"finalize {surface} data packet metadata",
+            finalize,
+        )
+
+    def _finalize_live_data_packet_metadata_inner(
+        self, surface: str, *, signature
+    ) -> None:
         if surface not in ACCOUNT_PACKET_KINDS:
             return
         self._ensure_live_data_packet_state()
@@ -7672,7 +7684,10 @@ class Passivbot:
             if surface in set(required)
         }
 
-    def _emit_snapshot_built_diagnostic(self, snapshot: PlanningSnapshot, *, context: str) -> None:
+    def _emit_snapshot_built_diagnostic(
+        self, snapshot: PlanningSnapshot, *, context: str
+    ) -> None:
+        availability = PlanningAvailability.from_snapshot(snapshot, now_ms=utc_ms())
         emit_diagnostic_event(
             self,
             DiagnosticEvent.build(
@@ -7695,6 +7710,7 @@ class Passivbot:
                         }
                         for packet in snapshot.data_packets
                     ],
+                    "planning_availability": availability.summary(),
                 },
                 ts_ms=snapshot.ts_ms,
             ),

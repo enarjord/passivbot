@@ -36,7 +36,7 @@ front-loaded:
   - structured event envelope
   - `DataPacket` metadata
   - immutable `LiveSnapshot` used through the whole cycle
-  - planning-unavailable diagnostics
+  - `planning_unavailable` diagnostics
 - Higher risk / later:
   - replacing scattered execution checks with enforced gatekeeper decisions
   - semi-lazy refresh scheduling that changes when data is refreshed
@@ -370,6 +370,10 @@ If stale or missing data causes Rust not to emit an ideal order it would have em
 data, the gatekeeper cannot recover that missing action. Therefore SnapshotBuilder must emit
 planning-completeness diagnostics, not only rely on post-Rust gatekeeping.
 
+Diagnostic construction and emission must be isolated from live control flow. A diagnostic failure
+may remove or degrade observability for that cycle, but it must not block account refresh,
+planning-snapshot capture, staged-defer logging, or protective panic planning.
+
 Target diagnostic examples:
 
 ```text
@@ -437,6 +441,16 @@ Open policy choice:
 
 Gatekeeper enforcement must not be treated as complete until this contract is implemented at least
 in Python for live-only data surfaces, and reviewed for the Rust-owned strategy surfaces.
+
+The first passive implementation may report only live-surface availability derived from the frozen
+snapshot. That report is diagnostic evidence only: it must not enforce, skip, or approve live
+trading decisions until a later gatekeeper phase explicitly consumes it with tests.
+
+Monitor `planning_unavailable` events are a throttled operator-facing diagnostic emitted when
+staged planning is deferred. They are useful evidence that a loop could not plan, but they are not
+the complete future internal `PlanningAvailability` ledger. The future ledger must be able to
+represent every symbol+pside+order-class decision, including unavailable decisions that are not
+emitted to the monitor because of throttling.
 
 ## Rust Orchestrator Contract
 
@@ -695,7 +709,7 @@ Initial event types:
 - `data_packet.updated`
 - `data_packet.degraded`
 - `snapshot.built`
-- `snapshot.planning_unavailable`
+- `planning_unavailable`
 - `rust_orchestrator.returned`
 - `action.planned`
 - `action.retained`
@@ -754,17 +768,21 @@ Exit criteria:
 - Use the frozen snapshot through Rust input building and subsequent reconciliation/execution
   diagnostics where practical.
 - Emit initial planning-unavailable diagnostics for missing/stale non-account surfaces.
+- Isolate diagnostic builders and emitters so diagnostics cannot change account refresh,
+  snapshot capture, staged defer, or protective panic control flow.
 
 Exit criteria:
 
 - Fake-live can assert packet revisions and snapshot ids are stable through a cycle.
 - Account-critical failures still block exchange writes.
 - The bot can explain which snapshot packet revisions were used for one normal fake-live cycle.
+- Diagnostic failures cannot block account refresh, staged-defer logging, normal snapshot capture,
+  or protective panic snapshot capture.
 
 ### Phase 2.5: Planning Availability Contract
 
 - Define `PlanningAvailability` records for symbol+pside+order-class evaluation.
-- Emit availability diagnostics before gatekeeper enforcement.
+- Emit passive availability diagnostics before gatekeeper enforcement.
 - Decide, per order class, whether stale values are excluded from Rust input, included only as
   diagnostic snapshot data, or allowed as an explicit fallback.
 - Add tests for silent-omission risks where missing data prevents order-class evaluation.
@@ -872,6 +890,8 @@ The smallest valuable slice:
 5. Add tests proving the current cycle uses frozen packet revisions.
 6. Emit minimal `planning_unavailable` events for account-critical or obviously stale non-account
    surfaces without changing execution.
+7. Add passive planning-availability reporting and diagnostic-isolation tests before any
+   gatekeeper enforcement work.
 
 This creates the diagnostic spine without changing order behavior. Gatekeeper enforcement should
 wait until the event, snapshot, and planning-availability boundaries are visible and testable.

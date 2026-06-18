@@ -30,6 +30,7 @@ from passivbot import Passivbot
 import passivbot as passivbot_module
 from config import get_template_config, prepare_config
 from freshness_ledger import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
+from live.planning_availability import PlanningAvailability
 from market_snapshot import MarketSnapshot
 from planning_snapshot import (
     PlanningMarketSnapshot,
@@ -344,6 +345,25 @@ def test_diagnostic_event_emit_failure_is_noncritical():
     )
 
     assert emit_diagnostic_event(bot, event) is None
+
+
+def test_authoritative_surface_record_survives_data_packet_finalize_failure():
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_refresh_epoch = 1
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch_fresh = set()
+    bot._authoritative_refresh_epoch_changed = set()
+
+    def failing_finalize(*_args, **_kwargs):
+        raise RuntimeError("diagnostic finalize failed")
+
+    bot._finalize_live_data_packet_metadata_inner = failing_finalize
+
+    assert bot._record_authoritative_surface("balance", ("balance", "fresh")) is True
+    assert bot._authoritative_surface_signatures["balance"] == ("balance", "fresh")
+    assert bot.freshness_ledger.surface_epoch("balance") == 1
 
 
 @pytest.mark.asyncio
@@ -4526,6 +4546,11 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
         event for event in events if event["kind"] == "snapshot.built"
     ]
     assert snapshot_events[-1]["payload"]["snapshot_id"] == planning_snapshot.snapshot_id
+    availability = snapshot_events[-1]["payload"]["planning_availability"]
+    assert availability["snapshot_id"] == planning_snapshot.snapshot_id
+    assert availability["record_count"] == 18
+    assert availability["status_counts"] == {"available": 18}
+    assert "records" not in availability
 
     positions[0]["size"] = 0.2
     assert await bot.refresh_authoritative_state() is True
@@ -4565,6 +4590,79 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
         bot._build_staged_planning_snapshot([symbol], snapshots)
 
 
+def test_planning_availability_reports_snapshot_invalid_without_enforcement():
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = PlanningSnapshot(
+        ts_ms=now_ms,
+        exchange="bybit",
+        user="tester",
+        epoch=7,
+        symbols=(symbol,),
+        required_surfaces=("positions",),
+        surfaces=(
+            PlanningSurfaceStamp(
+                name="positions",
+                epoch=1,
+                updated_ms=now_ms,
+                signature=("old",),
+                min_epoch=2,
+            ),
+        ),
+        market_snapshots=tuple(),
+        market_snapshot_max_age_ms=10_000,
+        completed_candle_signature=tuple(),
+        snapshot_id="snapshot-7",
+    )
+
+    availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
+
+    assert availability["summary"]["status_counts"] == {"unavailable": 18}
+    assert availability["records"][0]["status"] == "unavailable"
+    assert availability["records"][0]["reason_code"] == "surface_epoch_too_old"
+    assert availability["records"][0]["required_surfaces"] == ["positions"]
+
+
+def test_build_staged_planning_snapshot_survives_diagnostic_failures():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"user": "tester"}}
+    bot.exchange = "bybit"
+    bot.coin_overrides = {}
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    symbol = "BTC/USDT:USDT"
+    snapshots = {
+        symbol: MarketSnapshot(
+            symbol=symbol,
+            bid=100.0,
+            ask=101.0,
+            last=100.5,
+            fetched_ms=passivbot_module.utc_ms(),
+            source="test",
+        )
+    }
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot._record_authoritative_surface("completed_candles", tuple())
+    bot._record_market_snapshot_surface([symbol], snapshots)
+
+    def failing_packets(_required):
+        raise RuntimeError("packet metadata unavailable")
+
+    def failing_emitter(*_args, **_kwargs):
+        raise RuntimeError("monitor unavailable")
+
+    bot._planning_data_packets = failing_packets
+    bot._emit_snapshot_built_diagnostic = failing_emitter
+
+    planning_snapshot = bot._build_staged_planning_snapshot([symbol], snapshots)
+
+    assert planning_snapshot.symbols == (symbol,)
+    assert planning_snapshot.data_packets == tuple()
+
+
 def test_staged_execution_defer_emits_planning_unavailable_diagnostic():
     bot = Passivbot.__new__(Passivbot)
     events = []
@@ -4598,6 +4696,26 @@ def test_staged_execution_defer_emits_planning_unavailable_diagnostic():
         "defer_reason": "staged_planner_inputs_not_fresh",
     }
     assert isinstance(events[0]["ts"], int)
+
+
+def test_staged_execution_defer_survives_planning_unavailable_emit_failure():
+    bot = Passivbot.__new__(Passivbot)
+
+    def failing_emitter(_details):
+        raise RuntimeError("monitor unavailable")
+
+    bot._emit_planning_unavailable_diagnostic = failing_emitter
+    details = {
+        "missing": ["positions"],
+        "required": ["balance", "positions", "open_orders"],
+        "epoch": 3,
+        "min_epochs": {"positions": 3},
+        "invalid": {},
+        "context": "rust order calculation",
+        "defer_reason": "staged_planner_inputs_not_fresh",
+    }
+
+    bot._log_staged_execution_defer(details)
 
 
 @pytest.mark.asyncio
