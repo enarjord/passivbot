@@ -442,15 +442,40 @@ Open policy choice:
 Gatekeeper enforcement must not be treated as complete until this contract is implemented at least
 in Python for live-only data surfaces, and reviewed for the Rust-owned strategy surfaces.
 
-The first passive implementation may report only live-surface availability derived from the frozen
-snapshot. That report is diagnostic evidence only: it must not enforce, skip, or approve live
-trading decisions until a later gatekeeper phase explicitly consumes it with tests.
+The passive implementation reports live-surface availability derived from the frozen snapshot for
+each `(symbol, position_side, order_class)` record. It evaluates only diagnostic availability; it
+must not enforce, skip, or approve live trading decisions until a later gatekeeper phase explicitly
+consumes it with tests.
+
+The current Python-side passive matrix is:
+
+- `hsl_panic_close`: account surfaces plus the action symbol's market snapshot. It does not require
+  candles, EMAs, or fill history.
+- `take_profit_close`, `trailing_close`, `unstuck_close`, `wel_twel_reduce_close`: account surfaces
+  plus the action symbol's market snapshot. Fill history is required for these normal close classes
+  because the current live Rust input uses realized PnL history for close-side loss/unstuck
+  contracts.
+- `initial_entry`, `risk_increasing_entry`: account surfaces, the action symbol's market snapshot,
+  completed candles, and fill history. Completed candles are the current live proxy for strategy/EMA
+  readiness; fills feed current live entry cooldown and realized-PnL/unstuck inputs. A separate
+  strategy-surface stamp remains future work.
+- `entry_cancel`: balance, positions, and open orders.
+- `protective_close_cancel`: balance, positions, and open orders.
+
+Stale or missing symbol-scoped surfaces affect only records that require that symbol's surface.
+For example, missing completed candles for a flat candidate symbol do not make protective or normal
+close availability unavailable for a different positioned symbol. Account surfaces and fills remain
+global in the current snapshot contract.
 
 Monitor `planning_unavailable` events are a throttled operator-facing diagnostic emitted when
 staged planning is deferred. They are useful evidence that a loop could not plan, but they are not
 the complete future internal `PlanningAvailability` ledger. The future ledger must be able to
 represent every symbol+pside+order-class decision, including unavailable decisions that are not
 emitted to the monitor because of throttling.
+
+`snapshot.built` monitor payloads should stay compact and emit `PlanningAvailability.summary()`.
+Full record sets are available through the internal `PlanningAvailability.to_dict()` path and tests,
+not emitted in routine monitor snapshots.
 
 ## Rust Orchestrator Contract
 
