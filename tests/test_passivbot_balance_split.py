@@ -4590,29 +4590,77 @@ def test_build_staged_planning_snapshot_rejects_stale_market_snapshot():
         bot._build_staged_planning_snapshot([symbol], snapshots)
 
 
-def test_planning_availability_reports_snapshot_invalid_without_enforcement():
-    symbol = "BTC/USDT:USDT"
-    now_ms = passivbot_module.utc_ms()
-    snapshot = PlanningSnapshot(
+def _availability_test_snapshot(
+    *,
+    now_ms: int,
+    symbols: tuple[str, ...],
+    surfaces: dict[str, tuple[int, int, object]],
+    market_symbols: tuple[str, ...] | None = None,
+    completed_candle_signature: tuple = tuple(),
+) -> PlanningSnapshot:
+    return PlanningSnapshot(
         ts_ms=now_ms,
         exchange="bybit",
         user="tester",
         epoch=7,
-        symbols=(symbol,),
-        required_surfaces=("positions",),
-        surfaces=(
+        symbols=symbols,
+        required_surfaces=tuple(sorted(surfaces)),
+        surfaces=tuple(
             PlanningSurfaceStamp(
-                name="positions",
-                epoch=1,
+                name=name,
+                epoch=epoch,
                 updated_ms=now_ms,
-                signature=("old",),
-                min_epoch=2,
-            ),
+                signature=signature,
+                min_epoch=min_epoch,
+            )
+            for name, (epoch, min_epoch, signature) in sorted(surfaces.items())
         ),
-        market_snapshots=tuple(),
+        market_snapshots=tuple(
+            PlanningMarketSnapshot(
+                symbol=symbol,
+                bid=99.5,
+                ask=100.5,
+                last=100.0,
+                fetched_ms=now_ms,
+                source="test",
+            )
+            for symbol in (market_symbols if market_symbols is not None else symbols)
+        ),
         market_snapshot_max_age_ms=10_000,
-        completed_candle_signature=tuple(),
+        completed_candle_signature=completed_candle_signature,
         snapshot_id="snapshot-7",
+    )
+
+
+def _availability_record(
+    availability: dict, *, symbol: str, position_side: str, order_class: str
+) -> dict:
+    matches = [
+        record
+        for record in availability["records"]
+        if record["symbol"] == symbol
+        and record["position_side"] == position_side
+        and record["order_class"] == order_class
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
+def test_planning_availability_reports_snapshot_invalid_without_enforcement():
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = _availability_test_snapshot(
+        now_ms=now_ms,
+        symbols=(symbol,),
+        surfaces={
+            "balance": (2, 2, ("balance", "fresh")),
+            "positions": (1, 2, ("positions", "old")),
+            "open_orders": (2, 2, ("open_orders", "fresh")),
+            "market_snapshot": (2, 2, ("market_snapshot", "fresh")),
+            "completed_candles": (2, 2, ((symbol, 120_000),)),
+            "fills": (2, 2, ("fills", "fresh")),
+        },
+        completed_candle_signature=((symbol, 120_000),),
     )
 
     availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
@@ -4620,7 +4668,166 @@ def test_planning_availability_reports_snapshot_invalid_without_enforcement():
     assert availability["summary"]["status_counts"] == {"unavailable": 18}
     assert availability["records"][0]["status"] == "unavailable"
     assert availability["records"][0]["reason_code"] == "surface_epoch_too_old"
-    assert availability["records"][0]["required_surfaces"] == ["positions"]
+    assert "positions" in availability["records"][0]["unavailable_surfaces"]
+    entry_cancel = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="entry_cancel",
+    )
+    assert entry_cancel["status"] == "unavailable"
+    assert entry_cancel["unavailable_surfaces"] == ["positions"]
+
+
+def test_planning_availability_panic_close_does_not_require_candles_or_emas():
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = _availability_test_snapshot(
+        now_ms=now_ms,
+        symbols=(symbol,),
+        surfaces={
+            "balance": (7, 7, ("balance", "fresh")),
+            "positions": (7, 7, ((symbol, "long", 0.1, 100.0),)),
+            "open_orders": (7, 7, ("open_orders", "fresh")),
+            "market_snapshot": (7, 7, ("market_snapshot", "fresh")),
+        },
+    )
+
+    availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
+    panic = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="hsl_panic_close",
+    )
+    entry = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="initial_entry",
+    )
+
+    assert panic["status"] == "available"
+    assert "completed_candles" not in panic["required_surfaces"]
+    assert entry["status"] == "unavailable"
+    assert "completed_candles" in entry["required_surfaces"]
+
+
+def test_planning_availability_initial_entries_require_completed_candles():
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = _availability_test_snapshot(
+        now_ms=now_ms,
+        symbols=(symbol,),
+        surfaces={
+            "balance": (7, 7, ("balance", "fresh")),
+            "positions": (7, 7, tuple()),
+            "open_orders": (7, 7, tuple()),
+            "market_snapshot": (7, 7, ("market_snapshot", "fresh")),
+            "completed_candles": (7, 7, tuple()),
+            "fills": (7, 7, ("fills", "fresh")),
+        },
+        completed_candle_signature=tuple(),
+    )
+
+    availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
+    record = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="initial_entry",
+    )
+
+    assert record["status"] == "unavailable"
+    assert record["reason_code"] == "missing_completed_candles"
+    assert record["unavailable_surfaces"] == ["completed_candles"]
+
+
+def test_planning_availability_stale_flat_symbol_candles_do_not_poison_position_close():
+    positioned = "BTC/USDT:USDT"
+    flat = "XMR/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = _availability_test_snapshot(
+        now_ms=now_ms,
+        symbols=(flat, positioned),
+        surfaces={
+            "balance": (7, 7, ("balance", "fresh")),
+            "positions": (7, 7, ((positioned, "long", 0.1, 100.0),)),
+            "open_orders": (7, 7, tuple()),
+            "market_snapshot": (7, 7, ("market_snapshot", "fresh")),
+            "completed_candles": (7, 7, ((positioned, 120_000),)),
+            "fills": (7, 7, ("fills", "fresh")),
+        },
+        completed_candle_signature=((positioned, 120_000),),
+    )
+
+    availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
+    positioned_close = _availability_record(
+        availability,
+        symbol=positioned,
+        position_side="long",
+        order_class="take_profit_close",
+    )
+    flat_entry = _availability_record(
+        availability,
+        symbol=flat,
+        position_side="long",
+        order_class="initial_entry",
+    )
+
+    assert positioned_close["status"] == "available"
+    assert "completed_candles" not in positioned_close["required_surfaces"]
+    assert flat_entry["status"] == "unavailable"
+    assert flat_entry["reason_code"] == "missing_completed_candles"
+
+
+def test_planning_availability_missing_fills_only_affects_fill_required_classes():
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    snapshot = _availability_test_snapshot(
+        now_ms=now_ms,
+        symbols=(symbol,),
+        surfaces={
+            "balance": (7, 7, ("balance", "fresh")),
+            "positions": (7, 7, ((symbol, "long", 0.1, 100.0),)),
+            "open_orders": (7, 7, tuple()),
+            "market_snapshot": (7, 7, ("market_snapshot", "fresh")),
+            "completed_candles": (7, 7, ((symbol, 120_000),)),
+        },
+        completed_candle_signature=((symbol, 120_000),),
+    )
+
+    availability = PlanningAvailability.from_snapshot(snapshot, now_ms=now_ms).to_dict()
+
+    assert _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="hsl_panic_close",
+    )["status"] == "available"
+    entry = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="initial_entry",
+    )
+    assert entry["status"] == "unavailable"
+    assert entry["unavailable_surfaces"] == ["fills"]
+    assert _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="entry_cancel",
+    )["status"] == "available"
+    fill_required = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="unstuck_close",
+    )
+    assert fill_required["status"] == "unavailable"
+    assert fill_required["reason_code"] == "missing_surface"
+    assert fill_required["unavailable_surfaces"] == ["fills"]
 
 
 def test_build_staged_planning_snapshot_survives_diagnostic_failures():
