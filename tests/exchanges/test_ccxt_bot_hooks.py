@@ -284,6 +284,73 @@ class TestCreateCcxtSessionsWebSocketOptional:
 
         assert bot.ccp is None
 
+    def test_okx_defaults_to_swap_only_market_loading(self):
+        """OKX should not load spot/future/option markets for perp-only live trading."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {"exchange": "okx", "apiKey": "test"}
+        bot.exchange = "okx"
+        bot.exchange_ccxt_id = "okx"
+        bot.ws_enabled = True
+        bot.endpoint_override = None
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+        import ccxt.pro as ccxt_pro
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {}
+        ws_ctor = MagicMock()
+        ws_ctor.return_value = MagicMock()
+        ws_ctor.return_value.options = {}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "okx", rest_ctor, raising=False)
+            m.setattr(ccxt_pro, "okx", ws_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        assert bot.cca.options["defaultType"] == "swap"
+        assert bot.cca.options["fetchMarkets"] == {"types": ["swap"]}
+        assert bot.ccp.options["defaultType"] == "swap"
+        assert bot.ccp.options["fetchMarkets"] == {"types": ["swap"]}
+
+    def test_okx_user_fetch_markets_option_can_override_default(self):
+        """Explicit CCXT user options should remain able to replace Passivbot's OKX default."""
+        from exchanges.ccxt_bot import CCXTBot
+
+        user_fetch_markets = {"types": ["swap", "future"]}
+        bot = CCXTBot.__new__(CCXTBot)
+        bot.user_info = {
+            "exchange": "okx",
+            "apiKey": "test",
+            "options": {"fetchMarkets": user_fetch_markets},
+        }
+        bot.exchange = "okx"
+        bot.exchange_ccxt_id = "okx"
+        bot.ws_enabled = False
+        bot.endpoint_override = None
+        bot._build_ccxt_config = MagicMock(return_value={"apiKey": "test"})
+        bot._build_ccxt_options = MagicMock(return_value={})
+        bot._apply_endpoint_override = MagicMock()
+
+        import ccxt.async_support as ccxt_async
+
+        rest_ctor = MagicMock()
+        rest_ctor.return_value = MagicMock()
+        rest_ctor.return_value.options = {}
+
+        with pytest.MonkeyPatch().context() as m:
+            m.setattr(ccxt_async, "okx", rest_ctor, raising=False)
+            bot.create_ccxt_sessions()
+
+        assert bot.cca.options["defaultType"] == "swap"
+        assert bot.cca.options["fetchMarkets"] == user_fetch_markets
+        assert bot.ccp is None
+
 
 class TestBybitCreateCcxtSessions:
     """Test Bybit broker attribution during CCXT session creation."""
