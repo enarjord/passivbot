@@ -342,6 +342,34 @@ def test_migrate_v7_trailing_grid_reports_inserted_v8_defaults():
     assert any("inserted v8 default values" in item for item in report["warnings"])
 
 
+def test_migrate_v7_trailing_grid_zero_enforcer_thresholds_disable_enforcers():
+    source = _minimal_v7_trailing_grid_config()
+    for pside in ("long", "short"):
+        source["bot"][pside].pop("risk_wel_enforcer_enabled", None)
+        source["bot"][pside].pop("risk_twel_enforcer_enabled", None)
+        source["bot"][pside]["risk_wel_enforcer_threshold"] = 0
+        source["bot"][pside]["risk_twel_enforcer_threshold"] = 0
+
+    migrated, report = migrate_v7_trailing_grid_config(source)
+
+    for pside in ("long", "short"):
+        risk = migrated["bot"][pside]["risk"]
+        assert risk["position_exposure_enforcer_threshold"] == 0
+        assert risk["total_exposure_enforcer_threshold"] == 0
+        assert risk["position_exposure_enforcer_enabled"] is False
+        assert risk["total_exposure_enforcer_enabled"] is False
+        assert (
+            f"bot.{pside}.risk.position_exposure_enforcer_enabled"
+            not in report["inserted_v8_defaults"]
+        )
+        assert (
+            f"bot.{pside}.risk.total_exposure_enforcer_enabled"
+            not in report["inserted_v8_defaults"]
+        )
+    assert any("position_exposure_enforcer_enabled set false" in item for item in report["warnings"])
+    assert any("total_exposure_enforcer_enabled set false" in item for item in report["warnings"])
+
+
 def test_migrate_config_v7_cli_clean_migration_writes_output_and_returns_zero(tmp_path):
     input_path = tmp_path / "legacy.json"
     output_path = tmp_path / "migrated.json"
