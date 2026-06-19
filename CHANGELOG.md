@@ -72,8 +72,9 @@ All notable user-facing changes will be documented in this file.
   across auto-restart cooldowns and restart history replay, matching v8 backtest behavior.
 - Tightened Bitget fill normalization so ambiguous side/position-side payloads fail
   loudly instead of defaulting fills to the long side.
-- Backtests now reject heterogeneous per-coin maker/taker fees unless the matching
-  global `backtest.*_fee_override` is set, avoiding silent first-coin fee selection.
+- Backtests now use exchange-derived per-coin maker/taker fees by default, while
+  `backtest.maker_fee_override` and `backtest.taker_fee_override` remain explicit
+  global overrides and are exposed as visible backtest/optimize CLI flags.
 - Suite backtests and optimizer suites now reject asymmetric per-side approved/ignored
   coin lists instead of silently converting them to a long/short union.
 - Live execution now skips both order cancellations and creations while the raw wallet

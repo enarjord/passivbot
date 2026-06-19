@@ -522,38 +522,24 @@ def _market_fee_for_backtest(mss: dict, coin: str, fee_kind: str) -> float:
     return fee
 
 
-def _resolve_single_backtest_fee(
+def _resolve_backtest_fees(
     *,
     coins: Sequence[str],
     mss: dict,
     fee_kind: str,
     override_value: Any,
-) -> float:
+) -> tuple[float, dict[str, float]]:
     if override_value is not None:
         fee = float(override_value)
         if not math.isfinite(fee):
             raise ValueError(
                 f"backtest.{fee_kind}_fee_override must be finite, got {override_value}"
             )
-        return fee
-    fees = [(coin, _market_fee_for_backtest(mss, coin, fee_kind)) for coin in coins]
+        return fee, {coin: fee for coin in coins}
+    fees = {coin: _market_fee_for_backtest(mss, coin, fee_kind) for coin in coins}
     if not fees:
         raise ValueError(f"cannot resolve {fee_kind} fee without backtest coins")
-    reference = fees[0][1]
-    mismatches = [
-        (coin, fee)
-        for coin, fee in fees[1:]
-        if not math.isclose(fee, reference, rel_tol=0.0, abs_tol=1e-15)
-    ]
-    if mismatches:
-        preview = ", ".join(f"{coin}={fee:.12g}" for coin, fee in fees[:8])
-        suffix = f", +{len(fees) - 8} more" if len(fees) > 8 else ""
-        raise ValueError(
-            f"backtest.{fee_kind}_fee_override is required when selected coins have "
-            f"heterogeneous {fee_kind} fees; Rust backtests accept one global "
-            f"{fee_kind} fee. Fees: {preview}{suffix}"
-        )
-    return reference
+    return max(fees.values()), fees
 
 
 def _as_c_contiguous_native_array(arr, dtype):
@@ -2046,13 +2032,13 @@ def prep_backtest_args(
     taker_fee_override = get_optional_config_value(
         config, "backtest.taker_fee_override", None
     )
-    maker_fee = _resolve_single_backtest_fee(
+    maker_fee, maker_fees_by_coin = _resolve_backtest_fees(
         coins=coins,
         mss=mss,
         fee_kind="maker",
         override_value=maker_fee_override,
     )
-    taker_fee = _resolve_single_backtest_fee(
+    taker_fee, taker_fees_by_coin = _resolve_backtest_fees(
         coins=coins,
         mss=mss,
         fee_kind="taker",
@@ -2086,8 +2072,8 @@ def prep_backtest_args(
                     market_settings=effective_mss[coin],
                     warned=missing_c_mult_warnings,
                 ),
-                "maker_fee": float(maker_fee),
-                "taker_fee": float(taker_fee),
+                "maker_fee": float(maker_fees_by_coin[coin]),
+                "taker_fee": float(taker_fees_by_coin[coin]),
             }
             for coin in coins
         ]
