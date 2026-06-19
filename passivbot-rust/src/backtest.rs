@@ -1904,7 +1904,9 @@ impl<'a> Backtest<'a> {
             debug_assert!(
                 trade_idx >= expected_trade_idx,
                 "trade start index mismatch for coin {}: expected at least {} but got {}",
-                i, expected_trade_idx, trade_idx
+                i,
+                expected_trade_idx,
+                trade_idx
             );
             trade_activation_logged[i] = false;
         }
@@ -6015,7 +6017,7 @@ fn calc_ema_alphas(
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
-                2.0 / (span + 1.0)
+                2.0 / (span.max(1.0) + 1.0)
             } else {
                 0.0
             }
@@ -6024,7 +6026,7 @@ fn calc_ema_alphas(
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
-                2.0 / (span + 1.0)
+                2.0 / (span.max(1.0) + 1.0)
             } else {
                 0.0
             }
@@ -6036,7 +6038,8 @@ fn calc_ema_alphas(
 mod tests {
     use super::*;
     use crate::strategies::{
-        TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
+        TrailingGridV7EntryParams, TrailingGridV7Params, TrailingMartingaleCloseParams,
+        TrailingMartingaleEntryParams, TrailingMartingaleParams,
     };
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
@@ -10094,6 +10097,31 @@ mod tests {
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );
+    }
+
+    #[test]
+    fn test_hourly_volatility_span_below_one_hour_floors_alpha_to_one() {
+        let strategy_pair = StrategyParamsPair {
+            long: StrategyParams::TrailingGridV7(TrailingGridV7Params {
+                entry: TrailingGridV7EntryParams {
+                    volatility_ema_span_hours: 0.75,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            short: StrategyParams::TrailingGridV7(TrailingGridV7Params {
+                entry: TrailingGridV7EntryParams {
+                    volatility_ema_span_hours: 0.25,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        };
+
+        let alphas = calc_ema_alphas(&BotParamsPair::default(), &strategy_pair, 1);
+
+        assert_eq!(alphas.volatility_ema_1h_alpha_long, 1.0);
+        assert_eq!(alphas.volatility_ema_1h_alpha_short, 1.0);
     }
 }
 
