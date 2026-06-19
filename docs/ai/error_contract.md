@@ -48,6 +48,12 @@ positions or initial-entry candidates. Candles and EMAs are required for order c
 depend on strategy indicators, but stale candles for flat symbols must not block protective
 management of held symbols.
 
+For candle-dependent live order classes, gate on canonical strategy-input readiness rather than
+raw REST candle availability. Exchanges may publish completed candles late or omit no-trade candles.
+Explicitly synthesized zero-volume candles may satisfy candle readiness when the candle handler can
+prove series continuity, previous close is known, overlap repair/backfill is scheduled, and the gap
+is within policy. Raw REST delay alone must not become a global order halt.
+
 Approved/ignored coin lists are live eligibility inputs. Stale or unreadable eligibility state
 must block affected initial entries, but it must not block protective management of existing
 positions. If a held coin is removed from approved coins or added to ignored coins, handle it as

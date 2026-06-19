@@ -7,9 +7,15 @@ from live.planning_snapshot import PlanningSnapshot
 
 
 ACCOUNT_REQUIRED_SURFACES: tuple[str, ...] = ("balance", "positions", "open_orders")
-STRATEGY_REQUIRED_SURFACES: tuple[str, ...] = ("completed_candles",)
-FILL_REQUIRED_SURFACES: tuple[str, ...] = ("fills",)
-MARKET_REQUIRED_SURFACES: tuple[str, ...] = ("market_snapshot",)
+CANONICAL_CANDLE_SURFACES: tuple[str, ...] = ("canonical_candles",)
+FILL_HISTORY_SURFACES: tuple[str, ...] = ("fill_history",)
+MARKET_PRICE_SURFACES: tuple[str, ...] = ("market_prices",)
+
+REQUIREMENT_BACKING_SURFACES: dict[str, str] = {
+    "canonical_candles": "completed_candles",
+    "fill_history": "fills",
+    "market_prices": "market_snapshot",
+}
 
 ORDER_CLASSES: tuple[str, ...] = (
     "initial_entry",
@@ -28,37 +34,37 @@ POSITION_SIDES: tuple[str, ...] = ("long", "short")
 ORDER_CLASS_REQUIRED_SURFACES: dict[str, tuple[str, ...]] = {
     "initial_entry": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *STRATEGY_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
+        *CANONICAL_CANDLE_SURFACES,
+        *FILL_HISTORY_SURFACES,
     ),
     "risk_increasing_entry": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *STRATEGY_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
+        *CANONICAL_CANDLE_SURFACES,
+        *FILL_HISTORY_SURFACES,
     ),
     "take_profit_close": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
     ),
     "trailing_close": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
+        *CANONICAL_CANDLE_SURFACES,
+        *FILL_HISTORY_SURFACES,
     ),
     "unstuck_close": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
+        *FILL_HISTORY_SURFACES,
     ),
     "wel_twel_reduce_close": (
         *ACCOUNT_REQUIRED_SURFACES,
-        *MARKET_REQUIRED_SURFACES,
-        *FILL_REQUIRED_SURFACES,
+        *MARKET_PRICE_SURFACES,
+        *FILL_HISTORY_SURFACES,
     ),
-    "hsl_panic_close": (*ACCOUNT_REQUIRED_SURFACES, *MARKET_REQUIRED_SURFACES),
+    "hsl_panic_close": (*ACCOUNT_REQUIRED_SURFACES, *MARKET_PRICE_SURFACES),
     "entry_cancel": ACCOUNT_REQUIRED_SURFACES,
     "protective_close_cancel": ACCOUNT_REQUIRED_SURFACES,
 }
@@ -104,13 +110,14 @@ def _completed_candle_symbols(signature: Any) -> set[str]:
 
 
 def _surface_stamp_failure(
-    stamps: dict[str, Any], surface: str
+    stamps: dict[str, Any], requirement: str
 ) -> tuple[str, str] | None:
+    surface = REQUIREMENT_BACKING_SURFACES.get(requirement, requirement)
     stamp = stamps.get(surface)
     if stamp is None:
-        return surface, "missing_surface"
+        return requirement, "missing_surface"
     if int(stamp.epoch) < int(stamp.min_epoch):
-        return surface, "surface_epoch_too_old"
+        return requirement, "surface_epoch_too_old"
     return None
 
 
@@ -123,19 +130,19 @@ def _market_snapshot_failure(
     rows = {row.symbol: row for row in snapshot.market_snapshots}
     row = rows.get(symbol)
     if row is None:
-        return "market_snapshot", "missing_market_snapshot"
+        return "market_prices", "missing_market_prices"
     age_ms = int(now_ms) - int(row.fetched_ms)
     if age_ms > int(snapshot.market_snapshot_max_age_ms):
-        return "market_snapshot", "market_snapshot_too_old"
+        return "market_prices", "market_prices_too_old"
     return None
 
 
-def _completed_candle_failure(
+def _canonical_candle_failure(
     snapshot: PlanningSnapshot, *, symbol: str
 ) -> tuple[str, str] | None:
     candle_symbols = _completed_candle_symbols(snapshot.completed_candle_signature)
     if symbol not in candle_symbols:
-        return "completed_candles", "missing_completed_candles"
+        return "canonical_candles", "missing_canonical_candles"
     return None
 
 
@@ -153,10 +160,10 @@ def _availability_failures(
         if stamp_failure is not None:
             failures.append(stamp_failure)
             continue
-        if surface == "market_snapshot":
+        if surface == "market_prices":
             failure = _market_snapshot_failure(snapshot, symbol=symbol, now_ms=now_ms)
-        elif surface == "completed_candles":
-            failure = _completed_candle_failure(snapshot, symbol=symbol)
+        elif surface == "canonical_candles":
+            failure = _canonical_candle_failure(snapshot, symbol=symbol)
         else:
             failure = None
         if failure is not None:
