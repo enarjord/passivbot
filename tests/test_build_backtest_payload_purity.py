@@ -376,6 +376,44 @@ def test_build_backtest_payload_honors_explicit_warmup_provided_override():
     assert payload.bundle.meta["warmup_minutes_provided"] == 99
 
 
+def test_build_backtest_payload_clamps_trade_start_to_requested_start():
+    requested_start_ts = 1609459200000
+    effective_start_ts = requested_start_ts - 100 * 60_000
+    n_minutes = 180
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(requested_start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    mss["BTC"]["warmup_minutes"] = 30
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, effective_start_ts)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["warmup_minutes"] == [30]
+    assert payload.backtest_params["trade_start_indices"] == [100]
+
+
+def test_build_backtest_payload_uses_global_warmup_floor(monkeypatch):
+    start_ts = 1609459200000
+    n_minutes = 180
+    config = _base_config(candle_interval_minutes=1)
+    mss = _base_mss(start_ts)
+    mss["BTC"]["first_valid_index"] = 0
+    mss["BTC"]["last_valid_index"] = n_minutes - 1
+    mss["BTC"]["warmup_minutes"] = 30
+    hlcvs, btc, timestamps = _synthetic_1m_hlcvs(n_minutes, start_ts)
+    monkeypatch.setattr(
+        "backtest.compute_per_coin_warmup_minutes",
+        lambda _config: {"__default__": 30, "BTC": 30},
+    )
+    monkeypatch.setattr("backtest.compute_backtest_warmup_minutes", lambda _config: 100)
+
+    payload = build_backtest_payload(hlcvs, mss, config, "binance", btc, timestamps)
+
+    assert payload.backtest_params["warmup_minutes"] == [100]
+    assert payload.backtest_params["trade_start_indices"] == [100]
+
+
 def test_build_backtest_payload_propagates_metrics_only_flag():
     start_ts = 1609459200000
     n_minutes = 60

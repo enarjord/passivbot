@@ -45,6 +45,10 @@ All notable user-facing changes will be documented in this file.
   existing optimize bounds around the current config values while preserving positive steps.
   `--polish-bounds-mode` can now choose the default clamped behavior, allow tunable
   polished bounds to escape the original bounds, or expand fixed bounds too.
+- Fixed Pareto-member replay drift when a reusable HLCV cache contains more warmup than
+  the selected config's own indicators require. Backtests now preserve the optimizer's
+  bounds-aware warmup window and requested-start trade floor, so replaying an optimizer
+  Pareto JSON matches its recorded metrics when the same dataset is used.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless

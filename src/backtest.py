@@ -784,20 +784,49 @@ def build_backtest_payload(
             )
     backtest_params["first_timestamp_ms"] = first_ts_ms
 
+    total_steps = hlcvs.shape[0]
+    source_steps_1m = total_steps * (candle_interval if candle_interval > 1 else 1)
+    bundle_meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
+    candidate_start = bundle_meta.get(
+        "effective_requested_start_ts",
+        bundle_meta.get("requested_start_ts", require_config_value(config, "backtest.start_date")),
+    )
+    try:
+        if isinstance(candidate_start, str):
+            requested_start_ts = int(date_to_ts(candidate_start))
+        else:
+            requested_start_ts = int(candidate_start)
+    except Exception:
+        requested_start_ts = int(
+            date_to_ts(require_config_value(config, "backtest.start_date"))
+        )
+    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
+    requested_start_idx = 0
+    if timestamps is not None and len(timestamps) > 0:
+        try:
+            requested_start_idx = int(
+                np.searchsorted(np.asarray(timestamps), requested_start_ts, side="left")
+            )
+        except Exception:
+            interval_ms = max(1, candle_interval) * 60_000
+            requested_start_idx = int(
+                math.ceil((requested_start_ts - first_ts_ms) / interval_ms)
+            )
+        requested_start_idx = max(0, min(total_steps, requested_start_idx))
+
     warmup_map = compute_per_coin_warmup_minutes(config)
     default_warm = int(warmup_map.get("__default__", 0))
+    global_warmup_minutes = compute_backtest_warmup_minutes(config)
     first_valid_indices = []
     last_valid_indices = []
     warmup_minutes = []
     trade_start_indices = []
-    total_steps = hlcvs.shape[0]
-    source_steps_1m = total_steps * (candle_interval if candle_interval > 1 else 1)
     for idx, coin in enumerate(coins_order):
-        meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        coin_meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
         # Metadata indices are based on 1m candles; adjust for aggregated interval
-        first_idx_1m = int(meta.get("first_valid_index", 0)) - offset_bars
+        first_idx_1m = int(coin_meta.get("first_valid_index", 0)) - offset_bars
         last_idx_1m = (
-            int(meta.get("last_valid_index", source_steps_1m - 1)) - offset_bars
+            int(coin_meta.get("last_valid_index", source_steps_1m - 1)) - offset_bars
         )
         if first_idx_1m < 0:
             first_idx_1m = 0
@@ -820,49 +849,37 @@ def build_backtest_payload(
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
         # warmup_minutes stay in minutes (Rust adjusts based on interval)
-        warm = int(meta.get("warmup_minutes", warmup_map.get(coin, default_warm)))
+        warm = max(
+            int(coin_meta.get("warmup_minutes", warmup_map.get(coin, default_warm))),
+            int(global_warmup_minutes),
+        )
         warmup_minutes.append(warm)
         # trade_start_idx is in candle units, adjust warm from minutes to candle periods
         warm_bars = (
             int(math.ceil(warm / candle_interval)) if candle_interval > 1 else int(warm)
         )
         if first_idx > last_idx:
-            trade_idx = first_idx
+            trade_idx = max(first_idx, requested_start_idx)
+        elif requested_start_idx > last_idx:
+            trade_idx = requested_start_idx
         else:
-            trade_idx = min(last_idx, first_idx + warm_bars)
+            trade_idx = min(last_idx, max(first_idx + warm_bars, requested_start_idx))
         trade_start_indices.append(trade_idx)
     backtest_params["first_valid_indices"] = first_valid_indices
     backtest_params["last_valid_indices"] = last_valid_indices
     backtest_params["warmup_minutes"] = warmup_minutes
     backtest_params["trade_start_indices"] = trade_start_indices
-    global_warmup_minutes = compute_backtest_warmup_minutes(config)
     if candle_interval > 1:
         global_warmup_bars = int(math.ceil(global_warmup_minutes / candle_interval))
     else:
         global_warmup_bars = int(global_warmup_minutes)
     backtest_params["global_warmup_bars"] = global_warmup_bars
 
-    meta = mss.get("__meta__", {}) if isinstance(mss, dict) else {}
-    candidate_start = meta.get(
-        "effective_requested_start_ts",
-        meta.get("requested_start_ts", require_config_value(config, "backtest.start_date")),
-    )
-    try:
-        if isinstance(candidate_start, str):
-            requested_start_ts = int(date_to_ts(candidate_start))
-        else:
-            requested_start_ts = int(candidate_start)
-    except Exception:
-        requested_start_ts = int(
-            date_to_ts(require_config_value(config, "backtest.start_date"))
-        )
-    backtest_params["requested_start_timestamp_ms"] = requested_start_ts
-
     warmup_requested = int(
-        meta.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
+        bundle_meta.get("warmup_minutes_requested", compute_backtest_warmup_minutes(config))
     )
-    if "warmup_minutes_provided" in meta:
-        warmup_provided = int(meta["warmup_minutes_provided"])
+    if "warmup_minutes_provided" in bundle_meta:
+        warmup_provided = int(bundle_meta["warmup_minutes_provided"])
     elif timestamps is not None and len(timestamps) > 0:
         warmup_provided = max(0, (requested_start_ts - int(timestamps[0])) // 60_000)
     else:

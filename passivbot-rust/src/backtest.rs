@@ -1885,16 +1885,17 @@ impl<'a> Backtest<'a> {
             } else {
                 warm
             };
-            let mut trade_idx = first.saturating_add(warm_bars);
-            if trade_idx > last {
-                trade_idx = last;
-            }
+            let provided_trade_idx = trade_start_idx[i];
+            let trade_idx = first
+                .saturating_add(warm_bars)
+                .min(last)
+                .max(provided_trade_idx);
             trade_start_idx[i] = trade_idx;
 
             let expected_trade_idx = first.saturating_add(warm_bars).min(last);
-            debug_assert_eq!(
-                trade_idx, expected_trade_idx,
-                "trade start index mismatch for coin {}: expected {} but got {}",
+            debug_assert!(
+                trade_idx >= expected_trade_idx,
+                "trade start index mismatch for coin {}: expected at least {} but got {}",
                 i, expected_trade_idx, trade_idx
             );
             trade_activation_logged[i] = false;
