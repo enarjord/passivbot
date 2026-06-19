@@ -1,6 +1,8 @@
 import copy
+import pickle
 
 import numpy as np
+from pymoo.core.problem import ElementwiseProblem
 
 from optimization.bounds import Bound
 from optimization.backends import pymoo_backend
@@ -79,6 +81,15 @@ class FakeEvaluator:
         )
 
 
+class TinyManyObjectiveProblem(ElementwiseProblem):
+    def __init__(self, *, n_var: int = 2, n_obj: int = 4):
+        super().__init__(n_var=n_var, n_obj=n_obj, n_ieq_constr=0, xl=0.0, xu=1.0)
+
+    def _evaluate(self, x, out, *args, **kwargs):
+        value = float(np.mean(x))
+        out["F"] = np.full(self.n_obj, value, dtype=np.float64)
+
+
 def _build_config(vector, overrides_fn, overrides_list, template):
     config = copy.deepcopy(template)
     config["bot"]["long"]["a"] = float(vector[0])
@@ -119,6 +130,73 @@ def _many_starting_individuals(_cfgs, _bounds, _sig_digits):
 
 def _ignore_sigint():
     return None
+
+
+def _nsga3_config(*, population_size: int = 16, n_obj: int = 4):
+    return {
+        "optimize": {
+            "backend": "pymoo",
+            "population_size": population_size,
+            "scoring": [f"metric_{idx}" for idx in range(n_obj)],
+            "pymoo": {
+                "algorithm": "nsga3",
+                "shared": {
+                    "crossover_eta": 20.0,
+                    "crossover_prob_var": 0.5,
+                    "mutation_eta": 20.0,
+                    "mutation_prob_var": "auto",
+                    "eliminate_duplicates": True,
+                },
+                "algorithms": {
+                    "nsga3": {
+                        "ref_dirs": {
+                            "method": "das_dennis",
+                            "n_partitions": 1,
+                        }
+                    }
+                },
+            },
+        }
+    }
+
+
+def _build_nsga3_algorithm(*, population_size: int = 16, n_obj: int = 4):
+    bounds = [Bound(0.0, 1.0, 0.1) for _ in range(2)]
+    config = _nsga3_config(population_size=population_size, n_obj=n_obj)
+    population_plan = pymoo_backend._resolve_pymoo_population_plan(config, n_obj=n_obj)
+    return pymoo_backend._build_algorithm(
+        config=config,
+        sampling=np.zeros((population_plan["actual_population_size"], len(bounds)), dtype=np.float64),
+        bounds=bounds,
+        sig_digits=4,
+        population_plan=population_plan,
+    )
+
+
+def test_build_nsga3_algorithm_is_pickleable():
+    algorithm = _build_nsga3_algorithm()
+
+    pickle.dumps(algorithm, protocol=pickle.HIGHEST_PROTOCOL)
+
+
+def test_pymoo_checkpoint_callback_saves_nsga3_checkpoint(tmp_path):
+    algorithm = _build_nsga3_algorithm(population_size=8)
+    checkpoint_path = tmp_path / "checkpoint.pkl"
+
+    pymoo_backend.pymoo_minimize(
+        TinyManyObjectiveProblem(),
+        algorithm,
+        pymoo_backend.get_termination("n_gen", 1),
+        seed=1,
+        verbose=False,
+        copy_algorithm=False,
+        callback=pymoo_backend.PymooCheckpointCallback(str(checkpoint_path)),
+    )
+
+    assert checkpoint_path.stat().st_size > 0
+    with open(checkpoint_path, "rb") as f:
+        loaded = pickle.load(f)
+    assert loaded.__class__.__name__ == "NSGA3"
 
 
 def test_build_algorithm_uses_nsga3_with_auto_reference_directions():
@@ -390,7 +468,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
     monkeypatch.setattr(pymoo_backend.multiprocessing, "Pool", FakePool)
     captured = {}
 
-    def _fake_minimize(problem, algorithm, termination, seed, verbose):
+    def _fake_minimize(problem, algorithm, termination, seed, verbose, **kwargs):
         del problem, termination, seed, verbose
         captured["sampling"] = np.asarray(algorithm.initialization.sampling, dtype=np.float64)
         return None
