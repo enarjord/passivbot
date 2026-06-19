@@ -633,6 +633,83 @@ def _build_hlcvs_bundle(
     return pbr.HlcvsBundle(hlcvs_arr, btc_arr, timestamps_arr, bundle_meta)
 
 
+def _validate_hlcvs_valid_windows(
+    hlcvs,
+    timestamps,
+    coins_order,
+    first_valid_indices,
+    last_valid_indices,
+    *,
+    coin_indices: list[int] | None = None,
+) -> None:
+    hlcvs_arr = np.asarray(hlcvs)
+    if hlcvs_arr.ndim != 3 or hlcvs_arr.shape[2] < 4:
+        raise ValueError(
+            "invalid HLCV payload shape for backtest validation: "
+            f"expected (rows, coins, >=4), got {hlcvs_arr.shape}"
+        )
+    n_rows, n_cols = hlcvs_arr.shape[:2]
+    timestamps_arr = np.asarray(timestamps) if timestamps is not None else None
+    hlcv_fields = ("high", "low", "close", "volume")
+    active_columns = (
+        [int(idx) for idx in coin_indices]
+        if coin_indices is not None
+        else list(range(len(coins_order)))
+    )
+    if len(active_columns) != len(coins_order):
+        raise ValueError(
+            f"coin_indices length ({len(active_columns)}) does not match coins ({len(coins_order)})"
+        )
+    for payload_idx, coin in enumerate(coins_order):
+        if payload_idx >= len(first_valid_indices) or payload_idx >= len(last_valid_indices):
+            raise ValueError(
+                f"missing valid-window metadata for backtest coin {coin} index {payload_idx}"
+            )
+        col = int(active_columns[payload_idx])
+        if col < 0 or col >= n_cols:
+            raise ValueError(f"coin index {col} outside hlcvs coin dimension {n_cols}")
+        start = int(first_valid_indices[payload_idx])
+        end = int(last_valid_indices[payload_idx])
+        if start > end:
+            continue
+        start = max(0, start)
+        end = min(n_rows - 1, end)
+        if start > end:
+            continue
+        window = hlcvs_arr[start : end + 1, col, :4]
+        if np.isfinite(window).all():
+            continue
+        bad_rel_row, bad_field = np.argwhere(~np.isfinite(window))[0]
+        bad_row = start + int(bad_rel_row)
+        bad_value = float(hlcvs_arr[bad_row, col, int(bad_field)])
+        if timestamps_arr is not None and bad_row < len(timestamps_arr):
+            ts_context = f" timestamp_ms={int(timestamps_arr[bad_row])}"
+        else:
+            ts_context = ""
+        raise ValueError(
+            "non-finite HLCV value inside valid backtest window: "
+            f"coin={coin} payload_index={payload_idx} source_column={col} "
+            f"k={bad_row}{ts_context} field={hlcv_fields[int(bad_field)]} value={bad_value} "
+            f"valid_window={start}..{end}"
+        )
+
+
+def _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss) -> None:
+    first_valid_indices = []
+    last_valid_indices = []
+    for coin in coins:
+        meta = mss.get(coin, {}) if isinstance(mss, dict) else {}
+        first_valid_indices.append(int(meta["first_valid_index"]))
+        last_valid_indices.append(int(meta["last_valid_index"]))
+    _validate_hlcvs_valid_windows(
+        hlcvs,
+        timestamps,
+        coins,
+        first_valid_indices,
+        last_valid_indices,
+    )
+
+
 @dataclass
 class BacktestExecutionSettings:
     market_orders_allowed: bool
@@ -824,7 +901,7 @@ def build_backtest_payload(
             last_idx_1m = source_steps_1m - 1
         if candle_interval > 1:
             first_idx = int(math.ceil(first_idx_1m / candle_interval))
-            last_idx = int(last_idx_1m // candle_interval)
+            last_idx = int(((last_idx_1m + 1) // candle_interval) - 1)
         else:
             first_idx = int(first_idx_1m)
             last_idx = int(last_idx_1m)
@@ -832,6 +909,9 @@ def build_backtest_payload(
             first_idx = total_steps
         if last_idx >= total_steps:
             last_idx = total_steps - 1
+        if last_idx < 0:
+            first_idx = total_steps
+            last_idx = 0
         first_valid_indices.append(first_idx)
         last_valid_indices.append(last_idx)
         # warmup_minutes stay in minutes (Rust adjusts based on interval)
@@ -1787,6 +1867,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     if override_result is not None:
         cache_dir, coins, hlcvs, mss, results_path, btc_usd_prices, timestamps = override_result
         ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+        _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
         warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
         assert_hlcv_has_tradable_coverage(coins, mss)
         return (
@@ -1812,6 +1893,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             )
             logging.info(f"Successfully loaded hlcvs data from cache")
             ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+            _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
             warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
             assert_hlcv_has_tradable_coverage(coins, mss)
             # Pass through cached timestamps if they were stored; fall back to None otherwise
@@ -1871,6 +1953,7 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
         )
     coins = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
     ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map)
+    _validate_hlcvs_valid_windows_from_mss(hlcvs, timestamps, coins, mss)
     warn_hlcv_valid_range_coverage(config, coins, mss, timestamps)
     assert_hlcv_has_tradable_coverage(coins, mss)
     logging.info(f"Finished preparing hlcvs data for {exchange}. Shape: {hlcvs.shape}")
