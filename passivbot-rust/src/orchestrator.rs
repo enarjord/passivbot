@@ -50,7 +50,7 @@ mod core {
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
-        RuntimeBudgetState, StateParams, TrailingPriceBundle,
+        RuntimeBudgetState, StateParams, TrailingPriceBundle, TwelEnforcerPolicy,
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
@@ -117,7 +117,7 @@ mod core {
         pub execution_type: ExecutionType,
     }
 
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case", deny_unknown_fields)]
     pub enum OrchestratorWarning {
         DisabledPsideHasPosition {
@@ -127,6 +127,15 @@ mod core {
         NonTradableHasPosition {
             symbol_idx: usize,
             pside: PositionSide,
+        },
+        TwelRepairBlockedByLossGate {
+            pside: PositionSide,
+            current_twe: f64,
+            twel_repair_target: f64,
+            policy: TwelEnforcerPolicy,
+            candidate_count: usize,
+            blocked_order_count: usize,
+            projected_twe_after_allowed_reductions: f64,
         },
     }
 
@@ -501,6 +510,14 @@ mod core {
         matches!(
             order_type,
             OrderType::ClosePanicLong | OrderType::ClosePanicShort
+        )
+    }
+
+    fn is_twel_close_order_type(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
         )
     }
 
@@ -1456,6 +1473,139 @@ mod core {
             }
             s.closes = kept;
         }
+    }
+
+    fn twel_repair_target(bot: &BotParams) -> Option<f64> {
+        let raw_twel = bot.total_wallet_exposure_limit;
+        let threshold = bot.risk_twel_enforcer_threshold;
+        let target = raw_twel * threshold;
+        if raw_twel > 0.0 && threshold > 0.0 && target.is_finite() {
+            Some(target)
+        } else {
+            None
+        }
+    }
+
+    fn managed_side_twe_after_remaining_twel_closes(
+        input: &OrchestratorInput,
+        per_side: &[Option<PerSymbolOrders>],
+        pside: PositionSide,
+        balance: f64,
+        apply_remaining_twel_closes: bool,
+    ) -> f64 {
+        if !balance.is_finite() || balance <= 0.0 {
+            return 0.0;
+        }
+        let mut twe = 0.0;
+        for s in per_side.iter().filter_map(|v| v.as_ref()) {
+            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+                continue;
+            }
+            let Some(sym) = input.symbols.get(s.symbol_idx) else {
+                continue;
+            };
+            let mut abs_size = s.pos.size.abs();
+            if apply_remaining_twel_closes {
+                let close_qty: f64 = s
+                    .closes
+                    .iter()
+                    .filter(|o| is_twel_close_order_type(o.order_type, pside))
+                    .map(|o| o.qty.abs())
+                    .sum();
+                abs_size = (abs_size - close_qty).max(0.0);
+            }
+            let exposure =
+                calc_wallet_exposure(sym.exchange.c_mult, balance, abs_size, s.pos.price);
+            if exposure.is_finite() {
+                twe += exposure;
+            }
+        }
+        twe
+    }
+
+    fn push_twel_loss_gate_warning_for_side(
+        input: &OrchestratorInput,
+        per_side: &[Option<PerSymbolOrders>],
+        pside: PositionSide,
+        candidate_count: usize,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) {
+        if candidate_count == 0 {
+            return;
+        }
+        let blocked_order_count = diagnostics
+            .loss_gate_blocks
+            .iter()
+            .filter(|b| is_twel_close_order_type(b.order_type, pside))
+            .count();
+        if blocked_order_count == 0 {
+            return;
+        }
+        let bot = match pside {
+            PositionSide::Long => &input.global.global_bot_params.long,
+            PositionSide::Short => &input.global.global_bot_params.short,
+        };
+        let Some(target) = twel_repair_target(bot) else {
+            return;
+        };
+        let balance_raw = input_balance_raw(input);
+        let current_twe = managed_side_twe_after_remaining_twel_closes(
+            input,
+            per_side,
+            pside,
+            balance_raw,
+            false,
+        );
+        let projected_twe_after_allowed_reductions =
+            managed_side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, true);
+        if current_twe <= target + 1e-9 || projected_twe_after_allowed_reductions <= target + 1e-9 {
+            return;
+        }
+        log::warn!(
+            "TWEL repair blocked by realized-loss gate: pside={:?} current_twe={:.6} target={:.6} policy={:?} candidates={} blocked={} projected_twe={:.6}",
+            pside,
+            current_twe,
+            target,
+            bot.risk_twel_enforcer_policy,
+            candidate_count,
+            blocked_order_count,
+            projected_twe_after_allowed_reductions,
+        );
+        diagnostics
+            .warnings
+            .push(OrchestratorWarning::TwelRepairBlockedByLossGate {
+                pside,
+                current_twe,
+                twel_repair_target: target,
+                policy: bot.risk_twel_enforcer_policy,
+                candidate_count,
+                blocked_order_count,
+                projected_twe_after_allowed_reductions,
+            });
+    }
+
+    fn push_twel_loss_gate_warnings(
+        input: &OrchestratorInput,
+        per_long: &[Option<PerSymbolOrders>],
+        per_short: &[Option<PerSymbolOrders>],
+        twel_candidate_count_long: usize,
+        twel_candidate_count_short: usize,
+        diagnostics: &mut OrchestratorDiagnostics,
+    ) {
+        push_twel_loss_gate_warning_for_side(
+            input,
+            per_long,
+            PositionSide::Long,
+            twel_candidate_count_long,
+            diagnostics,
+        );
+        push_twel_loss_gate_warning_for_side(
+            input,
+            per_short,
+            PositionSide::Short,
+            twel_candidate_count_short,
+            diagnostics,
+        );
     }
 
     fn compute_effective_n_positions(
@@ -2984,13 +3134,11 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.bid,
-                    base_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -3010,7 +3158,7 @@ mod core {
                     .global_bot_params
                     .long
                     .total_wallet_exposure_limit,
-                enp_long,
+                input.global.global_bot_params.long.n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -3048,13 +3196,11 @@ mod core {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
-                let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
                 workspace.twel_positions.push(TwelEnforcerInputPosition {
                     idx: s.symbol_idx,
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.ask,
-                    base_wallet_exposure_limit: runtime_budget.effective_wallet_exposure_limit,
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -3074,7 +3220,7 @@ mod core {
                     .global_bot_params
                     .short
                     .total_wallet_exposure_limit,
-                enp_short,
+                input.global.global_bot_params.short.n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -3100,18 +3246,8 @@ mod core {
             }
         }
 
-        for idx in twel_selected_long {
-            if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                s.closes
-                    .retain(|o| o.order_type != OrderType::CloseAutoReduceWelLong);
-            }
-        }
-        for idx in twel_selected_short {
-            if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                s.closes
-                    .retain(|o| o.order_type != OrderType::CloseAutoReduceWelShort);
-            }
-        }
+        let twel_candidate_count_long = twel_selected_long.len();
+        let twel_candidate_count_short = twel_selected_short.len();
 
         // Trim closes per symbol to position size (furthest-first).
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
@@ -3137,12 +3273,20 @@ mod core {
 
         // Global realized-loss gate for close orders (all close types except panic).
         gate_lossy_closes_by_peak_balance(input, per_long, per_short, &mut diagnostics);
+        push_twel_loss_gate_warnings(
+            input,
+            per_long,
+            per_short,
+            twel_candidate_count_long,
+            twel_candidate_count_short,
+            &mut diagnostics,
+        );
 
         // Portfolio TWEL gating of entries per pside (reuse workspace buffers).
         workspace.gate_positions_long.clear();
         workspace.gate_positions_short.clear();
         for s in per_long.iter().filter_map(|v| v.as_ref()) {
-            if !matches!(s.mode, TradingMode::Manual) && s.pos.size != 0.0 {
+            if s.pos.size != 0.0 {
                 let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_long.push(GateEntriesPosition {
                     idx: s.symbol_idx,
@@ -3153,7 +3297,7 @@ mod core {
             }
         }
         for s in per_short.iter().filter_map(|v| v.as_ref()) {
-            if !matches!(s.mode, TradingMode::Manual) && s.pos.size != 0.0 {
+            if s.pos.size != 0.0 {
                 let sym = &input.symbols[s.symbol_idx];
                 workspace.gate_positions_short.push(GateEntriesPosition {
                     idx: s.symbol_idx,

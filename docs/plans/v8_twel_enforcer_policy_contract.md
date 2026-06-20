@@ -288,7 +288,8 @@ overweight_target = twel_repair_target / configured_n_positions
 candidate if WE > overweight_target
 ```
 
-3. Emit auto-reduce orders for all candidates.
+3. Evaluate candidates in deterministic reducer order and emit auto-reduce orders until projected
+   raw-balance TWE is `<= twel_repair_target`.
 4. Size candidate reductions with the initial deterministic reducer described below while reducing
    TWE toward `twel_repair_target`.
 
@@ -316,7 +317,8 @@ Behavior:
 1. If the entry gate is enabled, enforce the global TWEL entry gate at `twel_entry_cap`.
 2. If auto-reduce is enabled and current TWE exceeds `twel_repair_target`, all open same-side
    positions are candidates.
-3. Emit auto-reduce orders for all candidates.
+3. Evaluate all open same-side positions as candidates, but emit auto-reduce orders only until
+   projected raw-balance TWE is `<= twel_repair_target`.
 4. Size reductions with the initial deterministic reducer described below while reducing TWE toward
    `twel_repair_target`.
 
@@ -385,12 +387,13 @@ required_reduction = current_TWE - twel_repair_target
 Small-wallet rule:
 
 ```text
-If a candidate exists, keep emitting its TWEL auto-reduce order even when min qty/min cost makes the
-order chunkier than the ideal equal-loss target.
+If a candidate has a positive reduction slice, keep emitting its TWEL auto-reduce order even when
+min qty/min cost makes the order chunkier than the ideal equal-loss target.
 ```
 
-This avoids silently concentrating all TWEL repair on only the candidates whose ideal slice happens
-to clear exchange minimums.
+This avoids silently concentrating all TWEL repair on only the candidates whose positive ideal slice
+happens to clear exchange minimums. Do not force a min-size order for later candidates after the
+portfolio has already reached `twel_repair_target`.
 
 ## Realized-Loss Gate Interaction
 
@@ -532,8 +535,10 @@ Add focused Rust/Python tests around the JSON orchestrator boundary:
    `raw_twel * threshold`.
 6. `total_exposure_enforcer_threshold < 1.0` caps entries at `raw_twel * threshold`.
 7. `reduce_overweight` selects only positions with `WE > twel_repair_target / configured_n_positions`.
-8. `reduce_overweight` emits one reduce order for every overweight candidate that can reduce.
-9. `reduce_portfolio` emits one reduce order for every open same-side position that can reduce.
+8. `reduce_overweight` emits reduce orders for overweight candidates until projected TWE reaches
+   target; it does not force min-size orders after the target is reached.
+9. `reduce_portfolio` evaluates every open same-side managed position as a candidate, but emits
+   reduce orders only until projected TWE reaches target.
 10. Initial reducer prefers profitable/breakeven candidates, then shallowest adverse-loss
     candidates, with deterministic ties.
 11. Min qty/min cost clamping still emits orders for candidates when larger than ideal.

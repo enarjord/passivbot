@@ -1567,7 +1567,7 @@ def test_min_effective_cost_uses_strategy_initial_qty_pct():
     assert out["diagnostics"]["min_effective_cost_blocks"] == []
 
 
-def test_manual_positions_do_not_consume_twel_entry_budget():
+def test_manual_positions_consume_twel_entry_gate_budget():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -1599,9 +1599,9 @@ def test_manual_positions_do_not_consume_twel_entry_budget():
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[manual_sym, active_sym])
 
     out = compute(pbr, inp)
-    assert any(
+    assert not any(
         o["symbol_idx"] == 1 and o["order_type"].startswith("entry_") for o in out["orders"]
-    ), "manual positions are outside bot-scope TWE and must not block active-symbol entries"
+    ), "existing manual exposure must still consume TWE before allowing bot-generated entries"
 
 
 def test_twel_entry_gating_uses_snapped_balance_not_raw():
@@ -1922,7 +1922,7 @@ def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
     assert twel_symbols == {0, 1}
 
 
-def test_twel_enforcer_second_pass_reduces_below_position_floor():
+def test_twel_enforcer_can_reduce_below_per_slot_target():
     import passivbot_rust as pbr
 
     long_bp = {
@@ -1949,7 +1949,7 @@ def test_twel_enforcer_second_pass_reduces_below_position_floor():
     twel_closes = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
     assert twel_closes, "TWE above TWEL must be reduced even when every position is at/below floor"
     assert any(o["symbol_idx"] == 0 for o in twel_closes), (
-        "second pass should target the least-stuck candidate when bypassing the floor"
+        "TWEL repair should use the shallowest-loss candidate even when it is at/below target"
     )
 
 
@@ -1992,6 +1992,57 @@ def test_twel_enforcer_threshold_reduces_positions_at_wel():
         psize_by_symbol[order["symbol_idx"]] -= abs(order["qty"])
     twe_after = sum(size * 50.0 / 1_000.0 for size in psize_by_symbol.values())
     assert twe_after <= 1.5 * 0.99 + 1e-12
+
+
+def test_twel_loss_gate_block_emits_twel_specific_warning():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 1.0,
+        "risk_wel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 0.5,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=80.0,
+        ask=80.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym])
+    inp["balance_raw"] = 1_000.0
+    inp["global"]["max_realized_loss_pct"] = 0.0
+    inp["global"]["realized_pnl_cumsum_max"] = 0.0
+    inp["global"]["realized_pnl_cumsum_last"] = 0.0
+
+    out = compute(pbr, inp)
+
+    assert not any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+    assert any(
+        b["order_type"] == "close_auto_reduce_twel_long"
+        for b in out["diagnostics"]["loss_gate_blocks"]
+    )
+    warning = next(
+        (
+            w["twel_repair_blocked_by_loss_gate"]
+            for w in out["diagnostics"]["warnings"]
+            if "twel_repair_blocked_by_loss_gate" in w
+        ),
+        None,
+    )
+    assert warning is not None
+    assert warning["pside"] == "long"
+    assert warning["policy"] == "reduce_portfolio"
+    assert warning["candidate_count"] == 1
+    assert warning["blocked_order_count"] == 1
+    assert warning["current_twe"] == pytest.approx(0.6)
+    assert warning["twel_repair_target"] == pytest.approx(0.5)
+    assert warning["projected_twe_after_allowed_reductions"] == pytest.approx(0.6)
 
 
 # ---------------------------------------------------------------------------

@@ -164,7 +164,8 @@ The bot reduces positions according to `total_exposure_enforcer_policy`.
 * `> 1.0`: Allows some overflow (e.g., during extreme volatility) before forced reduction occurs.
 
 `total_exposure_entry_gate_enabled` is separate from auto-reduce. When enabled, bot-generated
-entries are blocked or cropped before projected snapped-balance TWE can exceed
+entries are blocked or cropped before projected snapped-balance TWE, including existing same-side
+exchange positions, can exceed
 `min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`.
 When disabled, positive excess allowance can let bot entries push TWE above raw TWEL; this is an
 explicit opt-out from the portfolio entry cap.
@@ -172,11 +173,11 @@ explicit opt-out from the portfolio entry cap.
 Set `total_exposure_enforcer_enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
 
-This portfolio trimming mechanism pairs well with the excess allowance. When TWE
-exceeds the repair target, `reduce_overweight` trims only positions above their thresholded
+This portfolio trimming mechanism pairs well with the excess allowance. When managed raw-balance
+TWE exceeds the repair target, `reduce_overweight` trims only positions above their thresholded
 per-slot target. `reduce_portfolio` may trim any managed open position on that side. Both policies
 prefer profitable or breakeven reductions first, then the shallowest adverse-loss reductions, with
-stable symbol tie-breaks.
+stable symbol tie-breaks, and stop once projected TWE reaches the repair target.
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
 panic positions remain outside TWEL auto-reduce management. TWEL auto-reduce is still subject to
