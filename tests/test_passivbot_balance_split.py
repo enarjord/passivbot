@@ -4815,6 +4815,15 @@ def test_planning_availability_trailing_close_requires_canonical_candles():
     assert trailing["status"] == "unavailable"
     assert trailing["reason_code"] == "missing_canonical_candles"
     assert "canonical_candles" in trailing["required_surfaces"]
+    unstuck = _availability_record(
+        availability,
+        symbol=symbol,
+        position_side="long",
+        order_class="unstuck_close",
+    )
+    assert unstuck["status"] == "unavailable"
+    assert unstuck["reason_code"] == "missing_canonical_candles"
+    assert "canonical_candles" in unstuck["required_surfaces"]
     assert non_trailing_tp["status"] == "available"
     assert "canonical_candles" not in non_trailing_tp["required_surfaces"]
 

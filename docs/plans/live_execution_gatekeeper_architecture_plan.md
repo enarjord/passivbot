@@ -464,14 +464,15 @@ The current Python-side passive matrix is:
 - `hsl_panic_close`: account surfaces plus the action symbol's market prices. It does not require
   candles, EMAs, or fill history.
 - `take_profit_close`: account surfaces plus the action symbol's market prices. The non-trailing TP
-  contract does not require candles or fill history unless a later planner attaches a loss-gate,
-  trailing, or volatility-weighting rationale to that planned action.
+  contract does not require fill history. It requires `canonical_candles` only when the planned
+  action's close threshold uses volatility weighting; the current passive matrix cannot inspect that
+  config/rationale yet, so enforcement must add conditional tests before consuming this class.
 - `trailing_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
   history. A fill resets trailing state, and trailing evaluation needs the candle span from the last
   symbol+side fill through the last strategy-ready completed minute.
-- `unstuck_close`: account surfaces, the action symbol's market prices, and fill history for
-  realized-PnL/loss-budget inputs. If a future unstuck order rationale uses strategy indicators or
-  volatility weighting, that planned action must also require `canonical_candles`.
+- `unstuck_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
+  history. Current Rust unstuck close pricing uses EMA bands, and fill history feeds
+  realized-PnL/loss-budget inputs.
 - `wel_twel_reduce_close`: account surfaces, the action symbol's market prices, and fill history for
   `max_realized_loss_pct`. TWEL/WEL auto-reduce is portfolio/per-position repair, not trailing or
   panic, and does not require candles unless the actual Rust order construction path later consumes
@@ -658,7 +659,7 @@ Initial target matrix:
 | open orders | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | balance | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
 | market prices | no | symbol | symbol | symbol | symbol | symbol | symbol | symbol | no | maybe |
-| canonical candles | no | strategy | strategy | no | symbol+pside | strategy | no | no | no | maybe |
+| canonical candles | no | strategy | strategy | volatility-weighted | symbol+pside | symbol+pside | no | no | no | maybe |
 | fill history | no | symbol+pside | symbol+pside | no | symbol+pside | yes | loss gate | no | no | maybe |
 
 This table is intentionally not final. The implementation should turn it into explicit test cases.
@@ -669,6 +670,7 @@ Terms:
 - `symbol`: required for the action symbol.
 - `symbol+pside`: required for the action symbol and position side.
 - `strategy`: required if the action class depends on strategy indicators for that symbol/pside.
+- `volatility-weighted`: required when the planned action's configured volatility weights are nonzero.
 - `maybe`: depends on configured risk/HSL/trailing/unstuck mode.
 - `loss gate`: required when the action is subject to `max_realized_loss_pct`.
 

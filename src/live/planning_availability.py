@@ -57,6 +57,7 @@ ORDER_CLASS_REQUIRED_SURFACES: dict[str, tuple[str, ...]] = {
     "unstuck_close": (
         *ACCOUNT_REQUIRED_SURFACES,
         *MARKET_PRICE_SURFACES,
+        *CANONICAL_CANDLE_SURFACES,
         *FILL_HISTORY_SURFACES,
     ),
     "wel_twel_reduce_close": (
