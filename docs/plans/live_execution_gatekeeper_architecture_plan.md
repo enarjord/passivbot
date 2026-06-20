@@ -447,25 +447,48 @@ each `(symbol, position_side, order_class)` record. It evaluates only diagnostic
 must not enforce, skip, or approve live trading decisions until a later gatekeeper phase explicitly
 consumes it with tests.
 
+Availability records should name canonical readiness requirements, not raw fetch artifacts. For
+example, `canonical_candles` means "the live candle handler has a continuous strategy-ready candle
+series for this symbol/side through the required horizon." It does not mean "the latest REST candle
+row has already appeared." Some exchanges publish completed candles late or omit no-trade candles.
+The live candle handler may synthesize zero-volume candles as `[prev_close, prev_close, prev_close,
+prev_close, 0]`, use them for the canonical series, avoid persisting them, and later replace them
+from overlapping REST backfills. Those synthesized rows may satisfy `canonical_candles` when the
+previous close is known, the gap is bounded by the candle handler policy, continuity is preserved,
+and repair/backfill remains scheduled and observable. They should fail readiness only when the
+canonical series cannot prove continuity, the previous close is unavailable, the gap exceeds policy,
+or overlap repair repeatedly fails.
+
 The current Python-side passive matrix is:
 
-- `hsl_panic_close`: account surfaces plus the action symbol's market snapshot. It does not require
+- `hsl_panic_close`: account surfaces plus the action symbol's market prices. It does not require
   candles, EMAs, or fill history.
-- `take_profit_close`, `trailing_close`, `unstuck_close`, `wel_twel_reduce_close`: account surfaces
-  plus the action symbol's market snapshot. Fill history is required for these normal close classes
-  because the current live Rust input uses realized PnL history for close-side loss/unstuck
-  contracts.
-- `initial_entry`, `risk_increasing_entry`: account surfaces, the action symbol's market snapshot,
-  completed candles, and fill history. Completed candles are the current live proxy for strategy/EMA
-  readiness; fills feed current live entry cooldown and realized-PnL/unstuck inputs. A separate
-  strategy-surface stamp remains future work.
+- `take_profit_close`: account surfaces plus the action symbol's market prices. The non-trailing TP
+  contract does not require fill history. It requires `canonical_candles` only when the planned
+  action's close threshold uses volatility weighting; the current passive matrix cannot inspect that
+  config/rationale yet, so enforcement must add conditional tests before consuming this class.
+- `trailing_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
+  history. A fill resets trailing state, and trailing evaluation needs the candle span from the last
+  symbol+side fill through the last strategy-ready completed minute.
+- `unstuck_close`: account surfaces, the action symbol's market prices, canonical candles, and fill
+  history. Current Rust unstuck close pricing uses EMA bands, and fill history feeds
+  realized-PnL/loss-budget inputs.
+- `wel_twel_reduce_close`: account surfaces, the action symbol's market prices, and fill history for
+  `max_realized_loss_pct`. TWEL/WEL auto-reduce is portfolio/per-position repair, not trailing or
+  panic, and does not require candles unless the actual Rust order construction path later consumes
+  volatility/strategy indicators.
+- `initial_entry`, `risk_increasing_entry`: account surfaces, the action symbol's market prices,
+  canonical candles, and fill history. Canonical candles are the current live proxy for
+  strategy/EMA/volatility readiness; fills feed current live entry cooldown, trailing reset, and
+  realized-PnL/unstuck inputs. A separate strategy-surface stamp remains future work.
 - `entry_cancel`: balance, positions, and open orders.
 - `protective_close_cancel`: balance, positions, and open orders.
 
 Stale or missing symbol-scoped surfaces affect only records that require that symbol's surface.
-For example, missing completed candles for a flat candidate symbol do not make protective or normal
-close availability unavailable for a different positioned symbol. Account surfaces and fills remain
-global in the current snapshot contract.
+For example, unavailable canonical candles for a flat candidate symbol do not make protective or
+normal close availability unavailable for a different positioned symbol. Account surfaces and fill
+history remain global in the current snapshot contract; the target enforcement contract should
+scope fill readiness by symbol+side where the data model supports it.
 
 Monitor `planning_unavailable` events are a throttled operator-facing diagnostic emitted when
 staged planning is deferred. They are useful evidence that a loop could not plan, but they are not
@@ -627,18 +650,17 @@ clear.
 
 Initial target matrix:
 
-| Surface | Account Barrier | Initial Entry | DCA Entry | Normal Close | Unstuck Close | WEL/TWEL Close | HSL Panic | Entry Cancel | Protective Close Cancel |
-|---------|-----------------|---------------|-----------|--------------|---------------|----------------|-----------|--------------|--------------------------|
-| config params | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| approved/ignored lists | no | yes | yes | no | no | no | no | no | no |
-| market metadata | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| positions | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| open orders | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| balance | yes | yes | yes | yes | yes | yes | yes | yes | yes |
-| ticker/order book | no | symbol | symbol | symbol | symbol | symbol | symbol | maybe | symbol |
-| 1m candles | no | strategy | strategy | strategy | strategy | maybe | no | no | maybe |
-| 1h candles | no | strategy | strategy | strategy | strategy | maybe | no | no | maybe |
-| fill events | no | maybe | maybe | maybe | yes | maybe | HSL mode | no | maybe |
+| Requirement | Account Barrier | Initial Entry | DCA Entry | Non-Trailing TP | Trailing Close | Unstuck Close | WEL/TWEL Close | HSL Panic | Entry Cancel | Protective Close Cancel |
+|-------------|-----------------|---------------|-----------|-----------------|----------------|---------------|----------------|-----------|--------------|--------------------------|
+| config params | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| approved/ignored lists | no | yes | yes | no | no | no | no | no | no | no |
+| market metadata | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| positions | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| open orders | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| balance | yes | yes | yes | yes | yes | yes | yes | yes | yes | yes |
+| market prices | no | symbol | symbol | symbol | symbol | symbol | symbol | symbol | no | maybe |
+| canonical candles | no | strategy | strategy | volatility-weighted | symbol+pside | symbol+pside | no | no | no | maybe |
+| fill history | no | symbol+pside | symbol+pside | no | symbol+pside | yes | loss gate | no | no | maybe |
 
 This table is intentionally not final. The implementation should turn it into explicit test cases.
 
@@ -646,8 +668,11 @@ Terms:
 
 - `yes`: required globally.
 - `symbol`: required for the action symbol.
+- `symbol+pside`: required for the action symbol and position side.
 - `strategy`: required if the action class depends on strategy indicators for that symbol/pside.
+- `volatility-weighted`: required when the planned action's configured volatility weights are nonzero.
 - `maybe`: depends on configured risk/HSL/trailing/unstuck mode.
+- `loss gate`: required when the action is subject to `max_realized_loss_pct`.
 
 ## Semi-Lazy Refresh Model
 
