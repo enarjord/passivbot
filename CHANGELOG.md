@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Implemented the v8 TWEL policy contract: TWEL entry gating is now controlled
+  separately from TWEL auto-reduce, entry gating uses the capped thresholded
+  portfolio cap, and TWEL auto-reduce supports `reduce_overweight` and
+  `reduce_portfolio` policies while remaining subject to the realized-loss gate.
 - Changed the v8 default backtest candle interval to 1 minute and added
   `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
   allowance; migrated v7 trailing-grid configs also force v7-absent entry

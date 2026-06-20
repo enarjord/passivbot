@@ -28,7 +28,7 @@ use crate::types::{
     BacktestParams, BotParams, BotParamsPair, CoinMeta, EMABands, Equities,
     EquityHardStopLossConfig, EquityHardStopLossTierRatios, ExchangeParams, ForagerScoreWeights,
     HlcvsBundle, HlcvsMeta, OrderBook, Position, RuntimeOrderContext, StateParams,
-    StrategyParamsPairValue, TrailingPriceBundle, WeExcessAllowanceMode,
+    StrategyParamsPairValue, TrailingPriceBundle, TwelEnforcerPolicy, WeExcessAllowanceMode,
 };
 use ndarray::Array2;
 use numpy::{IntoPyArray, PyArray1, PyArray3, PyArrayMethods, PyReadonlyArray1, PyReadonlyArray3};
@@ -2082,9 +2082,9 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
 
 fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
     for (key, _value) in dict.iter() {
-        let key = key.extract::<String>().map_err(|_| {
-            PyValueError::new_err(format!("{} contains a non-string key", context))
-        })?;
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyValueError::new_err(format!("{} contains a non-string key", context)))?;
         if !allowed.contains(&key.as_str()) {
             return Err(PyValueError::new_err(format!(
                 "{} contains unknown key: {}",
@@ -2239,6 +2239,25 @@ fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcess
     })
 }
 
+fn extract_optional_twel_enforcer_policy(dict: &PyDict) -> PyResult<TwelEnforcerPolicy> {
+    Ok(match dict.get_item("risk_twel_enforcer_policy")? {
+        Some(item) => {
+            if item.is_none() {
+                TwelEnforcerPolicy::default()
+            } else {
+                let raw = item.extract::<String>()?;
+                TwelEnforcerPolicy::from_str(raw.trim()).map_err(|_| {
+                    PyValueError::new_err(format!(
+                        "risk_twel_enforcer_policy must be one of: reduce_overweight, reduce_portfolio; got {:?}",
+                        raw
+                    ))
+                })?
+            }
+        }
+        None => TwelEnforcerPolicy::default(),
+    })
+}
+
 fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
     let risk_wel_enforcer_threshold: f64 = extract_value(dict, "risk_wel_enforcer_threshold")?;
     let risk_twel_enforcer_threshold: f64 = extract_value(dict, "risk_twel_enforcer_threshold")?;
@@ -2349,11 +2368,17 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         wallet_exposure_limit,
         risk_wel_enforcer_enabled: extract_optional_bool(dict, "risk_wel_enforcer_enabled", true)?,
         risk_wel_enforcer_threshold,
+        risk_twel_entry_gate_enabled: extract_optional_bool(
+            dict,
+            "risk_twel_entry_gate_enabled",
+            true,
+        )?,
         risk_twel_enforcer_enabled: extract_optional_bool(
             dict,
             "risk_twel_enforcer_enabled",
             true,
         )?,
+        risk_twel_enforcer_policy: extract_optional_twel_enforcer_policy(dict)?,
         risk_twel_enforcer_threshold,
         risk_we_excess_allowance_pct,
         risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
@@ -3434,6 +3459,16 @@ pub fn calc_closes_short_py(
 }
 
 #[pyfunction]
+#[pyo3(signature = (
+    side,
+    red_threshold,
+    total_wallet_exposure_limit,
+    effective_n_positions,
+    balance,
+    positions,
+    skip_idx=None,
+    policy=None
+))]
 pub fn calc_twel_enforcer_orders_py(
     side: &str,
     red_threshold: f64,
@@ -3442,6 +3477,7 @@ pub fn calc_twel_enforcer_orders_py(
     balance: f64,
     positions: &Bound<'_, PyList>,
     skip_idx: Option<usize>,
+    policy: Option<&str>,
 ) -> PyResult<Vec<(usize, f64, f64, u16)>> {
     let positions = positions.as_ref();
     let side_code = match side {
@@ -3452,6 +3488,15 @@ pub fn calc_twel_enforcer_orders_py(
                 "side must be either 'long' or 'short'",
             ))
         }
+    };
+    let policy = match policy {
+        Some(raw) => TwelEnforcerPolicy::from_str(raw.trim()).map_err(|_| {
+            PyValueError::new_err(format!(
+                "policy must be one of: reduce_overweight, reduce_portfolio; got {:?}",
+                raw
+            ))
+        })?,
+        None => TwelEnforcerPolicy::default(),
     };
     let positions_len = positions.len()?;
     let mut parsed_positions: Vec<TwelEnforcerInputPosition> = Vec::with_capacity(positions_len);
@@ -3521,6 +3566,7 @@ pub fn calc_twel_enforcer_orders_py(
         effective_n_positions,
         balance,
         &parsed_positions,
+        policy,
         skip_idx,
     );
     Ok(actions

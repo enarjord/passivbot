@@ -59,6 +59,7 @@ mod core {
     };
     use serde::{Deserialize, Serialize};
     use serde_json::Value;
+    use std::collections::HashSet;
 
     #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
@@ -2968,6 +2969,8 @@ mod core {
         }
 
         // TWEL enforcer: add auto-reduce closes in addition to normal closes.
+        let mut twel_selected_long: HashSet<usize> = HashSet::new();
+        let mut twel_selected_short: HashSet<usize> = HashSet::new();
         if enabled_long
             && input
                 .global
@@ -2978,13 +2981,6 @@ mod core {
             workspace.twel_positions.clear();
             for s in per_long.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
-                    continue;
-                }
-                // Skip TWEL enforcer for positions already running WEL auto-reduce.
-                if s.closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong)
-                {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
@@ -3017,10 +3013,17 @@ mod core {
                 enp_long,
                 input_balance_raw(input),
                 &workspace.twel_positions,
+                input
+                    .global
+                    .global_bot_params
+                    .long
+                    .risk_twel_enforcer_policy,
                 None,
             );
             for (idx, order) in actions {
                 if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
+                    s.closes
+                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelLong);
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Long,
@@ -3028,6 +3031,7 @@ mod core {
                         price: order.price,
                         order_type: order.order_type,
                     });
+                    twel_selected_long.insert(idx);
                 }
             }
         }
@@ -3041,12 +3045,6 @@ mod core {
             workspace.twel_positions.clear();
             for s in per_short.iter().filter_map(|v| v.as_ref()) {
                 if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
-                    continue;
-                }
-                if s.closes
-                    .iter()
-                    .any(|o| o.order_type == OrderType::CloseAutoReduceWelShort)
-                {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
@@ -3079,10 +3077,17 @@ mod core {
                 enp_short,
                 input_balance_raw(input),
                 &workspace.twel_positions,
+                input
+                    .global
+                    .global_bot_params
+                    .short
+                    .risk_twel_enforcer_policy,
                 None,
             );
             for (idx, order) in actions {
                 if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
+                    s.closes
+                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelShort);
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Short,
@@ -3090,7 +3095,21 @@ mod core {
                         price: order.price,
                         order_type: order.order_type,
                     });
+                    twel_selected_short.insert(idx);
                 }
+            }
+        }
+
+        for idx in twel_selected_long {
+            if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
+                s.closes
+                    .retain(|o| o.order_type != OrderType::CloseAutoReduceWelLong);
+            }
+        }
+        for idx in twel_selected_short {
+            if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
+                s.closes
+                    .retain(|o| o.order_type != OrderType::CloseAutoReduceWelShort);
             }
         }
 
@@ -3145,20 +3164,37 @@ mod core {
             }
         }
 
-        if enabled_long {
+        if enabled_long
+            && input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_entry_gate_enabled
+        {
             workspace.all_entries.clear();
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
             }
+            let raw_twel = input
+                .global
+                .global_bot_params
+                .long
+                .total_wallet_exposure_limit
+                .max(0.0);
+            let threshold = input
+                .global
+                .global_bot_params
+                .long
+                .risk_twel_enforcer_threshold;
+            let twel_entry_cap = if threshold.is_finite() && threshold > 0.0 {
+                raw_twel.min(raw_twel * threshold)
+            } else {
+                raw_twel
+            };
             gate_entries_by_twel_deterministic(
                 PositionSide::Long,
                 input.balance,
-                input
-                    .global
-                    .global_bot_params
-                    .long
-                    .total_wallet_exposure_limit
-                    .max(0.0),
+                twel_entry_cap,
                 &workspace.gate_positions_long,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -3173,26 +3209,43 @@ mod core {
                     s.entries.push(e);
                 }
             }
-        } else {
+        } else if !enabled_long {
             for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
                 s.entries.clear();
             }
         }
 
-        if enabled_short {
+        if enabled_short
+            && input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_entry_gate_enabled
+        {
             workspace.all_entries.clear();
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
                 workspace.all_entries.append(&mut s.entries);
             }
+            let raw_twel = input
+                .global
+                .global_bot_params
+                .short
+                .total_wallet_exposure_limit
+                .max(0.0);
+            let threshold = input
+                .global
+                .global_bot_params
+                .short
+                .risk_twel_enforcer_threshold;
+            let twel_entry_cap = if threshold.is_finite() && threshold > 0.0 {
+                raw_twel.min(raw_twel * threshold)
+            } else {
+                raw_twel
+            };
             gate_entries_by_twel_deterministic(
                 PositionSide::Short,
                 input.balance,
-                input
-                    .global
-                    .global_bot_params
-                    .short
-                    .total_wallet_exposure_limit
-                    .max(0.0),
+                twel_entry_cap,
                 &workspace.gate_positions_short,
                 &mut workspace.all_entries,
                 &input.symbols,
@@ -3207,7 +3260,7 @@ mod core {
                     s.entries.push(e);
                 }
             }
-        } else {
+        } else if !enabled_short {
             for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
                 s.entries.clear();
             }

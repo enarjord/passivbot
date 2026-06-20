@@ -1933,6 +1933,8 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     for key in ("threshold_volatility_1h_weight", "threshold_volatility_1m_weight", "threshold_we_weight"):
         trailing_martingale["entry"].pop(key)
     for key in (
+        "total_exposure_entry_gate_enabled",
+        "total_exposure_enforcer_policy",
         "total_exposure_enforcer_threshold",
         "we_excess_allowance_pct",
         "position_exposure_enforcer_threshold",
@@ -1952,8 +1954,39 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
     assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(4.66)
     assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(3.578)
     assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(0.985)
+    assert long_risk["total_exposure_entry_gate_enabled"] is True
+    assert long_risk["total_exposure_enforcer_policy"] == "reduce_overweight"
     assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.1)
     assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(0.99)
+
+
+def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["total_exposure_enforcer_policy"] = "REDUCE_PORTFOLIO"
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+    compiled = compile_runtime_config(prepared)
+
+    assert prepared["bot"]["long"]["risk"]["total_exposure_enforcer_policy"] == "reduce_portfolio"
+    assert compiled["bot"]["long"]["risk_twel_enforcer_policy"] == "reduce_portfolio"
+    assert compiled["bot"]["long"]["risk_twel_entry_gate_enabled"] is True
+
+
+def test_prepare_config_rejects_invalid_twel_policy():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["total_exposure_enforcer_policy"] = "least_stuck"
+
+    with pytest.raises(ValueError, match="bot.long.risk.total_exposure_enforcer_policy"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_twel_policy_and_entry_gate_are_not_optimizer_bounds():
+    bounds = get_optimize_bounds_defaults()
+
+    for pside in ("long", "short"):
+        risk_bounds = bounds[pside]["risk"]
+        assert "total_exposure_entry_gate_enabled" not in risk_bounds
+        assert "total_exposure_enforcer_policy" not in risk_bounds
 
 
 def test_load_fake_live_hsl_config_keeps_disabled_sparse_side_loadable():

@@ -127,6 +127,8 @@ def bot_params(**overrides):
         "total_wallet_exposure_limit": 1.0,
         "wallet_exposure_limit": 1.0,
         "risk_wel_enforcer_threshold": 0.0,
+        "risk_twel_entry_gate_enabled": True,
+        "risk_twel_enforcer_policy": "reduce_overweight",
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
         "risk_entry_cooldown_minutes": 0.0,
@@ -1518,9 +1520,11 @@ def test_twel_entry_gating_blocks_new_entries():
 
     long_bp = {
         "entry_initial_qty_pct": 0.1,
+        "entry_initial_ema_dist": -0.01,
         "entry_grid_spacing_pct": 0.01,
         "total_wallet_exposure_limit": 0.1,
         "wallet_exposure_limit": 0.1,
+        "risk_twel_enforcer_threshold": 1.0,
         "n_positions": 1,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
@@ -1572,6 +1576,7 @@ def test_manual_positions_do_not_consume_twel_entry_budget():
         "entry_grid_spacing_pct": 0.01,
         "total_wallet_exposure_limit": 0.1,
         "wallet_exposure_limit": 0.1,
+        "risk_twel_enforcer_threshold": 1.0,
         "n_positions": 1,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
@@ -1608,6 +1613,7 @@ def test_twel_entry_gating_uses_snapped_balance_not_raw():
         "entry_grid_double_down_factor": 10.0,
         "total_wallet_exposure_limit": 0.2,
         "wallet_exposure_limit": 1.0,
+        "risk_twel_enforcer_threshold": 1.0,
         "n_positions": 1,
     }
     global_bp = bot_params_pair(long_overrides=long_bp)
@@ -1647,6 +1653,101 @@ def test_twel_entry_gating_uses_snapped_balance_not_raw():
     ]
 
 
+def test_twel_entry_gate_disabled_allows_entries_above_raw_twel():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_initial_ema_dist": -0.01,
+        "entry_grid_spacing_pct": 0.02,
+        "entry_grid_double_down_factor": 10.0,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 0.5,
+        "risk_we_excess_allowance_pct": 0.25,
+        "risk_twel_entry_gate_enabled": False,
+        "risk_twel_enforcer_enabled": False,
+        "risk_twel_enforcer_threshold": 0.9,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    held_sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_mode="tp_only",
+        long_pos_size=9.8,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    active_sym = make_symbol(1, bid=100.0, ask=100.0, long_mode="normal", long_bp=long_bp)
+
+    out = compute(
+        pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[held_sym, active_sym])
+    )
+
+    assert any(
+        o["symbol_idx"] == 1 and o["order_type"].startswith("entry_") for o in out["orders"]
+    )
+
+
+def test_twel_entry_gate_uses_thresholded_cap_below_one():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_grid_spacing_pct": 0.02,
+        "entry_grid_double_down_factor": 10.0,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+        "risk_twel_entry_gate_enabled": True,
+        "risk_twel_enforcer_enabled": False,
+        "risk_twel_enforcer_threshold": 0.9,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=9.2,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym]))
+
+    assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
+
+
+def test_twel_entry_gate_caps_threshold_above_one_at_raw_twel():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "entry_initial_qty_pct": 0.1,
+        "entry_grid_spacing_pct": 0.02,
+        "entry_grid_double_down_factor": 10.0,
+        "total_wallet_exposure_limit": 1.0,
+        "wallet_exposure_limit": 1.0,
+        "risk_twel_entry_gate_enabled": True,
+        "risk_twel_enforcer_enabled": False,
+        "risk_twel_enforcer_threshold": 1.2,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym]))
+
+    assert not any(o["order_type"].startswith("entry_") for o in out["orders"])
+
+
 def test_twel_enforcer_emits_auto_reduce():
     import passivbot_rust as pbr
 
@@ -1675,7 +1776,150 @@ def test_twel_enforcer_emits_auto_reduce():
     )
     inp = make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1])
     out = compute(pbr, inp)
-    assert any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+    assert twel_orders
+    assert {o["symbol_idx"] for o in twel_orders} == {1}
+
+
+def test_twel_enforcer_disabled_emits_no_auto_reduce():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "total_wallet_exposure_limit": 0.9,
+        "risk_twel_enforcer_enabled": False,
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    symbols = [
+        make_symbol(0, bid=50.0, ask=50.0, long_pos_size=8.0, long_pos_price=50.0, long_bp=long_bp),
+        make_symbol(1, bid=50.0, ask=50.0, long_pos_size=12.0, long_pos_price=50.0, long_bp=long_bp),
+    ]
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+
+    assert not any(o["order_type"] == "close_auto_reduce_twel_long" for o in out["orders"])
+
+
+def test_twel_reduce_portfolio_can_select_underweight_positions():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.5,
+        "total_wallet_exposure_limit": 0.9,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 2,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym0 = make_symbol(
+        0,
+        bid=110.0,
+        ask=110.0,
+        long_pos_size=4.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+    sym1 = make_symbol(
+        1,
+        bid=80.0,
+        ask=80.0,
+        long_pos_size=10.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym0, sym1]))
+    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+
+    assert {o["symbol_idx"] for o in twel_orders} == {0, 1}
+
+
+def test_twel_auto_reduce_takes_priority_over_wel_for_same_position():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.4,
+        "risk_wel_enforcer_threshold": 1.0,
+        "total_wallet_exposure_limit": 0.5,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    sym = make_symbol(
+        0,
+        bid=100.0,
+        ask=100.0,
+        long_pos_size=6.0,
+        long_pos_price=100.0,
+        long_bp=long_bp,
+    )
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=[sym]))
+    order_types = [o["order_type"] for o in out["orders"]]
+
+    assert "close_auto_reduce_twel_long" in order_types
+    assert "close_auto_reduce_wel_long" not in order_types
+
+
+def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 0.2,
+        "total_wallet_exposure_limit": 0.2,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 4,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    symbols = [
+        make_symbol(
+            0,
+            bid=110.0,
+            ask=110.0,
+            long_mode="tp_only",
+            long_pos_size=3.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            1,
+            bid=109.0,
+            ask=109.0,
+            long_mode="graceful_stop",
+            long_pos_size=3.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            2,
+            bid=108.0,
+            ask=108.0,
+            long_mode="manual",
+            long_pos_size=2.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            3,
+            bid=107.0,
+            ask=107.0,
+            long_mode="panic",
+            long_pos_size=2.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+    ]
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+    twel_symbols = {
+        o["symbol_idx"] for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"
+    }
+
+    assert twel_symbols == {0, 1}
 
 
 def test_twel_enforcer_second_pass_reduces_below_position_floor():
@@ -1684,6 +1928,7 @@ def test_twel_enforcer_second_pass_reduces_below_position_floor():
     long_bp = {
         "wallet_exposure_limit": 0.2,
         "total_wallet_exposure_limit": 1.0,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
         "risk_twel_enforcer_threshold": 1.0,
         "n_positions": 8,
     }

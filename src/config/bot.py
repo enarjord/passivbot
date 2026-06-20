@@ -30,6 +30,7 @@ CLIFF_EDGE_THRESHOLD_KEYS = (
     "risk_twel_enforcer_threshold",
     "unstuck_threshold",
 )
+TWEL_ENFORCER_POLICIES = frozenset({"reduce_overweight", "reduce_portfolio"})
 CLIFF_EDGE_DUST_EPS = 1e-9
 CLIFF_EDGE_WARNING_THRESHOLD = 0.1
 FORAGER_CANONICAL_TO_INTERNAL_BOT_KEYS = {
@@ -91,6 +92,16 @@ def _validate_positive_ratio_when_enabled(
         raise ValueError(f"{threshold_path} must be finite and > 0.0 when {enabled_path}=true")
 
 
+def normalize_twel_enforcer_policy(value, *, path: str) -> str:
+    if not isinstance(value, str):
+        raise TypeError(f"{path} must be a string")
+    normalized = value.strip().lower()
+    if normalized not in TWEL_ENFORCER_POLICIES:
+        allowed = ", ".join(sorted(TWEL_ENFORCER_POLICIES))
+        raise ValueError(f"{path} must be one of: {allowed}")
+    return normalized
+
+
 def validate_bot_config(result: dict) -> None:
     for pside in BOT_POSITION_SIDES:
         bot_side = result["bot"][pside]
@@ -106,6 +117,30 @@ def validate_bot_config(result: dict) -> None:
             enabled_path=f"bot.{pside}.risk.total_exposure_enforcer_enabled",
             threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
         )
+        entry_gate_enabled = _validate_bool(
+            get_grouped_bot_value(bot_side, "risk_twel_entry_gate_enabled"),
+            path=f"bot.{pside}.risk.total_exposure_entry_gate_enabled",
+        )
+        if entry_gate_enabled:
+            _validate_positive_ratio_when_enabled(
+                enabled_value=True,
+                threshold_value=get_grouped_bot_value(bot_side, "risk_twel_enforcer_threshold"),
+                enabled_path=f"bot.{pside}.risk.total_exposure_entry_gate_enabled",
+                threshold_path=f"bot.{pside}.risk.total_exposure_enforcer_threshold",
+            )
+        normalize_twel_enforcer_policy(
+            get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
+            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+        )
+        twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
+        n_positions = int(round(float(get_grouped_bot_value(bot_side, "n_positions"))))
+        twel_enabled = bool(get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"))
+        if twel < 0.0 or not math.isfinite(twel):
+            raise ValueError(f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0")
+        if twel > 0.0 and (entry_gate_enabled or twel_enabled) and n_positions <= 0:
+            raise ValueError(
+                f"bot.{pside}.risk.n_positions must be > 0 when TWEL entry gate or enforcer is enabled"
+            )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
             path=f"bot.{pside}.unstuck.enabled",
@@ -559,6 +594,18 @@ def normalize_risk_config(result: dict, *, tracker: Optional[object] = None) -> 
                 normalized,
             )
         risk_cfg["we_excess_allowance_mode"] = normalized
+        current_policy = risk_cfg.get("total_exposure_enforcer_policy")
+        normalized_policy = normalize_twel_enforcer_policy(
+            current_policy,
+            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+        )
+        if tracker is not None and current_policy != normalized_policy:
+            tracker.update(
+                ["bot", pside, "risk", "total_exposure_enforcer_policy"],
+                current_policy,
+                normalized_policy,
+            )
+        risk_cfg["total_exposure_enforcer_policy"] = normalized_policy
 
 
 def normalize_coin_override_risk_config(

@@ -1,6 +1,6 @@
 use crate::constants::{LONG, SHORT};
 use crate::entries::calc_min_entry_qty;
-use crate::types::{ExchangeParams, Order, OrderType};
+use crate::types::{ExchangeParams, Order, OrderType, TwelEnforcerPolicy};
 use crate::utils::{
     calc_auto_unstuck_allowance, calc_new_psize_pprice, calc_pnl_long, calc_pnl_short,
     calc_pprice_diff_int, calc_pside_price_diff_int, calc_wallet_exposure, cost_to_qty,
@@ -44,10 +44,6 @@ fn least_stuck_order(candidates: Vec<LeastStuckCandidate>) -> Vec<usize> {
         .into_iter()
         .map(|candidate| candidate.collection_idx)
         .collect()
-}
-
-fn select_least_stuck(candidates: Vec<LeastStuckCandidate>) -> Option<usize> {
-    least_stuck_order(candidates).into_iter().next()
 }
 
 #[derive(Clone, Debug)]
@@ -626,17 +622,21 @@ pub fn calc_twel_enforcer_actions(
     effective_n_positions: usize,
     balance: f64,
     positions: &[TwelEnforcerInputPosition],
+    policy: TwelEnforcerPolicy,
     skip_idx: Option<usize>,
 ) -> Vec<(usize, Order)> {
-    if threshold < 0.0
+    if threshold <= 0.0
         || total_wallet_exposure_limit <= 0.0
         || balance <= 0.0
         || effective_n_positions == 0
+        || !threshold.is_finite()
+        || !total_wallet_exposure_limit.is_finite()
+        || !balance.is_finite()
     {
         return Vec::new();
     }
     let limit = total_wallet_exposure_limit * threshold;
-    if limit <= 0.0 {
+    if !limit.is_finite() || limit <= 0.0 {
         return Vec::new();
     }
     #[derive(Clone, Debug)]
@@ -644,7 +644,6 @@ pub fn calc_twel_enforcer_actions(
         idx: usize,
         exposure: f64,
         initial_abs_psize: f64,
-        abs_psize: f64,
         position_price: f64,
         market_price: f64,
         qty_step: f64,
@@ -652,15 +651,10 @@ pub fn calc_twel_enforcer_actions(
         min_qty: f64,
         min_cost: f64,
         c_mult: f64,
-        price_diff: f64,
-        psize_to_close: f64,
-        floor_exposure: f64,
-        floor_psize: f64,
-        blocked_floor_pass: bool,
-        blocked_no_floor_pass: bool,
+        adverse_loss: f64,
     }
 
-    let mut candidates: Vec<Candidate> = Vec::with_capacity(positions.len());
+    let mut valid_positions: Vec<Candidate> = Vec::with_capacity(positions.len());
     let mut total_exposure = 0.0f64;
     for pos in positions {
         if !pos.position_price.is_finite() || pos.position_price <= 0.0 {
@@ -739,7 +733,6 @@ pub fn calc_twel_enforcer_actions(
         } else {
             pos.position_price
         };
-        let price_diff = calc_pprice_diff_int(pside, pos.position_price, market_price);
         let base_limit = pos.base_wallet_exposure_limit.max(0.0);
         if base_limit <= 0.0 {
             log::error!(
@@ -749,15 +742,20 @@ pub fn calc_twel_enforcer_actions(
             );
             continue;
         }
-        let per_position_twel_share = limit / (effective_n_positions as f64);
-        let floor_exposure = base_limit.min(per_position_twel_share.max(0.0));
-        let floor_psize =
-            exposure_to_psize(floor_exposure, balance, pos.position_price, pos.c_mult);
-        candidates.push(Candidate {
+        let projected_pnl = match pside {
+            LONG => calc_pnl_long(pos.position_price, market_price, -abs_psize, pos.c_mult),
+            SHORT => calc_pnl_short(pos.position_price, market_price, abs_psize, pos.c_mult),
+            _ => 0.0,
+        };
+        let adverse_loss = if projected_pnl.is_finite() {
+            (-projected_pnl).max(0.0)
+        } else {
+            f64::INFINITY
+        };
+        valid_positions.push(Candidate {
             idx: pos.idx,
             exposure,
             initial_abs_psize: abs_psize,
-            abs_psize,
             position_price: pos.position_price,
             market_price,
             qty_step: pos.qty_step,
@@ -765,198 +763,48 @@ pub fn calc_twel_enforcer_actions(
             min_qty: pos.min_qty.max(0.0),
             min_cost: pos.min_cost.max(0.0),
             c_mult: pos.c_mult,
-            price_diff,
-            psize_to_close: 0.0,
-            floor_exposure,
-            floor_psize: floor_psize.max(0.0),
-            blocked_floor_pass: false,
-            blocked_no_floor_pass: false,
+            adverse_loss,
         });
     }
 
     let exposure_tolerance = 1e-9;
     let qty_tolerance = 1e-9;
-    if candidates.is_empty() || !(total_exposure > limit + exposure_tolerance) {
+    if valid_positions.is_empty() || !(total_exposure > limit + exposure_tolerance) {
         return Vec::new();
     }
 
-    for respect_floor in [true, false] {
-        loop {
-            if total_exposure <= limit + exposure_tolerance {
-                break;
+    let overweight_target = limit / effective_n_positions as f64;
+    let mut candidates: Vec<Candidate> = valid_positions
+        .into_iter()
+        .filter(|candidate| match policy {
+            TwelEnforcerPolicy::ReduceOverweight => {
+                candidate.exposure > overweight_target + exposure_tolerance
             }
-            let best_candidate = select_least_stuck(
-                candidates
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, cand)| {
-                        cand.abs_psize > qty_tolerance
-                            && if respect_floor {
-                                !cand.blocked_floor_pass
-                                    && cand.exposure > cand.floor_exposure + exposure_tolerance
-                            } else {
-                                !cand.blocked_no_floor_pass && cand.exposure > exposure_tolerance
-                            }
-                    })
-                    .map(|(collection_idx, cand)| LeastStuckCandidate {
-                        collection_idx,
-                        symbol_idx: cand.idx,
-                        price_diff: cand.price_diff,
-                    })
-                    .collect(),
-            );
-
-            let Some(candidate_idx) = best_candidate else {
-                break;
-            };
-
-            let candidate = &mut candidates[candidate_idx];
-            let reducible_exposure = if respect_floor {
-                (candidate.exposure - candidate.floor_exposure).max(0.0)
-            } else {
-                candidate.exposure
-            };
-            if reducible_exposure <= exposure_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-            let needed_exposure = (total_exposure - limit).max(0.0);
-            if needed_exposure <= exposure_tolerance {
-                break;
-            }
-            let exposure_to_cut = reducible_exposure.min(needed_exposure);
-            let mut qty_reduce = exposure_to_psize(
-                exposure_to_cut,
-                balance,
-                candidate.position_price,
-                candidate.c_mult,
-            );
-            if qty_reduce <= qty_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-            qty_reduce = round_up(qty_reduce, candidate.qty_step);
-            if qty_reduce > candidate.abs_psize {
-                qty_reduce = candidate.abs_psize;
-            }
-            if qty_reduce <= qty_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-
-            if respect_floor {
-                let prospective_psize = candidate.abs_psize - qty_reduce;
-                if prospective_psize + qty_tolerance < candidate.floor_psize {
-                    let target_psize = candidate.floor_psize.min(candidate.abs_psize);
-                    let mut adjusted_qty = (candidate.abs_psize - target_psize).max(0.0);
-                    adjusted_qty = round_dn(adjusted_qty, candidate.qty_step);
-                    if adjusted_qty <= qty_tolerance {
-                        candidate.blocked_floor_pass = true;
-                        continue;
-                    }
-                    qty_reduce = adjusted_qty.min(candidate.abs_psize);
-                }
-            }
-            if qty_reduce <= qty_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-
-            let mut close_qty = qty_reduce;
-            if close_qty < candidate.min_qty {
-                if candidate.abs_psize <= candidate.min_qty + qty_tolerance {
-                    close_qty = candidate.abs_psize;
-                } else {
-                    close_qty = candidate.min_qty;
-                }
-            }
-            close_qty = round_dn(close_qty, candidate.qty_step);
-            if close_qty <= qty_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-            if close_qty > candidate.abs_psize {
-                close_qty = candidate.abs_psize;
-            }
-            let new_abs_psize = (candidate.abs_psize - close_qty).max(0.0);
-            let new_exposure = calc_wallet_exposure(
-                candidate.c_mult,
-                balance,
-                new_abs_psize,
-                candidate.position_price,
-            );
-            if respect_floor && new_exposure < candidate.floor_exposure - exposure_tolerance {
-                candidate.blocked_floor_pass = true;
-                continue;
-            }
-            let actual_reduce = (candidate.exposure - new_exposure).max(0.0);
-            if actual_reduce <= exposure_tolerance {
-                if respect_floor {
-                    candidate.blocked_floor_pass = true;
-                } else {
-                    candidate.blocked_no_floor_pass = true;
-                }
-                continue;
-            }
-            candidate.abs_psize = new_abs_psize;
-            candidate.exposure = new_exposure;
-            candidate.psize_to_close += close_qty;
-            total_exposure -= actual_reduce;
-        }
-        if total_exposure <= limit + exposure_tolerance {
-            break;
-        }
+            TwelEnforcerPolicy::ReducePortfolio => candidate.exposure > exposure_tolerance,
+        })
+        .collect();
+    if candidates.is_empty() {
+        return Vec::new();
     }
 
-    if total_exposure > limit + exposure_tolerance {
-        log::warn!(
-            "TWEL enforcer unable to reduce exposure to target: remaining {:.6} > {:.6}",
-            total_exposure,
-            limit
-        );
-    }
+    candidates.sort_by(|a, b| {
+        a.adverse_loss
+            .partial_cmp(&b.adverse_loss)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| a.idx.cmp(&b.idx))
+    });
 
     let mut actions: Vec<(usize, Order)> = Vec::new();
     for candidate in candidates {
-        if candidate.psize_to_close <= qty_tolerance {
-            continue;
-        }
-        let available_qty = (candidate.initial_abs_psize - candidate.abs_psize).max(0.0);
-        if available_qty <= qty_tolerance {
-            continue;
-        }
-        let mut qty_to_close = candidate.psize_to_close.min(available_qty);
-        if qty_to_close < candidate.min_qty {
-            if available_qty <= candidate.min_qty + qty_tolerance {
-                qty_to_close = available_qty;
-            } else {
-                qty_to_close = candidate.min_qty;
-            }
-        }
-        qty_to_close = round_dn(qty_to_close, candidate.qty_step);
-        if qty_to_close <= qty_tolerance {
-            continue;
-        }
+        let needed_exposure = (total_exposure - limit).max(0.0);
+        let exposure_to_cut = needed_exposure.min(candidate.exposure);
+        let mut qty_to_close = exposure_to_psize(
+            exposure_to_cut,
+            balance,
+            candidate.position_price,
+            candidate.c_mult,
+        );
+        qty_to_close = round_up(qty_to_close, candidate.qty_step);
         let mut price = candidate.market_price;
         if !price.is_finite() || price <= 0.0 {
             price = candidate.position_price;
@@ -1043,6 +891,18 @@ pub fn calc_twel_enforcer_actions(
                 _ => 0.0,
             };
         }
+        let remaining_psize = (candidate.initial_abs_psize - order.qty.abs()).max(0.0);
+        let new_exposure = calc_wallet_exposure(
+            candidate.c_mult,
+            balance,
+            remaining_psize,
+            candidate.position_price,
+        );
+        let actual_reduce = (candidate.exposure - new_exposure).max(0.0);
+        if actual_reduce <= exposure_tolerance {
+            continue;
+        }
+        total_exposure -= actual_reduce;
         actions.push((candidate.idx, order));
     }
     actions
@@ -1126,8 +986,16 @@ mod tests {
             pos(0, 8.0, 50.0, 50.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
             pos(1, 12.0, 50.0, 49.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
-        let actions =
-            calc_twel_enforcer_actions(LONG, threshold, twel, 2, balance, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            threshold,
+            twel,
+            2,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReduceOverweight,
+            None,
+        );
         assert!(!actions.is_empty(), "should emit reduction actions");
         // Only the most above-floor position (idx 1) should be targeted
         for (idx, _) in &actions {
@@ -1175,8 +1043,16 @@ mod tests {
             pos(1, 15.0, 50.0, 49.5, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
 
-        let actions =
-            calc_twel_enforcer_actions(LONG, threshold, twel, 2, balance, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            threshold,
+            twel,
+            2,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReduceOverweight,
+            None,
+        );
         assert!(
             !actions.is_empty(),
             "thresholded TWEL target should be reachable even when positions start at WEL"
@@ -1207,7 +1083,16 @@ mod tests {
             pos(0, 4.0, 50.0, 50.0, 0.2, 1.0, 0.1, 0.1, 0.1, 0.0),
             pos(1, 12.0, 50.0, 48.0, 0.2, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
-        let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 2, balance, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            twel,
+            2,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReduceOverweight,
+            None,
+        );
         assert!(
             actions.iter().all(|(idx, _)| *idx == 1),
             "only idx 1 should be reduced"
@@ -1253,7 +1138,16 @@ mod tests {
             // idx 1: position_price 100, market 99 (near breakeven, small diff)
             pos(1, 7.5, 100.0, 99.0, wel_base, 1.0, 0.1, 0.1, 0.1, 0.0),
         ];
-        let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 2, balance, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            twel,
+            2,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReduceOverweight,
+            None,
+        );
         assert!(!actions.is_empty());
         // The action with the smallest price diff should target idx 1
         let price_diff = |idx: usize| -> f64 {
@@ -1270,6 +1164,35 @@ mod tests {
             .map(|(idx, _)| *idx)
             .unwrap();
         assert_eq!(best_idx, 1);
+    }
+
+    #[test]
+    fn test_twel_reducer_emits_one_order_per_reduce_portfolio_candidate() {
+        let balance = 1000.0;
+        let twel = 0.9;
+        let positions = vec![
+            pos(0, 4.0, 100.0, 110.0, 0.5, 1.0, 0.1, 0.1, 0.1, 0.0),
+            pos(1, 4.0, 100.0, 109.0, 0.5, 1.0, 0.1, 0.1, 0.1, 0.0),
+            pos(2, 2.0, 100.0, 108.0, 0.5, 1.0, 0.1, 0.1, 0.1, 0.0),
+        ];
+
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            twel,
+            3,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReducePortfolio,
+            None,
+        );
+
+        let action_idxs: Vec<usize> = actions.iter().map(|(idx, _)| *idx).collect();
+        assert_eq!(
+            action_idxs,
+            vec![0, 1, 2],
+            "reduce_portfolio should emit one order per managed open-position candidate"
+        );
     }
 
     #[test]
@@ -1294,7 +1217,16 @@ mod tests {
             ));
         }
 
-        let actions = calc_twel_enforcer_actions(LONG, 1.0, twel, 8, balance, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            twel,
+            8,
+            balance,
+            &positions,
+            TwelEnforcerPolicy::ReducePortfolio,
+            None,
+        );
         assert!(
             actions.iter().any(|(idx, _)| *idx == 0),
             "second pass should reduce the least-stuck position even when all positions are at/below floor"
@@ -1326,7 +1258,16 @@ mod tests {
     fn test_twel_reducer_never_closes_more_than_position_after_rounding() {
         let positions = vec![pos(0, 0.26, 100.0, 100.0, 0.1, 1.0, 0.1, 0.1, 0.0, 30.0)];
 
-        let actions = calc_twel_enforcer_actions(LONG, 1.0, 0.0001, 1, 1000.0, &positions, None);
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            0.0001,
+            1,
+            1000.0,
+            &positions,
+            TwelEnforcerPolicy::ReducePortfolio,
+            None,
+        );
 
         assert!(!actions.is_empty(), "expected TWEL reducer action");
         for (_idx, order) in actions {

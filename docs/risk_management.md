@@ -152,32 +152,35 @@ Set `we_excess_allowance_mode = "legacy_raw"` only when intentionally preserving
     * *Effective per-position limit:* `0.10 * 1.5 = 0.15`.
     * If there is a market crash and 6 positions fill to their effective limit, the total exposure is `6 * 0.15 = 0.9`.
     * If a 7th position also fills to 0.15, total exposure would become `1.05`.
-    * Since `1.05 > 1.0` (the TWEL), the bot will gate any new orders for that 7th position that would cause the total wallet exposure to breach the TWEL, effectively blocking the "excess" allowance for the last few positions.
+    * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position when `total_exposure_entry_gate_enabled = true`, effectively blocking the "excess" allowance for the last few positions.
 
 #### Total Exposure Enforcer (`total_exposure_enforcer_threshold`)
-This controls **total portfolio** trimming. It monitors the sum of all long (or short) exposures. If the total exceeds:
+This controls **total portfolio** trimming. It monitors the sum of all managed long (or short) exposures. If the raw-balance total exceeds:
 `total_wallet_exposure_limit * total_exposure_enforcer_threshold`
-The bot reduces positions, starting with the **least underwater** ones first (following Auto-Unstuck logic).
+The bot reduces positions according to `total_exposure_enforcer_policy`.
 
 * `0.95`: Trims the portfolio when it reaches 95% of the total limit.
 * `1.0`: Strictly enforces the total limit.
 * `> 1.0`: Allows some overflow (e.g., during extreme volatility) before forced reduction occurs.
 
-Set `total_exposure_enforcer_enabled = false` to disable this control. The
-threshold must be finite and greater than zero when enabled.
+`total_exposure_entry_gate_enabled` is separate from auto-reduce. When enabled, bot-generated
+entries are blocked or cropped before projected snapped-balance TWE can exceed
+`min(total_wallet_exposure_limit, total_wallet_exposure_limit * total_exposure_enforcer_threshold)`.
+When disabled, positive excess allowance can let bot entries push TWE above raw TWEL; this is an
+explicit opt-out from the portfolio entry cap.
+
+Set `total_exposure_enforcer_enabled = false` to disable TWEL auto-reduce. The threshold must be
+finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
 
 This portfolio trimming mechanism pairs well with the excess allowance. When TWE
-hits TWEL and new orders are blocked, the total exposure enforcer first chips
-away at least-underwater positions above their per-position floor. If total
-bot-scope exposure remains above target, it has greater authority and continues
-reducing least-underwater bot-managed positions even below that floor.
+exceeds the repair target, `reduce_overweight` trims only positions above their thresholded
+per-slot target. `reduce_portfolio` may trim any managed open position on that side. Both policies
+prefer profitable or breakeven reductions first, then the shallowest adverse-loss reductions, with
+stable symbol tie-breaks.
 
-Manual-mode positions are outside bot scope: they do not receive bot-created
-orders, bot cancellations, auto unstuck, exposure-enforcer reductions, active
-slot accounting, or bot-scope TWE/TWEL accounting.
-
-The future v8 policy-contract work for this enforcer is tracked in
-[`docs/plans/v8_twel_enforcer_policy_contract.md`](plans/v8_twel_enforcer_policy_contract.md).
+`normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
+panic positions remain outside TWEL auto-reduce management. TWEL auto-reduce is still subject to
+`max_realized_loss_pct`; only panic close orders bypass the realized-loss gate.
 
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.
