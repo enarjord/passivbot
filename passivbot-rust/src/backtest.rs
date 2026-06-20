@@ -528,6 +528,8 @@ pub struct StrategyEquityMetrics {
     pub drawdown_worst_ema_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
+    pub strategy_eq_underwater_pct_mean: f64,
+    pub strategy_eq_underwater_pct_median: f64,
     pub strategy_eq_recovery_days_mean: f64,
     pub strategy_eq_recovery_days_median: f64,
     pub strategy_eq_recovery_days_p95: f64,
@@ -5486,6 +5488,8 @@ impl<'a> Backtest<'a> {
             let daily_worst_drawdowns =
                 daily_worst_positive_drawdowns(drawdowns, timestamps_ms, series.len());
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
+            let strategy_eq_underwater_pct_mean = mean_abs(&daily_worst_drawdowns);
+            let strategy_eq_underwater_pct_median = median_abs(&daily_worst_drawdowns);
             let drawdown_worst_ema_strategy_eq = drawdown_emas
                 .map(|values| {
                     values
@@ -5510,6 +5514,8 @@ impl<'a> Backtest<'a> {
                 drawdown_worst_ema_strategy_eq,
                 drawdown_worst_mean_1pct_strategy_eq: drawdown_worst_mean_1pct,
                 drawdown_worst_mean_1pct_ema_strategy_eq,
+                strategy_eq_underwater_pct_mean,
+                strategy_eq_underwater_pct_median,
                 ..StrategyEquityMetrics::default()
             }
         };
@@ -5796,6 +5802,37 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         .map(|x| x.abs())
         .sum::<f64>()
         / worst_n as f64
+}
+
+fn mean_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().map(|x| x.abs()).sum::<f64>() / values.len() as f64
+}
+
+fn median_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.iter().map(|x| x.abs()).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b).unwrap_or_else(|| {
+            if a.is_nan() && b.is_nan() {
+                Ordering::Equal
+            } else if a.is_nan() {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        })
+    });
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -8266,6 +8303,26 @@ mod tests {
         assert!((daily_worst[0] - 0.5).abs() < 1e-12);
         assert!((daily_worst[1] - (1.0 / 110.0)).abs() < 1e-12);
         assert!((mean_worst_1pct_abs(&daily_worst) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn strategy_eq_underwater_pct_uses_daily_worst_drawdowns() {
+        let day = 86_400_000;
+        let series = vec![100.0, 50.0, 110.0, 109.0, 110.0, 99.0];
+        let timestamps = vec![
+            0,
+            3_600_000,
+            day,
+            day + 3_600_000,
+            2 * day,
+            2 * day + 3_600_000,
+        ];
+        let drawdowns = calc_strategy_equity_drawdowns(&series);
+        let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
+
+        assert_eq!(daily_worst.len(), 3);
+        assert!((mean_abs(&daily_worst) - ((0.5 + (1.0 / 110.0) + 0.1) / 3.0)).abs() < 1e-12);
+        assert!((median_abs(&daily_worst) - 0.1).abs() < 1e-12);
     }
 
     #[test]

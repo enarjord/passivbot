@@ -46,7 +46,27 @@ def test_default_objective_goal_recognizes_strategy_eq_recovery_metrics():
     assert default_objective_goal("strategy_eq_recovery_days_mean_worst_5pct") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_mean_worst_1pct") == "min"
     assert default_objective_goal("strategy_eq_recovery_days_max") == "min"
+    assert default_objective_goal("strategy_eq_underwater_pct_mean") == "min"
+    assert default_objective_goal("strategy_eq_underwater_pct_median") == "min"
     assert default_objective_goal("peak_recovery_days_strategy_eq") == "min"
+
+
+def test_strategy_eq_underwater_metrics_are_shared_despite_stat_like_suffixes():
+    specs, changed = normalize_scoring_entries(
+        ["strategy_eq_underwater_pct_mean", "strategy_eq_underwater_pct_median"]
+    )
+
+    assert changed
+    assert [(spec.metric, spec.goal) for spec in specs] == [
+        ("strategy_eq_underwater_pct_mean", "min"),
+        ("strategy_eq_underwater_pct_median", "min"),
+    ]
+    metrics = {
+        "strategy_eq_underwater_pct_mean": 0.12,
+        "strategy_eq_underwater_pct_mean_mean": 0.13,
+    }
+    assert resolve_metric_value(metrics, "strategy_eq_underwater_pct_mean") == 0.12
+    assert resolve_metric_value(metrics, "strategy_eq_underwater_pct_mean_mean") == 0.13
 
 
 def test_hard_stop_panic_close_drawdown_metrics_are_shared():

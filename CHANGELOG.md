@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
+  backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added
   `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
   allowance; migrated v7 trailing-grid configs also force v7-absent entry

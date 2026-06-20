@@ -136,6 +136,8 @@ SHARED_METRICS = {
     "drawdown_worst_ema_strategy_eq",
     "drawdown_worst_mean_1pct_strategy_eq",
     "drawdown_worst_mean_1pct_ema_strategy_eq",
+    "strategy_eq_underwater_pct_mean",
+    "strategy_eq_underwater_pct_median",
     "strategy_eq_recovery_days_mean",
     "strategy_eq_recovery_days_median",
     "strategy_eq_recovery_days_p95",

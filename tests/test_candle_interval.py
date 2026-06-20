@@ -156,6 +156,8 @@ def test_backtest_with_candle_interval():
         "position_unchanged_days_max",
         "high_exposure_days_max_long",
         "peak_recovery_days_strategy_eq",
+        "strategy_eq_underwater_pct_mean",
+        "strategy_eq_underwater_pct_median",
         "fills_count",
         "fills_per_day",
         "fills_gap_longest_days",

@@ -1562,6 +1562,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_usd.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_usd.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_usd.strategy_eq_recovery_days_median =
@@ -1654,6 +1658,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_btc.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_btc.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_btc.strategy_eq_recovery_days_median =
@@ -2082,9 +2090,9 @@ fn ema_anchor_strategy_params_from_dict(dict: &PyDict) -> PyResult<Value> {
 
 fn validate_py_dict_keys(dict: &PyDict, context: &str, allowed: &[&str]) -> PyResult<()> {
     for (key, _value) in dict.iter() {
-        let key = key.extract::<String>().map_err(|_| {
-            PyValueError::new_err(format!("{} contains a non-string key", context))
-        })?;
+        let key = key
+            .extract::<String>()
+            .map_err(|_| PyValueError::new_err(format!("{} contains a non-string key", context)))?;
         if !allowed.contains(&key.as_str()) {
             return Err(PyValueError::new_err(format!(
                 "{} contains unknown key: {}",
