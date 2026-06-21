@@ -1486,7 +1486,7 @@ mod core {
         }
     }
 
-    fn managed_side_twe_after_remaining_twel_closes(
+    fn side_twe_after_remaining_twel_closes(
         input: &OrchestratorInput,
         per_side: &[Option<PerSymbolOrders>],
         pside: PositionSide,
@@ -1498,7 +1498,7 @@ mod core {
         }
         let mut twe = 0.0;
         for s in per_side.iter().filter_map(|v| v.as_ref()) {
-            if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+            if s.pos.size == 0.0 {
                 continue;
             }
             let Some(sym) = input.symbols.get(s.symbol_idx) else {
@@ -1549,15 +1549,10 @@ mod core {
             return;
         };
         let balance_raw = input_balance_raw(input);
-        let current_twe = managed_side_twe_after_remaining_twel_closes(
-            input,
-            per_side,
-            pside,
-            balance_raw,
-            false,
-        );
+        let current_twe =
+            side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, false);
         let projected_twe_after_allowed_reductions =
-            managed_side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, true);
+            side_twe_after_remaining_twel_closes(input, per_side, pside, balance_raw, true);
         if current_twe <= target + 1e-9 || projected_twe_after_allowed_reductions <= target + 1e-9 {
             return;
         }
@@ -3130,7 +3125,7 @@ mod core {
         {
             workspace.twel_positions.clear();
             for s in per_long.iter().filter_map(|v| v.as_ref()) {
-                if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+                if s.pos.size == 0.0 {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
@@ -3139,6 +3134,10 @@ mod core {
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.bid,
+                    is_managed_candidate: !matches!(
+                        s.mode,
+                        TradingMode::Manual | TradingMode::Panic
+                    ),
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,
@@ -3192,7 +3191,7 @@ mod core {
         {
             workspace.twel_positions.clear();
             for s in per_short.iter().filter_map(|v| v.as_ref()) {
-                if matches!(s.mode, TradingMode::Manual | TradingMode::Panic) || s.pos.size == 0.0 {
+                if s.pos.size == 0.0 {
                     continue;
                 }
                 let sym = &input.symbols[s.symbol_idx];
@@ -3201,6 +3200,10 @@ mod core {
                     position_size: s.pos.size,
                     position_price: s.pos.price,
                     market_price: sym.order_book.ask,
+                    is_managed_candidate: !matches!(
+                        s.mode,
+                        TradingMode::Manual | TradingMode::Panic
+                    ),
                     c_mult: sym.exchange.c_mult,
                     qty_step: sym.exchange.qty_step,
                     price_step: sym.exchange.price_step,

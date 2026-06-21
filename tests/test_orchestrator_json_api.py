@@ -1922,6 +1922,54 @@ def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
     assert twel_symbols == {0, 1}
 
 
+def test_twel_auto_reduce_manual_panic_exposure_triggers_managed_repair():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "wallet_exposure_limit": 1.0,
+        "risk_wel_enforcer_enabled": False,
+        "total_wallet_exposure_limit": 0.5,
+        "risk_twel_enforcer_policy": "reduce_portfolio",
+        "risk_twel_enforcer_threshold": 1.0,
+        "n_positions": 1,
+    }
+    global_bp = bot_params_pair(long_overrides=long_bp)
+    symbols = [
+        make_symbol(
+            0,
+            bid=100.0,
+            ask=100.0,
+            long_mode="normal",
+            long_pos_size=1.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            1,
+            bid=100.0,
+            ask=100.0,
+            long_mode="manual",
+            long_pos_size=3.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+        make_symbol(
+            2,
+            bid=100.0,
+            ask=100.0,
+            long_mode="panic",
+            long_pos_size=2.0,
+            long_pos_price=100.0,
+            long_bp=long_bp,
+        ),
+    ]
+
+    out = compute(pbr, make_input(balance=1_000.0, global_bp=global_bp, symbols=symbols))
+    twel_orders = [o for o in out["orders"] if o["order_type"] == "close_auto_reduce_twel_long"]
+
+    assert {o["symbol_idx"] for o in twel_orders} == {0}
+
+
 def test_twel_enforcer_can_reduce_below_per_slot_target():
     import passivbot_rust as pbr
 

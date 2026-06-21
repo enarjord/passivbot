@@ -8,6 +8,8 @@ All notable user-facing changes will be documented in this file.
   separately from TWEL auto-reduce, entry gating uses the capped thresholded
   portfolio cap, and TWEL auto-reduce supports `reduce_overweight` and
   `reduce_portfolio` policies while remaining subject to the realized-loss gate.
+  Manual and panic exposure now counts toward same-side TWEL measurement while
+  remaining excluded from TWEL auto-reduce candidate selection.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
   backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added

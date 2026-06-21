@@ -3534,6 +3534,11 @@ pub fn calc_twel_enforcer_orders_py(
                     PyValueError::new_err("twel enforcer position missing 'market_price'")
                 })?
                 .extract::<f64>()?,
+            is_managed_candidate: dict
+                .get_item("is_managed_candidate")?
+                .map(|value| value.extract::<bool>())
+                .transpose()?
+                .unwrap_or(true),
             c_mult: dict
                 .get_item("c_mult")?
                 .ok_or_else(|| PyValueError::new_err("twel enforcer position missing 'c_mult'"))?

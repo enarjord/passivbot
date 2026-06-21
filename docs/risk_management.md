@@ -155,7 +155,8 @@ Set `we_excess_allowance_mode = "legacy_raw"` only when intentionally preserving
     * Since `1.05 > 1.0` (the TWEL), the bot will gate any new bot-generated entries for that 7th position when `total_exposure_entry_gate_enabled = true`, effectively blocking the "excess" allowance for the last few positions.
 
 #### Total Exposure Enforcer (`total_exposure_enforcer_threshold`)
-This controls **total portfolio** trimming. It monitors the sum of all managed long (or short) exposures. If the raw-balance total exceeds:
+This controls **total portfolio** trimming. It monitors the sum of all same-side long or short
+exchange exposure, including manual and panic positions. If the raw-balance total exceeds:
 `total_wallet_exposure_limit * total_exposure_enforcer_threshold`
 The bot reduces positions according to `total_exposure_enforcer_policy`.
 
@@ -173,15 +174,16 @@ explicit opt-out from the portfolio entry cap.
 Set `total_exposure_enforcer_enabled = false` to disable TWEL auto-reduce. The threshold must be
 finite and greater than zero when either TWEL entry gating or TWEL auto-reduce is enabled.
 
-This portfolio trimming mechanism pairs well with the excess allowance. When managed raw-balance
-TWE exceeds the repair target, `reduce_overweight` trims only positions above their thresholded
-per-slot target. `reduce_portfolio` may trim any managed open position on that side. Both policies
-prefer profitable or breakeven reductions first, then the shallowest adverse-loss reductions, with
-stable symbol tie-breaks, and stop once projected TWE reaches the repair target.
+This portfolio trimming mechanism pairs well with the excess allowance. When same-side raw-balance
+TWE exceeds the repair target, `reduce_overweight` trims only managed positions above their
+thresholded per-slot target. `reduce_portfolio` may trim any managed open position on that side.
+Both policies prefer profitable or breakeven reductions first, then the shallowest adverse-loss
+reductions, with stable symbol tie-breaks, and stop once projected TWE reaches the repair target.
 
 `normal`, `graceful_stop`, and `tp_only` open positions are managed by TWEL auto-reduce. Manual and
-panic positions remain outside TWEL auto-reduce management. TWEL auto-reduce is still subject to
-`max_realized_loss_pct`; only panic close orders bypass the realized-loss gate.
+panic exposure contributes to the same-side TWE measurement, but those positions remain outside
+TWEL auto-reduce management. TWEL auto-reduce is still subject to `max_realized_loss_pct`; only
+panic close orders bypass the realized-loss gate.
 
 ### C. Realized-Loss Gate (`live.max_realized_loss_pct`)
 This is a global guardrail on **loss-realizing close orders**. It applies to all close order types, including WEL/TWEL auto-reduce and unstuck closes. Only panic closes are exempt.

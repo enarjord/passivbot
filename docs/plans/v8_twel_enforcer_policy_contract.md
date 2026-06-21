@@ -212,7 +212,8 @@ Common reasons current TWE can exceed `twel_repair_target` even with entry gatin
 ## Mode Semantics
 
 TWEL entry gating applies only to bot-generated entry candidates. It does not govern external,
-manual, or already-open exchange orders that are intentionally outside entry generation.
+manual, or already-open exchange orders that are intentionally outside entry generation. Existing
+same-side exchange exposure still counts toward the entry-gate TWE baseline.
 
 Mode interactions:
 
@@ -228,8 +229,10 @@ Mode interactions:
   override manual mode.
 - `panic`: generate panic close behavior only; TWEL auto-reduce should not compete with panic mode.
 
-`reduce_portfolio` and `reduce_overweight` include managed open positions in `normal`,
-`graceful_stop`, and `tp_only`. They exclude `manual` and `panic`.
+TWEL auto-reduce measures current same-side TWE from all open same-side exchange positions,
+including `manual` and `panic`. `reduce_portfolio` and `reduce_overweight` choose repair
+candidates only from managed open positions in `normal`, `graceful_stop`, and `tp_only`; they do
+not emit TWEL auto-reduce orders for `manual` or `panic`.
 
 ## Config Parameters
 
@@ -497,8 +500,9 @@ Rust remains the source of truth for this behavior:
   - call TWEL reducer only when auto-reduce is enabled and current TWE exceeds
     `twel_repair_target`
   - keep TWEL entry gating limited to bot-generated entries
-  - include `normal`, `graceful_stop`, and `tp_only` open positions in TWEL auto-reduce; exclude
-    `manual` and `panic`
+  - include all same-side open exchange positions in TWEL auto-reduce trigger/current-TWE
+    measurement, but select repair candidates only from `normal`, `graceful_stop`, and `tp_only`;
+    exclude `manual` and `panic` from emitted TWEL auto-reduce orders
   - keep TWEL auto-reduce subject to `max_realized_loss_pct`; keep `ClosePanic*` exempt
   - compute TWEL auto-reduce before WEL auto-reduce and skip WEL for positions selected by TWEL
   - pass the selected policy to the reducer
@@ -552,7 +556,8 @@ Add focused Rust/Python tests around the JSON orchestrator boundary:
     and continuation entries are TWEL-gated when the entry gate is enabled.
 18. `tp_only` generates no bot entries, preserves operator entry responsibility, and still allows
     TWEL auto-reduce for managed open positions.
-19. `manual` and `panic` positions are excluded from TWEL auto-reduce candidate selection.
+19. `manual` and `panic` exposure contributes to TWEL auto-reduce trigger/current-TWE
+    measurement, but those positions are excluded from TWEL auto-reduce candidate selection.
 20. `ClosePanic*` orders bypass `max_realized_loss_pct`; TWEL auto-reduce orders do not.
 
 ## Resolved Decisions
@@ -563,7 +568,8 @@ Add focused Rust/Python tests around the JSON orchestrator boundary:
   `ClosePanicLong` / `ClosePanicShort` order types.
 - `reduce_portfolio` and `reduce_overweight` include managed open positions in `tp_only` and
   `graceful_stop`.
-- `manual` and `panic` remain outside TWEL auto-reduce management.
+- `manual` and `panic` exposure is counted for same-side TWEL measurement, but those modes remain
+  outside TWEL auto-reduce management.
 - `tp_only` is manual/operator-risk for entries and managed for closes. TWEL entry gating therefore
   has no bot-generated entries to gate in `tp_only`.
 
@@ -583,7 +589,8 @@ TWEL entry gate:
 TWEL auto-reduce:
     optional portfolio repair path.
     when enabled, repairs already-over-target states above raw_twel * threshold.
-    subject to max_realized_loss_pct; excludes manual and panic positions.
+    subject to max_realized_loss_pct; measures manual and panic exposure but excludes manual and
+    panic positions from emitted TWEL auto-reduce orders.
 
 Panic close:
     ClosePanicLong and ClosePanicShort bypass max_realized_loss_pct.

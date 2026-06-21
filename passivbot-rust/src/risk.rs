@@ -607,6 +607,7 @@ pub struct TwelEnforcerInputPosition {
     pub position_size: f64,
     pub position_price: f64,
     pub market_price: f64,
+    pub is_managed_candidate: bool,
     pub c_mult: f64,
     pub qty_step: f64,
     pub price_step: f64,
@@ -726,6 +727,9 @@ pub fn calc_twel_enforcer_actions(
             if pos.idx == skip {
                 continue;
             }
+        }
+        if !pos.is_managed_candidate {
+            continue;
         }
         let market_price = if pos.market_price.is_finite() && pos.market_price > 0.0 {
             pos.market_price
@@ -923,6 +927,7 @@ mod tests {
             position_size: psize,
             position_price: pprice,
             market_price: mprice,
+            is_managed_candidate: true,
             c_mult,
             qty_step,
             price_step,
@@ -1184,6 +1189,32 @@ mod tests {
             action_idxs,
             vec![0],
             "reduce_portfolio must not force min-qty closes after the target is reached"
+        );
+    }
+
+    #[test]
+    fn test_twel_reducer_counts_non_candidate_exposure_for_trigger() {
+        let balance = 1000.0;
+        let twel = 0.5;
+        let mut managed = pos(0, 1.0, 100.0, 100.0, 0.5, 1.0, 0.1, 0.1, 0.1, 0.0);
+        managed.is_managed_candidate = true;
+        let mut external = pos(1, 5.0, 100.0, 100.0, 0.5, 1.0, 0.1, 0.1, 0.1, 0.0);
+        external.is_managed_candidate = false;
+        let actions = calc_twel_enforcer_actions(
+            LONG,
+            1.0,
+            twel,
+            1,
+            balance,
+            &[managed, external],
+            TwelEnforcerPolicy::ReducePortfolio,
+            None,
+        );
+
+        assert_eq!(
+            actions.iter().map(|(idx, _)| *idx).collect::<Vec<_>>(),
+            vec![0],
+            "external/manual exposure should trigger TWEL repair without becoming a reduce candidate"
         );
     }
 
