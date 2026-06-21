@@ -8,6 +8,8 @@ All notable user-facing changes will be documented in this file.
   `pnls_max_lookback_days` coverage triggers a blocking lookback refresh and
   retry/defer instead of sending neutral PnL inputs or repeatedly restarting the
   execution loop.
+- Hardened live candle EMA inputs by filtering invalid OHLCV rows at ingestion and
+  preventing a leading non-finite candle sample from poisoning log-range EMAs.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
   backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added

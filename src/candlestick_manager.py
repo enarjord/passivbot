@@ -3931,6 +3931,10 @@ class CandlestickManager:
                     ts = _floor_minute(ts)
                 o, h, l, c = map(float, (r[1], r[2], r[3], r[4]))
                 bv = float(r[5]) if len(r) > 5 else 0.0
+                if not all(math.isfinite(x) for x in (o, h, l, c, bv)):
+                    continue
+                if min(o, h, l, c) <= 0.0 or bv < 0.0:
+                    continue
                 bv = normalize_ccxt_volume_to_base(self._ex_id or "", c, bv)
                 out.append((ts, o, h, l, c, bv))
             except Exception:
@@ -6519,10 +6523,20 @@ class CandlestickManager:
         alpha = 2.0 / (span + 1.0)
         one_minus = 1.0 - alpha
         out = np.empty((n,), dtype=np.float64)
-        num = float(values[0])
+        first_finite_idx = None
+        for i in range(n):
+            if np.isfinite(float(values[i])):
+                first_finite_idx = i
+                break
+        if first_finite_idx is None:
+            out.fill(float("nan"))
+            return out
+        if first_finite_idx > 0:
+            out[:first_finite_idx] = float("nan")
+        num = float(values[first_finite_idx])
         den = 1.0
-        out[0] = num / den
-        for i in range(1, n):
+        out[first_finite_idx] = num / den
+        for i in range(first_finite_idx + 1, n):
             v = float(values[i])
             if not np.isfinite(v):
                 out[i] = out[i - 1]

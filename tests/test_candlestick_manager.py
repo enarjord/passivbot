@@ -20,6 +20,71 @@ from candlestick_manager import (
 )
 
 
+def test_normalize_ccxt_ohlcv_filters_nonfinite_and_nonpositive_rows(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
+    rows = [
+        [base, 100.0, 101.0, 99.0, 100.5, 7.0],
+        [base + ONE_MIN_MS, 100.0, float("nan"), 99.0, 100.5, 7.0],
+        [base + 2 * ONE_MIN_MS, 100.0, 101.0, 0.0, 100.5, 7.0],
+        [base + 3 * ONE_MIN_MS, 100.0, 101.0, 99.0, 100.5, -1.0],
+    ]
+
+    arr = cm._normalize_ccxt_ohlcv(rows)
+
+    assert arr.size == 1
+    assert int(arr[0]["ts"]) == base
+    assert float(arr[0]["c"]) == pytest.approx(100.5)
+
+
+def test_ema_series_skips_leading_nonfinite_without_poisoning_window(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    values = np.asarray([float("nan"), 1.0, 3.0], dtype=np.float64)
+
+    out = cm._ema_series(values, span=3.0)
+
+    assert math.isnan(float(out[0]))
+    assert float(out[-1]) == pytest.approx(2.0)
+    assert math.isnan(float(cm._ema_series(np.asarray([float("nan")]), span=3.0)[-1]))
+
+
+@pytest.mark.asyncio
+async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
+    class _Ex:
+        id = "binance"
+
+    cm = CandlestickManager(exchange=_Ex(), exchange_name="binance", cache_dir=str(tmp_path / "caches"))
+    base = _floor_minute(int(time.time() * 1000)) - 10 * ONE_MIN_MS
+    arr = np.array(
+        [
+            (base, 100.0, float("nan"), 99.0, 100.0, 1.0),
+            (base + ONE_MIN_MS, 100.0, 102.0, 100.0, 101.0, 1.0),
+            (base + 2 * ONE_MIN_MS, 101.0, 104.0, 101.0, 103.0, 1.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+
+    async def latest_range(_span, *, period_ms=ONE_MIN_MS):
+        return base, base + 2 * ONE_MIN_MS
+
+    async def get_candles(*_args, **_kwargs):
+        return arr
+
+    cm._latest_finalized_range = latest_range
+    cm.get_candles = get_candles
+
+    val = await cm.get_latest_ema_log_range("BAD/USDT:USDT", span=3.0)
+
+    assert math.isfinite(val)
+    assert val > 0.0
+
+
 @pytest.mark.parametrize("debug", [False])
 def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     class _Ex:

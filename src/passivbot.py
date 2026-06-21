@@ -1298,6 +1298,7 @@ class Passivbot:
         self,
         *,
         start_ms: Optional[int],
+        end_ms: Optional[int] = None,
         lookback=None,
     ) -> dict[str, object]:
         manager = getattr(self, "_pnls_manager", None)
@@ -1357,6 +1358,30 @@ class Passivbot:
             covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
         oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
 
+        if end_ms is None:
+            try:
+                end_ms = int(self.get_exchange_time())
+            except (AttributeError, TypeError, ValueError):
+                end_ms = None
+        blocking_gaps = self._pnl_blocking_known_gaps(
+            cache,
+            metadata=metadata,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
+        if blocking_gaps:
+            gap = blocking_gaps[0]
+            return {
+                "ready": False,
+                "reason": "known_gap_overlaps_lookback",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+                "gap_start_ts": int(gap.get("start_ts", 0) or 0),
+                "gap_end_ts": int(gap.get("end_ts", 0) or 0),
+                "gap_reason": str(gap.get("reason", "unknown")),
+            }
+
         if history_scope == "all":
             return {
                 "ready": True,
@@ -1398,10 +1423,15 @@ class Passivbot:
                 self.live_value("pnls_max_lookback_days"),
                 field_name="live.pnls_max_lookback_days",
             )
-            start_ms = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+            now_ms = self.get_exchange_time()
+            start_ms = lookback.fill_cache_age_limit_ms(now_ms)
         except (AttributeError, KeyError, TypeError, ValueError):
             return False
-        status = self._pnl_history_coverage_status(start_ms=start_ms, lookback=lookback)
+        status = self._pnl_history_coverage_status(
+            start_ms=start_ms,
+            end_ms=now_ms,
+            lookback=lookback,
+        )
         return bool(status.get("ready", False))
 
     def _get_effective_pnl_events(self) -> list:
@@ -1436,6 +1466,27 @@ class Passivbot:
         start = 0 if start_ms is None else int(start_ms)
         end = (2**63 - 1) if end_ms is None else int(end_ms)
         return gap_start < end and gap_end > start
+
+    def _pnl_blocking_known_gaps(
+        self,
+        cache,
+        *,
+        metadata: Optional[dict] = None,
+        start_ms: Optional[int],
+        end_ms: Optional[int],
+    ) -> list[dict]:
+        get_known_gaps = getattr(cache, "get_known_gaps", None)
+        known_gaps = (
+            list(get_known_gaps() or [])
+            if callable(get_known_gaps)
+            else list((metadata or {}).get("known_gaps", []) or [])
+        )
+        return [
+            gap
+            for gap in known_gaps
+            if not self._pnl_gap_is_confirmed_legitimate(gap)
+            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
+        ]
 
     @staticmethod
     def _pnl_event_preview(events: Iterable[Any]) -> str:
@@ -1484,14 +1535,11 @@ class Passivbot:
             except (AttributeError, TypeError, ValueError):
                 end_ms = None
 
-        get_known_gaps = getattr(cache, "get_known_gaps", None)
-        known_gaps = list(get_known_gaps() or []) if callable(get_known_gaps) else []
-        blocking_gaps = [
-            gap
-            for gap in known_gaps
-            if not self._pnl_gap_is_confirmed_legitimate(gap)
-            and self._pnl_gap_overlaps(gap, start_ms, end_ms)
-        ]
+        blocking_gaps = self._pnl_blocking_known_gaps(
+            cache,
+            start_ms=start_ms,
+            end_ms=end_ms,
+        )
         if blocking_gaps:
             gap = blocking_gaps[0]
             raise RuntimeError(
@@ -1502,7 +1550,7 @@ class Passivbot:
                 f"reason={gap.get('reason', 'unknown')}"
             )
 
-        status = self._pnl_history_coverage_status(start_ms=start_ms)
+        status = self._pnl_history_coverage_status(start_ms=start_ms, end_ms=end_ms)
         if bool(status.get("ready", False)):
             return
         history_scope = str(status.get("history_scope", "unknown"))
@@ -8945,6 +8993,7 @@ class Passivbot:
             before_events_count = len(events)
             coverage_status = self._pnl_history_coverage_status(
                 start_ms=age_limit,
+                end_ms=self.get_exchange_time(),
                 lookback=lookback,
             )
             coverage_ready = bool(coverage_status.get("ready", False))
