@@ -40,8 +40,8 @@ For the recommended user workflow, examples, and best practices, see [Config Wor
 - **candle_interval_minutes**: Aggregates raw 1m OHLCVs into coarser candles before the backtest loop runs. `1` keeps native 1m behavior; values above `1` speed up backtests and optimizer runs at the cost of losing intra-interval fill ordering.
 - **gap_tolerance_ohlcvs_minutes**: Maximum internal hole size that can be filled in prepared OHLCV data. Larger or persistent gaps are repaired from local v2 data, legacy shards, and targeted remote fetches; if a large internal gap remains, it is excluded from the returned tradable window rather than made tradable with synthetic candles. Verified exchange-side late starts and early ends do not by themselves abort a run, but local corruption, malformed candles, missing BTC benchmark data, or no tradable candles still fail loudly.
 - **liquidation_threshold**: Early-stop backtest equity-floor guard. The run terminates once total equity falls to or below `starting_balance * liquidation_threshold`, and `backtest_completion_ratio` will fall below `1.0`. Example: with `starting_balance = 1000` and `liquidation_threshold = 0.05`, the backtest stops at equity `<= 50`. This is not a “5% drawdown” threshold; if the run never rises above the start, it corresponds to roughly a `0.95` worst drawdown. Must satisfy `0.0 <= liquidation_threshold < 1.0`.
-- **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use the exchange-derived maker fees.
-- **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use the exchange-derived taker fees.
+- **maker_fee_override**: Optional maker fee override (part-per-one; use `0.0002` for 0.02%). Leave `null` to use exchange-derived per-coin maker fees. CLI: `--maker-fee-override`.
+- **taker_fee_override**: Optional taker fee override (part-per-one; use `0.00055` for 0.055%). Leave `null` to use exchange-derived per-coin taker fees. CLI: `--taker-fee-override`.
 - **market_order_slippage_pct**: Backtest-only slippage applied whenever the backtester simulates market-order execution. This applies both to HSL panic closes when `bot.{long,short}.hsl.panic_close_order_type` is `"market"` and to normal orchestrator orders promoted to market execution by `live.market_orders_allowed`. A sell fills at `close * (1 - slippage_pct)` rounded down to `price_step`; a buy fills at `close * (1 + slippage_pct)` rounded up. The fill is guaranteed once the market-execution path is chosen, and the resulting fill also uses taker fees. Default `0.0005` (5 bps). This field is not a live slippage cap; live market orders use the exchange adapter's order semantics and any exchange/CCXT slippage controls.
 - **visible_metrics**: Controls which metrics are printed to the terminal after a standalone backtest. `null` shows the metrics implied by `optimize.scoring` and `optimize.limits`, `[]` shows all metrics, and an explicit list adds extra named metrics to the default view. This affects CLI visibility only; the full metric set is still computed and persisted.
   Fill-activity metrics use the `fills_*` prefix, including fill counts, per-day entry/close and long/short rates, no-fill gap durations, per-position-slot activity, active fill day counts/ratio, analysis duration, active symbol count, and top-symbol fill share.
@@ -187,7 +187,7 @@ Signal mode:
 
 Backtest-specific note:
 
-1. If `hsl_panic_close_order_type = "market"`, the backtester uses `backtest.market_order_slippage_pct` for simulated taker execution and charges taker fees (exchange-derived by default, or `backtest.taker_fee_override` when set).
+1. If `hsl_panic_close_order_type = "market"`, the backtester uses `backtest.market_order_slippage_pct` for simulated taker execution and charges per-coin taker fees (exchange-derived by default, or global `backtest.taker_fee_override` when set).
 
 Key HSL analysis metrics:
 

@@ -199,6 +199,7 @@ class BacktestDatasetMaterializer:
         mss: dict,
         run_id: str,
         fill_edge_gaps: bool = False,
+        synthetic_gaps_tradable: bool = False,
     ) -> SharedBacktestDatasetHandle:
         interval_ms = timeframe_to_interval_ms("1m")
         if end_ts < start_ts:
@@ -281,6 +282,10 @@ class BacktestDatasetMaterializer:
                 synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(
                     coin_view, valid_buffer, fill_edge_gaps=fill_edge_gaps
                 )
+                if synthetic_gaps_tradable:
+                    tradable_first_index, tradable_last_index, _tradable_count = (
+                        _longest_contiguous_valid_span(valid_buffer)
+                    )
                 meta = enriched_mss.setdefault(coin, {})
                 meta["first_valid_index"] = tradable_first_index
                 meta["last_valid_index"] = tradable_last_index
@@ -292,6 +297,8 @@ class BacktestDatasetMaterializer:
                 if synthetic_gap_fill_count:
                     meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
                     meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
+                    if synthetic_gaps_tradable:
+                        meta["synthetic_gap_fill_tradable"] = True
                 logging.info(
                     "[materializer] coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
                     "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",
@@ -361,6 +368,7 @@ def materialize_frames(
     btc_usd_prices: np.ndarray,
     mss: dict,
     run_id: str,
+    synthetic_gaps_tradable: bool = False,
 ) -> SharedBacktestDatasetHandle:
     output_root = Path(output_root)
     output_root.mkdir(parents=True, exist_ok=True)
@@ -419,6 +427,10 @@ def materialize_frames(
                 interval_ms=60_000 if n_steps < 2 else int(ts_arr[1] - ts_arr[0]),
             )
             synthetic_gap_fill_count = _fill_sparse_hlcv_gaps(aligned, valid_mask)
+            if synthetic_gaps_tradable:
+                tradable_first_index, tradable_last_index, _tradable_count = (
+                    _longest_contiguous_valid_span(valid_mask)
+                )
             hlcvs[:, coin_idx, :] = aligned
             meta = enriched_mss.setdefault(coin, {})
             meta["first_valid_index"] = tradable_first_index
@@ -429,6 +441,8 @@ def materialize_frames(
             if synthetic_gap_fill_count:
                 meta["synthetic_gap_fill_count"] = synthetic_gap_fill_count
                 meta["synthetic_gap_fill_source"] = "previous_or_edge_close"
+                if synthetic_gaps_tradable:
+                    meta["synthetic_gap_fill_tradable"] = True
             logging.info(
                 "[materializer] frame coin done %d/%d exchange=%s coin=%s source_first_valid=%d "
                 "source_last_valid=%d invalid_rows=%d synthetic_filled=%d elapsed_s=%.1f",

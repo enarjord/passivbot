@@ -1143,6 +1143,30 @@ RESERVED_CLI_ARGS = {
         "choices": ("intersection", "dataset"),
         "help": "How --hlcvs-data-dir chooses coins/range: intersection or dataset.",
     },
+    "backtest.maker_fee_override": {
+        "visible": ["--maker-fee-override"],
+        "hidden": ["--backtest.maker_fee_override", "--backtest_maker_fee_override"],
+        "type": optional_float,
+        "metavar": "FLOAT",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "Override all backtest maker fees. Leave unset to use exchange-derived per-coin maker fees.",
+    },
+    "backtest.taker_fee_override": {
+        "visible": ["--taker-fee-override"],
+        "hidden": ["--backtest.taker_fee_override", "--backtest_taker_fee_override"],
+        "type": optional_float,
+        "metavar": "FLOAT",
+        "commands": {"backtest", "optimize"},
+        "group": {
+            "backtest": "Backtest Runtime",
+            "optimize": "Backtest Runtime",
+        },
+        "help": "Override all backtest taker fees. Leave unset to use exchange-derived per-coin taker fees.",
+    },
     "backtest.starting_balance": {
         "visible": ["--starting-balance", "-sb"],
         "hidden": ["--backtest.starting_balance", "--backtest_starting_balance"],
@@ -1383,6 +1407,7 @@ def _classify_backtest_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.maker_fee_override",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
+        "backtest.taker_fee_override",
     }
     output = {
         "backtest.base_dir",
@@ -1433,6 +1458,7 @@ def _classify_optimize_argument(full_name: str, help_all: bool) -> Optional[str]
         "backtest.maker_fee_override",
         "backtest.ohlcv_source_dir",
         "backtest.starting_balance",
+        "backtest.taker_fee_override",
         "backtest.volume_normalization",
     }
     optimize_common = {
@@ -1706,6 +1732,8 @@ def add_arguments_recursively(
             elif "scoring" in full_name:
                 type_ = comma_separated_values
                 appendix = "Examples: adg,sharpe_ratio; mdg,sortino_ratio; ..."
+            elif isinstance(value, list) and "bounds" not in full_name:
+                type_ = comma_separated_values
             elif value is None:
                 if full_name == "backtest.btc_collateral_ltv_cap":
                     type_ = optional_float

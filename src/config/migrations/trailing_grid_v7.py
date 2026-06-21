@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from copy import deepcopy
 from functools import lru_cache
 from pathlib import Path
@@ -13,7 +14,11 @@ from config.optimize_bounds import (
 )
 from config.overrides import allowed_flat_bot_side_modification_keys
 from config.schema import CONFIG_SCHEMA_VERSION, get_template_config
-from config.shared_bot import BOT_GROUP_FIELD_MAP, FLAT_BOT_KEY_TO_GROUP_PATH
+from config.shared_bot import (
+    BOT_GROUP_FIELD_MAP,
+    FLAT_BOT_KEY_TO_GROUP_PATH,
+    get_grouped_bot_value,
+)
 from config.strategy_spec import get_strategy_param_keys
 from risk_limits import WE_EXCESS_ALLOWANCE_MODE_BOUNDED
 
@@ -149,6 +154,14 @@ V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "unstuck_loss_allowance_pct",
     "unstuck_threshold",
 )
+V7_THRESHOLD_DERIVED_ENFORCER_ENABLED_KEYS = {
+    "risk_wel_enforcer_enabled",
+    "risk_twel_enforcer_enabled",
+}
+V7_ENFORCER_THRESHOLD_BY_ENABLED_KEY = {
+    "risk_wel_enforcer_enabled": "risk_wel_enforcer_threshold",
+    "risk_twel_enforcer_enabled": "risk_twel_enforcer_threshold",
+}
 
 LEGACY_SHARED_SIDE_ALIASES = {
     "filter_volatility_ema_span_1m": "forager_volatility_ema_span_1m",
@@ -325,6 +338,23 @@ def _source_side_has_shared_value(source_side: dict, flat_key: str) -> bool:
     return isinstance(group, dict) and local_key in group
 
 
+def _source_side_has_nonpositive_enforcer_threshold(
+    source_side: dict, enabled_flat_key: str
+) -> bool:
+    threshold_flat_key = V7_ENFORCER_THRESHOLD_BY_ENABLED_KEY.get(enabled_flat_key)
+    if threshold_flat_key is None or not _source_side_has_shared_value(
+        source_side,
+        threshold_flat_key,
+    ):
+        return False
+    raw_threshold = get_grouped_bot_value(source_side, threshold_flat_key)
+    try:
+        threshold = float(raw_threshold)
+    except (TypeError, ValueError):
+        return False
+    return math.isfinite(threshold) and threshold <= 0.0
+
+
 def _source_has_shared_bound(source: dict, pside: str, flat_key: str) -> bool:
     bounds = source.get("optimize", {}).get("bounds")
     if not isinstance(bounds, dict):
@@ -495,6 +525,11 @@ def _record_inserted_v8_defaults(source: dict, target: dict, report: dict) -> No
             target_path = ("bot", pside, group_name, local_key)
             if _source_side_has_default_source_value(source_side, flat_key):
                 continue
+            if (
+                flat_key in V7_THRESHOLD_DERIVED_ENFORCER_ENABLED_KEYS
+                and _source_side_has_nonpositive_enforcer_threshold(source_side, flat_key)
+            ):
+                continue
             if _path_exists({"bot": target_bot}, target_path):
                 _append_inserted_default(report, ".".join(target_path))
 
@@ -564,6 +599,48 @@ def _force_v7_absent_risk_defaults(source: dict, target: dict, report: dict) -> 
                 source, pside, flat_key
             ):
                 target_bounds_risk[local_key] = [float(value), float(value), 0.1]
+
+
+def _disable_enforcers_for_zero_v7_thresholds(source: dict, target: dict, report: dict) -> None:
+    bot = source.get("bot", {})
+    if not isinstance(bot, dict):
+        return
+    enforcer_pairs = (
+        (
+            "risk_wel_enforcer_threshold",
+            "position_exposure_enforcer_threshold",
+            "position_exposure_enforcer_enabled",
+        ),
+        (
+            "risk_twel_enforcer_threshold",
+            "total_exposure_enforcer_threshold",
+            "total_exposure_enforcer_enabled",
+        ),
+    )
+    for pside in ("long", "short"):
+        source_side = bot.get(pside, {})
+        if not isinstance(source_side, dict):
+            continue
+        target_risk = target["bot"][pside].setdefault("risk", {})
+        for flat_threshold_key, threshold_key, enabled_key in enforcer_pairs:
+            if not _source_side_has_shared_value(source_side, flat_threshold_key):
+                continue
+            raw_threshold = get_grouped_bot_value(source_side, flat_threshold_key)
+            try:
+                threshold = float(raw_threshold)
+            except (TypeError, ValueError):
+                continue
+            if not math.isfinite(threshold) or threshold > 0.0:
+                continue
+            if target_risk.get(enabled_key) is False:
+                continue
+            target_risk[enabled_key] = False
+            report["warnings"].append(
+                f"bot.{pside}.risk.{enabled_key} set false because source "
+                f"bot.{pside}.{flat_threshold_key}={raw_threshold!r} maps to "
+                f"bot.{pside}.risk.{threshold_key}={raw_threshold!r}; v8 requires disabled "
+                "enforcers when thresholds are zero or negative."
+            )
 
 
 def _warn_if_risk_excess_would_be_clamped(risk: dict, *, path: str, report: dict) -> None:
@@ -1204,6 +1281,7 @@ def migrate_v7_trailing_grid_config(source: dict, *, source_path: str | None = N
     _move_bounds(source, target, report)
     _migrate_coin_overrides(source, target, report)
     _force_v7_absent_risk_defaults(source, target, report)
+    _disable_enforcers_for_zero_v7_thresholds(source, target, report)
     _record_inserted_v8_defaults(source, target, report)
     _warn_if_v7_excess_would_be_clamped(target, report)
     return target, report

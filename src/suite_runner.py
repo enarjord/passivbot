@@ -23,6 +23,7 @@ from config.access import require_config_value, require_live_value
 from config.metrics import canonicalize_metric_name
 from config.overrides import parse_overrides
 from config.param_paths import require_existing_config_path
+from config.parse import load_raw_config
 from config.shared_bot import canonicalize_shared_bot_side
 from config_transform import ConfigTransformTracker, record_transform
 from logging_setup import configure_logging
@@ -136,6 +137,55 @@ def extract_suite_config(
     cfg["enabled"] = suite_enabled_config and has_scenarios
 
     return cfg
+
+
+def _suite_override_from_section(section: Dict[str, Any], *, source_label: str) -> Dict[str, Any]:
+    if not isinstance(section, dict):
+        raise ValueError(f"Suite config {source_label} must be a mapping.")
+    if "suite" in section:
+        suite = section["suite"]
+        if not isinstance(suite, dict):
+            raise ValueError(f"Suite config {source_label} field 'suite' must be a mapping.")
+        return deepcopy(suite)
+    if "scenarios" not in section:
+        raise ValueError(f"Suite config {source_label} must define scenarios.")
+    scenarios = section["scenarios"]
+    if not isinstance(scenarios, list):
+        raise ValueError(f"Suite config {source_label} field 'scenarios' must be a list.")
+    suite_override: Dict[str, Any] = {
+        "scenarios": deepcopy(scenarios),
+        "aggregate": deepcopy(section.get("aggregate", {"default": "mean"})),
+    }
+    for key in ("exchanges", "volume_normalization"):
+        if key in section:
+            suite_override[key] = deepcopy(section[key])
+    return suite_override
+
+
+def load_suite_override_config(suite_config_path: str | Path) -> Dict[str, Any]:
+    """
+    Load a suite override file without normalizing it as a full bot config.
+
+    External suite files are intentionally partial: they may contain only
+    backtest.scenarios/backtest.aggregate or a legacy backtest.suite wrapper.
+    Full config flavor detection is therefore the wrong boundary here.
+    """
+
+    raw = load_raw_config(str(suite_config_path), log_errors=True)
+    if not isinstance(raw, dict):
+        raise ValueError(f"Suite config {suite_config_path} must be a mapping.")
+    source_label = str(suite_config_path)
+    backtest = raw.get("backtest")
+    if isinstance(backtest, dict) and (
+        "scenarios" in backtest or "suite" in backtest
+    ):
+        return _suite_override_from_section(backtest, source_label=source_label)
+    if "scenarios" in raw or "suite" in raw:
+        return _suite_override_from_section(raw, source_label=source_label)
+    raise ValueError(
+        f"Suite config {suite_config_path} must define backtest.scenarios "
+        "or legacy backtest.suite."
+    )
 
 
 def filter_scenarios_by_label(
@@ -1782,21 +1832,7 @@ def run_backtest_suite_sync(
 
     suite_override = None
     if suite_config_path:
-        override_config = load_prepared_config(str(suite_config_path), verbose=False)
-        override_backtest = override_config.get("backtest", {})
-        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
-        if "scenarios" in override_backtest:
-            suite_override = {
-                "scenarios": override_backtest.get("scenarios", []),
-                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
-            }
-        elif "suite" in override_backtest:
-            # Legacy format - extract from suite wrapper
-            suite_override = override_backtest["suite"]
-        else:
-            raise ValueError(
-                f"Suite config {suite_config_path} does not contain backtest.scenarios definition."
-            )
+        suite_override = load_suite_override_config(suite_config_path)
 
     suite_cfg = extract_suite_config(config, suite_override)
     if not suite_cfg.get("scenarios"):

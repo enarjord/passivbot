@@ -29,6 +29,7 @@ from suite_runner import (
     build_scenarios,
     collect_suite_coin_sources,
     filter_coins_by_exchange_assignment,
+    load_suite_override_config,
     prepare_master_datasets,
     validate_suite_side_coin_lists,
     _prepare_dataset_subset,
@@ -526,19 +527,7 @@ def ensure_suite_config(config_path: Path, suite_path: Optional[Path]) -> Dict[s
     config = parse_overrides(config, verbose=False)
     suite_override = None
     if suite_path:
-        override_config = load_prepared_config(str(suite_path), verbose=False)
-        override_backtest = override_config.get("backtest", {})
-        # Support both new (scenarios at top level) and legacy (suite wrapper) formats
-        if "suite" in override_backtest:
-            # Legacy format - prefer explicit suite wrapper over template/default scenarios.
-            suite_override = override_backtest["suite"]
-        elif "scenarios" in override_backtest:
-            suite_override = {
-                "scenarios": override_backtest.get("scenarios", []),
-                "aggregate": override_backtest.get("aggregate", {"default": "mean"}),
-            }
-        else:
-            raise ValueError(f"Suite config {suite_path} must provide backtest.scenarios definition.")
+        suite_override = load_suite_override_config(suite_path)
     return extract_suite_config(config, suite_override)
 
 

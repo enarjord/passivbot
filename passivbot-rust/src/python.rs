@@ -1562,6 +1562,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_usd.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_usd.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_usd.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_usd.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_usd.strategy_eq_recovery_days_median =
@@ -1654,6 +1658,10 @@ fn run_backtest_core<'py>(
             strategy.long.drawdown_worst_mean_1pct_ema_strategy_eq;
         analysis_btc.drawdown_worst_mean_1pct_ema_strategy_eq_short =
             strategy.short.drawdown_worst_mean_1pct_ema_strategy_eq;
+        analysis_btc.strategy_eq_underwater_pct_mean =
+            strategy.overall.strategy_eq_underwater_pct_mean;
+        analysis_btc.strategy_eq_underwater_pct_median =
+            strategy.overall.strategy_eq_underwater_pct_median;
         analysis_btc.strategy_eq_recovery_days_mean =
             strategy.overall.strategy_eq_recovery_days_mean;
         analysis_btc.strategy_eq_recovery_days_median =

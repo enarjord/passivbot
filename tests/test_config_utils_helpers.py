@@ -1187,6 +1187,33 @@ def test_optimize_help_all_shows_hidden_bounds_flags():
     assert "--bot.short.hsl.panic_close_order_type VALUE" in help_text
 
 
+def test_optimize_fixed_params_cli_parses_csv_selectors():
+    config = project_template_config_for_cli(get_template_config(), "optimize")
+    parser = argparse.ArgumentParser(prog="optimize")
+    group_map = {
+        title: parser.add_argument_group(title) for title in CLI_HELP_GROUPS["optimize"]
+    }
+    add_config_arguments(
+        parser,
+        config,
+        command="optimize",
+        help_all=True,
+        group_map=group_map,
+    )
+
+    args = parser.parse_args(
+        [
+            "--optimize.fixed_params",
+            "bot.long.risk.n_positions,bot.long.risk.total_wallet_exposure_limit",
+        ]
+    )
+
+    assert getattr(args, "optimize.fixed_params") == [
+        "bot.long.risk.n_positions",
+        "bot.long.risk.total_wallet_exposure_limit",
+    ]
+
+
 def test_live_default_help_shows_curated_groups():
     config = get_template_config()
     del config["optimize"]
@@ -1383,6 +1410,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     parsed_loss = parser.parse_args(["-mrlp", "0.75"])
     parsed_fee_fallback = parser.parse_args(["--fee-pct-fallback", "0"])
     parsed_fee_sanity = parser.parse_args(["--fee-pct-sanity-abs-max", "0.002"])
+    parsed_maker_fee = parser.parse_args(["--maker-fee-override", "0.0002"])
+    parsed_taker_fee = parser.parse_args(["--taker-fee-override", "0.00055"])
 
     assert getattr(parsed_market, "live.market_orders_allowed") is True
     assert getattr(parsed_hedge, "live.hedge_mode") is False
@@ -1393,6 +1422,8 @@ def test_backtest_reserved_execution_live_aliases_parse_short_and_long():
     assert getattr(parsed_loss, "live.max_realized_loss_pct") == pytest.approx(0.75)
     assert getattr(parsed_fee_fallback, "live.fee_pct_fallback") == pytest.approx(0.0)
     assert getattr(parsed_fee_sanity, "live.fee_pct_sanity_abs_max") == pytest.approx(0.002)
+    assert getattr(parsed_maker_fee, "backtest.maker_fee_override") == pytest.approx(0.0002)
+    assert getattr(parsed_taker_fee, "backtest.taker_fee_override") == pytest.approx(0.00055)
 
 
 def test_backtest_default_help_shows_live_near_touch_threshold_override():
@@ -1400,6 +1431,8 @@ def test_backtest_default_help_shows_live_near_touch_threshold_override():
     help_text = _format_parser_help_with_config("backtest", config, help_all=False)
 
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
+    assert "--maker-fee-override FLOAT" in help_text
+    assert "--taker-fee-override FLOAT" in help_text
 
 
 def test_runtime_registry_reserved_help_metadata_stays_in_sync():

@@ -558,6 +558,24 @@ def test_optimize_parser_candle_interval_short_flag_parses_as_int():
     assert isinstance(getattr(args, "backtest.candle_interval_minutes"), int)
 
 
+def test_optimize_parser_accepts_polish_bounds_mode():
+    parser = optimize.build_command_parser(
+        prog="passivbot optimize",
+        description="run optimizer",
+        usage="%(prog)s [config_path] [options]",
+        epilog="",
+    )
+    advanced_group = parser.add_argument_group("Advanced Overrides")
+    optimize.add_extra_options(advanced_group, help_all=True)
+
+    args = parser.parse_args(
+        ["--polish-pct", "0.2", "--polish-bounds-mode", "override-all"]
+    )
+
+    assert args.polish_bounds_pct == 0.2
+    assert args.polish_bounds_mode == "override-all"
+
+
 class TestFormatObjectives:
     """Test _format_objectives function."""
 
@@ -1573,6 +1591,154 @@ class TestApplyPolishBounds:
             [0.08, 0.1]
         )
 
+    def test_override_tunable_allows_tunable_bounds_outside_existing_domain(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {"bounds": {"long_entry_threshold_base_pct": [0.01, 0.1]}},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.09},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.5, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.045, 0.135]
+        )
+
+    def test_override_tunable_uses_current_value_outside_existing_domain(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {"bounds": {"long_entry_threshold_base_pct": [0.01, 0.1]}},
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 1.0},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.8, 1.2]
+        )
+
+    def test_override_tunable_keeps_fixed_bounds_fixed(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": 0.05,
+                    "long_close_threshold_we_weight": [-0.07, -0.07],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.07},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-tunable")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == 0.05
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == [
+            -0.07,
+            -0.07,
+        ]
+
+    def test_override_all_expands_fixed_bounds(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long_entry_threshold_base_pct": 0.05,
+                    "long_close_threshold_we_weight": [-0.07, -0.07],
+                }
+            },
+            "bot": {
+                "long": {
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                            "close": {"threshold_we_weight": -0.07},
+                        }
+                    }
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.2, bounds_mode="override-all")
+
+        assert config["optimize"]["bounds"]["long_entry_threshold_base_pct"] == pytest.approx(
+            [0.04, 0.06]
+        )
+        assert config["optimize"]["bounds"]["long_close_threshold_we_weight"] == pytest.approx(
+            [-0.084, -0.056]
+        )
+
+    def test_fixed_params_collapse_after_override_all_polish(self):
+        config = {
+            "live": {"strategy_kind": "trailing_martingale"},
+            "optimize": {
+                "bounds": {
+                    "long": {
+                        "risk": {
+                            "n_positions": [1.0, 10.0, 1.0],
+                            "total_wallet_exposure_limit": [0.1, 3.0, 0.1],
+                        },
+                        "strategy": {
+                            "trailing_martingale": {
+                                "entry": {"threshold_base_pct": [0.01, 0.1, 0.001]}
+                            }
+                        },
+                    }
+                },
+                "fixed_params": [
+                    "bot.long.risk.n_positions",
+                    "bot.long.risk.total_wallet_exposure_limit",
+                ],
+            },
+            "bot": {
+                "long": {
+                    "risk": {
+                        "n_positions": 3,
+                        "total_wallet_exposure_limit": 1.5,
+                    },
+                    "strategy": {
+                        "trailing_martingale": {
+                            "entry": {"threshold_base_pct": 0.05},
+                        }
+                    },
+                }
+            },
+        }
+
+        apply_polish_bounds(config, 0.25, bounds_mode="override-all")
+        apply_fine_tune_bounds(config, [], set())
+
+        long_bounds = config["optimize"]["bounds"]["long"]
+        assert long_bounds["risk"]["n_positions"] == [3.0, 3.0]
+        assert long_bounds["risk"]["total_wallet_exposure_limit"] == [1.5, 1.5]
+        assert long_bounds["strategy"]["trailing_martingale"]["entry"][
+            "threshold_base_pct"
+        ] == pytest.approx([0.0375, 0.0625, 0.001])
+
     def test_step_dropped_when_polished_range_cannot_support_it(self):
         config = {
             "live": {"strategy_kind": "trailing_martingale"},
@@ -1601,6 +1767,10 @@ class TestApplyPolishBounds:
     def test_invalid_percentage_raises(self):
         with pytest.raises(ValueError, match="finite non-negative"):
             apply_polish_bounds({"optimize": {"bounds": {}}}, -0.1)
+
+    def test_invalid_bounds_mode_raises(self):
+        with pytest.raises(ValueError, match="polish bounds mode"):
+            apply_polish_bounds({"optimize": {"bounds": {}}}, 0.1, bounds_mode="wide")
 
 
 class TestApplyFineTuneBounds:

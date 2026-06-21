@@ -86,6 +86,8 @@ def _make_analysis_entry(value):
             "sterling_ratio": 0.0,
             "drawdown_worst": 0.0,
             "drawdown_worst_mean_1pct": 0.0,
+            "strategy_eq_underwater_pct_mean": 0.0,
+            "strategy_eq_underwater_pct_median": 0.0,
             "equity_balance_diff_neg_max": 0.0,
             "equity_balance_diff_neg_mean": 0.0,
             "equity_balance_diff_pos_max": 0.0,

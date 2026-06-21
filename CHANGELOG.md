@@ -8,6 +8,8 @@ All notable user-facing changes will be documented in this file.
   separately from TWEL auto-reduce, entry gating uses the capped thresholded
   portfolio cap, and TWEL auto-reduce supports `reduce_overweight` and
   `reduce_portfolio` policies while remaining subject to the realized-loss gate.
+- Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
+  backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added
   `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
   allowance; migrated v7 trailing-grid configs also force v7-absent entry
@@ -47,6 +49,12 @@ All notable user-facing changes will be documented in this file.
   multiple fills per order, and OKX net-mode accounts fail loudly.
 - Added optimizer polish bounds via `--polish-pct`/`--polish-bounds-pct`, which narrows
   existing optimize bounds around the current config values while preserving positive steps.
+  `--polish-bounds-mode` can now choose the default clamped behavior, allow tunable
+  polished bounds to escape the original bounds, or expand fixed bounds too.
+- Fixed Pareto-member replay drift when a reusable HLCV cache contains more warmup than
+  the selected config's own indicators require. Backtests now preserve the optimizer's
+  bounds-aware warmup window and requested-start trade floor, so replaying an optimizer
+  Pareto JSON matches its recorded metrics when the same dataset is used.
 - Hardened v8 audit follow-ups: live HSL cooldowns now reset from flat-confirmed
   panic fills, suite metric medians are real/fail-loud, malformed foreign
   client-order ids decode to `unknown`, partial OHLCV fetches no longer bless
@@ -70,8 +78,9 @@ All notable user-facing changes will be documented in this file.
   across auto-restart cooldowns and restart history replay, matching v8 backtest behavior.
 - Tightened Bitget fill normalization so ambiguous side/position-side payloads fail
   loudly instead of defaulting fills to the long side.
-- Backtests now reject heterogeneous per-coin maker/taker fees unless the matching
-  global `backtest.*_fee_override` is set, avoiding silent first-coin fee selection.
+- Backtests now use exchange-derived per-coin maker/taker fees by default, while
+  `backtest.maker_fee_override` and `backtest.taker_fee_override` remain explicit
+  global overrides and are exposed as visible backtest/optimize CLI flags.
 - Suite backtests and optimizer suites now reject asymmetric per-side approved/ignored
   coin lists instead of silently converting them to a long/short union.
 - Live execution now skips both order cancellations and creations while the raw wallet

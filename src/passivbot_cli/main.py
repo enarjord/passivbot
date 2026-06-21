@@ -46,6 +46,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "audit candle caches (requires full install)",
         requires_full=True,
     ),
+    "crash-finder": CommandSpec(
+        "tools.crash_finder",
+        "scan local OHLCV cache for crash-window suite scenarios (requires full install)",
+        requires_full=True,
+    ),
     "fetch-balance": CommandSpec("tools.fetch_balance", "fetch exchange balances"),
     "hyperliquid-balance-probe": CommandSpec(
         "tools.probe_hyperliquid_balance",

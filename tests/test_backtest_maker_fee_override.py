@@ -58,9 +58,11 @@ def _multi_coin_mss(*, eth_maker=0.0001, eth_taker=0.0005):
 def test_prep_backtest_args_uses_exchange_maker_fee_when_no_override():
     config = _base_config()
     mss = _base_mss()
-    _, _, _, backtest_params = prep_backtest_args(config, mss, "binance")
+    _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
     assert backtest_params["maker_fee"] == 0.0001
     assert backtest_params["taker_fee"] == 0.0005
+    assert exchange_params[0]["maker_fee"] == 0.0001
+    assert exchange_params[0]["taker_fee"] == 0.0005
 
 
 def test_prep_backtest_args_uses_maker_fee_override_when_set():
@@ -79,20 +81,24 @@ def test_prep_backtest_args_uses_taker_fee_override_when_set():
     assert backtest_params["taker_fee"] == 0.0008
 
 
-def test_prep_backtest_args_rejects_heterogeneous_maker_fees_without_override():
+def test_prep_backtest_args_uses_per_coin_maker_fees_without_override():
     config = _multi_coin_config()
     mss = _multi_coin_mss(eth_maker=0.0002)
 
-    with pytest.raises(ValueError, match="maker_fee_override.*heterogeneous maker fees"):
-        prep_backtest_args(config, mss, "binance")
+    _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
+
+    assert [item["maker_fee"] for item in exchange_params] == [0.0001, 0.0002]
+    assert backtest_params["maker_fee"] == 0.0002
 
 
-def test_prep_backtest_args_rejects_heterogeneous_taker_fees_without_override():
+def test_prep_backtest_args_uses_per_coin_taker_fees_without_override():
     config = _multi_coin_config()
     mss = _multi_coin_mss(eth_taker=0.0007)
 
-    with pytest.raises(ValueError, match="taker_fee_override.*heterogeneous taker fees"):
-        prep_backtest_args(config, mss, "binance")
+    _, _, exchange_params, backtest_params = prep_backtest_args(config, mss, "binance")
+
+    assert [item["taker_fee"] for item in exchange_params] == [0.0005, 0.0007]
+    assert backtest_params["taker_fee"] == 0.0007
 
 
 def test_prep_backtest_args_rejects_missing_taker_fee_without_override():

@@ -1065,6 +1065,11 @@ async def prepare_hlcvs(
 
         if isinstance(prepared_hlcvs, dict):
             coins_sorted = sorted([coin for coin in mss.keys() if not coin.startswith("__")])
+            synthetic_gaps_tradable = (
+                bool(config.get("backtest", {}).get("ohlcv_source_dir"))
+                and to_standard_exchange_name(exchange) == "hyperliquid"
+                and any(coin.startswith("xyz:") for coin in coins_sorted)
+            )
             handle = materialize_frames(
                 output_root=Path("caches") / "ohlcvs" / "materialized",
                 exchange=to_standard_exchange_name(exchange),
@@ -1074,6 +1079,7 @@ async def prepare_hlcvs(
                 btc_usd_prices=btc_usd_prices,
                 mss={coin: mss[coin] for coin in coins_sorted},
                 run_id=f"{to_standard_exchange_name(exchange)}_{uuid4().hex[:12]}",
+                synthetic_gaps_tradable=synthetic_gaps_tradable,
             )
             enriched_mss = handle.mss
             enriched_mss["__meta__"] = mss["__meta__"]
@@ -1254,6 +1260,11 @@ async def try_prepare_hlcvs_v2_local(
             return None
 
         run_id = f"{store_exchange}_{uuid4().hex[:12]}"
+        synthetic_gaps_tradable = (
+            bool(config.get("backtest", {}).get("ohlcv_source_dir"))
+            and store_exchange == "hyperliquid"
+            and any(coin.startswith("xyz:") for coin in coin_symbols)
+        )
         handle = BacktestDatasetMaterializer(
             store, Path("caches") / "ohlcvs" / "materialized"
         ).materialize(
@@ -1269,6 +1280,7 @@ async def try_prepare_hlcvs_v2_local(
             mss={coin: mss[coin] for coin in sorted(coin_symbols)},
             run_id=run_id,
             fill_edge_gaps=True,
+            synthetic_gaps_tradable=synthetic_gaps_tradable,
         )
         enriched_mss = handle.mss
         warmup_provided = max(0, int(max(0, requested_start_ts - int(global_start_ts)) // minute_ms))

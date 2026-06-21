@@ -528,6 +528,8 @@ pub struct StrategyEquityMetrics {
     pub drawdown_worst_ema_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_strategy_eq: f64,
     pub drawdown_worst_mean_1pct_ema_strategy_eq: f64,
+    pub strategy_eq_underwater_pct_mean: f64,
+    pub strategy_eq_underwater_pct_median: f64,
     pub strategy_eq_recovery_days_mean: f64,
     pub strategy_eq_recovery_days_median: f64,
     pub strategy_eq_recovery_days_p95: f64,
@@ -1793,6 +1795,14 @@ impl<'a> Backtest<'a> {
         exchange_params_list: Vec<ExchangeParams>,
         backtest_params: &BacktestParams,
     ) -> Self {
+        assert!(
+            backtest_params.maker_fee.is_finite(),
+            "backtest maker_fee must be finite"
+        );
+        assert!(
+            backtest_params.taker_fee.is_finite(),
+            "backtest taker_fee must be finite"
+        );
         let mut balance = Balance::default();
         balance.btc_collateral_cap = backtest_params.btc_collateral_cap.max(0.0);
         balance.btc_collateral_ltv_cap = backtest_params.btc_collateral_ltv_cap;
@@ -1885,17 +1895,20 @@ impl<'a> Backtest<'a> {
             } else {
                 warm
             };
-            let mut trade_idx = first.saturating_add(warm_bars);
-            if trade_idx > last {
-                trade_idx = last;
-            }
+            let provided_trade_idx = trade_start_idx[i];
+            let trade_idx = first
+                .saturating_add(warm_bars)
+                .min(last)
+                .max(provided_trade_idx);
             trade_start_idx[i] = trade_idx;
 
             let expected_trade_idx = first.saturating_add(warm_bars).min(last);
-            debug_assert_eq!(
-                trade_idx, expected_trade_idx,
-                "trade start index mismatch for coin {}: expected {} but got {}",
-                i, expected_trade_idx, trade_idx
+            debug_assert!(
+                trade_idx >= expected_trade_idx,
+                "trade start index mismatch for coin {}: expected at least {} but got {}",
+                i,
+                expected_trade_idx,
+                trade_idx
             );
             trade_activation_logged[i] = false;
         }
@@ -4592,7 +4605,7 @@ impl<'a> Backtest<'a> {
                     };
                     let exec = OrderFillExecution {
                         price,
-                        fee_rate: self.backtest_params.taker_fee,
+                        fee_rate: self.exchange_params_list[idx].taker_fee,
                         liquidity: "taker",
                     };
                     self.did_fill_long[idx] = true;
@@ -4612,7 +4625,7 @@ impl<'a> Backtest<'a> {
                     };
                     let exec = OrderFillExecution {
                         price,
-                        fee_rate: self.backtest_params.taker_fee,
+                        fee_rate: self.exchange_params_list[idx].taker_fee,
                         liquidity: "taker",
                     };
                     self.did_fill_short[idx] = true;
@@ -4912,14 +4925,14 @@ impl<'a> Backtest<'a> {
                 .market_fill_price(k, idx, &order.order)
                 .map(|price| OrderFillExecution {
                     price,
-                    fee_rate: self.backtest_params.taker_fee,
+                    fee_rate: self.exchange_params_list[idx].taker_fee,
                     liquidity: "taker",
                 });
         }
         if self.order_filled(k, idx, &order.order) {
             return Some(OrderFillExecution {
                 price: order.order.price,
-                fee_rate: self.backtest_params.maker_fee,
+                fee_rate: self.exchange_params_list[idx].maker_fee,
                 liquidity: "maker",
             });
         }
@@ -5475,6 +5488,8 @@ impl<'a> Backtest<'a> {
             let daily_worst_drawdowns =
                 daily_worst_positive_drawdowns(drawdowns, timestamps_ms, series.len());
             let drawdown_worst_mean_1pct = mean_worst_1pct_abs(&daily_worst_drawdowns);
+            let strategy_eq_underwater_pct_mean = mean_abs(&daily_worst_drawdowns);
+            let strategy_eq_underwater_pct_median = median_abs(&daily_worst_drawdowns);
             let drawdown_worst_ema_strategy_eq = drawdown_emas
                 .map(|values| {
                     values
@@ -5499,6 +5514,8 @@ impl<'a> Backtest<'a> {
                 drawdown_worst_ema_strategy_eq,
                 drawdown_worst_mean_1pct_strategy_eq: drawdown_worst_mean_1pct,
                 drawdown_worst_mean_1pct_ema_strategy_eq,
+                strategy_eq_underwater_pct_mean,
+                strategy_eq_underwater_pct_median,
                 ..StrategyEquityMetrics::default()
             }
         };
@@ -5787,6 +5804,37 @@ fn mean_worst_1pct_abs(values: &[f64]) -> f64 {
         / worst_n as f64
 }
 
+fn mean_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    values.iter().map(|x| x.abs()).sum::<f64>() / values.len() as f64
+}
+
+fn median_abs(values: &[f64]) -> f64 {
+    if values.is_empty() {
+        return 0.0;
+    }
+    let mut sorted = values.iter().map(|x| x.abs()).collect::<Vec<_>>();
+    sorted.sort_by(|a, b| {
+        a.partial_cmp(b).unwrap_or_else(|| {
+            if a.is_nan() && b.is_nan() {
+                Ordering::Equal
+            } else if a.is_nan() {
+                Ordering::Less
+            } else {
+                Ordering::Greater
+            }
+        })
+    });
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        (sorted[mid - 1] + sorted[mid]) / 2.0
+    } else {
+        sorted[mid]
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default)]
 struct StrategyEqRecoveryDays {
     mean: f64,
@@ -6006,7 +6054,7 @@ fn calc_ema_alphas(
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.long).unwrap_or(0.0);
             if span > 0.0 {
-                2.0 / (span + 1.0)
+                2.0 / (span.max(1.0) + 1.0)
             } else {
                 0.0
             }
@@ -6015,7 +6063,7 @@ fn calc_ema_alphas(
             let span =
                 strategy_entry_volatility_span_hours(&strategy_params_pair.short).unwrap_or(0.0);
             if span > 0.0 {
-                2.0 / (span + 1.0)
+                2.0 / (span.max(1.0) + 1.0)
             } else {
                 0.0
             }
@@ -6027,7 +6075,8 @@ fn calc_ema_alphas(
 mod tests {
     use super::*;
     use crate::strategies::{
-        TrailingMartingaleCloseParams, TrailingMartingaleEntryParams, TrailingMartingaleParams,
+        TrailingGridV7EntryParams, TrailingGridV7Params, TrailingMartingaleCloseParams,
+        TrailingMartingaleEntryParams, TrailingMartingaleParams,
     };
     use crate::types::EquityHardStopLossConfig;
     use ndarray::{Array1, Array3};
@@ -6745,7 +6794,7 @@ mod tests {
     }
 
     #[test]
-    fn non_panic_market_entry_uses_slippage_taker_fee_and_liquidity_tag() {
+    fn non_panic_market_entry_uses_slippage_exchange_taker_fee_and_liquidity_tag() {
         let hlcvs = Array3::from_shape_vec(
             (2, 1, 4),
             vec![
@@ -6765,6 +6814,84 @@ mod tests {
         let backtest_params = BacktestParams {
             starting_balance: 1000.0,
             maker_fee: 0.0002,
+            taker_fee: 0.00099,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+            market_orders_allowed: true,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams {
+                taker_fee: 0.00055,
+                ..Default::default()
+            }],
+            &backtest_params,
+        );
+        bt.open_orders.long[0].entries.push(BacktestOrder {
+            order: Order {
+                qty: 1.0,
+                price: 100.0,
+                order_type: OrderType::EntryGridNormalLong,
+            },
+            execution_type: orchestrator::ExecutionType::Market,
+        });
+
+        bt.check_for_fills(1);
+
+        assert_ne!(bt.positions.long[0].size, 0.0);
+        assert_eq!(bt.fills.len(), 1);
+        assert_eq!(bt.fills[0].order_type, OrderType::EntryGridNormalLong);
+        assert_eq!(bt.fills[0].liquidity, "taker");
+        assert!((bt.fills[0].fill_price - 100.05).abs() < 1e-12);
+        assert!((bt.fills[0].fee_paid + 100.05 * 0.00055).abs() < 1e-12);
+    }
+
+    #[test]
+    fn limit_entry_uses_exchange_maker_fee_and_liquidity_tag() {
+        let hlcvs = Array3::from_shape_vec(
+            (2, 1, 4),
+            vec![
+                101.0, 99.0, 100.0, 1.0, //
+                101.0, 99.0, 100.0, 1.0,
+            ],
+        )
+        .unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.0;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 1000.0,
+            maker_fee: 0.00099,
             taker_fee: 0.00055,
             coins: vec!["TEST".to_string()],
             active_coin_indices: None,
@@ -6797,7 +6924,10 @@ mod tests {
             hlcvs.view(),
             btc_usd_prices.view(),
             vec![bp_pair],
-            vec![ExchangeParams::default()],
+            vec![ExchangeParams {
+                maker_fee: 0.0002,
+                ..Default::default()
+            }],
             &backtest_params,
         );
         bt.open_orders.long[0].entries.push(BacktestOrder {
@@ -6806,7 +6936,7 @@ mod tests {
                 price: 100.0,
                 order_type: OrderType::EntryGridNormalLong,
             },
-            execution_type: orchestrator::ExecutionType::Market,
+            execution_type: orchestrator::ExecutionType::Limit,
         });
 
         bt.check_for_fills(1);
@@ -6814,9 +6944,9 @@ mod tests {
         assert_ne!(bt.positions.long[0].size, 0.0);
         assert_eq!(bt.fills.len(), 1);
         assert_eq!(bt.fills[0].order_type, OrderType::EntryGridNormalLong);
-        assert_eq!(bt.fills[0].liquidity, "taker");
-        assert!((bt.fills[0].fill_price - 100.05).abs() < 1e-12);
-        assert!((bt.fills[0].fee_paid + 100.05 * 0.00055).abs() < 1e-12);
+        assert_eq!(bt.fills[0].liquidity, "maker");
+        assert_eq!(bt.fills[0].fill_price, 100.0);
+        assert!((bt.fills[0].fee_paid + 100.0 * 0.0002).abs() < 1e-12);
     }
 
     #[test]
@@ -8173,6 +8303,26 @@ mod tests {
         assert!((daily_worst[0] - 0.5).abs() < 1e-12);
         assert!((daily_worst[1] - (1.0 / 110.0)).abs() < 1e-12);
         assert!((mean_worst_1pct_abs(&daily_worst) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn strategy_eq_underwater_pct_uses_daily_worst_drawdowns() {
+        let day = 86_400_000;
+        let series = vec![100.0, 50.0, 110.0, 109.0, 110.0, 99.0];
+        let timestamps = vec![
+            0,
+            3_600_000,
+            day,
+            day + 3_600_000,
+            2 * day,
+            2 * day + 3_600_000,
+        ];
+        let drawdowns = calc_strategy_equity_drawdowns(&series);
+        let daily_worst = daily_worst_positive_drawdowns(&drawdowns, &timestamps, series.len());
+
+        assert_eq!(daily_worst.len(), 3);
+        assert!((mean_abs(&daily_worst) - ((0.5 + (1.0 / 110.0) + 0.1) / 3.0)).abs() < 1e-12);
+        assert!((median_abs(&daily_worst) - 0.1).abs() < 1e-12);
     }
 
     #[test]
@@ -10004,6 +10154,31 @@ mod tests {
                 < 1e-12,
             "hourly volatility alpha should not change with interval"
         );
+    }
+
+    #[test]
+    fn test_hourly_volatility_span_below_one_hour_floors_alpha_to_one() {
+        let strategy_pair = StrategyParamsPair {
+            long: StrategyParams::TrailingGridV7(TrailingGridV7Params {
+                entry: TrailingGridV7EntryParams {
+                    volatility_ema_span_hours: 0.75,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+            short: StrategyParams::TrailingGridV7(TrailingGridV7Params {
+                entry: TrailingGridV7EntryParams {
+                    volatility_ema_span_hours: 0.25,
+                    ..Default::default()
+                },
+                ..Default::default()
+            }),
+        };
+
+        let alphas = calc_ema_alphas(&BotParamsPair::default(), &strategy_pair, 1);
+
+        assert_eq!(alphas.volatility_ema_1h_alpha_long, 1.0);
+        assert_eq!(alphas.volatility_ema_1h_alpha_short, 1.0);
     }
 }
 

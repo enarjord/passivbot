@@ -68,6 +68,8 @@ DEFAULT_OBJECTIVE_GOALS = {
     "sterling_ratio_strategy_eq_w": "max",
     "drawdown_worst_strategy_eq": "min",
     "drawdown_worst_mean_1pct_strategy_eq": "min",
+    "strategy_eq_underwater_pct_mean": "min",
+    "strategy_eq_underwater_pct_median": "min",
     "strategy_eq_recovery_days_mean": "min",
     "strategy_eq_recovery_days_median": "min",
     "strategy_eq_recovery_days_p95": "min",

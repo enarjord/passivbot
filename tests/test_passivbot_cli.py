@@ -129,6 +129,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert cli_main.main(["tool", "-h"]) == 0
 
     out = capsys.readouterr().out
+    assert "crash-finder" in out
     assert "hyperliquid-abstraction-probe" in out
     assert "hyperliquid-balance-probe" in out
     assert "hyperliquid-order-margin-probe" in out
