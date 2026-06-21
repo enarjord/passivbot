@@ -4669,6 +4669,82 @@ class FillEventsManager:
             )
             return
 
+        coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+        def gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
+            try:
+                gap_start = int(gap["start_ts"])
+                gap_end = int(gap["end_ts"])
+            except (KeyError, TypeError, ValueError):
+                return None
+            if gap_end <= gap_start:
+                return None
+            return gap_start, gap_end
+
+        def gap_confirmed_legitimate(gap: KnownGap) -> bool:
+            reason = str(gap.get("reason", "") or "").lower()
+            try:
+                confidence = float(gap.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+        def blocking_known_gaps() -> List[KnownGap]:
+            gaps: List[KnownGap] = []
+            for gap in self.cache.get_known_gaps():
+                if gap_confirmed_legitimate(gap):
+                    continue
+                bounds = gap_bounds(gap)
+                if bounds is None:
+                    gaps.append(gap)
+                    continue
+                gap_start, gap_end = bounds
+                if gap_start < coverage_end_ms and gap_end > start_ms:
+                    gaps.append(gap)
+            return gaps
+
+        blocking_gaps = blocking_known_gaps()
+        if blocking_gaps:
+            retried_ranges: List[Tuple[int, int]] = []
+            for gap in blocking_gaps:
+                bounds = gap_bounds(gap)
+                if bounds is None:
+                    continue
+                if not force_refetch_gaps and not self.cache.should_retry_gap(gap):
+                    continue
+                gap_start, gap_end = bounds
+                retry_start = max(start_ms, gap_start)
+                retry_end = min(coverage_end_ms, gap_end)
+                if retry_start < retry_end:
+                    retried_ranges.append((retry_start, retry_end))
+            for retry_start, retry_end in self._merge_intervals(retried_ranges):
+                logger.info(
+                    "[fills] retrying known fill-history gap before lookback coverage proof | range=%s..%s",
+                    _format_ms(retry_start),
+                    _format_ms(retry_end),
+                )
+                await self.refresh(start_ms=retry_start, end_ms=retry_end)
+            if retried_ranges:
+                await self.refresh_latest(overlap=overlap)
+                blocking_gaps = blocking_known_gaps()
+            if blocking_gaps:
+                gap = blocking_gaps[0]
+                bounds = gap_bounds(gap)
+                range_label = (
+                    f"{_format_ms(bounds[0])}..{_format_ms(bounds[1])}"
+                    if bounds is not None
+                    else "unknown"
+                )
+                logger.warning(
+                    "[fills] lookback coverage remains unproven because known gap overlaps requested window | start=%s gap=%s reason=%s retry_count=%s confidence=%s",
+                    _format_ms(start_ms),
+                    range_label,
+                    str(gap.get("reason", "unknown")),
+                    str(gap.get("retry_count", "unknown")),
+                    str(gap.get("confidence", "unknown")),
+                )
+                return
+
         metadata = self.cache.load_metadata()
         covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
         oldest_event_ts = int(self._events[0].timestamp) if self._events else 0

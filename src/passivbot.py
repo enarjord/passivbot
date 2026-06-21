@@ -9127,9 +9127,23 @@ class Passivbot:
             pending_pnl_events = FillEventsManager.pending_pnl_events(all_events)
             self._last_fill_refresh_pending_pnl_count = len(pending_pnl_events)
             pnls_complete = not pending_pnl_events
-            if pnls_complete:
+            post_refresh_coverage_status = self._pnl_history_coverage_status(
+                start_ms=age_limit,
+                end_ms=self.get_exchange_time(),
+                lookback=lookback,
+            )
+            coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
+            if pnls_complete and coverage_ready_after:
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
+                )
+            elif pnls_complete and not coverage_ready_after:
+                logging.warning(
+                    "[fills] fill-history lookback still unproven after refresh; "
+                    "deferring authoritative fills | reason=%s scope=%s covered_start=%s",
+                    str(post_refresh_coverage_status.get("reason", "unknown")),
+                    str(post_refresh_coverage_status.get("history_scope", "unknown")),
+                    int(post_refresh_coverage_status.get("covered_start_ms", 0) or 0),
                 )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
@@ -9144,7 +9158,7 @@ class Passivbot:
             )
             logging.log(
                 log_level,
-                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s overlap_minutes=%s pending_pnl=%d",
+                "[fills] refresh timing | source=%s mode=%s | elapsed=%dms | before=%d after=%d new=%d | lookback=%s scope=%s coverage_ready=%s coverage_reason=%s overlap_minutes=%s pending_pnl=%d",
                 source,
                 refresh_mode,
                 elapsed_ms,
@@ -9153,11 +9167,13 @@ class Passivbot:
                 len(new_events),
                 str(self.live_value("pnls_max_lookback_days")),
                 self._pnls_manager.get_history_scope(),
+                coverage_ready_after,
+                str(post_refresh_coverage_status.get("reason", "unknown")),
                 (f"{overlap_minutes:.3f}" if overlap_minutes is not None else "-"),
                 len(pending_pnl_events),
             )
 
-            return pnls_complete
+            return pnls_complete and coverage_ready_after
 
         except RateLimitExceeded:
             if self._shutdown_requested():
