@@ -64,6 +64,11 @@ max-loss, auto-unstuck, trailing, and related logic where applicable. Corrupted 
 fills must use bounded repair/retry and observable degraded decisions. Do not replace missing
 fill/PnL inputs with silent neutral defaults.
 
+For live fill/PnL lookbacks, freshness alone is not coverage proof. Risk consumers may use a
+window only after the fill cache proves `history_scope=all` or `covered_start_ms` at/before the
+configured `live.pnls_max_lookback_days` start. Unproven coverage must trigger an observable
+lookback refresh/defer, not a neutral PnL default and not a restart burst.
+
 Manual or external fills/orders without a Passivbot client order id are not automatically
 corruption. If the exchange row is otherwise valid and does not violate ownership or safety
 policy, accept it as exchange truth and log it clearly as external/manual.

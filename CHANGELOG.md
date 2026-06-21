@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed v8 live fill-history startup/restart behavior so unproven
+  `pnls_max_lookback_days` coverage triggers a blocking lookback refresh and
+  retry/defer instead of sending neutral PnL inputs or repeatedly restarting the
+  execution loop.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
   backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added

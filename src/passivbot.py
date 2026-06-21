@@ -116,6 +116,11 @@ from dataclasses import dataclass
 from collections import defaultdict, Counter
 from sortedcontainers import SortedDict
 
+
+class FillHistoryCoverageUnavailable(RuntimeError):
+    """Raised when live risk gates need fill history whose lookback is unproven."""
+
+
 try:
     import psutil  # type: ignore
 except Exception:
@@ -1289,6 +1294,116 @@ class Passivbot:
         )
         return lookback.event_history_start_ms(self.get_exchange_time())
 
+    def _pnl_history_coverage_status(
+        self,
+        *,
+        start_ms: Optional[int],
+        lookback=None,
+    ) -> dict[str, object]:
+        manager = getattr(self, "_pnls_manager", None)
+        if manager is None:
+            return {
+                "ready": False,
+                "reason": "missing_pnl_manager",
+                "history_scope": "unknown",
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
+        cache = getattr(manager, "cache", None)
+        if cache is None:
+            get_history_scope = getattr(manager, "get_history_scope", None)
+            history_scope = (
+                str(get_history_scope() or "unknown").lower()
+                if callable(get_history_scope)
+                else "unknown"
+            )
+            if history_scope == "all":
+                return {
+                    "ready": True,
+                    "reason": "full_history",
+                    "history_scope": history_scope,
+                    "covered_start_ms": 0,
+                    "oldest_event_ts": 0,
+                }
+            return {
+                "ready": False,
+                "reason": "missing_cache",
+                "history_scope": "unknown",
+                "covered_start_ms": 0,
+                "oldest_event_ts": 0,
+            }
+
+        metadata = {}
+        load_metadata = getattr(cache, "load_metadata", None)
+        if callable(load_metadata):
+            metadata = load_metadata() or {}
+
+        get_history_scope = getattr(manager, "get_history_scope", None)
+        if not callable(get_history_scope):
+            get_history_scope = getattr(cache, "get_history_scope", None)
+        raw_history_scope = (
+            get_history_scope()
+            if callable(get_history_scope)
+            else metadata.get("history_scope", "unknown")
+        )
+        history_scope = str(raw_history_scope or "unknown").lower()
+        if history_scope not in {"unknown", "window", "all"}:
+            history_scope = "unknown"
+
+        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
+        if callable(get_covered_start_ms):
+            covered_start_ms = int(get_covered_start_ms() or 0)
+        else:
+            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
+        oldest_event_ts = int(metadata.get("oldest_event_ts", 0) or 0)
+
+        if history_scope == "all":
+            return {
+                "ready": True,
+                "reason": "full_history",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        if start_ms is None or (lookback is not None and getattr(lookback, "is_all", False)):
+            return {
+                "ready": False,
+                "reason": "full_history_scope_not_proven",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
+            return {
+                "ready": True,
+                "reason": "window_covered",
+                "history_scope": history_scope,
+                "covered_start_ms": covered_start_ms,
+                "oldest_event_ts": oldest_event_ts,
+            }
+
+        return {
+            "ready": False,
+            "reason": "window_coverage_not_proven",
+            "history_scope": history_scope,
+            "covered_start_ms": covered_start_ms,
+            "oldest_event_ts": oldest_event_ts,
+        }
+
+    def _pnl_history_coverage_ready_for_risk(self) -> bool:
+        try:
+            lookback = parse_pnls_max_lookback_days(
+                self.live_value("pnls_max_lookback_days"),
+                field_name="live.pnls_max_lookback_days",
+            )
+            start_ms = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
+        except (AttributeError, KeyError, TypeError, ValueError):
+            return False
+        status = self._pnl_history_coverage_status(start_ms=start_ms, lookback=lookback)
+        return bool(status.get("ready", False))
+
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
             return []
@@ -1387,50 +1502,18 @@ class Passivbot:
                 f"reason={gap.get('reason', 'unknown')}"
             )
 
-        metadata = {}
-        load_metadata = getattr(cache, "load_metadata", None)
-        if callable(load_metadata):
-            metadata = load_metadata() or {}
+        status = self._pnl_history_coverage_status(start_ms=start_ms)
+        if bool(status.get("ready", False)):
+            return
+        history_scope = str(status.get("history_scope", "unknown"))
         if start_ms is None:
-            get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
-            if not callable(get_history_scope):
-                get_history_scope = getattr(cache, "get_history_scope", None)
-            raw_history_scope = (
-                get_history_scope()
-                if callable(get_history_scope)
-                else metadata.get("history_scope", "unknown")
+            raise FillHistoryCoverageUnavailable(
+                f"{context}: fill history coverage unknown for full-history risk lookback "
+                f"(history_scope={history_scope})"
             )
-            history_scope = str(raw_history_scope).lower()
-            if history_scope != "all":
-                raise RuntimeError(
-                    f"{context}: fill history coverage unknown for full-history risk lookback "
-                    f"(history_scope={history_scope})"
-            )
-            return
-
-        get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
-        if not callable(get_history_scope):
-            get_history_scope = getattr(cache, "get_history_scope", None)
-        raw_history_scope = (
-            get_history_scope()
-            if callable(get_history_scope)
-            else metadata.get("history_scope", "unknown")
-        )
-        history_scope = str(raw_history_scope or "unknown").lower()
-        if history_scope == "all":
-            return
-
-        covered_start_ms = 0
-        get_covered_start_ms = getattr(cache, "get_covered_start_ms", None)
-        if callable(get_covered_start_ms):
-            covered_start_ms = int(get_covered_start_ms() or 0)
-        else:
-            covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)
-
-        if covered_start_ms > 0 and covered_start_ms <= int(start_ms):
-            return
-        metadata_oldest = int(metadata.get("oldest_event_ts", 0) or 0)
-        raise RuntimeError(
+        covered_start_ms = int(status.get("covered_start_ms", 0) or 0)
+        metadata_oldest = int(status.get("oldest_event_ts", 0) or 0)
+        raise FillHistoryCoverageUnavailable(
             f"{context}: fill history coverage unknown for risk lookback "
             f"start={int(start_ms)} covered_start={covered_start_ms} "
             f"oldest_event={metadata_oldest} history_scope={history_scope}"
@@ -5292,6 +5375,20 @@ class Passivbot:
                     e, allow_time_sync_recovery=False
                 ):
                     break
+            except FillHistoryCoverageUnavailable as e:
+                if self._shutdown_requested():
+                    logging.debug(
+                        "[shutdown] execution loop stopped during fill-history coverage retry: %s",
+                        e,
+                    )
+                    break
+                self._request_authoritative_confirmation({"fills"})
+                logging.warning(
+                    "[fills] live planning deferred pending fill-history coverage | "
+                    "action=refresh_lookback_before_retry error=%s",
+                    e,
+                )
+                await asyncio.sleep(1.0)
             except Exception as e:
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=True
@@ -8842,13 +8939,19 @@ class Passivbot:
                     existing_source_ids.add(ev.id)
                     existing_by_source_id[str(ev.id)] = ev
 
-            # Check if we need a full refresh (cache empty or too old)
+            # Check whether the cache proves the configured fill-history
+            # lookback before risk gates consume realized PnL.
             events = self._pnls_manager.get_events()
             before_events_count = len(events)
-            needs_full_refresh = not events
-            history_scope = self._pnls_manager.get_history_scope()
-            if lookback.is_all and events and history_scope != "all":
-                needs_full_refresh = True
+            coverage_status = self._pnl_history_coverage_status(
+                start_ms=age_limit,
+                lookback=lookback,
+            )
+            coverage_ready = bool(coverage_status.get("ready", False))
+            needs_full_refresh = lookback.is_all and not coverage_ready
+            needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
+            history_scope = str(coverage_status.get("history_scope", "unknown"))
+            if needs_full_refresh:
                 cache_key = "_fills_full_refresh_logged"
                 if not getattr(self, cache_key, False):
                     setattr(self, cache_key, True)
@@ -8856,21 +8959,6 @@ class Passivbot:
                         "[fills] Cache history scope %s is narrower than requested full history; doing full refresh",
                         history_scope,
                     )
-            elif events and age_limit is not None:
-                oldest_event_ts = events[0].timestamp
-                if (
-                    oldest_event_ts > age_limit + 1000 * 60 * 60 * 24
-                ):  # > 1 day newer than limit
-                    needs_full_refresh = True
-                    # Log once per session to avoid spam
-                    cache_key = "_fills_full_refresh_logged"
-                    if not getattr(self, cache_key, False):
-                        setattr(self, cache_key, True)
-                        logging.debug(
-                            "[fills] Cache oldest event (%s) is newer than lookback (%s), doing full refresh",
-                            ts_to_date(oldest_event_ts)[:19],
-                            ts_to_date(age_limit)[:19],
-                        )
 
             if needs_full_refresh:
                 # Full refresh with proper lookback window
@@ -8896,6 +8984,31 @@ class Passivbot:
                 self._pnls_manager.set_history_scope(
                     "all" if lookback.is_all else "window"
                 )
+            elif needs_lookback_refresh:
+                refresh_mode = "lookback_bootstrap"
+                logging.info(
+                    "[fills] proving fill-history lookback before risk planning | "
+                    "start=%s scope=%s covered_start=%s reason=%s",
+                    ts_to_date(age_limit)[:19] if age_limit is not None else "all",
+                    history_scope,
+                    int(coverage_status.get("covered_start_ms", 0) or 0),
+                    str(coverage_status.get("reason", "unknown")),
+                )
+                refresh_for_lookback = getattr(
+                    self._pnls_manager, "refresh_for_lookback", None
+                )
+                if age_limit is not None and callable(refresh_for_lookback):
+                    await refresh_for_lookback(start_ms=int(age_limit))
+                else:
+                    await self._pnls_manager.refresh(
+                        start_ms=None if age_limit is None else int(age_limit),
+                        end_ms=None,
+                    )
+                    cache = getattr(self._pnls_manager, "cache", None)
+                    mark_covered_start = getattr(cache, "mark_covered_start", None)
+                    if age_limit is not None and callable(mark_covered_start):
+                        mark_covered_start(int(age_limit))
+                self._pnls_manager.set_history_scope("window")
             else:
                 # Incremental refresh
                 pending = dict(
@@ -8971,7 +9084,7 @@ class Passivbot:
                 )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
-                refresh_mode in {"full", "incremental_confirm"}
+                refresh_mode in {"full", "lookback_bootstrap", "incremental_confirm"}
                 or "confirm" in str(source)
                 or "staged" in str(source)
             )

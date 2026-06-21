@@ -213,6 +213,7 @@ def _counted_staged_account_refresh_bot(
     bot._detect_foreign_passivbot_orders = AsyncMock()
     bot._reconcile_balance_after_positions_and_balance_refresh = lambda: False
     bot._reconcile_balance_after_open_orders_refresh = lambda: False
+    bot._pnl_history_coverage_ready_for_risk = lambda: True
 
     counts = {
         "fetch_balance": 0,
@@ -2114,6 +2115,186 @@ async def test_update_pnls_all_lookback_uses_incremental_refresh_when_cache_is_f
         last_refresh_overlap_ms=10 * 60 * 1000,
     )
     assert bot._pnls_manager.history_scope == "all"
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    lookback_days = 30.0
+    start_ms = now_ms - int(lookback_days * 86_400_000)
+    cached_events = [
+        SimpleNamespace(
+            timestamp=start_ms - 60_000,
+            id="old-fill",
+            source_ids=["old-fill"],
+            symbol="BTC/USDT:USDT",
+            position_side="long",
+            side="sell",
+            qty=0.1,
+            price=10.0,
+            pnl=1.0,
+            fee_paid=0.0,
+            pnl_status="complete",
+        )
+    ]
+
+    class _Cache:
+        def __init__(self):
+            self.covered_start_ms = 0
+
+        def load_metadata(self):
+            return {
+                "covered_start_ms": self.covered_start_ms,
+                "oldest_event_ts": cached_events[0].timestamp,
+                "history_scope": "window",
+                "known_gaps": [],
+            }
+
+        def get_known_gaps(self):
+            return []
+
+        def get_covered_start_ms(self):
+            return self.covered_start_ms
+
+        def mark_covered_start(self, value):
+            self.covered_start_ms = int(value)
+
+    class _Manager:
+        def __init__(self, events):
+            self._events = list(events)
+            self.cache = _Cache()
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.refresh_for_lookback = AsyncMock(side_effect=self._refresh_for_lookback)
+            self.history_scope = "window"
+
+        async def _refresh_for_lookback(self, *, start_ms):
+            self.cache.mark_covered_start(start_ms)
+
+        def get_events(self, start_ms=None):
+            if start_ms is None:
+                return list(self._events)
+            return [event for event in self._events if event.timestamp >= int(start_ms)]
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": lookback_days,
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager(cached_events)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls(source="staged_blocking")
+
+    assert result is True
+    bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_not_awaited()
+    assert bot._pnls_manager.cache.get_covered_start_ms() == start_ms
+    assert bot._pnls_manager.history_scope == "window"
+
+
+@pytest.mark.asyncio
+async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven():
+    bot = Passivbot.__new__(Passivbot)
+    now_ms = 1_800_000_000_000
+    lookback_days = 30.0
+    start_ms = now_ms - int(lookback_days * 86_400_000)
+    cached_events = [
+        SimpleNamespace(
+            timestamp=start_ms + 60_000,
+            id="recent-fill",
+            source_ids=["recent-fill"],
+            symbol="BTC/USDT:USDT",
+            position_side="long",
+            side="sell",
+            qty=0.1,
+            price=10.0,
+            pnl=1.0,
+            fee_paid=0.0,
+            pnl_status="complete",
+        )
+    ]
+
+    class _Cache:
+        def load_metadata(self):
+            return {
+                "covered_start_ms": start_ms,
+                "oldest_event_ts": cached_events[0].timestamp,
+                "history_scope": "window",
+                "known_gaps": [],
+            }
+
+        def get_known_gaps(self):
+            return []
+
+        def get_covered_start_ms(self):
+            return start_ms
+
+    class _Manager:
+        def __init__(self, events):
+            self._events = list(events)
+            self.cache = _Cache()
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock()
+            self.refresh_for_lookback = AsyncMock()
+            self.history_scope = "window"
+
+        def get_events(self, start_ms=None):
+            if start_ms is None:
+                return list(self._events)
+            return [event for event in self._events if event.timestamp >= int(start_ms)]
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": lookback_days,
+        }
+    }
+    bot._authoritative_pending_confirmations = {}
+    bot._pnls_manager = _Manager(cached_events)
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    bot.get_exchange_time = lambda: now_ms
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls()
+
+    assert result is True
+    bot._pnls_manager.refresh_for_lookback.assert_not_awaited()
+    bot._pnls_manager.refresh.assert_not_awaited()
+    bot._pnls_manager.refresh_latest.assert_awaited_once_with(
+        overlap=20,
+        last_refresh_overlap_ms=10 * 60 * 1000,
+    )
 
 
 @pytest.mark.asyncio
@@ -4085,6 +4266,7 @@ def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_pending_confirmations = {}
+    bot._pnl_history_coverage_ready_for_risk = lambda: True
     bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
 
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
@@ -4097,6 +4279,23 @@ def test_staged_refresh_plan_defers_fills_until_next_minute(monkeypatch):
     plan = bot._authoritative_staged_refresh_plan()
 
     assert plan == {"balance", "positions", "open_orders", "fills"}
+
+
+def test_staged_refresh_plan_keeps_fills_when_risk_coverage_unproven(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_pending_confirmations = {}
+    bot._pnl_history_coverage_ready_for_risk = lambda: False
+    bot.freshness_ledger.stamp("fills", ("fills", "fresh"), now_ms=120_010, epoch=1)
+
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 120_500)
+
+    assert bot._authoritative_staged_refresh_plan() == {
+        "balance",
+        "positions",
+        "open_orders",
+        "fills",
+    }
 
 
 def test_staged_refresh_plan_keeps_pending_fills_even_with_recent_fills(monkeypatch):
@@ -5799,6 +5998,88 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     assert executes == ["universe", "market", ("execute", False, 13)]
     assert sleeps[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
     assert sleeps[7:12] == [60.0] * 5
+
+
+@pytest.mark.asyncio
+async def test_run_execution_loop_retries_fill_history_coverage_without_restart(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    cycle = {"n": 0}
+    executes = []
+    sleeps = []
+
+    async def fake_sleep(seconds):
+        sleeps.append(seconds)
+        return None
+
+    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot.active_symbols = []
+    bot.positions = {}
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot._authoritative_surface_signatures = {}
+    bot._authoritative_surface_generations = {}
+    bot._authoritative_refresh_epoch = 0
+    bot._authoritative_pending_confirmations = {}
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: False
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._log_settled_order_waves = lambda *args, **kwargs: None
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        cycle["n"] += 1
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", cycle["n"])),
+            ("positions", ("p", cycle["n"])),
+            ("open_orders", ("o", cycle["n"])),
+            ("fills", ("f", cycle["n"])),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    async def fake_refresh_market_state_if_needed():
+        executes.append(("market", cycle["n"]))
+        return True
+
+    async def fake_prepare_planning_universe():
+        executes.append(("universe", cycle["n"]))
+
+    async def fake_execute_to_exchange(*, prepare_cycle=True):
+        executes.append(("execute", prepare_cycle, cycle["n"]))
+        if cycle["n"] == 1:
+            raise passivbot_module.FillHistoryCoverageUnavailable(
+                "fill history coverage unknown for risk lookback"
+            )
+        return {"executed_cycle": cycle["n"]}
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.prepare_planning_universe = fake_prepare_planning_universe
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"executed_cycle": 2}
+    bot.restart_bot_on_too_many_errors.assert_not_awaited()
+    assert sleeps == [1.0]
+    assert executes == [
+        ("universe", 1),
+        ("market", 1),
+        ("execute", False, 1),
+        ("universe", 2),
+        ("market", 2),
+        ("execute", False, 2),
+    ]
 
 
 @pytest.mark.asyncio

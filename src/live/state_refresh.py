@@ -167,7 +167,15 @@ def authoritative_staged_refresh_plan(bot) -> set[str]:
         return plan
     plan = {"balance", "positions", "open_orders", "fills"}
     if "fills" not in pending:
-        if not bot._staged_fills_refresh_due():
+        coverage_ready = True
+        coverage_ready_fn = getattr(bot, "_pnl_history_coverage_ready_for_risk", None)
+        if callable(coverage_ready_fn):
+            coverage_ready = bool(coverage_ready_fn())
+        if not coverage_ready:
+            logging.debug(
+                "[state] staged fills refresh required: risk lookback coverage unproven"
+            )
+        elif not bot._staged_fills_refresh_due():
             plan.discard("fills")
             logging.debug("[state] staged fills refresh deferred until next minute boundary")
         elif bot._staged_fills_can_prefetch_routine() and (
