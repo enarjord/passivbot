@@ -2212,9 +2212,13 @@ async def test_update_pnls_window_lookback_bootstraps_when_coverage_unproven():
 
 
 @pytest.mark.asyncio
-async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists():
+async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists(
+    monkeypatch,
+):
     bot = Passivbot.__new__(Passivbot)
     now_ms = 1_800_000_000_000
+    wall_ms = {"value": now_ms}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: wall_ms["value"])
     lookback_days = 30.0
     start_ms = now_ms - int(lookback_days * 86_400_000)
     cached_events = [
@@ -2292,6 +2296,11 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
         }
     }
     bot._authoritative_pending_confirmations = {}
+    bot._fill_coverage_retry_state = {
+        "key": ("stale",),
+        "retry_count": 3,
+        "next_retry_ms": now_ms + 60_000,
+    }
     bot._pnls_manager = _Manager(cached_events)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -2310,6 +2319,19 @@ async def test_update_pnls_window_lookback_stays_blocked_when_known_gap_persists
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert bot._last_fill_refresh_pending_pnl_count == 0
     assert "fills" not in getattr(bot, "_authoritative_surface_signatures", {})
+    retry_state = getattr(bot, "_fill_coverage_retry_state", {})
+    assert retry_state["next_retry_ms"] > wall_ms["value"]
+
+    result = await bot.update_pnls(source="staged_blocking")
+
+    assert result is False
+    bot._pnls_manager.refresh_for_lookback.assert_awaited_once_with(start_ms=start_ms)
+
+    wall_ms["value"] = int(retry_state["next_retry_ms"]) + 1
+    result = await bot.update_pnls(source="staged_blocking")
+
+    assert result is False
+    assert bot._pnls_manager.refresh_for_lookback.await_count == 2
 
 
 @pytest.mark.asyncio
@@ -2412,6 +2434,7 @@ async def test_update_pnls_window_lookback_records_fills_after_known_gap_repair(
     bot._pnls_manager.refresh.assert_not_awaited()
     bot._pnls_manager.refresh_latest.assert_not_awaited()
     assert "fills" in getattr(bot, "_authoritative_surface_signatures", {})
+    assert getattr(bot, "_fill_coverage_retry_state", {}) == {}
 
 
 @pytest.mark.asyncio
@@ -6195,11 +6218,10 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     executes = []
     sleeps = []
 
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
+    async def fake_sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
         return None
 
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     bot.stop_signal_received = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -6210,6 +6232,7 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     bot._maybe_log_unstuck_status = lambda: None
     bot._monitor_flush_snapshot = AsyncMock()
     bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
 
     async def fake_refresh_authoritative_state():
@@ -6250,8 +6273,10 @@ async def test_run_execution_loop_waits_on_pending_pnl_without_restart(monkeypat
     assert result == {"executed_cycle": 13}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
     assert executes == ["universe", "market", ("execute", False, 13)]
-    assert sleeps[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
-    assert sleeps[7:12] == [60.0] * 5
+    sleep_seconds = [seconds for seconds, _stage in sleeps]
+    assert sleep_seconds[:7] == [1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 60.0]
+    assert sleep_seconds[7:12] == [60.0] * 5
+    assert {stage for _seconds, stage in sleeps} == {"pending_pnl_authoritative_retry"}
 
 
 @pytest.mark.asyncio
@@ -6261,11 +6286,10 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     executes = []
     sleeps = []
 
-    async def fake_sleep(seconds):
-        sleeps.append(seconds)
+    async def fake_sleep_unless_shutdown(seconds, *, stage):
+        sleeps.append((seconds, stage))
         return None
 
-    monkeypatch.setattr(asyncio, "sleep", fake_sleep)
     bot.stop_signal_received = False
     bot.execution_scheduled = False
     bot.state_change_detected_by_symbol = set()
@@ -6285,6 +6309,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
     bot._maybe_log_unstuck_status = lambda: None
     bot._monitor_flush_snapshot = AsyncMock()
     bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot._sleep_unless_shutdown = fake_sleep_unless_shutdown
     bot._log_settled_order_waves = lambda *args, **kwargs: None
     bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
 
@@ -6325,7 +6350,7 @@ async def test_run_execution_loop_retries_fill_history_coverage_without_restart(
 
     assert result == {"executed_cycle": 2}
     bot.restart_bot_on_too_many_errors.assert_not_awaited()
-    assert sleeps == [1.0]
+    assert sleeps == [(1.0, "fill_history_coverage_retry")]
     assert executes == [
         ("universe", 1),
         ("market", 1),

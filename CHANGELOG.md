@@ -8,6 +8,9 @@ All notable user-facing changes will be documented in this file.
   `pnls_max_lookback_days` coverage triggers a blocking lookback refresh and
   retry/defer instead of sending neutral PnL inputs or repeatedly restarting the
   execution loop.
+- Reduced repeated live fill-history repair work when coverage remains blocked
+  by the same unresolved gap, and made live execution-loop retry delays respond
+  promptly to shutdown.
 - Hardened live candle EMA inputs by filtering invalid OHLCV rows at ingestion and
   preventing a leading non-finite candle sample from poisoning log-range EMAs.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`

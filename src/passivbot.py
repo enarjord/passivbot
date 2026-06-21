@@ -1434,6 +1434,76 @@ class Passivbot:
         )
         return bool(status.get("ready", False))
 
+    def _fill_coverage_retry_delay_seconds(self, retry_count: int) -> float:
+        try:
+            base_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_delay_seconds",
+                    30.0,
+                )
+            )
+        except Exception:
+            base_delay = 30.0
+        try:
+            max_delay = float(
+                get_optional_live_value(
+                    self.config,
+                    "fills_coverage_retry_max_delay_seconds",
+                    300.0,
+                )
+            )
+        except Exception:
+            max_delay = 300.0
+        base_delay = max(0.0, base_delay)
+        max_delay = max(base_delay, max_delay)
+        retry_count = max(1, int(retry_count or 1))
+        return min(max_delay, base_delay * (2 ** min(retry_count - 1, 6)))
+
+    @staticmethod
+    def _fill_coverage_retry_key(status: dict[str, object]) -> tuple:
+        return (
+            str(status.get("reason", "unknown")),
+            str(status.get("history_scope", "unknown")),
+            int(status.get("covered_start_ms", 0) or 0),
+            int(status.get("oldest_event_ts", 0) or 0),
+            int(status.get("gap_start_ts", 0) or 0),
+            int(status.get("gap_end_ts", 0) or 0),
+            str(status.get("gap_reason", "")),
+        )
+
+    def _fill_coverage_retry_deferred(self, status: dict[str, object], now_ms: int) -> bool:
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        if not isinstance(state, dict):
+            return False
+        if state.get("key") != self._fill_coverage_retry_key(status):
+            return False
+        next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+        return next_retry_ms > int(now_ms)
+
+    def _record_fill_coverage_retry_defer(
+        self, status: dict[str, object], *, now_ms: Optional[int] = None
+    ) -> None:
+        now = utc_ms() if now_ms is None else int(now_ms)
+        key = self._fill_coverage_retry_key(status)
+        state = getattr(self, "_fill_coverage_retry_state", None)
+        previous_count = (
+            int(state.get("retry_count", 0) or 0)
+            if isinstance(state, dict) and state.get("key") == key
+            else 0
+        )
+        retry_count = previous_count + 1
+        delay_s = self._fill_coverage_retry_delay_seconds(retry_count)
+        self._fill_coverage_retry_state = {
+            "key": key,
+            "retry_count": retry_count,
+            "next_retry_ms": now + int(delay_s * 1000.0),
+        }
+
+    def _clear_fill_coverage_retry_defer(self) -> None:
+        if hasattr(self, "_fill_coverage_retry_state"):
+            self._fill_coverage_retry_state = {}
+
     def _get_effective_pnl_events(self) -> list:
         if self._pnls_manager is None:
             return []
@@ -5250,11 +5320,16 @@ class Passivbot:
                         self._maybe_log_pending_pnl_authoritative_block(
                             retry_delay_seconds=retry_delay_seconds
                         )
-                        await asyncio.sleep(retry_delay_seconds)
+                        await self._sleep_unless_shutdown(
+                            retry_delay_seconds,
+                            stage="pending_pnl_authoritative_retry",
+                        )
                     else:
                         pending_pnl_authoritative_retry_count = 0
                         failed_update_pos_oos_pnls_ohlcvs_count += 1
-                        await asyncio.sleep(0.5)
+                        await self._sleep_unless_shutdown(
+                            0.5, stage="authoritative_refresh_retry"
+                        )
                         if failed_update_pos_oos_pnls_ohlcvs_count > max_n_fails:
                             await self.restart_bot_on_too_many_errors()
                     continue
@@ -5291,10 +5366,11 @@ class Passivbot:
                     self._set_log_silence_watchdog_context(
                         phase="runtime", stage="confirmation_delay"
                     )
-                    await asyncio.sleep(
+                    await self._sleep_unless_shutdown(
                         self._authoritative_confirmation_retry_delay_seconds(
                             details=barrier_details
-                        )
+                        ),
+                        stage="authoritative_confirmation_delay",
                     )
                     continue
                 if self.stop_signal_received:
@@ -5322,7 +5398,9 @@ class Passivbot:
                     raise
                 mark_phase("market_state", phase_start_ms)
                 if not market_ok:
-                    await asyncio.sleep(0.5)
+                    await self._sleep_unless_shutdown(
+                        0.5, stage="market_state_retry"
+                    )
                     continue
                 Passivbot._startup_timing_mark(self, "market")
                 if self.stop_signal_received:
@@ -5384,7 +5462,10 @@ class Passivbot:
                     phase="runtime", stage="execution_delay"
                 )
                 phase_start_ms = utc_ms()
-                await asyncio.sleep(float(self.live_value("execution_delay_seconds")))
+                await self._sleep_unless_shutdown(
+                    float(self.live_value("execution_delay_seconds")),
+                    stage="execution_delay",
+                )
                 mark_phase("execution_delay", phase_start_ms)
                 sleep_duration = 30
                 self._set_log_silence_watchdog_context(
@@ -5417,7 +5498,9 @@ class Passivbot:
                     "[rate] execution loop hit rate limit; backing off 5s..."
                 )
                 await self.restart_bot_on_too_many_errors()
-                await asyncio.sleep(5.0)
+                await self._sleep_unless_shutdown(
+                    5.0, stage="rate_limit_backoff"
+                )
             except asyncio.CancelledError as e:
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=False
@@ -5436,7 +5519,9 @@ class Passivbot:
                     "action=refresh_lookback_before_retry error=%s",
                     e,
                 )
-                await asyncio.sleep(1.0)
+                await self._sleep_unless_shutdown(
+                    1.0, stage="fill_history_coverage_retry"
+                )
             except Exception as e:
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=True
@@ -9000,6 +9085,19 @@ class Passivbot:
             needs_full_refresh = lookback.is_all and not coverage_ready
             needs_lookback_refresh = (not lookback.is_all) and not coverage_ready
             history_scope = str(coverage_status.get("history_scope", "unknown"))
+            if not coverage_ready:
+                now_ms = utc_ms()
+                if self._fill_coverage_retry_deferred(coverage_status, now_ms):
+                    state = getattr(self, "_fill_coverage_retry_state", {}) or {}
+                    next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+                    logging.debug(
+                        "[fills] fill-history lookback proof deferred by retry backoff | "
+                        "reason=%s scope=%s next_retry_in_ms=%d",
+                        str(coverage_status.get("reason", "unknown")),
+                        history_scope,
+                        max(0, next_retry_ms - now_ms),
+                    )
+                    return False
             if needs_full_refresh:
                 cache_key = "_fills_full_refresh_logged"
                 if not getattr(self, cache_key, False):
@@ -9134,16 +9232,21 @@ class Passivbot:
             )
             coverage_ready_after = bool(post_refresh_coverage_status.get("ready", False))
             if pnls_complete and coverage_ready_after:
+                self._clear_fill_coverage_retry_defer()
                 self._record_authoritative_surface(
                     "fills", self._fill_events_signature(all_events)
                 )
             elif pnls_complete and not coverage_ready_after:
+                self._record_fill_coverage_retry_defer(post_refresh_coverage_status)
+                state = getattr(self, "_fill_coverage_retry_state", {}) or {}
+                next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
                 logging.warning(
                     "[fills] fill-history lookback still unproven after refresh; "
-                    "deferring authoritative fills | reason=%s scope=%s covered_start=%s",
+                    "deferring authoritative fills | reason=%s scope=%s covered_start=%s next_retry_in_ms=%d",
                     str(post_refresh_coverage_status.get("reason", "unknown")),
                     str(post_refresh_coverage_status.get("history_scope", "unknown")),
                     int(post_refresh_coverage_status.get("covered_start_ms", 0) or 0),
+                    max(0, next_retry_ms - utc_ms()),
                 )
             elapsed_ms = int(max(0, utc_ms() - refresh_started_ms))
             blocking_or_confirmation_refresh = (
