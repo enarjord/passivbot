@@ -1213,18 +1213,17 @@ class CandlestickManager:
             record = self._held_fetch_locks.get(key)
             if record is None or float(record.acquired_at) != float(acquired_at):
                 return
-            self._held_fetch_locks.pop(key, None)
             owner = self._read_lockfile_owner(record.path)
             self._log(
                 "warning",
-                "fetch_lock_hold_timeout_release",
+                "fetch_lock_hold_timeout",
                 symbol=symbol,
                 timeframe=timeframe,
                 held_seconds=f"{timeout_s:.1f}",
                 lock_path=record.path,
                 owner=owner,
+                action="holder_still_active",
             )
-            await self._release_lock(record.lock, record.path, symbol, timeframe)
 
         self._cancel_fetch_lock_watchdog(key)
         self._fetch_lock_watchdogs[key] = asyncio.create_task(_watchdog())

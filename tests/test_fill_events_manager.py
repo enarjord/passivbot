@@ -4943,6 +4943,58 @@ async def test_manager_refresh_for_lookback_retries_known_gap_before_latest(tmp_
     assert manager.cache.get_known_gaps() == []
 
 
+def test_clear_gap_persists_partial_trim_and_middle_split(tmp_path: Path):
+    cache = FillEventCache(tmp_path / "fills_clear_gap")
+    cache.save_metadata(
+        {
+            "last_refresh_ms": 1,
+            "oldest_event_ts": 0,
+            "newest_event_ts": 0,
+            "covered_start_ms": 0,
+            "known_gaps": [
+                {
+                    "start_ts": 1_000,
+                    "end_ts": 5_000,
+                    "retry_count": 0,
+                    "reason": GAP_REASON_FETCH_FAILED,
+                    "confidence": 0.0,
+                }
+            ],
+        }
+    )
+
+    assert cache.clear_gap(3_000, 5_000) is True
+    assert cache.get_known_gaps() == [
+        {
+            "start_ts": 1_000,
+            "end_ts": 3_000,
+            "retry_count": 0,
+            "reason": GAP_REASON_FETCH_FAILED,
+            "confidence": 0.0,
+        }
+    ]
+    assert cache.load_metadata()["known_gaps"] == cache.get_known_gaps()
+
+    assert cache.clear_gap(1_500, 2_000) is True
+    assert cache.get_known_gaps() == [
+        {
+            "start_ts": 1_000,
+            "end_ts": 1_500,
+            "retry_count": 0,
+            "reason": GAP_REASON_FETCH_FAILED,
+            "confidence": 0.0,
+        },
+        {
+            "start_ts": 2_000,
+            "end_ts": 3_000,
+            "retry_count": 0,
+            "reason": GAP_REASON_FETCH_FAILED,
+            "confidence": 0.0,
+        },
+    ]
+    assert cache.load_metadata()["known_gaps"] == cache.get_known_gaps()
+
+
 @pytest.mark.asyncio
 async def test_manager_refresh_range_detects_gaps(tmp_path: Path):
     cache_dir = tmp_path / "fills_range"

@@ -836,19 +836,10 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     bot_active = FakeBot()
     bot_active.PB_modes = {"long": {symbol: "normal"}, "short": {}}
     bot_active.active_symbols = [symbol]
-    (
-        active_close_emas,
-        _active_volume_emas,
-        active_log_range_emas,
-        _active_h1_log_range_emas,
-        _active_volumes_long,
-        _active_log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot_active, [symbol], modes=bot_active.PB_modes
-    )
-    assert active_close_emas[symbol] == {}
-    assert active_log_range_emas[symbol] == {}
-    assert bot_active._orchestrator_ema_unavailable_symbols == {symbol}
+    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot_active, [symbol], modes=bot_active.PB_modes
+        )
 
     bot_with_position = FakeBot()
     bot_with_position.positions = {
@@ -1309,12 +1300,12 @@ async def test_orchestrator_ema_bundle_marks_incomplete_cache_only_symbol_unavai
 
     called_symbols = {symbol for _kind, symbol, _tf, _max_age_ms in bot.cm.calls}
     assert "CACHE/USDT:USDT" in called_symbols
-    assert m1_close_emas["CACHE/USDT:USDT"] == {}
+    assert m1_close_emas["CACHE/USDT:USDT"]
     assert m1_volume_emas["CACHE/USDT:USDT"] == {}
-    assert m1_log_range_emas["CACHE/USDT:USDT"] == {}
-    assert h1_log_range_emas["CACHE/USDT:USDT"] == {}
+    assert isinstance(m1_log_range_emas["CACHE/USDT:USDT"], dict)
+    assert isinstance(h1_log_range_emas["CACHE/USDT:USDT"], dict)
     assert volumes_long["CACHE/USDT:USDT"] == 0.0
-    assert log_ranges_long["CACHE/USDT:USDT"] == 0.0
+    assert isinstance(log_ranges_long["CACHE/USDT:USDT"], float)
     assert bot._orchestrator_ema_unavailable_symbols == {
         "CACHE/USDT:USDT",
         "FETCH/USDT:USDT",

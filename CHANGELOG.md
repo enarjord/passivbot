@@ -4,14 +4,13 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Hardened v8 live startup after overnight VPS probes: flat historical coin-HSL
-  pairs with missing per-coin unrealized PnL no longer block startup when there
-  is no current position, deterministic coin-HSL validation errors stop as
-  terminal startup failures instead of restart loops, stale candle fetch locks
-  now include owner diagnostics and a local hold watchdog, flat active symbols
-  with unavailable required EMA inputs are marked nontradable until fresh data
-  is available, and Gateio history replay uses single-fetch concurrency by
-  default.
+- Hardened v8 live startup after overnight VPS probes: deterministic coin-HSL
+  validation errors stop as terminal startup failures instead of restart loops,
+  stale candle fetch locks now include owner diagnostics and local hold-timeout
+  warnings, partial fill-history gap repairs persist correctly, true secondary
+  forager symbols with unavailable required EMA inputs are marked nontradable
+  until fresh data is available, active/normal EMA inputs remain fail-loud, and
+  Gateio history replay uses single-fetch concurrency by default.
 - Hardened v8 live restart behavior by clearing successfully retried empty
   fill-history gaps, failing loudly on ambiguous coin-HSL carry-in replay,
   avoiding duplicate coin-HSL startup replay, keeping active/normal forager

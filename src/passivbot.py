@@ -12479,9 +12479,11 @@ class Passivbot:
             return True
 
         def required_ema_can_mark_nontradable(symbol: str) -> bool:
+            if has_normal_planning_mode(symbol):
+                return False
             if symbol in cache_only_symbols or candidate_only_forager_symbol(symbol):
                 return True
-            return not has_position_or_open_order(symbol)
+            return False
 
         def required_ema_log_level(symbol: str) -> int:
             return (
@@ -13046,7 +13048,8 @@ class Passivbot:
                     if missing_lr1m:
                         missing_bits.append("missing_log_range")
                     mark_ema_unavailable(sym, "+".join(missing_bits) or "incomplete")
-                    return {}, {}, {}, {}
+                    if not (missing_required_volume or missing_required_forager_lr1m):
+                        return {}, {}, {}, {}
             return close, vol, lr1m, h1
 
         # Ordering: symbols with open positions first (they need EMA data

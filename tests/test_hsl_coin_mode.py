@@ -787,7 +787,7 @@ async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_history_replay_skips_flat_missing_upnl_for_historical_pair(caplog):
+async def test_coin_hsl_history_replay_requires_upnl_for_flat_ambiguous_decrease():
     bot = make_coin_bot()
     symbol = "A"
 
@@ -818,15 +818,8 @@ async def test_coin_hsl_history_replay_skips_flat_missing_upnl_for_historical_pa
 
     bot.get_balance_equity_history = fake_history
 
-    with caplog.at_level(logging.WARNING):
+    with pytest.raises(ValueError, match="unrealized_pnl_by_coin_pside"):
         await bot._equity_hard_stop_initialize_coin_from_history()
-
-    assert bot._equity_hard_stop_coin_initialized is True
-    assert any(
-        "skipped flat historical pairs with missing unrealized_pnl_by_coin_pside"
-        in record.message
-        for record in caplog.records
-    )
 
 
 @pytest.mark.asyncio

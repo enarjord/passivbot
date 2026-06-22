@@ -2098,7 +2098,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         required_replay_pairs: set[tuple[str, str]] = set()
         required_replay_start_ts: dict[tuple[str, str], int] = {}
         skipped_unsupported_symbols: set[str] = set()
-        skipped_missing_upnl_pairs: set[tuple[str, str]] = set()
 
         def remember_required_replay_start(
             pside: str, symbol: str, ts_ms: int
@@ -2275,7 +2274,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 require_coin_timeline_fields = (pside, symbol) in required_replay_pairs
                 required_start_ts = required_replay_start_ts.get((pside, symbol))
                 seen_coin_timeline_fields = False
-                skip_pair_due_missing_upnl = False
                 replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
                     fill_events, pside, symbol
                 )
@@ -2379,10 +2377,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if not has_unrealized and require_coin_timeline_value:
                         replay_position_size = replay_size_at(ts)
                         if replay_ambiguous or replay_position_size > 1e-12:
-                            if not self._equity_hard_stop_has_open_position_symbol(pside, symbol):
-                                skipped_missing_upnl_pairs.add((pside, symbol))
-                                skip_pair_due_missing_upnl = True
-                                break
                             current_upnl = _equity_hard_stop_history_coin_value(
                                 row,
                                 "unrealized_pnl_by_coin_pside",
@@ -2497,8 +2491,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
                     self._equity_hard_stop_remove_latch_file(pside, symbol=symbol)
                     state = self._hsl_coin_state(pside, symbol)
-                if skip_pair_due_missing_upnl:
-                    continue
                 if (
                     not state["halted"]
                     and contract["latest_panic_ts"] is not None
@@ -2599,17 +2591,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         realized_pnl_total=float(self._equity_hard_stop_realized_pnl_now()),
                     )
                 log_replay_progress(pair_idx, pside, symbol, applied_rows)
-        if skipped_missing_upnl_pairs:
-            examples = ",".join(
-                f"{pside}:{symbol}"
-                for pside, symbol in sorted(skipped_missing_upnl_pairs)[:12]
-            )
-            logging.warning(
-                "[risk] HSL coin history skipped flat historical pairs with missing "
-                "unrealized_pnl_by_coin_pside and ambiguous replay | pairs=%d examples=%s",
-                len(skipped_missing_upnl_pairs),
-                examples,
-            )
         self._equity_hard_stop_coin_initialized = True
         logging.info(
             "[risk] HSL coin history reconstruction completed | rows=%d pairs=%d elapsed=%.1fs",

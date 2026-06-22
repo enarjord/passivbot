@@ -1895,30 +1895,46 @@ class FillEventCache:
         self.save_metadata(metadata)
 
     def clear_gap(self, start_ts: int, end_ts: int) -> bool:
-        """Remove a gap that has been filled. Returns True if a gap was removed."""
+        """Remove a filled interval from known gaps and persist any mutation."""
         metadata = self.load_metadata()
         gaps = metadata.get("known_gaps", [])
-        original_count = len(gaps)
+        changed = False
 
-        # Remove gaps that are fully contained in the filled range
         remaining = []
         for gap in gaps:
-            if gap["start_ts"] >= start_ts and gap["end_ts"] <= end_ts:
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_end <= start_ts or gap_start >= end_ts:
+                remaining.append(gap)
+                continue
+            changed = True
+            if gap_start >= start_ts and gap_end <= end_ts:
                 logger.info(
                     "FillEventCache.clear_gap: removed gap %s → %s",
-                    _format_ms(gap["start_ts"]),
-                    _format_ms(gap["end_ts"]),
+                    _format_ms(gap_start),
+                    _format_ms(gap_end),
                 )
                 continue
-            # Partial overlap - trim the gap
-            if gap["start_ts"] < start_ts < gap["end_ts"]:
-                gap["end_ts"] = start_ts
-            if gap["start_ts"] < end_ts < gap["end_ts"]:
-                gap["start_ts"] = end_ts
-            if gap["start_ts"] < gap["end_ts"]:
-                remaining.append(gap)
 
-        if len(remaining) != original_count:
+            if gap_start < start_ts:
+                left = dict(gap)
+                left["end_ts"] = start_ts
+                if int(left["start_ts"]) < int(left["end_ts"]):
+                    remaining.append(left)
+            if end_ts < gap_end:
+                right = dict(gap)
+                right["start_ts"] = end_ts
+                if int(right["start_ts"]) < int(right["end_ts"]):
+                    remaining.append(right)
+            logger.info(
+                "FillEventCache.clear_gap: trimmed gap %s → %s by filled range %s → %s",
+                _format_ms(gap_start),
+                _format_ms(gap_end),
+                _format_ms(start_ts),
+                _format_ms(end_ts),
+            )
+
+        if changed:
             metadata["known_gaps"] = remaining
             self.save_metadata(metadata)
             return True

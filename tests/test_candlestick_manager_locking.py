@@ -99,7 +99,7 @@ async def test_concurrent_refresh_no_deadlock(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_fetch_lock_watchdog_releases_stale_local_holder(tmp_path, caplog):
+async def test_fetch_lock_watchdog_logs_stale_local_holder_without_release(tmp_path, caplog):
     cache_dir = tmp_path / "caches"
     cm = CandlestickManager(
         exchange=FakeExchange(),
@@ -119,13 +119,10 @@ async def test_fetch_lock_watchdog_releases_stale_local_holder(tmp_path, caplog)
             assert payload["symbol"] == key[0]
             assert payload["timeframe"] == key[1]
 
-            async def wait_for_watchdog() -> None:
-                while key in cm._held_fetch_locks:
-                    await asyncio.sleep(0.005)
-
-            await asyncio.wait_for(wait_for_watchdog(), timeout=1.0)
+            await asyncio.sleep(0.03)
+            assert key in cm._held_fetch_locks
 
     assert key not in cm._held_fetch_locks
     assert any(
-        "fetch_lock_hold_timeout_release" in record.message for record in caplog.records
+        "fetch_lock_hold_timeout" in record.message for record in caplog.records
     )
