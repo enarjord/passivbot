@@ -10,7 +10,7 @@ for monitor tooling that wants a fixed path per bot. This behavior is controlled
 - `logging.persist_to_file = true` keeps on-disk live logs enabled
 - `logging.dir` chooses the target directory for both the timestamped archive and the stable alias
 - `logging.rotation`, `logging.max_bytes_mb`, and `logging.backup_count`
-  control optional file rotation
+  control file rotation, which is enabled by default for new/generated configs
 
 Disable file persistence only if you explicitly want console-only live logging:
 

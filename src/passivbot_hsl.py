@@ -979,6 +979,67 @@ def _equity_hard_stop_history_coin_has_value(row: dict, key: str, symbol: str, p
     return pside in by_pside and by_pside[pside] is not None
 
 
+def _equity_hard_stop_fill_replay_qty(fill: Any) -> Optional[float]:
+    for key in ("qty", "amount", "size", "contracts"):
+        raw = _equity_hard_stop_event_value(fill, key)
+        if raw is None:
+            continue
+        try:
+            qty = abs(float(raw))
+        except (TypeError, ValueError):
+            return None
+        if not math.isfinite(qty):
+            return None
+        return qty
+    return None
+
+
+def _equity_hard_stop_coin_replay_events(
+    fill_events: list[Any], pside: str, symbol: str
+) -> tuple[list[tuple[int, str, float]], bool]:
+    replay_events: list[tuple[int, str, float]] = []
+    ambiguous = False
+    for event in fill_events:
+        if _equity_hard_stop_fill_pside(event) != pside:
+            continue
+        if _equity_hard_stop_fill_symbol(event) != symbol:
+            continue
+        action = str(_equity_hard_stop_event_value(event, "action", "") or "").lower()
+        qty = _equity_hard_stop_fill_replay_qty(event)
+        if action not in {"increase", "decrease"} or qty is None or qty <= 0.0:
+            ambiguous = True
+            continue
+        replay_events.append(
+            (_equity_hard_stop_fill_timestamp_ms(event), action, float(qty))
+        )
+    replay_events.sort(key=lambda item: item[0])
+    return replay_events, ambiguous
+
+
+def _equity_hard_stop_coin_replay_size_at(
+    replay_events: list[tuple[int, str, float]], row_ts_ms: int
+) -> float:
+    boundary_ts_ms = int(row_ts_ms) + 60_000
+    size = 0.0
+    for event_ts, action, qty in replay_events:
+        if int(event_ts) >= boundary_ts_ms:
+            break
+        if action == "increase":
+            size += qty
+        else:
+            size = max(0.0, size - qty)
+    return float(size)
+
+
+def _equity_hard_stop_symbol_supported_for_coin_replay(self, symbol: str) -> bool:
+    if symbol in (self.positions or {}):
+        return True
+    c_mults = getattr(self, "c_mults", None)
+    if isinstance(c_mults, dict) and c_mults:
+        return symbol in c_mults
+    return True
+
+
 def _equity_hard_stop_activate_coin_red_from_metrics(
     self,
     pside: str,
@@ -2027,6 +2088,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         symbols = set(self.positions.keys())
         required_replay_pairs: set[tuple[str, str]] = set()
         required_replay_start_ts: dict[tuple[str, str], int] = {}
+        skipped_unsupported_symbols: set[str] = set()
 
         def remember_required_replay_start(
             pside: str, symbol: str, ts_ms: int
@@ -2050,6 +2112,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 continue
             symbol = _equity_hard_stop_fill_symbol(event)
             if symbol:
+                if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
+                    skipped_unsupported_symbols.add(symbol)
+                    continue
                 pside = _equity_hard_stop_fill_pside(event)
                 symbols.add(symbol)
                 required_replay_pairs.add((pside, symbol))
@@ -2065,7 +2130,14 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         f"get_balance_equity_history()['timeline'][]['{key}'] must be a dict, "
                         f"got {type(row[key]).__name__}"
                     )
-                symbols.update(str(symbol) for symbol in row[key].keys() if symbol)
+                for symbol in row[key].keys():
+                    symbol = str(symbol)
+                    if not symbol:
+                        continue
+                    if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
+                        skipped_unsupported_symbols.add(symbol)
+                        continue
+                    symbols.add(symbol)
 
         latest_panic_by_coin_minute: dict[tuple[str, str, int], dict[str, Any]] = {}
         for item in panic_flatten_events:
@@ -2081,6 +2153,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             minute_ts = int(minute_ts)
             if lookback_start_ms is not None and stop_ts < lookback_start_ms:
                 continue
+            if not self._equity_hard_stop_symbol_supported_for_coin_replay(symbol):
+                skipped_unsupported_symbols.add(symbol)
+                continue
             symbols.add(symbol)
             required_replay_pairs.add((pside, symbol))
             remember_required_replay_start(pside, symbol, minute_ts)
@@ -2093,6 +2168,13 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "pside": pside,
                     "symbol": symbol,
                 }
+
+        if skipped_unsupported_symbols:
+            logging.warning(
+                "[risk] HSL coin history skipping unsupported historical symbols "
+                "with no current position | symbols=%s",
+                ",".join(sorted(skipped_unsupported_symbols)),
+            )
 
         balance = float(self.get_raw_balance())
         rows = 0
@@ -2127,6 +2209,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 require_coin_timeline_fields = (pside, symbol) in required_replay_pairs
                 required_start_ts = required_replay_start_ts.get((pside, symbol))
                 seen_coin_timeline_fields = False
+                replay_events, replay_ambiguous = _equity_hard_stop_coin_replay_events(
+                    fill_events, pside, symbol
+                )
                 for row in timeline:
                     if not isinstance(row, dict):
                         continue
@@ -2198,14 +2283,28 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     ]
                     window_last_realized = window_values[-1] if window_values else 0.0
                     peak_realized = max([0.0, *window_values])
-                    current_upnl = _equity_hard_stop_history_coin_value(
-                        row,
-                        "unrealized_pnl_by_coin_pside",
-                        symbol,
-                        pside,
-                        require_key=require_coin_timeline_value,
-                        require_value=require_coin_timeline_value,
-                    )
+                    if not has_unrealized and require_coin_timeline_value:
+                        replay_size = _equity_hard_stop_coin_replay_size_at(replay_events, ts)
+                        if replay_ambiguous or replay_size > 1e-12:
+                            current_upnl = _equity_hard_stop_history_coin_value(
+                                row,
+                                "unrealized_pnl_by_coin_pside",
+                                symbol,
+                                pside,
+                                require_key=True,
+                                require_value=True,
+                            )
+                        else:
+                            current_upnl = 0.0
+                    else:
+                        current_upnl = _equity_hard_stop_history_coin_value(
+                            row,
+                            "unrealized_pnl_by_coin_pside",
+                            symbol,
+                            pside,
+                            require_key=require_coin_timeline_value,
+                            require_value=require_coin_timeline_value,
+                        )
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, ts)
                     metrics = self._equity_hard_stop_apply_coin_metrics_sample(
                         pside,

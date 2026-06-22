@@ -10298,9 +10298,34 @@ class Passivbot:
             end_minute = record_start_minute
 
         symbols = {evt["symbol"] for evt in events if evt["symbol"]}
+        price_replay_symbols = set(symbols)
+        known_market_symbols = (
+            set(self.c_mults) if isinstance(getattr(self, "c_mults", None), dict) else set()
+        )
+        if known_market_symbols:
+            current_position_symbols = {
+                symbol
+                for (symbol, _pside), (size, _price) in current_position_state.items()
+                if size > 1e-12
+            }
+            skipped_price_symbols = {
+                symbol
+                for symbol in symbols
+                if symbol not in known_market_symbols
+                and symbol not in current_position_symbols
+            }
+            if skipped_price_symbols:
+                price_replay_symbols.difference_update(skipped_price_symbols)
+                logging.warning(
+                    "[risk] balance-equity replay skipping candles for unsupported "
+                    "historical symbols with no current position | symbols=%s",
+                    ",".join(
+                        Passivbot._log_symbol(sym) for sym in sorted(skipped_price_symbols)
+                    ),
+                )
         price_lookup: Dict[str, Dict[int, float]] = {}
         approximate_price_sources: Dict[str, Dict[str, int]] = {}
-        if symbols and getattr(self, "cm", None) is not None:
+        if price_replay_symbols and getattr(self, "cm", None) is not None:
             replay_concurrency = self._candle_fetch_concurrency(
                 context="history_replay"
             )
@@ -10327,7 +10352,7 @@ class Passivbot:
                             )
 
             for sym, arr, exc in await asyncio.gather(
-                *(fetch_replay_candles(sym) for sym in sorted(symbols))
+                *(fetch_replay_candles(sym) for sym in sorted(price_replay_symbols))
             ):
                 if exc is not None:
                     logging.error(f"error fetching candles for {sym} {exc}")
@@ -10353,7 +10378,7 @@ class Passivbot:
                     for sym, arr, exc in await asyncio.gather(
                         *(
                             fetch_replay_candles(sym, timeframe=timeframe)
-                            for sym in sorted(symbols)
+                            for sym in sorted(price_replay_symbols)
                         )
                     ):
                         if exc is not None:
@@ -10385,7 +10410,7 @@ class Passivbot:
                                 timeframe
                             ] = added
         else:
-            price_lookup = {sym: {} for sym in symbols}
+            price_lookup = {sym: {} for sym in price_replay_symbols}
 
         positions: Dict[str, Dict[str, Dict[str, float]]] = {}
         active_symbols: set[str] = set()
@@ -10509,6 +10534,8 @@ class Passivbot:
             upnl_by_pside = {"long": 0.0, "short": 0.0}
             upnl_by_coin_pside: Dict[str, Dict[str, float]] = {}
             for symbol in list(active_symbols):
+                if symbol not in price_replay_symbols:
+                    continue
                 price = price_lookup.get(symbol, {}).get(minute)
                 if price is None:
                     price = last_price.get(symbol)
@@ -10612,7 +10639,7 @@ class Passivbot:
             "lookback_days": lookback.display_value,
             "resolution_ms": ONE_MIN_MS,
             "events_used": len(events),
-            "symbols_covered": sorted(symbols),
+            "symbols_covered": sorted(price_replay_symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
         }

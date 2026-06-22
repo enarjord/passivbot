@@ -957,6 +957,88 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_balance_equity_history_skips_unsupported_closed_historical_symbols(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "gateio"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 100.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = {}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot.c_mults = {"BTC/USDT:USDT": 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        def __init__(self):
+            self.calls = []
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append(symbol)
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": "BTC/USDT:USDT",
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts,
+            "symbol": "TON/USDT:USDT",
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 5.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 60_000,
+            "symbol": "TON/USDT:USDT",
+            "position_side": "long",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 4.9,
+            "pnl": -0.1,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events, current_balance=100.0
+    )
+
+    assert bot.cm.calls == ["BTC/USDT:USDT"]
+    assert [event["symbol"] for event in history["fill_events"]] == [
+        "BTC/USDT:USDT",
+        "TON/USDT:USDT",
+        "TON/USDT:USDT",
+    ]
+    assert history["metadata"]["symbols_covered"] == ["BTC/USDT:USDT"]
+    assert history["metadata"]["missing_price_symbols"] == []
+
+
+@pytest.mark.asyncio
 async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bybit"

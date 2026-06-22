@@ -294,7 +294,7 @@ def resolve_live_log_file_settings(
     return {
         "log_file": str(build_command_log_path(effective_command_args, log_dir)),
         "current_log_file": str(Path(log_dir).expanduser() / f"{user}.log"),
-        "rotation": bool(logging_cfg.get("rotation", False)),
+        "rotation": bool(logging_cfg.get("rotation", True)),
         "max_bytes": max(1, int(max_bytes_mb * 1024 * 1024)),
         "backup_count": max(0, backup_count),
     }

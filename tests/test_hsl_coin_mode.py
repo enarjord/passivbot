@@ -86,11 +86,14 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_prime_coin_runtime_for_replay",
         "_equity_hard_stop_reset_coin_after_restart",
         "_equity_hard_stop_set_coin_runtime_forced_mode",
+        "_equity_hard_stop_symbol_supported_for_coin_replay",
         "_hsl_coin_state",
     ):
         setattr(bot, name, MethodType(getattr(hsl, name), bot))
     for name in (
         "_assert_no_pending_pnl_events",
+        "_pnl_history_coverage_status",
+        "_pnl_blocking_known_gaps",
         "_pnl_gap_is_confirmed_legitimate",
         "_pnl_gap_overlaps",
         "_pnl_event_preview",
@@ -683,6 +686,61 @@ async def test_coin_hsl_history_replay_requires_relevant_symbol_fields():
 
     with pytest.raises(ValueError, match="missing required coin HSL symbol"):
         await bot._equity_hard_stop_initialize_coin_from_history()
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
+    bot = make_coin_bot()
+    symbol = "A"
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 95.0,
+                    "realized_pnl": -5.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -5.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                },
+                {
+                    "timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "price": 95.0,
+                    "pnl": -5.0,
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["last_metrics"]["timestamp_ms"] == 180_000
+    assert state["last_metrics"]["tier"] == "green"
 
 
 @pytest.mark.asyncio

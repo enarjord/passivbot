@@ -47,7 +47,7 @@ def test_build_command_log_path_places_file_under_requested_dir():
 
 def test_resolve_live_log_file_settings_defaults_to_timestamped_archive_and_stable_alias():
     settings = resolve_live_log_file_settings(
-        {"logging": {"persist_to_file": True, "dir": "logs", "rotation": False}},
+        {"logging": {"persist_to_file": True, "dir": "logs"}},
         user="bitget_01",
         command_args=["passivbot live", "-u", "bitget_01", "-lm", "graceful_stop"],
     )
@@ -57,9 +57,18 @@ def test_resolve_live_log_file_settings_defaults_to_timestamped_archive_and_stab
         "_passivbot_live_-u_bitget_01_-lm_graceful_stop.log"
     )
     assert settings["current_log_file"] == "logs/bitget_01.log"
-    assert settings["rotation"] is False
+    assert settings["rotation"] is True
     assert settings["max_bytes"] == 10 * 1024 * 1024
     assert settings["backup_count"] == 5
+
+
+def test_resolve_live_log_file_settings_preserves_explicit_rotation_false():
+    settings = resolve_live_log_file_settings(
+        {"logging": {"persist_to_file": True, "dir": "logs", "rotation": False}},
+        user="bitget_01",
+    )
+
+    assert settings["rotation"] is False
 
 
 def test_resolve_live_log_file_settings_disables_file_handler_when_requested():
