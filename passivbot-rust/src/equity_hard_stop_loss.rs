@@ -166,6 +166,24 @@ pub fn step_with_peak_strategy_equity(
     peak_strategy_equity: f64,
     timestamp_ms: u64,
 ) -> Result<HardStopStep, String> {
+    step_with_peak_strategy_equity_latch(
+        state,
+        config,
+        equity,
+        peak_strategy_equity,
+        timestamp_ms,
+        true,
+    )
+}
+
+pub fn step_with_peak_strategy_equity_latch(
+    state: &mut HardStopState,
+    config: HardStopConfig,
+    equity: f64,
+    peak_strategy_equity: f64,
+    timestamp_ms: u64,
+    latch_red: bool,
+) -> Result<HardStopStep, String> {
     config.validate()?;
     if !equity.is_finite() || equity <= 0.0 {
         return Err("equity must be finite and > 0".to_string());
@@ -219,8 +237,14 @@ pub fn step_with_peak_strategy_equity(
         let mut step = state
             .cached_step
             .ok_or_else(|| "initialized hard-stop state missing cached_step".to_string())?;
+        if latch_red && step.tier == HardStopTier::Red && !state.red_latched {
+            state.red_latched = true;
+            state.tier = HardStopTier::Red;
+            step.tier = HardStopTier::Red;
+        }
         step.changed = false;
         step.elapsed_minutes = 0;
+        state.cached_step = Some(step);
         return Ok(step);
     }
 
@@ -246,7 +270,7 @@ pub fn step_with_peak_strategy_equity(
     } else {
         HardStopTier::Green
     };
-    if next_tier == HardStopTier::Red {
+    if latch_red && next_tier == HardStopTier::Red {
         state.red_latched = true;
     }
     state.tier = if state.red_latched {
@@ -401,6 +425,29 @@ mod tests {
         let after_recovery = step(&mut state, config, 100.0, 180_000).unwrap();
         assert_eq!(after_recovery.tier, HardStopTier::Red);
         assert!(state.red_latched);
+    }
+
+    #[test]
+    fn red_crossing_can_be_replayed_without_latching() {
+        let mut state = HardStopState::default();
+        let config = HardStopConfig {
+            red_threshold: 0.25,
+            ema_span_minutes: 1.0,
+            tier_ratios: HardStopTierRatios::default(),
+        };
+        let _ =
+            step_with_peak_strategy_equity_latch(&mut state, config, 100.0, 100.0, 60_000, false)
+                .unwrap();
+        let red =
+            step_with_peak_strategy_equity_latch(&mut state, config, 60.0, 100.0, 120_000, false)
+                .unwrap();
+        assert_eq!(red.tier, HardStopTier::Red);
+        assert!(!state.red_latched);
+        let after_recovery =
+            step_with_peak_strategy_equity_latch(&mut state, config, 100.0, 100.0, 180_000, false)
+                .unwrap();
+        assert_eq!(after_recovery.tier, HardStopTier::Green);
+        assert!(!state.red_latched);
     }
 
     #[test]

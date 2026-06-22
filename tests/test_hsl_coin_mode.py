@@ -312,7 +312,7 @@ def test_coin_hsl_active_side_rejects_invalid_budget_config(
 
 
 @pytest.mark.asyncio
-async def test_coin_hsl_history_replay_latches_red_without_panic_marker():
+async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_panic_marker():
     bot = make_coin_bot()
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
@@ -351,12 +351,14 @@ async def test_coin_hsl_history_replay_latches_red_without_panic_marker():
     await bot._equity_hard_stop_initialize_coin_from_history()
 
     state = bot._hsl_coin_state("long", symbol)
-    assert state["runtime"].red_latched() is True
-    assert state["runtime"].tier() == "red"
-    assert state["pending_red_since_ms"] == 120_000
+    assert state["runtime"].red_latched() is False
+    assert state["runtime"].tier() == "green"
+    assert state["last_metrics"]["timestamp_ms"] == 180_000
+    assert state["last_metrics"]["tier"] == "green"
+    assert state["pending_red_since_ms"] is None
     assert state["pending_stop_event"] is None
-    assert bot._runtime_forced_modes["long"][symbol] == "panic"
-    assert bot._equity_hard_stop_coin_red_active() is True
+    assert symbol not in bot._runtime_forced_modes["long"]
+    assert bot._equity_hard_stop_coin_red_active() is False
 
 
 @pytest.mark.asyncio

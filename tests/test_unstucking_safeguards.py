@@ -98,6 +98,7 @@ def _make_mock_pbr():
             ema_span_minutes,
             tier_ratio_yellow,
             tier_ratio_orange,
+            latch_red=True,
         ):
             current_minute = int(timestamp_ms) // 60_000
             alpha = 2.0 / (ema_span_minutes + 1.0)
@@ -130,8 +131,13 @@ def _make_mock_pbr():
             elapsed_minutes = current_minute - self._last_minute
             if elapsed_minutes == 0:
                 cached = dict(self._cached_step)
+                if latch_red and cached["tier"] == "red" and not self._red_latched:
+                    self._red_latched = True
+                    self._tier = "red"
+                    cached["red_latched"] = True
                 cached["changed"] = False
                 cached["elapsed_minutes"] = 0
+                self._cached_step = dict(cached)
                 return cached
 
             self._last_rolling_peak = float(peak_strategy_equity)
@@ -146,7 +152,8 @@ def _make_mock_pbr():
             drawdown_score = min(drawdown_raw, self._drawdown_ema)
             if self._red_latched or drawdown_score >= red_threshold:
                 self._tier = "red"
-                self._red_latched = True
+                if latch_red:
+                    self._red_latched = True
             elif drawdown_score >= red_threshold * tier_ratio_orange:
                 self._tier = "orange"
             elif drawdown_score >= red_threshold * tier_ratio_yellow:
@@ -2924,7 +2931,15 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
                     "is_flat_long": True,
                     "is_flat_short": True,
                 },
-            ]
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 121_500,
+                    "minute_timestamp": 121_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                }
+            ],
         }
 
     captured = {}
@@ -2944,8 +2959,78 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
     assert _hsl_state(bot)["no_restart_latched"] is True
     assert captured["payload"]["no_restart_latched"] is True
     assert captured["payload"]["cooldown_until_ms"] is None
-    assert captured["payload"]["stop_event_timestamp_ms"] == 121_000
+    assert captured["payload"]["stop_event_timestamp_ms"] == 121_500
     assert captured["pside"] == "long"
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_does_not_latch_recovered_red_without_panic_marker(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    bot.balance = 100.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 61_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": -20.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": False,
+                    "is_flat_long": False,
+                    "is_flat_short": True,
+                },
+            ],
+            "panic_flatten_events": [],
+        }
+
+    async def fake_upnl(*_args, **_kwargs):
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 181_000)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is False
+    assert state["runtime"].red_latched() is False
+    assert state["runtime"].tier() == "green"
+    assert state["pending_red_since_ms"] is None
 
 
 @pytest.mark.asyncio
@@ -3013,7 +3098,15 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
                     "is_flat_long": True,
                     "is_flat_short": True,
                 },
-            ]
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 181_500,
+                    "minute_timestamp": 181_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                }
+            ],
         }
 
     current_time = {"ts": 200_000}
@@ -3030,7 +3123,7 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
     assert bot.stop_signal_received is False
     assert _hsl_state(bot)["halted"] is True
     assert _hsl_state(bot)["no_restart_latched"] is False
-    assert _hsl_state(bot)["cooldown_until_ms"] == 241_000
+    assert _hsl_state(bot)["cooldown_until_ms"] == 241_500
 
 
 @pytest.mark.asyncio
@@ -3110,7 +3203,15 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(
                     "is_flat_long": False,
                     "is_flat_short": True,
                 },
-            ]
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 181_000,
+                    "minute_timestamp": 181_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                }
+            ],
         }
 
     reset_calls = {"count": 0}
@@ -3218,7 +3319,21 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
                     "is_flat_long": True,
                     "is_flat_short": True,
                 },
-            ]
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 121_500,
+                    "minute_timestamp": 121_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                },
+                {
+                    "timestamp": 241_500,
+                    "minute_timestamp": 241_000,
+                    "pside": "long",
+                    "symbol": "XMR/USDT:USDT",
+                },
+            ],
         }
 
     captured = []
@@ -3244,10 +3359,10 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
     assert _hsl_state(bot)["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
     assert len(captured) == 2
     assert captured[0][1]["no_restart_latched"] is False
-    assert captured[0][1]["cooldown_until_ms"] == 181_000
+    assert captured[0][1]["cooldown_until_ms"] == 181_500
     assert captured[1][1]["no_restart_latched"] is True
     assert captured[1][1]["cooldown_until_ms"] is None
-    assert captured[1][1]["drawdown_raw"] == pytest.approx(1.0 - 86.0 / 90.0)
+    assert captured[1][1]["drawdown_raw"] == pytest.approx(0.0)
     assert captured[1][1]["no_restart_drawdown_raw"] == pytest.approx(
         1.0 - 86.0 / 110.0
     )

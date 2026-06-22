@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed live HSL restart replay so historical drawdown threshold crossings no
+  longer create a fresh RED panic after recovery; startup now panics only when
+  current drawdown is RED or when exchange-derived panic/cooldown markers
+  reconstruct an active prior HSL stop.
 - Hardened v8 live startup after overnight VPS probes: deterministic coin-HSL
   validation errors stop as terminal startup failures instead of restart loops,
   stale candle fetch locks now include owner diagnostics and local hold-timeout
