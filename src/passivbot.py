@@ -6560,7 +6560,9 @@ class Passivbot:
         for s in syms:
             if per_sym_ttl.get(s) == CACHE_ONLY_TTL:
                 try:
-                    if self.cm.get_last_refresh_ms(s) == 0:
+                    last_refresh = int(self.cm.get_last_refresh_ms(s) or 0)
+                    last_final = int(self.cm.get_last_final_ts(s) or 0)
+                    if last_refresh == 0 and last_final == 0:
                         cache_only_never_fetched.add(s)
                 except Exception:
                     cache_only_never_fetched.add(s)
@@ -7350,10 +7352,30 @@ class Passivbot:
                     max_age_ms=max_age_ms,
                     max_network_fetches=fetch_budget,
                 )
+            feature_unavailable = [
+                symbol
+                for symbol in candidates
+                if symbol not in volumes or symbol not in log_ranges
+            ]
+            if feature_unavailable:
+                logging.debug(
+                    "[forager] %s unavailable ranking features | unavailable=%d candidates=%d symbols=%s",
+                    pside,
+                    len(feature_unavailable),
+                    len(candidates),
+                    Passivbot._log_symbols(feature_unavailable, limit=12),
+                )
+                candidates = [
+                    symbol
+                    for symbol in candidates
+                    if symbol in volumes and symbol in log_ranges
+                ]
+                if not candidates:
+                    return []
             if volatility_drop > 0.0:
                 ranked = sorted(
                     candidates,
-                    key=lambda symbol: float(log_ranges.get(symbol, 0.0)),
+                    key=lambda symbol: float(log_ranges[symbol]),
                     reverse=True,
                 )
                 keep_from = min(
@@ -7367,8 +7389,8 @@ class Passivbot:
                 {
                     "index": idx,
                     "enabled": min_cost_flags.get(symbol, True),
-                    "volume_score": volumes.get(symbol, 0.0),
-                    "volatility_score": log_ranges.get(symbol, 0.0),
+                    "volume_score": float(volumes[symbol]),
+                    "volatility_score": float(log_ranges[symbol]),
                     "ema_readiness_score": 0.0,
                 }
                 for idx, symbol in enumerate(candidates)
@@ -7409,7 +7431,8 @@ class Passivbot:
 
         If *max_network_fetches* is set, at most that many symbols will be allowed to
         trigger a network fetch.  The remaining symbols receive a very large TTL so they
-        return cached data (or 0.0 if nothing is cached) without hitting the API.
+        return cached data without hitting the API. Symbols with no usable current or
+        bounded cached value are omitted from the returned maps.
         """
         span_volume = int(round(self.bot_value(pside, "forager_volume_ema_span_1m")))
         span_volatility = int(round(self.bot_value(pside, "forager_volatility_ema_span_1m")))
@@ -7442,27 +7465,27 @@ class Passivbot:
         )
 
         async def one(symbol: str):
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol))
+                        if hasattr(self, "open_orders")
+                        else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+            vol = float("nan")
+            lr = float("nan")
             try:
-                if symbol in cache_only_never_fetched:
-                    return (0.0, 0.0)
-                ttl = per_sym_ttl.get(symbol)
-                if ttl is None or ttl == 0:
-                    if max_age_ms is not None:
-                        ttl = int(max_age_ms)
-                    else:
-                        has_pos = self.has_position(symbol)
-                        has_oo = (
-                            bool(self.open_orders.get(symbol))
-                            if hasattr(self, "open_orders")
-                            else False
-                        )
-                        ttl = (
-                            60_000
-                            if (has_pos or has_oo)
-                            else int(
-                                getattr(self, "inactive_coin_candle_ttl_ms", 600_000)
-                            )
-                        )
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"qv": span_volume, "log_range": span_volatility},
@@ -7472,12 +7495,28 @@ class Passivbot:
                 )
                 vol = float(res.get("qv", float("nan")))
                 lr = float(res.get("log_range", float("nan")))
-                return (
-                    0.0 if not np.isfinite(vol) else vol,
-                    0.0 if not np.isfinite(lr) else lr,
-                )
             except Exception:
-                return (0.0, 0.0)
+                pass
+            missing_metrics: dict[str, float] = {}
+            if not np.isfinite(vol):
+                missing_metrics["qv"] = float(span_volume)
+            if not np.isfinite(lr):
+                missing_metrics["log_range"] = float(span_volatility)
+            if missing_metrics:
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    missing_metrics,
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                if "qv" in cached:
+                    vol = float(cached["qv"])
+                if "log_range" in cached:
+                    lr = float(cached["log_range"])
+            if not (np.isfinite(vol) and np.isfinite(lr)):
+                return None
+            return (float(vol), float(lr))
 
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         volumes: Dict[str, float] = {}
@@ -7485,9 +7524,12 @@ class Passivbot:
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                vol, lr = await task
+                res = await task
             except Exception:
-                vol, lr = 0.0, 0.0
+                res = None
+            if res is None:
+                continue
+            vol, lr = res
             volumes[sym] = float(vol)
             log_ranges[sym] = float(lr)
 
@@ -12560,6 +12602,7 @@ class Passivbot:
                     return True
             return False
 
+        forager_cached_max_age_by_symbol: dict[str, int] = {}
         if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -12593,10 +12636,14 @@ class Passivbot:
                 stale_unavailable = set()
                 for sym in secondary_symbols:
                     cache_only_symbols.add(sym)
+                    forager_cached_max_age_by_symbol[sym] = int(secondary_max_age_ms)
                     m1_max_age_by_symbol[sym] = cache_only_ttl
                     h1_max_age_by_symbol[sym] = cache_only_ttl
                     try:
-                        never_fetched = int(self.cm.get_last_refresh_ms(sym) or 0) <= 0
+                        never_fetched = (
+                            int(self.cm.get_last_refresh_ms(sym) or 0) <= 0
+                            and int(self.cm.get_last_final_ts(sym) or 0) <= 0
+                        )
                     except Exception:
                         never_fetched = True
                     if never_fetched:
@@ -12633,21 +12680,83 @@ class Passivbot:
                     exc,
                 )
                 ctx = None
+            if ctx is None and sym in forager_cached_max_age_by_symbol:
+                try:
+                    now_ms = utc_ms()
+                    latest_expected = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
+                    last_cached = int(self.cm.get_last_final_ts(sym) or 0)
+                    max_tail_gap_ms = int(forager_cached_max_age_by_symbol[sym])
+                    tail_gap_age_ms = max(0, int(latest_expected) - int(last_cached))
+                    if last_cached > 0 and tail_gap_age_ms <= max_tail_gap_ms:
+                        ctx = {
+                            "symbol": str(sym),
+                            "latest_expected_ts": int(latest_expected),
+                            "last_cached_ts": int(last_cached),
+                            "tail_gap_age_ms": int(tail_gap_age_ms),
+                            "tail_gap_candles": int(tail_gap_age_ms // ONE_MIN_MS),
+                            "max_tail_gap_ms": int(max_tail_gap_ms),
+                            "reason": "forager_stale_tail_projection",
+                        }
+                except Exception as exc:
+                    logging.debug(
+                        "[candle] forager tail projection context failed %s | error_type=%s error=%s",
+                        Passivbot._log_symbol(sym),
+                        type(exc).__name__,
+                        exc,
+                    )
             if ctx is not None:
                 projection_contexts[sym] = ctx
         self._orchestrator_ema_projection_symbols = set()
         self._orchestrator_ema_projection_details = {}
+        forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] = {}
+
+        async def fetch_cached_forager_metric(
+            symbol: str, span: float, metric_key: str
+        ) -> Optional[float]:
+            max_staleness_ms = forager_cached_max_age_by_symbol.get(symbol)
+            if max_staleness_ms is None:
+                return None
+            cached = await Passivbot._get_forager_cached_ema_metrics(
+                self,
+                symbol,
+                {metric_key: float(span)},
+                max_staleness_ms=int(max_staleness_ms),
+                window_candles=max(1, int(math.ceil(float(span)))),
+            )
+            if metric_key not in cached:
+                return None
+            val = float(cached[metric_key])
+            if not math.isfinite(val):
+                return None
+            try:
+                age_ms = int(Passivbot._candle_staleness_ms(self, symbol))
+            except Exception:
+                age_ms = -1
+            forager_cached_ema_fallbacks.setdefault(symbol, []).append(
+                (metric_key, float(span), int(age_ms))
+            )
+            return val
 
         async def fetch_map(symbol: str, spans: list[float], fn, ema_type: str):
             out: dict[float, float] = {}
             if not spans:
                 return out
+            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
+                ema_type
+            )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"ema_{ema_type}")
                 span = float(sp)
                 try:
                     val = float(await fn(symbol, span))
                 except Exception as e:
+                    if metric_key is not None:
+                        fallback = await fetch_cached_forager_metric(
+                            symbol, span, metric_key
+                        )
+                        if fallback is not None:
+                            out[span] = fallback
+                            continue
                     record_optional_ema_drop(
                         ema_type, symbol, span, f"{type(e).__name__}: {e}"
                     )
@@ -12655,6 +12764,13 @@ class Passivbot:
                 if math.isfinite(val):
                     out[span] = val
                 else:
+                    if metric_key is not None:
+                        fallback = await fetch_cached_forager_metric(
+                            symbol, span, metric_key
+                        )
+                        if fallback is not None:
+                            out[span] = fallback
+                            continue
                     record_optional_ema_drop(
                         ema_type, symbol, span, f"non-finite value {val}"
                     )
@@ -12667,6 +12783,9 @@ class Passivbot:
             if not spans:
                 return out
             missing: list[tuple[float, str]] = []
+            metric_key = {"m1_volume": "qv", "m1_log_range": "log_range"}.get(
+                ema_type
+            )
             for sp in spans:
                 Passivbot._raise_if_shutdown_requested(self, f"required_ema_{ema_type}")
                 span = float(sp)
@@ -12679,6 +12798,11 @@ class Passivbot:
                         out[span] = val
                         continue
                     reason = f"non-finite {ema_type} value {val}"
+                if metric_key is not None:
+                    fallback = await fetch_cached_forager_metric(symbol, span, metric_key)
+                    if fallback is not None:
+                        out[span] = fallback
+                        continue
                 missing.append((span, reason))
             if missing:
                 detail = "; ".join(
@@ -12945,16 +13069,23 @@ class Passivbot:
                             "[ema] projected open-tail close EMA incomplete for "
                             f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                         )
-                    missing_required_lr1m = [
-                        span
-                        for span in required_m1_lr_for_symbol
-                        if span not in lr1m or not math.isfinite(float(lr1m[span]))
-                    ]
-                    if missing_required_lr1m:
-                        raise RuntimeError(
-                            "[ema] projected open-tail m1 log-range EMA incomplete for "
-                            f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
-                        )
+                    if candidate_only_forager_symbol(sym):
+                        # For flat forager candidates, open-tail projection is
+                        # valid for close EMA readiness only. Ranking qv/log-range
+                        # must carry forward cached real-candle EMA values.
+                        vol = None
+                        lr1m = None
+                    else:
+                        missing_required_lr1m = [
+                            span
+                            for span in required_m1_lr_for_symbol
+                            if span not in lr1m or not math.isfinite(float(lr1m[span]))
+                        ]
+                        if missing_required_lr1m:
+                            raise RuntimeError(
+                                "[ema] projected open-tail m1 log-range EMA incomplete for "
+                                f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_required_lr1m)}"
+                            )
                     self._orchestrator_ema_projection_symbols.add(sym)
                     self._orchestrator_ema_projection_details[sym] = dict(projection_ctx)
                 else:
@@ -13180,6 +13311,26 @@ class Passivbot:
                 "; ".join(examples),
                 interval_ms=15 * 60 * 1000,
             )
+        if forager_cached_ema_fallbacks:
+            total = sum(len(items) for items in forager_cached_ema_fallbacks.values())
+            examples = []
+            for symbol, items in sorted(forager_cached_ema_fallbacks.items())[:8]:
+                max_age_ms = max(age for _metric, _span, age in items)
+                bits = ",".join(
+                    f"{metric}:{span:.8g}" for metric, span, _age in sorted(items)[:6]
+                )
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)}={bits} max_age_ms={max_age_ms}"
+                )
+            log_ema_issue(
+                ("forager_cached_ema_fallback_summary",),
+                logging.DEBUG,
+                "[ema] forager cached EMA carry-forward summary | fallbacks=%d symbols=%d | %s",
+                total,
+                len(forager_cached_ema_fallbacks),
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
+            )
         if candidate_ema_unavailable_details:
             parts = []
             all_symbols: set[str] = set()
@@ -13238,9 +13389,15 @@ class Passivbot:
             )
 
         # Convenience: compute the single-span values used by legacy forager logging.
-        volumes_long = {s: m1_volume_emas[s].get(vol_span_long, 0.0) for s in symbols}
+        volumes_long = {
+            s: m1_volume_emas[s][vol_span_long]
+            for s in symbols
+            if vol_span_long in m1_volume_emas[s]
+        }
         log_ranges_long = {
-            s: m1_log_range_emas[s].get(lr_span_long, 0.0) for s in symbols
+            s: m1_log_range_emas[s][lr_span_long]
+            for s in symbols
+            if lr_span_long in m1_log_range_emas[s]
         }
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
 
@@ -13655,6 +13812,47 @@ class Passivbot:
         if not math.isfinite(minutes) or minutes <= 0.0:
             minutes = 10.0
         return max(60_000, int(minutes * 60_000))
+
+    async def _get_forager_cached_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: dict[str, float],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+    ) -> dict[str, float]:
+        """Read bounded cache-derived qv/log-range EMAs for stale forager ranking."""
+        fn = getattr(self.cm, "get_latest_cached_ema_metrics", None)
+        if not callable(fn):
+            return {}
+        try:
+            out = await fn(
+                symbol,
+                spans_by_metric,
+                max_staleness_ms=max_staleness_ms,
+                window_candles=window_candles,
+                timeframe="1m",
+            )
+        except Exception as exc:
+            logging.debug(
+                "[ema] forager cached EMA unavailable %s metrics=%s error_type=%s error=%s",
+                Passivbot._log_symbol(symbol),
+                ",".join(sorted(str(k) for k in spans_by_metric)),
+                type(exc).__name__,
+                exc,
+            )
+            return {}
+        if not isinstance(out, dict):
+            return {}
+        clean: dict[str, float] = {}
+        for key, val in out.items():
+            try:
+                fval = float(val)
+            except (TypeError, ValueError):
+                continue
+            if math.isfinite(fval):
+                clean[str(key)] = fval
+        return clean
 
     def _market_snapshot_signature(
         self, symbols: Iterable[str], snapshots: dict[str, MarketSnapshot]
@@ -14839,7 +15037,8 @@ class Passivbot:
     ) -> Dict[str, float]:
         """Compute 1m EMA of log range per symbol: EMA(ln(high/low)).
 
-        Returns mapping symbol -> ema_log_range; non-finite/failed computations yield 0.0.
+        Returns mapping symbol -> ema_log_range. Symbols without a usable current or
+        bounded cached value are omitted.
 
         If *max_network_fetches* is set, at most that many symbols will be allowed to
         trigger a network fetch; the rest use cached data only.
@@ -14872,29 +15071,28 @@ class Passivbot:
 
         # Compute EMA of log range on 1m candles: ln(high/low)
         async def one(symbol: str):
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
+                # If caller passes a TTL, use it; otherwise select per-symbol TTL
+                if max_age_ms is not None:
+                    ttl = int(max_age_ms)
+                else:
+                    # More generous TTL for non-traded symbols
+                    has_pos = self.has_position(symbol)
+                    has_oo = (
+                        bool(self.open_orders.get(symbol))
+                        if hasattr(self, "open_orders")
+                        else False
+                    )
+                    ttl = (
+                        60_000
+                        if (has_pos or has_oo)
+                        else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
+                    )
+            val = float("nan")
             try:
-                if symbol in cache_only_never_fetched:
-                    return 0.0
-                ttl = per_sym_ttl.get(symbol)
-                if ttl is None or ttl == 0:
-                    # If caller passes a TTL, use it; otherwise select per-symbol TTL
-                    if max_age_ms is not None:
-                        ttl = int(max_age_ms)
-                    else:
-                        # More generous TTL for non-traded symbols
-                        has_pos = self.has_position(symbol)
-                        has_oo = (
-                            bool(self.open_orders.get(symbol))
-                            if hasattr(self, "open_orders")
-                            else False
-                        )
-                        ttl = (
-                            60_000
-                            if (has_pos or has_oo)
-                            else int(
-                                getattr(self, "inactive_coin_candle_ttl_ms", 600_000)
-                            )
-                        )
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"log_range": span},
@@ -14903,9 +15101,18 @@ class Passivbot:
                     timeframe=None,
                 )
                 val = float(res.get("log_range", float("nan")))
-                return float(val) if np.isfinite(val) else 0.0
             except Exception:
-                return 0.0
+                pass
+            if not np.isfinite(val):
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    {"log_range": float(span)},
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                val = float(cached.get("log_range", float("nan")))
+            return float(val) if np.isfinite(val) else None
 
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
@@ -14913,9 +15120,11 @@ class Passivbot:
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                out[sym] = await task
+                val = await task
             except Exception:
-                out[sym] = 0.0
+                val = None
+            if val is not None:
+                out[sym] = float(val)
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         now_ms = utc_ms()
         ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric
@@ -14949,10 +15158,12 @@ class Passivbot:
         symbols: Optional[Iterable[str]] = None,
         *,
         max_age_ms: Optional[int] = 60_000,
+        max_network_fetches: Optional[int] = None,
     ) -> Dict[str, float]:
         """Compute 1m EMA of quote volume per symbol.
 
-        Returns mapping symbol -> ema_quote_volume; non-finite/failed computations yield 0.0.
+        Returns mapping symbol -> ema_quote_volume. Symbols without a usable current or
+        bounded cached value are omitted.
         """
         span = int(round(self.bot_value(pside, "forager_volume_ema_span_1m")))
         try:
@@ -14973,10 +15184,17 @@ class Passivbot:
             window_candles = min(int(window_candles), int(max_warmup_minutes))
         if symbols is None:
             symbols = self.get_symbols_approved_or_has_pos(pside)
+        syms = list(symbols)
+        per_sym_ttl, cache_only_never_fetched = self._compute_fetch_budget_ttls(
+            syms, max_age_ms, max_network_fetches
+        )
 
         # Compute EMA of quote volume on 1m candles
         async def one(symbol: str):
-            try:
+            if symbol in cache_only_never_fetched:
+                return None
+            ttl = per_sym_ttl.get(symbol)
+            if ttl is None or ttl == 0:
                 if max_age_ms is not None:
                     ttl = int(max_age_ms)
                 else:
@@ -14991,6 +15209,8 @@ class Passivbot:
                         if (has_pos or has_oo)
                         else int(getattr(self, "inactive_coin_candle_ttl_ms", 600_000))
                     )
+            val = float("nan")
+            try:
                 res = await self.cm.get_latest_ema_metrics(
                     symbol,
                     {"qv": span},
@@ -14999,20 +15219,30 @@ class Passivbot:
                     timeframe=None,
                 )
                 val = float(res.get("qv", float("nan")))
-                return float(val) if np.isfinite(val) else 0.0
             except Exception:
-                return 0.0
+                pass
+            if not np.isfinite(val):
+                cached = await Passivbot._get_forager_cached_ema_metrics(
+                    self,
+                    symbol,
+                    {"qv": float(span)},
+                    max_staleness_ms=max_age_ms,
+                    window_candles=window_candles,
+                )
+                val = float(cached.get("qv", float("nan")))
+            return float(val) if np.isfinite(val) else None
 
-        syms = list(symbols)
         tasks = {s: asyncio.create_task(one(s)) for s in syms}
         out = {}
         n = len(syms)
         started_ms = utc_ms()
         for sym, task in tasks.items():
             try:
-                out[sym] = await task
+                val = await task
             except Exception:
-                out[sym] = 0.0
+                val = None
+            if val is not None:
+                out[sym] = float(val)
         elapsed_s = max(0.001, (utc_ms() - started_ms) / 1000.0)
         now_ms = utc_ms()
         ema_log_throttle_ms = 300_000  # 5 minutes between logs per metric

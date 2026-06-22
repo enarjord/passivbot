@@ -785,8 +785,8 @@ async def test_open_tail_projection_missing_optional_metrics_are_diagnostic(capl
 
     assert m1_volume_emas[symbol] == {}
     assert m1_log_range_emas[symbol] == {}
-    assert volumes_long[symbol] == 0.0
-    assert log_ranges_long[symbol] == 0.0
+    assert symbol not in volumes_long
+    assert symbol not in log_ranges_long
     optional_logs = [record.message for record in caplog.records if "optional EMA drops" in record.message]
     assert optional_logs
     assert "m1_volume" in optional_logs[-1]

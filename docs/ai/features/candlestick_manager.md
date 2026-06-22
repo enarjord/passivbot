@@ -18,7 +18,13 @@
    log-range, and quote-volume inputs. Projection computes temporary values as if missing tail
    minutes were no-trade candles, but does not persist open-tail synthetic candles or normal EMA
    cache entries.
-5. Projection is stateless per read. Real candles always win on the next read, and bounded internal
+5. That projection contract is for paths where no-trade tail projection is explicitly allowed. Live
+   forager candidate ranking has a narrower stale-tail contract: close EMA readiness may use
+   bounded flat-close projection, but quote-volume and log-range ranking inputs should carry
+   forward the latest known EMA value with age/source metadata instead of appending unknown
+   zero-volume or zero-range tail minutes. Zero volume/log-range is valid for verified no-trade
+   continuity gaps, not for unknown stale tails caused by refresh budget or REST delay.
+6. Projection is stateless per read. Real candles always win on the next read, and bounded internal
    gaps continue to use the normal synthetic gap path with replacement/invalidation tracking.
 
 ## Failure Modes To Watch
@@ -29,6 +35,8 @@
 4. Stale known-gap metadata should guide retries but must expire; the current default retry horizon is 7 days.
 5. Forager ranking drift if projected open-tail EMA values are accidentally cached or reused after
    late real candles arrive.
+6. Forager ranking bias if unknown stale candidate tails are converted into zero quote-volume or
+   zero log-range instead of carrying forward the latest known ranking EMA within policy.
 
 ## Test Focus
 

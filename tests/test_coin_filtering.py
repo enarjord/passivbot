@@ -68,6 +68,14 @@ class CoinFilterHarness(Passivbot):
     async def calc_volumes(self, _pside, symbols):
         return {sym: self._volumes[sym] for sym in symbols}
 
+    async def calc_volumes_and_log_ranges(
+        self, _pside, symbols, max_age_ms=None, max_network_fetches=None
+    ):
+        return (
+            {sym: self._volumes[sym] for sym in symbols},
+            {sym: self._log_ranges[sym] for sym in symbols},
+        )
+
     async def calc_log_range(self, _pside, eligible_symbols, max_age_ms=None, max_network_fetches=None):
         return {sym: self._log_ranges[sym] for sym in eligible_symbols}
 
@@ -179,6 +187,39 @@ class _CMColdCacheOnlyStub:
         return {k: 1.0 for k in spans_by_metric}
 
 
+class _CMStaleCacheStub:
+    def __init__(self):
+        self.current_calls = 0
+        self.cached_calls = 0
+
+    def get_last_refresh_ms(self, _symbol):
+        return 1
+
+    def get_last_final_ts(self, _symbol):
+        return 1
+
+    async def get_latest_ema_metrics(self, _symbol, spans_by_metric, **_kwargs):
+        self.current_calls += 1
+        return {k: float("nan") for k in spans_by_metric}
+
+    async def get_latest_cached_ema_metrics(
+        self,
+        _symbol,
+        spans_by_metric,
+        *,
+        max_staleness_ms=None,
+        window_candles=None,
+        timeframe="1m",
+    ):
+        self.cached_calls += 1
+        out = {}
+        if "qv" in spans_by_metric:
+            out["qv"] = 123.0
+        if "log_range" in spans_by_metric:
+            out["log_range"] = 0.0042
+        return out
+
+
 @pytest.mark.asyncio
 async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
     bot = Passivbot.__new__(Passivbot)
@@ -198,7 +239,7 @@ async def test_calc_log_range_respects_cache_only_budget_for_cold_symbols():
         max_age_ms=60_000,
         max_network_fetches=0,
     )
-    assert out == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    assert out == {}
     assert bot.cm.calls == 0
 
 
@@ -221,9 +262,32 @@ async def test_calc_volumes_and_log_ranges_respects_cache_only_budget_for_cold_s
         max_age_ms=60_000,
         max_network_fetches=0,
     )
-    assert volumes == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
-    assert log_ranges == {"AAA": 0.0, "BBB": 0.0, "CCC": 0.0}
+    assert volumes == {}
+    assert log_ranges == {}
     assert bot.cm.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_calc_volumes_and_log_ranges_carries_cached_values_for_stale_symbols():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.cm = _CMStaleCacheStub()
+    bot.open_orders = {}
+    bot.positions = {}
+    bot.bot_value = lambda _pside, key: 12.0
+    bot.has_position = lambda *_args, **_kwargs: False
+
+    volumes, log_ranges = await bot.calc_volumes_and_log_ranges(
+        "long",
+        symbols=["AAA"],
+        max_age_ms=300_000,
+        max_network_fetches=0,
+    )
+
+    assert volumes == {"AAA": 123.0}
+    assert log_ranges == {"AAA": 0.0042}
+    assert bot.cm.current_calls == 1
+    assert bot.cm.cached_calls == 1
 
 
 def test_log_min_effective_cost_blocks_includes_concrete_numbers(monkeypatch):

@@ -85,6 +85,42 @@ async def test_latest_ema_log_range_ignores_leading_nonfinite_sample(tmp_path):
     assert val > 0.0
 
 
+@pytest.mark.asyncio
+async def test_latest_cached_ema_metrics_carries_values_without_tail_zeroing(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "STALE/USDT:USDT"
+    now_ms = 10 * ONE_MIN_MS
+    latest_expected = 9 * ONE_MIN_MS
+    last_cached = 7 * ONE_MIN_MS
+    cm._now_ms = lambda: now_ms
+    candles = np.array(
+        [
+            (5 * ONE_MIN_MS, 100.0, 102.0, 99.0, 101.0, 2.0),
+            (6 * ONE_MIN_MS, 101.0, 103.0, 100.0, 102.0, 3.0),
+            (last_cached, 102.0, 105.0, 101.0, 104.0, 4.0),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    cm._persist_batch(symbol, candles, timeframe="1m", merge_cache=True, last_refresh_ms=now_ms)
+
+    out = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 2.0, "log_range": 2.0},
+        max_staleness_ms=latest_expected - last_cached,
+        window_candles=3,
+    )
+
+    assert out["qv"] > 0.0
+    assert out["log_range"] > 0.0
+    too_stale = await cm.get_latest_cached_ema_metrics(
+        symbol,
+        {"qv": 2.0, "log_range": 2.0},
+        max_staleness_ms=ONE_MIN_MS,
+        window_candles=3,
+    )
+    assert too_stale == {}
+
+
 @pytest.mark.parametrize("debug", [False])
 def test_standardize_gaps_inserts_zero_candles(tmp_path, debug):
     class _Ex:

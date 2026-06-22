@@ -54,6 +54,22 @@ Explicitly synthesized zero-volume candles may satisfy candle readiness when the
 prove series continuity, previous close is known, overlap repair/backfill is scheduled, and the gap
 is within policy. Raw REST delay alone must not become a global order halt.
 
+For live forager candidate ranking, stale candles for flat symbols are not an automatic
+disqualifier while they remain within `live.max_forager_candle_staleness_minutes`. The broad
+forager refresh loop should keep refreshing the stalest eligible symbols first, but ranking must
+not collapse to the freshest arbitrary subset just because the full universe cannot be refreshed in
+one cycle. Within the staleness cap, close EMA readiness may use bounded flat-close/no-trade
+projection, while quote-volume and log-range EMA ranking inputs must carry forward their latest
+known EMA values with observable age/source metadata. Do not append synthetic zero-volume or
+zero-range tails for unknown stale forager candidates; zero volume/log-range is valid only for
+verified no-trade gaps where continuity is proven.
+
+Forager candidates with no prior feature basis, non-finite carried values, or feature ages beyond
+the configured staleness cap are unavailable for new forager entries until refreshed. That
+unavailability must be explicit and observable; do not substitute neutral values and do not silently
+select only among symbols that happened to refresh first. A symbol selected for an actual initial
+entry still needs the market snapshot and forager feature age required by that entry's order class.
+
 Approved/ignored coin lists are live eligibility inputs. Stale or unreadable eligibility state
 must block affected initial entries, but it must not block protective management of existing
 positions. If a held coin is removed from approved coins or added to ignored coins, handle it as

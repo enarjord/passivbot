@@ -6821,6 +6821,94 @@ class CandlestickManager:
             out[metric_key] = metric_out
         return out
 
+    async def get_latest_cached_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+        timeframe: str = "1m",
+    ) -> Dict[str, float]:
+        """Return EMA metrics ending at the newest locally cached completed candle.
+
+        This is for non-critical live candidate ranking where callers may carry
+        forward qv/log-range EMAs through a bounded unknown stale tail. It never
+        fetches remote candles and never appends synthetic tail rows.
+        """
+        period_ms = _tf_to_ms(timeframe)
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        if not normalized:
+            return {}
+        last_cached = _floor_minute(int(self.get_last_final_ts(symbol) or 0))
+        if last_cached <= 0:
+            return {}
+        latest_expected = (int(self._now_ms()) // period_ms) * period_ms - period_ms
+        stale_tail_ms = max(0, int(latest_expected) - int(last_cached))
+        if (
+            max_staleness_ms is not None
+            and int(max_staleness_ms) >= 0
+            and stale_tail_ms > int(max_staleness_ms)
+        ):
+            return {}
+        max_span = max(span for spans in normalized.values() for span in spans)
+        max_candles = max(1, int(math.ceil(max_span)))
+        if window_candles is not None:
+            try:
+                max_candles = max(max_candles, int(window_candles))
+            except Exception:
+                pass
+        start_ts = int(last_cached - period_ms * (max_candles - 1))
+        raw = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=int(last_cached),
+            max_age_ms=None,
+            strict=False,
+            timeframe=timeframe,
+            max_lookback_candles=max_candles,
+            fill_trailing_gaps=False,
+            allow_remote_fetch=False,
+        )
+        if raw.size == 0 or not self._ema_window_has_expected_tail(raw, int(last_cached)):
+            return {}
+
+        out: Dict[str, float] = {}
+        tf_key = str(period_ms)
+        now = self._now_ms()
+        cache = self._ema_cache.setdefault(symbol, {})
+        for metric_key, spans in normalized.items():
+            for span in spans:
+                span_candles = max(1, int(math.ceil(span)))
+                metric_start_ts = int(last_cached - period_ms * (span_candles - 1))
+                tail = self._slice_ts_range(
+                    raw, metric_start_ts, int(last_cached), assume_sorted=True
+                )
+                if period_ms == ONE_MIN_MS:
+                    tail = self.standardize_gaps(
+                        tail,
+                        start_ts=metric_start_ts,
+                        end_ts=int(last_cached),
+                        strict=False,
+                        fill_trailing_gaps=False,
+                        assume_sorted=True,
+                        symbol=symbol,
+                    )
+                if tail.size == 0:
+                    continue
+                series = self._ema_metric_series(metric_key, tail)
+                if series.shape[0] == 0:
+                    continue
+                val = float(self._ema(series, span))
+                if math.isfinite(val):
+                    out[str(metric_key)] = val
+                    cache[(str(metric_key), float(span), tf_key)] = (
+                        val,
+                        int(last_cached),
+                        int(now),
+                    )
+        return out
+
     async def _latest_finalized_range(
         self, span: float, *, period_ms: int = ONE_MIN_MS
     ) -> Tuple[int, int]:
