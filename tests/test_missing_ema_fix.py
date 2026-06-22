@@ -372,6 +372,7 @@ class _BundleReproBot:
         h1_mode="value",
         h1_log_range_value=0.0015,
         entry_h1_span_hours=0.0,
+        entry_m1_weight=0.0,
         prev_close_ema=None,
         prev_age_ms=5_000,
         project_open_tail=False,
@@ -380,6 +381,7 @@ class _BundleReproBot:
         projected_log_range_ema=None,
         qv_mode="value",
         lr1m_mode="value",
+        project_open_tail_after_health_calls=None,
     ):
         self.symbol = symbol
         self.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
@@ -391,6 +393,7 @@ class _BundleReproBot:
         self.h1_mode = h1_mode
         self.h1_log_range_value = float(h1_log_range_value)
         self.entry_h1_span_hours = float(entry_h1_span_hours)
+        self.entry_m1_weight = float(entry_m1_weight)
         self.project_open_tail = bool(project_open_tail)
         self.projected_close_ema = dict(projected_close_ema or {})
         self.projected_qv_ema = None if projected_qv_ema is None else dict(projected_qv_ema)
@@ -399,6 +402,8 @@ class _BundleReproBot:
         )
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
+        self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
+        self.completed_candle_health_calls = 0
         self._orchestrator_close_ema_fallback_counts = {}
         self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
         self.exchange = "kucoin"
@@ -451,7 +456,13 @@ class _BundleReproBot:
                 return 0.0015
 
             def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
-                if not self.outer.project_open_tail:
+                self.outer.completed_candle_health_calls += 1
+                delayed_projection = (
+                    self.outer.project_open_tail_after_health_calls is not None
+                    and self.outer.completed_candle_health_calls
+                    > int(self.outer.project_open_tail_after_health_calls)
+                )
+                if not self.outer.project_open_tail and not delayed_projection:
                     return {
                         "ok": True,
                         "timeframes": {
@@ -538,10 +549,12 @@ class _BundleReproBot:
         return 0.0
 
     def _strategy_params_to_rust_dict(self, pside, symbol=None):
-        return _rust_strategy_params(
+        params = _rust_strategy_params(
             entry_volatility_ema_span_1h=self.entry_h1_span_hours,
             entry_weight_volatility_1h=1.0 if self.entry_h1_span_hours > 0.0 else 0.0,
         )
+        params["entry"]["threshold_volatility_1m_weight"] = self.entry_m1_weight
+        return params
 
     def _strategy_value(self, pside, key, symbol=None):
         params = self._strategy_params_to_rust_dict(pside, symbol)
@@ -895,6 +908,45 @@ async def test_open_tail_projection_precedes_previous_close_ema_fallback():
     assert volumes_long[symbol] == pytest.approx(250000.0)
     assert log_ranges_long[symbol] == pytest.approx(0.0015)
     assert bot._orchestrator_close_ema_fallback_counts == {}
+
+
+@pytest.mark.asyncio
+async def test_late_open_tail_projection_recovers_required_m1_log_range():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "WLD/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        lr1m_mode="nan",
+        entry_m1_weight=1.0,
+        project_open_tail_after_health_calls=1,
+        projected_close_ema={span0: 201.0, span1: 202.0, span2: 203.0},
+        projected_log_range_ema={10.0: 0.0015, 60.0: 0.0042},
+    )
+    bot.projected_open_tail_called = False
+
+    (
+        m1_close_emas,
+        _m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+
+    assert bot.completed_candle_health_calls >= 2
+    assert bot.projected_open_tail_called is True
+    assert m1_close_emas[symbol][span0] == pytest.approx(201.0)
+    assert m1_log_range_emas[symbol][60.0] == pytest.approx(0.0042)
+    assert log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot._orchestrator_ema_projection_details[symbol]["tail_gap_age_ms"] == 60_000
 
 
 @pytest.mark.asyncio

@@ -1073,6 +1073,80 @@ async def test_balance_equity_history_skips_unsupported_closed_historical_symbol
 
 
 @pytest.mark.asyncio
+async def test_balance_equity_history_emits_zero_coin_upnl_for_flat_realized_symbol(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "gateio"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: 1.0 if key == "pnls_max_lookback_days" else None
+    base_ts = 1_800_000_000_000
+    bot.get_exchange_time = lambda: base_ts + 120_000
+    bot.get_raw_balance = lambda: 95.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = {}
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 2
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    symbol = "M/USDT:USDT"
+    bot.c_mults = {symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        async def get_candles(self, symbol, **kwargs):
+            return np.array(
+                [
+                    (base_ts, 99.0, 101.0, 98.0, 100.0, 1.0),
+                    (base_ts + 60_000, 100.0, 102.0, 99.0, 101.0, 1.0),
+                    (base_ts + 120_000, 101.0, 103.0, 100.0, 102.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    fill_events = [
+        {
+            "timestamp": base_ts,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "buy",
+            "qty": 1.0,
+            "price": 100.0,
+            "pnl": 0.0,
+        },
+        {
+            "timestamp": base_ts + 60_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "side": "sell",
+            "qty": 1.0,
+            "price": 95.0,
+            "pnl": -5.0,
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events, current_balance=95.0
+    )
+
+    flat_rows = [
+        row
+        for row in history["timeline"]
+        if row["timestamp"] >= base_ts + 60_000
+    ]
+    assert flat_rows
+    for row in flat_rows:
+        assert row["realized_pnl_by_coin_pside"][symbol]["long"] == pytest.approx(-5.0)
+        assert row["unrealized_pnl_by_coin_pside"][symbol]["long"] == pytest.approx(0.0)
+        assert row["unrealized_pnl_by_coin_pside"][symbol]["short"] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
 async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "bybit"
