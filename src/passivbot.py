@@ -2587,6 +2587,9 @@ class Passivbot:
     _equity_hard_stop_check = pb_hsl._equity_hard_stop_check
     _equity_hard_stop_coin_active_pside = pb_hsl._equity_hard_stop_coin_active_pside
     _equity_hard_stop_coin_symbols = pb_hsl._equity_hard_stop_coin_symbols
+    _equity_hard_stop_symbol_supported_for_coin_replay = (
+        pb_hsl._equity_hard_stop_symbol_supported_for_coin_replay
+    )
     _equity_hard_stop_reset_coin_after_restart = pb_hsl._equity_hard_stop_reset_coin_after_restart
     _equity_hard_stop_check_coin = pb_hsl._equity_hard_stop_check_coin
     _equity_hard_stop_apply_coin_metrics_sample = (

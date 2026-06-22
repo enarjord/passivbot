@@ -172,6 +172,10 @@ def make_coin_bot(policy="panic"):
     return bot
 
 
+def test_passivbot_binds_coin_hsl_replay_support_helper():
+    assert hasattr(Passivbot, "_equity_hard_stop_symbol_supported_for_coin_replay")
+
+
 def test_calc_upnl_sum_strict_preserves_symbol_filter():
     bot = FakeHslBot()
     bind_hsl_methods(bot)
