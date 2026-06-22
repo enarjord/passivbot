@@ -378,6 +378,8 @@ class _BundleReproBot:
         projected_close_ema=None,
         projected_qv_ema=None,
         projected_log_range_ema=None,
+        qv_mode="value",
+        lr1m_mode="value",
     ):
         self.symbol = symbol
         self.PB_modes = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
@@ -395,6 +397,8 @@ class _BundleReproBot:
         self.projected_log_range_ema = (
             None if projected_log_range_ema is None else dict(projected_log_range_ema)
         )
+        self.qv_mode = qv_mode
+        self.lr1m_mode = lr1m_mode
         self._orchestrator_close_ema_fallback_counts = {}
         self.config = {"live": {"max_forager_candle_staleness_minutes": 10}}
         self.exchange = "kucoin"
@@ -425,6 +429,10 @@ class _BundleReproBot:
             async def get_latest_ema_quote_volume(
                 self, symbol, span, max_age_ms=60_000, allow_remote_fetch=True
             ):
+                if self.outer.qv_mode == "timeout":
+                    raise TimeoutError("quote volume timeout")
+                if self.outer.qv_mode == "nan":
+                    return float("nan")
                 return 250000.0
 
             async def get_latest_ema_log_range(
@@ -436,6 +444,10 @@ class _BundleReproBot:
                     if self.outer.h1_mode == "nan":
                         return float("nan")
                     return float(self.outer.h1_log_range_value)
+                if self.outer.lr1m_mode == "timeout":
+                    raise TimeoutError("log range timeout")
+                if self.outer.lr1m_mode == "nan":
+                    return float("nan")
                 return 0.0015
 
             def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
@@ -708,6 +720,138 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     assert not any("missing required close EMA AVAX" in message for message in warning_messages)
     assert not any("required EMA unavailable TAO" in message for message in warning_messages)
     assert not any("missing required close EMA TAO" in message for message in warning_messages)
+
+
+def _enable_forager_required_ranking(bot):
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 1.0, "volatility": 1.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+
+@pytest.mark.asyncio
+async def test_active_normal_missing_required_forager_features_fails_loudly():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
+        qv_mode="nan",
+        lr1m_mode="nan",
+    )
+    _enable_forager_required_ranking(bot)
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"missing required forager EMA for active/normal symbol HYPE/USDT:USDT",
+    ):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+
+@pytest.mark.asyncio
+async def test_candidate_only_missing_required_forager_features_marks_unavailable(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "HYPE/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
+        qv_mode="nan",
+        lr1m_mode="nan",
+    )
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.cm.get_last_refresh_ms = lambda _symbol: int(time.time() * 1000)
+    bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
+    _enable_forager_required_ranking(bot)
+
+    with caplog.at_level(logging.WARNING):
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            _h1_log_range_emas,
+            volumes_long,
+            log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
+
+    assert m1_close_emas[symbol]
+    assert m1_volume_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert symbol not in volumes_long
+    assert symbol not in log_ranges_long
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert any(
+        "missing required forager EMA HYPE" in record.message
+        and "action=mark_nontradable_until_fresh" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_new_forager_normal_symbols_are_warmed_before_planning():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    class WarmupProbe:
+        def __init__(self):
+            self._forager_new_normal_warmup_symbols = {
+                "HYPE/USDT:USDT",
+                "ENA/USDT:USDT",
+            }
+            self._forager_normal_warmup_attempt_ms = {}
+            self.calls = []
+
+        def is_forager_mode(self, pside=None):
+            return True
+
+        async def warmup_candles_staggered(self, **kwargs):
+            self.calls.append(kwargs)
+
+    bot = WarmupProbe()
+
+    warmed = await pb_mod.Passivbot._warmup_new_forager_normal_symbols(
+        bot, ["HYPE/USDT:USDT", "WLD/USDT:USDT"]
+    )
+
+    assert warmed == {"HYPE/USDT:USDT"}
+    assert len(bot.calls) == 1
+    assert bot.calls[0]["symbols_override"] == ["HYPE/USDT:USDT"]
+    assert bot.calls[0]["ttl_ms"] == 0
+    assert bot.calls[0]["skip_jitter"] is True
+    assert bot.calls[0]["context"] == "forager-selected warmup"
+    assert bot._forager_new_normal_warmup_symbols == {
+        "HYPE/USDT:USDT",
+        "ENA/USDT:USDT",
+    }
 
 
 @pytest.mark.asyncio

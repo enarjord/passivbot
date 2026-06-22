@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened live forager promotion readiness: newly selected normal forager
+  symbols now get targeted candle warmup before normal order planning, and
+  missing required forager ranking EMAs still fail loudly for active/normal
+  symbols instead of silently making them nontradable.
 - Fixed live HSL restart replay so historical drawdown threshold crossings no
   longer create a fresh RED panic after recovery; startup now panics only when
   current drawdown is RED or when exchange-derived panic/cooldown markers

@@ -11815,12 +11815,95 @@ class Passivbot:
                     else:
                         pb_modes[pside][symbol] = self.PB_mode_stop[pside]
 
+        forager_side_enabled: dict[str, bool] = {}
+        for pside in ("long", "short"):
+            try:
+                forager_side_enabled[pside] = bool(self.is_forager_mode(pside))
+            except Exception:
+                forager_side_enabled[pside] = False
+
+        newly_normal_forager_symbols: set[str] = set()
+        if previous_PB_modes is not None or any(forager_side_enabled.values()):
+            for pside in ("long", "short"):
+                if not forager_side_enabled.get(pside, False):
+                    continue
+                prev_modes = (
+                    previous_PB_modes.get(pside, {})
+                    if isinstance(previous_PB_modes, dict)
+                    else {}
+                )
+                for symbol, mode in pb_modes[pside].items():
+                    if self._pb_mode_to_orchestrator_mode(mode) != "normal":
+                        continue
+                    prev_mode = (
+                        prev_modes.get(symbol)
+                        if isinstance(prev_modes, dict)
+                        else None
+                    )
+                    if self._pb_mode_to_orchestrator_mode(prev_mode) != "normal":
+                        newly_normal_forager_symbols.add(symbol)
+        if newly_normal_forager_symbols:
+            pending = set(
+                getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+            )
+            pending.update(newly_normal_forager_symbols)
+            self._forager_new_normal_warmup_symbols = pending
+
         self.PB_modes = pb_modes
         self.active_symbols = sorted(
             set(pb_modes["long"]) | set(pb_modes["short"]) | set(self.open_orders)
         )
         res = log_dict_changes(previous_PB_modes, self.PB_modes)
         self._log_mode_changes(res, previous_PB_modes)
+
+    async def _warmup_new_forager_normal_symbols(
+        self, symbols: Iterable[str]
+    ) -> set[str]:
+        """Synchronously warm newly selected forager symbols before normal planning."""
+        try:
+            forager_enabled = any(
+                self.is_forager_mode(pside) for pside in ("long", "short")
+            )
+        except Exception:
+            forager_enabled = False
+        if not forager_enabled:
+            return set()
+        pending_all = set(
+            getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+        )
+        if not pending_all:
+            return set()
+        symbol_set = {str(symbol) for symbol in symbols if symbol}
+        pending = sorted(pending_all & symbol_set)
+        if not pending:
+            return set()
+        attempts = getattr(self, "_forager_normal_warmup_attempt_ms", None)
+        if not isinstance(attempts, dict):
+            attempts = {}
+        now_ms = utc_ms()
+        retry_ms = 5 * 60 * 1000
+        due = [
+            symbol
+            for symbol in pending
+            if now_ms - int(attempts.get(symbol, 0) or 0) >= retry_ms
+        ]
+        if not due:
+            return set()
+        for symbol in due:
+            attempts[symbol] = now_ms
+        self._forager_normal_warmup_attempt_ms = attempts
+        logging.info(
+            "[warmup] forager-selected normal warmup: %d symbols=%s",
+            len(due),
+            Passivbot._log_symbols(due, limit=8),
+        )
+        await self.warmup_candles_staggered(
+            symbols_override=due,
+            ttl_ms=0,
+            skip_jitter=True,
+            context="forager-selected warmup",
+        )
+        return set(due)
 
     def _orchestrator_mode_override(self, pside: str, symbol: str) -> Optional[str]:
         if self._equity_hard_stop_enabled(pside):
@@ -12564,6 +12647,91 @@ class Passivbot:
                 parts.append(f"health_error={type(exc).__name__}")
             return " ".join(parts)
 
+        def ema_window_health_context(
+            symbol: str, ema_type: str, spans: Iterable[float]
+        ) -> str:
+            span_values = []
+            for raw_span in spans:
+                try:
+                    span = float(raw_span)
+                except Exception:
+                    continue
+                if math.isfinite(span) and span > 0.0:
+                    span_values.append(span)
+            if not span_values:
+                return ema_candle_health_context(symbol)
+            max_span = max(span_values)
+            if ema_type == "h1_log_range":
+                timeframe = "1h"
+                window = max(1, int(math.ceil(max_span)))
+            else:
+                timeframe = "1m"
+                window = max(1, int(math.ceil(max_span)))
+            parts = [
+                f"ema_type={ema_type}",
+                f"timeframe={timeframe}",
+                f"window={window}",
+            ]
+            try:
+                health = self.cm.get_completed_candle_health(
+                    symbol, {timeframe: window}, now_ms=utc_ms()
+                )
+                tf = (health.get("timeframes", {}) or {}).get(timeframe, {})
+                parts.extend(
+                    [
+                        f"latest_expected={tf.get('latest_expected_ts')}",
+                        f"last_cached={tf.get('last_cached_ts')}",
+                        f"last_disk={tf.get('last_disk_ts')}",
+                        f"last_runtime={tf.get('last_runtime_ts')}",
+                        f"missing={tf.get('missing_candles')}",
+                        f"tail={tf.get('open_tail_gap')}",
+                        f"tail_candles={tf.get('tail_gap_candles')}",
+                        f"tail_age_ms={tf.get('tail_gap_age_ms')}",
+                    ]
+                )
+                spans_report = tf.get("missing_spans_preview") or []
+                if not spans_report:
+                    spans_report = tf.get("missing_spans") or []
+                if spans_report:
+                    first = spans_report[0]
+                    if isinstance(first, dict):
+                        first_start = first.get("start_ts")
+                        first_end = first.get("end_ts")
+                        first_candles = first.get("candles")
+                    else:
+                        try:
+                            first_start = int(first[0])
+                            first_end = int(first[1])
+                            period_ms = int(tf.get("period_ms") or ONE_MIN_MS)
+                            first_candles = int((first_end - first_start) // period_ms + 1)
+                        except Exception:
+                            first_start = first_end = first_candles = None
+                    parts.extend(
+                        [
+                            f"first_missing_start={first_start}",
+                            f"first_missing_end={first_end}",
+                            f"first_missing_candles={first_candles}",
+                        ]
+                    )
+            except Exception as exc:
+                parts.append(f"health_error={type(exc).__name__}")
+            try:
+                projection_ctx = projection_contexts.get(symbol)
+            except Exception:
+                projection_ctx = None
+            if projection_ctx is not None:
+                parts.extend(
+                    [
+                        "projection_ctx=yes",
+                        f"projection_last_cached={projection_ctx.get('last_cached_ts')}",
+                        f"projection_latest_expected={projection_ctx.get('latest_expected_ts')}",
+                        f"projection_tail_age_ms={projection_ctx.get('tail_gap_age_ms')}",
+                    ]
+                )
+            else:
+                parts.append("projection_ctx=no")
+            return " ".join(parts)
+
         def has_normal_planning_mode(symbol: str) -> bool:
             """Return True when the current Rust payload may place entries for symbol."""
             pb_modes = getattr(self, "PB_modes", {})
@@ -12706,6 +12874,30 @@ class Passivbot:
                     )
             if ctx is not None:
                 projection_contexts[sym] = ctx
+        if projection_contexts:
+            examples = []
+            for sym, ctx in sorted(projection_contexts.items())[:8]:
+                try:
+                    tail_age_ms = int(ctx.get("tail_gap_age_ms") or 0)
+                    tail_candles = int(ctx.get("tail_gap_candles") or 0)
+                    latest_expected = ctx.get("latest_expected_ts")
+                    last_cached = ctx.get("last_cached_ts")
+                    reason = ctx.get("reason") or "open_tail_gap_projection"
+                    examples.append(
+                        f"{Passivbot._log_symbol(sym)} tail={tail_candles}"
+                        f" age_ms={tail_age_ms} last_cached={last_cached}"
+                        f" latest_expected={latest_expected} reason={reason}"
+                    )
+                except Exception:
+                    examples.append(Passivbot._log_symbol(sym))
+            log_ema_issue(
+                ("open_tail_projection_context_summary",),
+                logging.INFO,
+                "[candle] open-tail EMA projection contexts | symbols=%d | %s",
+                len(projection_contexts),
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
+            )
         self._orchestrator_ema_projection_symbols = set()
         self._orchestrator_ema_projection_details = {}
         forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] = {}
@@ -12811,10 +13003,13 @@ class Passivbot:
                 log_ema_issue(
                     ("required_missing", symbol, ema_type),
                     required_ema_log_level(symbol),
-                    "[ema] missing required %s EMA %s spans=%s",
+                    "[ema] missing required %s EMA %s spans=%s | %s",
                     ema_type,
                     Passivbot._log_symbol(symbol),
                     ",".join(f"{sp:.8g}" for sp, _why in missing),
+                    ema_window_health_context(
+                        symbol, ema_type, [sp for sp, _why in missing]
+                    ),
                 )
                 raise RuntimeError(
                     f"[ema] missing required {ema_type} EMA for {symbol}: {detail}"
@@ -13158,6 +13353,23 @@ class Passivbot:
                 if missing_required_forager_lr1m:
                     reasons.append("missing_required_forager_log_range")
                 reason = "+".join(reasons)
+                detail = (
+                    f"volume_spans={','.join(f'{span:.8g}' for span in missing_required_volume)} "
+                    f"log_range_spans={','.join(f'{span:.8g}' for span in missing_required_forager_lr1m)}"
+                )
+                if not required_ema_can_mark_nontradable(sym):
+                    log_ema_issue(
+                        ("required_forager_missing_active", sym),
+                        logging.WARNING,
+                        "[ema] missing required forager EMA %s %s action=raise | %s",
+                        Passivbot._log_symbol(sym),
+                        detail,
+                        ema_candle_health_context(sym),
+                        interval_ms=15 * 60 * 1000,
+                    )
+                    raise RuntimeError(
+                        f"[ema] missing required forager EMA for active/normal symbol {sym}: {detail}"
+                    )
                 mark_ema_unavailable(sym, reason)
                 log_ema_issue(
                     ("required_forager_missing", sym),
@@ -13433,6 +13645,9 @@ class Passivbot:
         # the create-side safety guard instead of aging it during EMA loading.
         if not hasattr(self, "effective_min_cost") or not self.effective_min_cost:
             await self.update_effective_min_cost()
+        warmed_forager_normal_symbols = await self._warmup_new_forager_normal_symbols(
+            symbols
+        )
 
         (
             m1_close_emas,
@@ -13442,6 +13657,12 @@ class Passivbot:
             _volumes_long,
             _log_ranges_long,
         ) = await self._load_orchestrator_ema_bundle(symbols, mode_overrides)
+        if warmed_forager_normal_symbols:
+            pending = set(
+                getattr(self, "_forager_new_normal_warmup_symbols", set()) or set()
+            )
+            pending.difference_update(warmed_forager_normal_symbols)
+            self._forager_new_normal_warmup_symbols = pending
         ema_unavailable_symbols = set(
             getattr(self, "_orchestrator_ema_unavailable_symbols", set())
         )
