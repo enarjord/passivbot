@@ -3977,7 +3977,8 @@ async def test_manager_replaces_synthetic_pnl_when_authoritative_arrives(
     tmp_path: Path,
 ):
     cache_dir = tmp_path / "fills_synthetic_replaced"
-    entry_ts = 1_700_000_000_000
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    entry_ts = now_ms - 2 * 60_000
     pending_ts = entry_ts + 60_000
     last_refresh_ms = pending_ts + 4 * 60 * 60 * 1000
     overlap_ms = 10 * 60 * 1000
@@ -4257,7 +4258,8 @@ async def test_manager_refresh_latest_keeps_synthetic_pnl_in_enrichment_window(
     tmp_path: Path,
 ):
     cache_dir = tmp_path / "fills_synthetic_window"
-    entry_ts = 1_700_000_000_000
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    entry_ts = now_ms - 2 * 60_000
     close_ts = entry_ts + 1_000
     last_refresh_ms = close_ts + 40 * 60_000
     overlap_ms = 10 * 60_000
@@ -4358,6 +4360,102 @@ async def test_manager_refresh_latest_keeps_synthetic_pnl_in_enrichment_window(
     close = [ev for ev in manager.get_events(symbol="SOL/USDT:USDT") if ev.id == "close"][0]
     assert close.pnl == pytest.approx(9.99)
     assert close.pnl_source == fem.PNL_SOURCE_AUTHORITATIVE
+
+
+@pytest.mark.asyncio
+async def test_manager_refresh_latest_skips_old_synthetic_pnl_repair_window(
+    tmp_path: Path,
+):
+    cache_dir = tmp_path / "fills_old_synthetic_window"
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    entry_ts = now_ms - 30 * 24 * 60 * 60 * 1000
+    close_ts = entry_ts + 1_000
+    later_events = [
+        dict(
+            id=f"later-{idx}",
+            timestamp=close_ts + (idx + 1) * 60_000,
+            datetime="",
+            symbol="SOL/USDT:USDT",
+            side="buy",
+            qty=0.1,
+            price=12.0 + idx,
+            pnl=0.0,
+            pnl_status="complete",
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id=f"cid-later-{idx}",
+        )
+        for idx in range(30)
+    ]
+    events = [
+        dict(
+            id="entry",
+            timestamp=entry_ts,
+            datetime="",
+            symbol="SOL/USDT:USDT",
+            side="buy",
+            qty=5.0,
+            price=10.0,
+            pnl=0.0,
+            pnl_status="complete",
+            pb_order_type="entry_grid_long",
+            position_side="long",
+            client_order_id="cid-entry",
+        ),
+        dict(
+            id="close",
+            timestamp=close_ts,
+            datetime="",
+            symbol="SOL/USDT:USDT",
+            side="sell",
+            qty=-2.0,
+            price=12.0,
+            pnl=0.0,
+            pnl_status="pending",
+            pb_order_type="close_grid_long",
+            position_side="long",
+            client_order_id="cid-close",
+        ),
+        *later_events,
+    ]
+
+    class _RecordingFetcher(BaseFetcher):
+        def __init__(self, batches):
+            self.batches = list(batches)
+            self.calls: List[Tuple[Optional[int], Optional[int]]] = []
+
+        async def fetch(self, since_ms, until_ms, detail_cache, on_batch=None):
+            self.calls.append((since_ms, until_ms))
+            batch = [dict(ev) for ev in (self.batches.pop(0) if self.batches else [])]
+            if since_ms is not None:
+                batch = [ev for ev in batch if int(ev["timestamp"]) >= since_ms]
+            if until_ms is not None:
+                batch = [ev for ev in batch if int(ev["timestamp"]) <= until_ms]
+            if on_batch and batch:
+                on_batch(batch)
+            return batch
+
+    fetcher = _RecordingFetcher([events, events])
+    manager = FillEventsManager(
+        exchange="kucoin",
+        user="default",
+        fetcher=fetcher,
+        cache_path=cache_dir,
+    )
+
+    await manager.refresh()
+    close = [ev for ev in manager.get_events(symbol="SOL/USDT:USDT") if ev.id == "close"][0]
+    assert close.pnl_source == fem.PNL_SOURCE_SYNTHETIC_EXACT
+
+    metadata = manager.cache.load_metadata()
+    metadata["last_refresh_ms"] = close_ts + 40 * 60_000
+    manager.cache.save_metadata(metadata)
+
+    await manager.refresh_latest(overlap=20, last_refresh_overlap_ms=10 * 60_000)
+
+    assert fetcher.calls[1][1] is None
+    assert fetcher.calls[1][0] > close_ts
+    assert fetcher.calls[1][0] != max(0, close_ts - fem.PENDING_PNL_REFRESH_MARGIN_MS)
 
 
 @pytest.mark.asyncio

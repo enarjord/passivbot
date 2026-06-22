@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reduced live Kucoin fill-history churn by keeping old synthetic PnL records out of
+  routine/latest repair windows, and made flat forager candidates with unavailable
+  required EMA volatility inputs non-tradable for that planning cycle instead of
+  restarting the execution loop.
 - Fixed v8 live fill-history startup/restart behavior so unproven
   `pnls_max_lookback_days` coverage triggers a blocking lookback refresh and
   retry/defer instead of sending neutral PnL inputs or repeatedly restarting the

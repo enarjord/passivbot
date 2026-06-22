@@ -12394,6 +12394,21 @@ class Passivbot:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
 
+        def candidate_only_forager_symbol(symbol: str) -> bool:
+            if not bool(is_forager_mode()):
+                return False
+            try:
+                if self.has_position(symbol=symbol):
+                    return False
+            except Exception:
+                return False
+            try:
+                if bool(getattr(self, "open_orders", {}).get(symbol)):
+                    return False
+            except Exception:
+                return False
+            return True
+
         def ema_candle_health_context(symbol: str) -> str:
             try:
                 last_refresh_ms = int(self.cm.get_last_refresh_ms(symbol) or 0)
@@ -12883,10 +12898,26 @@ class Passivbot:
                         "m1_log_range",
                     )
                     lr1m = {**optional_lr1m, **required_lr1m}
-            except Exception:
-                if sym not in cache_only_symbols:
+            except Exception as exc:
+                if sym not in cache_only_symbols and not candidate_only_forager_symbol(sym):
                     raise
-                mark_ema_unavailable(sym, "cache_only_fetch_failed")
+                reason = (
+                    "cache_only_fetch_failed"
+                    if sym in cache_only_symbols
+                    else "candidate_required_ema_unavailable"
+                )
+                mark_ema_unavailable(sym, reason)
+                log_ema_issue(
+                    ("candidate_ema_unavailable", sym),
+                    logging.WARNING,
+                    "[ema] required candidate EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
+                    Passivbot._log_symbol(sym),
+                    reason,
+                    type(exc).__name__,
+                    exc,
+                    ema_candle_health_context(sym),
+                    interval_ms=15 * 60 * 1000,
+                )
                 return {}, {}, {}, {}
             missing_required_volume = [
                 span for span in sorted(required_forager_volume_spans) if span not in vol

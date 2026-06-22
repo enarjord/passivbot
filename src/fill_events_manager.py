@@ -4611,8 +4611,7 @@ class FillEventsManager:
         recent_synthetic_pnl_events = [
             ev
             for ev in synthetic_pnl_events
-            if str(getattr(ev, "pnl_source", "") or "") != PNL_SOURCE_SYNTHETIC_DEGRADED
-            or int(getattr(ev, "timestamp", 0) or 0) >= now_ms - synthetic_refresh_margin_ms
+            if int(getattr(ev, "timestamp", 0) or 0) >= now_ms - synthetic_refresh_margin_ms
         ]
         old_synthetic_count = len(synthetic_pnl_events) - len(recent_synthetic_pnl_events)
         pnl_refresh_events = pending_pnl_events + recent_synthetic_pnl_events
