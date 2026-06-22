@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reduced v8 live startup noise and CPU pressure by summarizing flat forager
+  candidate EMA readiness failures, optimizing coin-HSL restart replay, adding
+  coin-HSL replay progress logs, and suppressing known websocket timeout futures.
 - Reduced live Kucoin fill-history churn by keeping old synthetic PnL records out of
   routine/latest repair windows, and made flat forager candidates with unavailable
   required EMA volatility inputs non-tradable for that planning cycle instead of

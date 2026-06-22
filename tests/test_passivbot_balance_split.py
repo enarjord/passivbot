@@ -870,6 +870,37 @@ def test_asyncio_runtime_exception_handler_suppresses_ccxt_transport_callback(ca
     )
 
 
+def test_asyncio_runtime_exception_handler_suppresses_unretrieved_transport_future(caplog):
+    class RequestTimeout(Exception):
+        pass
+
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._asyncio_ws_callback_last_log_ms = 0
+
+    with caplog.at_level(logging.WARNING):
+        handled = bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Future exception was never retrieved",
+                "exception": RequestTimeout("Connection timeout"),
+            }
+        )
+
+    assert handled is True
+    assert any("websocket callback RequestTimeout" in r.message for r in caplog.records)
+    assert (
+        bot._handle_asyncio_runtime_exception(
+            {
+                "message": "Future exception was never retrieved",
+                "exception": RuntimeError("strategy failure"),
+            }
+        )
+        is False
+    )
+
+
 def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}

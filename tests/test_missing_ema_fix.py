@@ -652,6 +652,59 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
 
 
 @pytest.mark.asyncio
+async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbols = ["AVAX/USDT:USDT", "TAO/USDT:USDT"]
+    bot = _BundleReproBot(symbols[0], close_mode="nan")
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.positions = {
+        symbol: {
+            "long": {"size": 0.0, "price": 0.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+        for symbol in symbols
+    }
+    bot.cm.get_last_refresh_ms = lambda symbol: int(time.time() * 1000)
+    bot._candle_staleness_ms = lambda symbol, now_ms=None: 0
+    bot.is_forager_mode = lambda *args, **kwargs: True
+    original_bot_value = bot.bot_value
+
+    def bot_value(pside, key):
+        if key == "forager_score_weights":
+            return {"volume": 1.0, "volatility": 1.0}
+        if key == "forager_volume_drop_pct":
+            return 0.0
+        return original_bot_value(pside, key)
+
+    bot.bot_value = bot_value
+
+    with caplog.at_level(logging.WARNING):
+        (
+            m1_close_emas,
+            _m1_volume_emas,
+            _m1_log_range_emas,
+            _h1_log_range_emas,
+            _volumes_long,
+            _log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, symbols, bot.PB_modes)
+
+    assert m1_close_emas == {symbols[0]: {}, symbols[1]: {}}
+    assert set(bot._orchestrator_ema_unavailable_symbols) == set(symbols)
+    warning_messages = [
+        record.message for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert any("candidate EMA unavailable summary" in message for message in warning_messages)
+    assert not any("required candidate EMA unavailable AVAX" in message for message in warning_messages)
+    assert not any("missing required close EMA AVAX" in message for message in warning_messages)
+    assert not any("required candidate EMA unavailable TAO" in message for message in warning_messages)
+    assert not any("missing required close EMA TAO" in message for message in warning_messages)
+
+
+@pytest.mark.asyncio
 async def test_open_tail_projection_precedes_previous_close_ema_fallback():
     try:
         import passivbot as pb_mod

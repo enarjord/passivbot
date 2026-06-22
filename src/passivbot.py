@@ -5613,8 +5613,10 @@ class Passivbot:
         message = str(context.get("message") or "") if isinstance(context, dict) else ""
         exc_text = f"{type(exc).__name__}: {exc}" if exc is not None else ""
         combined = f"{message} {exc_text}".lower()
+        future_unretrieved = "future exception was never retrieved" in combined
         callback_like = (
             "exception in callback" in combined
+            or future_unretrieved
             or "client.receive_loop" in combined
             or "websocket" in combined
             or " ws " in f" {combined} "
@@ -5643,6 +5645,7 @@ class Passivbot:
             and "websocket" not in combined
             and "ws" not in combined
             and "client.receive_loop" not in combined
+            and not future_unretrieved
         ):
             return False
         now_ms = utc_ms()
@@ -12397,6 +12400,7 @@ class Passivbot:
         cache_only_symbols: set[str] = set()
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
+        candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] = {}
         optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
         close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
 
@@ -12439,6 +12443,9 @@ class Passivbot:
             except Exception:
                 return False
             return True
+
+        def required_ema_log_level(symbol: str) -> int:
+            return logging.DEBUG if candidate_only_forager_symbol(symbol) else logging.WARNING
 
         def ema_candle_health_context(symbol: str) -> str:
             try:
@@ -12634,7 +12641,7 @@ class Passivbot:
                 )
                 log_ema_issue(
                     ("required_missing", symbol, ema_type),
-                    logging.WARNING,
+                    required_ema_log_level(symbol),
                     "[ema] missing required %s EMA %s spans=%s",
                     ema_type,
                     Passivbot._log_symbol(symbol),
@@ -12734,7 +12741,7 @@ class Passivbot:
                 if stale:
                     log_ema_issue(
                         ("close_fallback_stale", symbol),
-                        logging.WARNING,
+                        required_ema_log_level(symbol),
                         "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
                         Passivbot._log_symbol(symbol),
                         ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
@@ -12746,7 +12753,7 @@ class Passivbot:
                 else:
                     log_ema_issue(
                         ("close_missing", symbol),
-                        logging.WARNING,
+                        required_ema_log_level(symbol),
                         "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
                         Passivbot._log_symbol(symbol),
                         ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
@@ -12941,9 +12948,13 @@ class Passivbot:
                     else "candidate_required_ema_unavailable"
                 )
                 mark_ema_unavailable(sym, reason)
+                if candidate_only_forager_symbol(sym):
+                    candidate_ema_unavailable_details.setdefault(reason, []).append(
+                        (sym, type(exc).__name__, str(exc))
+                    )
                 log_ema_issue(
                     ("candidate_ema_unavailable", sym),
-                    logging.WARNING,
+                    required_ema_log_level(sym),
                     "[ema] required candidate EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
                     Passivbot._log_symbol(sym),
                     reason,
@@ -13083,6 +13094,33 @@ class Passivbot:
                 len(close_ema_recoveries),
                 max_fallbacks,
                 "; ".join(examples),
+            )
+        if candidate_ema_unavailable_details:
+            parts = []
+            all_symbols: set[str] = set()
+            for reason, items in sorted(candidate_ema_unavailable_details.items()):
+                unique_symbols = sorted({symbol for symbol, _error_type, _error in items})
+                all_symbols.update(unique_symbols)
+                error_types = sorted({error_type for _symbol, error_type, _error in items})
+                example_error = next((error for _symbol, _error_type, error in items if error), "")
+                parts.append(
+                    "%s:n=%d symbols=%s error_types=%s example=%s"
+                    % (
+                        reason,
+                        len(unique_symbols),
+                        Passivbot._log_symbols(unique_symbols, limit=10),
+                        ",".join(error_types[:4]),
+                        str(example_error)[:160],
+                    )
+                )
+            log_ema_issue(
+                ("candidate_ema_unavailable_summary",),
+                logging.WARNING,
+                "[ema] candidate EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
+                len(all_symbols),
+                len(candidate_ema_unavailable_details),
+                "; ".join(parts[:4]),
+                interval_ms=15 * 60 * 1000,
             )
         if errors:
             fatal = next(
