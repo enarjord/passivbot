@@ -43,7 +43,7 @@ import sys
 import time
 import zlib
 import atexit
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, TYPE_CHECKING
@@ -729,8 +729,10 @@ class CandlestickManager:
         self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
         self._lock_backoff_initial = float(_LOCK_BACKOFF_INITIAL)
         self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
+        self._lock_hold_timeout_seconds = max(60.0, self._lock_timeout_seconds * 6.0)
         # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord
         self._held_fetch_locks: Dict[Tuple[str, str], _LockRecord] = {}
+        self._fetch_lock_watchdogs: Dict[Tuple[str, str], asyncio.Task] = {}
         self._shutdown_guard = threading.Lock()
         self._closed = False
         atexit.register(self._cleanup_on_exit)
@@ -1070,6 +1072,10 @@ class CandlestickManager:
             self._closed = True
         records = list(self._held_fetch_locks.values())
         self._held_fetch_locks.clear()
+        watchdogs = list(self._fetch_lock_watchdogs.values())
+        self._fetch_lock_watchdogs.clear()
+        for task in watchdogs:
+            task.cancel()
         for record in records:
             self._release_lock_sync(record)
 
@@ -1129,13 +1135,99 @@ class CandlestickManager:
         finally:
             self._remove_lockfile(path)
 
-    def _touch_lockfile(self, path: str) -> None:
+    def _touch_lockfile(
+        self,
+        path: str,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        acquired_at: float | None = None,
+        attempt: int | None = None,
+    ) -> None:
+        payload = {
+            "pid": os.getpid(),
+            "exchange": str(self.exchange_name),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "acquired_at": float(acquired_at if acquired_at is not None else time.time()),
+            "attempt": attempt,
+        }
         try:
-            os.utime(path, None)
+            task = asyncio.current_task()
+            if task is not None:
+                payload["task"] = task.get_name()
+        except RuntimeError:
+            pass
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, sort_keys=True)
         except FileNotFoundError:
             return
         except Exception:
+            with suppress(Exception):
+                os.utime(path, None)
+
+    def _read_lockfile_owner(self, path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return "-"
+        if not isinstance(payload, dict):
+            return "-"
+        bits = []
+        for key in ("pid", "exchange", "symbol", "timeframe", "task", "attempt"):
+            value = payload.get(key)
+            if value is not None:
+                bits.append(f"{key}={value}")
+        acquired_at = payload.get("acquired_at")
+        if acquired_at is not None:
+            try:
+                bits.append(f"held_s={max(0.0, time.time() - float(acquired_at)):.1f}")
+            except Exception:
+                pass
+        return " ".join(bits) if bits else "-"
+
+    def _cancel_fetch_lock_watchdog(self, key: Tuple[str, str]) -> None:
+        task = self._fetch_lock_watchdogs.pop(key, None)
+        if task is not None:
+            task.cancel()
+
+    def _start_fetch_lock_watchdog(
+        self,
+        key: Tuple[str, str],
+        *,
+        symbol: str,
+        timeframe: str,
+        acquired_at: float,
+    ) -> None:
+        timeout_s = float(getattr(self, "_lock_hold_timeout_seconds", 0.0) or 0.0)
+        if timeout_s <= 0.0 or not math.isfinite(timeout_s):
             return
+
+        async def _watchdog() -> None:
+            try:
+                await asyncio.sleep(timeout_s)
+            except asyncio.CancelledError:
+                return
+            record = self._held_fetch_locks.get(key)
+            if record is None or float(record.acquired_at) != float(acquired_at):
+                return
+            self._held_fetch_locks.pop(key, None)
+            owner = self._read_lockfile_owner(record.path)
+            self._log(
+                "warning",
+                "fetch_lock_hold_timeout_release",
+                symbol=symbol,
+                timeframe=timeframe,
+                held_seconds=f"{timeout_s:.1f}",
+                lock_path=record.path,
+                owner=owner,
+            )
+            await self._release_lock(record.lock, record.path, symbol, timeframe)
+
+        self._cancel_fetch_lock_watchdog(key)
+        self._fetch_lock_watchdogs[key] = asyncio.create_task(_watchdog())
 
     def _lockfile_age(self, path: str) -> Optional[float]:
         try:
@@ -1709,6 +1801,7 @@ class CandlestickManager:
                     return
                 if record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
+                    self._cancel_fetch_lock_watchdog(key)
                     await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 else:
                     self._held_fetch_locks[key] = _LockRecord(
@@ -1729,11 +1822,23 @@ class CandlestickManager:
             try:
                 await asyncio.to_thread(lock_obj.acquire)
                 acquired_at = time.time()
-                self._touch_lockfile(lock_path)
+                self._touch_lockfile(
+                    lock_path,
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    acquired_at=acquired_at,
+                    attempt=attempt,
+                )
                 self._held_fetch_locks[key] = _LockRecord(
                     lock=lock_obj,
                     path=lock_path,
                     count=1,
+                    acquired_at=acquired_at,
+                )
+                self._start_fetch_lock_watchdog(
+                    key,
+                    symbol=symbol,
+                    timeframe=tf_norm,
                     acquired_at=acquired_at,
                 )
                 self._log(
@@ -1747,6 +1852,7 @@ class CandlestickManager:
                     yield
                 finally:
                     record = self._held_fetch_locks.pop(key, None)
+                    self._cancel_fetch_lock_watchdog(key)
                     if record is not None:
                         await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 return
@@ -1760,6 +1866,7 @@ class CandlestickManager:
                         timeframe=tf_norm,
                         age=f"{age:.2f}",
                         lock_path=lock_path,
+                        owner=self._read_lockfile_owner(lock_path),
                     )
 
                 if time.monotonic() >= deadline:

@@ -911,6 +911,9 @@ def test_candle_fetch_concurrency_is_conservative_for_history_replay():
     bot.exchange = "kucoin"
     assert bot._candle_fetch_concurrency(context="history_replay") == 1
 
+    bot.exchange = "gateio"
+    assert bot._candle_fetch_concurrency(context="history_replay") == 1
+
     bot.config = {"live": {"warmup_concurrency": 7}}
     assert bot._candle_fetch_concurrency(context="history_replay") == 7
 
@@ -1110,6 +1113,54 @@ async def test_start_bot_treats_shutdown_cancelled_warmup_as_clean_stop(monkeypa
     assert stop_events
     assert stop_events[-1][0][0] == "startup_aborted"
     assert stop_events[-1][1]["payload"]["stage"] == "warmup_trading_ready_candles"
+
+
+@pytest.mark.asyncio
+async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "gateio"
+    bot.user = "test_user"
+    bot.quote = "USDT"
+    bot.start_time_ms = 1_000_000
+    bot.config = {"live": {"boot_stagger_seconds": 0}}
+    bot.debug_mode = False
+    bot.stop_signal_received = False
+    bot._shutdown_in_progress = False
+    bot._bot_ready = False
+    bot.user_info = {"exchange": "gateio"}
+    bot._log_startup_banner = lambda: None
+    monitor_errors = []
+    stop_events = []
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: monitor_errors.append((args, kwargs))
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot._monitor_emit_stop = lambda *args, **kwargs: stop_events.append((args, kwargs))
+    bot.init_markets = AsyncMock()
+    bot.warmup_trading_ready_candles = AsyncMock()
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
+    bot._equity_hard_stop_signal_mode = lambda *args, **kwargs: "coin"
+    bot._equity_hard_stop_initialize_coin_from_history = AsyncMock(
+        side_effect=ValueError("missing unrealized_pnl_by_coin_pside")
+    )
+
+    async def _format(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(passivbot_module, "format_approved_ignored_coins", _format)
+
+    with pytest.raises(FatalBotException, match="terminal startup validation failure"):
+        await bot.start_bot()
+
+    assert monitor_errors
+    assert (
+        monitor_errors[-1][1]["payload"]["stage"]
+        == "equity_hard_stop_initialize_coin_from_history"
+    )
+    assert stop_events[-1][0][0] == "startup_error"
+    assert stop_events[-1][1]["payload"] == {
+        "stage": "equity_hard_stop_initialize_coin_from_history",
+        "error_type": "ValueError",
+    }
 
 
 def test_startup_timing_marks_log_once(monkeypatch, caplog):

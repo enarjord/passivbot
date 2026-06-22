@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import logging
 import time
 from typing import List
 
@@ -94,3 +96,36 @@ async def test_concurrent_refresh_no_deadlock(tmp_path):
 
     assert cm1._held_fetch_locks == {}
     assert cm2._held_fetch_locks == {}
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_watchdog_releases_stale_local_holder(tmp_path, caplog):
+    cache_dir = tmp_path / "caches"
+    cm = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(cache_dir),
+        default_window_candles=5,
+    )
+    cm._lock_hold_timeout_seconds = 0.01
+    key = ("BTC/USDC:USDC", "1m")
+    lock_path = cm._fetch_lock_path(*key)
+
+    with caplog.at_level(logging.WARNING, logger="passivbot.candlestick_manager"):
+        async with cm._acquire_fetch_lock(*key):
+            with open(lock_path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+            assert payload["pid"]
+            assert payload["symbol"] == key[0]
+            assert payload["timeframe"] == key[1]
+
+            async def wait_for_watchdog() -> None:
+                while key in cm._held_fetch_locks:
+                    await asyncio.sleep(0.005)
+
+            await asyncio.wait_for(wait_for_watchdog(), timeout=1.0)
+
+    assert key not in cm._held_fetch_locks
+    assert any(
+        "fetch_lock_hold_timeout_release" in record.message for record in caplog.records
+    )

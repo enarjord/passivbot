@@ -751,6 +751,9 @@ async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
 async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
     bot = make_coin_bot()
     symbol = "A"
+    bot.positions = {
+        symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}
+    }
 
     async def fake_history(current_balance=None):
         return {
@@ -781,6 +784,49 @@ async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
 
     with pytest.raises(ValueError, match="unrealized_pnl_by_coin_pside"):
         await bot._equity_hard_stop_initialize_coin_from_history()
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_skips_flat_missing_upnl_for_historical_pair(caplog):
+    bot = make_coin_bot()
+    symbol = "A"
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 120_000,
+                    "balance": 95.0,
+                    "realized_pnl": -5.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -5.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "price": 95.0,
+                    "pnl": -5.0,
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    with caplog.at_level(logging.WARNING):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert bot._equity_hard_stop_coin_initialized is True
+    assert any(
+        "skipped flat historical pairs with missing unrealized_pnl_by_coin_pside"
+        in record.message
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio

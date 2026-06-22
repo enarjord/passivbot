@@ -3335,7 +3335,30 @@ class Passivbot:
                 ts=error_ts,
                 payload={"stage": boot_stage, "error_type": type(exc).__name__},
             )
+            if self._startup_exception_is_terminal(exc, boot_stage):
+                logging.critical(
+                    "[boot] terminal startup validation failure | stage=%s error_type=%s error=%s",
+                    boot_stage,
+                    type(exc).__name__,
+                    exc,
+                )
+                raise FatalBotException(
+                    f"terminal startup validation failure during {boot_stage}: {exc}"
+                ) from exc
             raise
+
+    @staticmethod
+    def _startup_exception_is_terminal(exc: BaseException, stage: str) -> bool:
+        """Return True for deterministic startup validation failures.
+
+        Exchange/network failures may clear after a restart. Type/value contract
+        failures in local reconstructed safety state do not, so restart loops only
+        add CPU/load while preserving the same error.
+        """
+        stage = str(stage or "")
+        if not stage.startswith("equity_hard_stop_initialize"):
+            return False
+        return isinstance(exc, (TypeError, ValueError))
 
     def _startup_timing_begin(self) -> None:
         """Initialize one-shot startup readiness timing diagnostics."""
@@ -5556,9 +5579,11 @@ class Passivbot:
             return 1
         if exchange_lower == "hyperliquid":
             return 1
-        if exchange_lower == "kucoin" and str(context).lower() in {"history_replay"}:
+        if exchange_lower in {"gateio", "kucoin"} and str(context).lower() in {
+            "history_replay"
+        }:
             return 1
-        if context == "history_replay":
+        if str(context).lower() == "history_replay":
             return 2
         return max(1, int(getattr(self, "max_n_concurrent_ohlcvs_1m_updates", 4) or 4))
 
@@ -12431,25 +12456,39 @@ class Passivbot:
             ema_unavailable_symbols.add(symbol)
             ema_unavailable_reasons.setdefault(str(reason), []).append(symbol)
 
+        def has_position_or_open_order(symbol: str) -> bool:
+            try:
+                if self.has_position(symbol=symbol):
+                    return True
+            except Exception:
+                return True
+            try:
+                if bool(getattr(self, "open_orders", {}).get(symbol)):
+                    return True
+            except Exception:
+                return True
+            return False
+
         def candidate_only_forager_symbol(symbol: str) -> bool:
             if not bool(is_forager_mode()):
                 return False
             if has_normal_planning_mode(symbol):
                 return False
-            try:
-                if self.has_position(symbol=symbol):
-                    return False
-            except Exception:
-                return False
-            try:
-                if bool(getattr(self, "open_orders", {}).get(symbol)):
-                    return False
-            except Exception:
+            if has_position_or_open_order(symbol):
                 return False
             return True
 
+        def required_ema_can_mark_nontradable(symbol: str) -> bool:
+            if symbol in cache_only_symbols or candidate_only_forager_symbol(symbol):
+                return True
+            return not has_position_or_open_order(symbol)
+
         def required_ema_log_level(symbol: str) -> int:
-            return logging.DEBUG if candidate_only_forager_symbol(symbol) else logging.WARNING
+            return (
+                logging.DEBUG
+                if candidate_only_forager_symbol(symbol)
+                else logging.WARNING
+            )
 
         def ema_candle_health_context(symbol: str) -> str:
             try:
@@ -12947,22 +12986,22 @@ class Passivbot:
                     )
                     lr1m = {**optional_lr1m, **required_lr1m}
             except Exception as exc:
-                if sym not in cache_only_symbols and not candidate_only_forager_symbol(sym):
+                if not required_ema_can_mark_nontradable(sym):
                     raise
-                reason = (
-                    "cache_only_fetch_failed"
-                    if sym in cache_only_symbols
-                    else "candidate_required_ema_unavailable"
-                )
+                if sym in cache_only_symbols:
+                    reason = "cache_only_fetch_failed"
+                elif candidate_only_forager_symbol(sym):
+                    reason = "candidate_required_ema_unavailable"
+                else:
+                    reason = "flat_active_required_ema_unavailable"
                 mark_ema_unavailable(sym, reason)
-                if candidate_only_forager_symbol(sym):
-                    candidate_ema_unavailable_details.setdefault(reason, []).append(
-                        (sym, type(exc).__name__, str(exc))
-                    )
+                candidate_ema_unavailable_details.setdefault(reason, []).append(
+                    (sym, type(exc).__name__, str(exc))
+                )
                 log_ema_issue(
-                    ("candidate_ema_unavailable", sym),
+                    ("required_ema_unavailable", sym),
                     required_ema_log_level(sym),
-                    "[ema] required candidate EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
+                    "[ema] required EMA unavailable %s action=mark_nontradable_until_fresh reason=%s error_type=%s error=%s | %s",
                     Passivbot._log_symbol(sym),
                     reason,
                     type(exc).__name__,
@@ -13157,9 +13196,9 @@ class Passivbot:
                     )
                 )
             log_ema_issue(
-                ("candidate_ema_unavailable_summary",),
+                ("required_ema_unavailable_summary",),
                 logging.WARNING,
-                "[ema] candidate EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
+                "[ema] required EMA unavailable summary | unavailable=%d groups=%d action=mark_nontradable_until_fresh | %s",
                 len(all_symbols),
                 len(candidate_ema_unavailable_details),
                 "; ".join(parts[:4]),

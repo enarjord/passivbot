@@ -703,10 +703,10 @@ async def test_candidate_ema_unavailable_logs_single_warning_summary(caplog):
     warning_messages = [
         record.message for record in caplog.records if record.levelno >= logging.WARNING
     ]
-    assert any("candidate EMA unavailable summary" in message for message in warning_messages)
-    assert not any("required candidate EMA unavailable AVAX" in message for message in warning_messages)
+    assert any("required EMA unavailable summary" in message for message in warning_messages)
+    assert not any("required EMA unavailable AVAX" in message for message in warning_messages)
     assert not any("missing required close EMA AVAX" in message for message in warning_messages)
-    assert not any("required candidate EMA unavailable TAO" in message for message in warning_messages)
+    assert not any("required EMA unavailable TAO" in message for message in warning_messages)
     assert not any("missing required close EMA TAO" in message for message in warning_messages)
 
 
