@@ -12398,6 +12398,7 @@ class Passivbot:
         ema_unavailable_symbols: set[str] = set()
         ema_unavailable_reasons: dict[str, list[str]] = {}
         optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
+        close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
 
         def log_ema_issue(
             key: tuple,
@@ -12671,7 +12672,10 @@ class Passivbot:
                             self._orchestrator_close_ema_fallback_counts.get(key, 0)
                         )
                         if prev_fallback_count > 0:
-                            logging.info(
+                            close_ema_recoveries.setdefault(symbol, []).append(
+                                (span, prev_fallback_count)
+                            )
+                            logging.debug(
                                 "[ema] close EMA recovered %s span=%.8g after %d fallback(s)",
                                 Passivbot._log_symbol(symbol),
                                 span,
@@ -13059,6 +13063,26 @@ class Passivbot:
                 total,
                 len(optional_ema_drops),
                 "; ".join(parts[:4]),
+            )
+        if close_ema_recoveries:
+            recovered_count = sum(len(items) for items in close_ema_recoveries.values())
+            max_fallbacks = max(
+                count for items in close_ema_recoveries.values() for _span, count in items
+            )
+            examples = []
+            for symbol, items in sorted(close_ema_recoveries.items())[:8]:
+                spans = ",".join(f"{span:.8g}" for span, _count in sorted(items)[:6])
+                symbol_max_fallbacks = max(count for _span, count in items)
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)} spans={spans} "
+                    f"max_fallbacks={symbol_max_fallbacks}"
+                )
+            logging.debug(
+                "[ema] close EMA recoveries | recovered=%d symbols=%d max_fallbacks=%d | %s",
+                recovered_count,
+                len(close_ema_recoveries),
+                max_fallbacks,
+                "; ".join(examples),
             )
         if errors:
             fatal = next(

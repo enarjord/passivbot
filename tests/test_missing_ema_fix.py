@@ -791,7 +791,7 @@ async def test_close_ema_fallback_raises_when_previous_ema_is_stale(caplog):
 
 
 @pytest.mark.asyncio
-async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery():
+async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -811,14 +811,16 @@ async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery():
 
     bot.close_mode = "value"
     bot.close_value = 105.5
-    (
-        m1_close_emas,
-        _m1_volume_emas,
-        _m1_log_range_emas,
-        _h1_log_range_emas,
-        _volumes_long,
-        _log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        (
+            m1_close_emas,
+            _m1_volume_emas,
+            _m1_log_range_emas,
+            _h1_log_range_emas,
+            _volumes_long,
+            _log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
     got = m1_close_emas[symbol]
     assert got[span0] == pytest.approx(105.5)
@@ -827,6 +829,12 @@ async def test_kucoin_avax_close_ema_fallback_count_resets_on_recovery():
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span0)] == 0
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span1)] == 0
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span2)] == 0
+    recovered_records = [
+        record for record in caplog.records if "close EMA recovered" in record.message
+    ]
+    assert recovered_records
+    assert all(record.levelno == logging.DEBUG for record in recovered_records)
+    assert any("close EMA recoveries" in record.message for record in caplog.records)
 
 
 @pytest.mark.asyncio
