@@ -4940,7 +4940,7 @@ async def test_manager_refresh_for_lookback_retries_known_gap_before_latest(tmp_
 
     assert fetcher.calls[0] == (gap_start, gap_end)
     assert fetcher.calls[1] == (event_ts, None)
-    assert manager.cache.get_known_gaps()
+    assert manager.cache.get_known_gaps() == []
 
 
 @pytest.mark.asyncio

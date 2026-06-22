@@ -4555,15 +4555,17 @@ class FillEventsManager:
                 day_payload = self._events_for_days(self._events, all_days_persisted)
                 self.cache.save_days(day_payload)
 
+        fetched_bounded_range = start_ms is not None and end_ms is not None
+
         # Update cache metadata with timestamps
         if self._events:
             self.cache.update_metadata_from_events(self._events)
-
-            # If we successfully fetched data for a gap range, clear it
-            if start_ms is not None and end_ms is not None and added_ids:
-                self.cache.clear_gap(start_ms, end_ms)
         else:
             self.cache.mark_refreshed()
+        if fetched_bounded_range:
+            # A successful bounded fetch proves the retried range even when the
+            # exchange returns no new fills or only duplicates.
+            self.cache.clear_gap(start_ms, end_ms)
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Hardened v8 live restart behavior by clearing successfully retried empty
+  fill-history gaps, failing loudly on ambiguous coin-HSL carry-in replay,
+  avoiding duplicate coin-HSL startup replay, keeping active/normal forager
+  EMA inputs fail-loud, and summarizing close-EMA fallbacks.
 - Reduced v8 live startup noise and CPU pressure by summarizing flat forager
   candidate EMA readiness failures, optimizing coin-HSL restart replay, adding
   coin-HSL replay progress logs, and suppressing known websocket timeout futures.

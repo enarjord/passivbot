@@ -748,6 +748,42 @@ async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
+    bot = make_coin_bot()
+    symbol = "A"
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 120_000,
+                    "balance": 95.0,
+                    "realized_pnl": -5.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -5.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "price": 95.0,
+                    "pnl": -5.0,
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    with pytest.raises(ValueError, match="unrealized_pnl_by_coin_pside"):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_reconstructs_unresolved_panic_residue_on_restart():
     bot = make_coin_bot(policy="normal")
     symbol = "A"

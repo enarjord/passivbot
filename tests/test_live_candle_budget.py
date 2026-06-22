@@ -635,8 +635,8 @@ async def test_orchestrator_ema_bundle_marks_missing_required_forager_ema_unavai
         }
         positions = {}
         open_orders = {}
-        PB_modes = {"long": {symbol: "normal"}, "short": {}}
-        active_symbols = [symbol]
+        PB_modes = {"long": {}, "short": {}}
+        active_symbols = []
         inactive_coin_candle_ttl_ms = 600_000
         cm = FakeCM()
 
@@ -756,8 +756,8 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
         }
         positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
         open_orders = {}
-        PB_modes = {"long": {symbol: "normal"}, "short": {}}
-        active_symbols = [symbol]
+        PB_modes = {"long": {}, "short": {}}
+        active_symbols = []
         inactive_coin_candle_ttl_ms = 600_000
         cm = FakeCM()
 
@@ -832,6 +832,14 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
     assert m1_close_emas[symbol] == {}
     assert m1_log_range_emas[symbol] == {}
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+
+    bot_active = FakeBot()
+    bot_active.PB_modes = {"long": {symbol: "normal"}, "short": {}}
+    bot_active.active_symbols = [symbol]
+    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot_active, [symbol], modes=bot_active.PB_modes
+        )
 
     bot_with_position = FakeBot()
     bot_with_position.positions = {

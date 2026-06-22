@@ -5270,14 +5270,15 @@ class Passivbot:
         failed_update_pos_oos_pnls_ohlcvs_count = 0
         pending_pnl_authoritative_retry_count = 0
         max_n_fails = 10
-        if self._equity_hard_stop_enabled() and not all(
-            self._equity_hard_stop_runtime_initialized(pside)
-            or not self._equity_hard_stop_enabled(pside)
-            for pside in self._hsl_psides()
-        ):
+        if self._equity_hard_stop_enabled():
             if self._equity_hard_stop_signal_mode() == "coin":
-                await self._equity_hard_stop_initialize_coin_from_history()
-            else:
+                if not getattr(self, "_equity_hard_stop_coin_initialized", False):
+                    await self._equity_hard_stop_initialize_coin_from_history()
+            elif not all(
+                self._equity_hard_stop_runtime_initialized(pside)
+                or not self._equity_hard_stop_enabled(pside)
+                for pside in self._hsl_psides()
+            ):
                 await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
             try:
@@ -12403,6 +12404,7 @@ class Passivbot:
         candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] = {}
         optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] = {}
         close_ema_recoveries: dict[str, list[tuple[float, int]]] = {}
+        close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] = {}
 
         def log_ema_issue(
             key: tuple,
@@ -12431,6 +12433,8 @@ class Passivbot:
 
         def candidate_only_forager_symbol(symbol: str) -> bool:
             if not bool(is_forager_mode()):
+                return False
+            if has_normal_planning_mode(symbol):
                 return False
             try:
                 if self.has_position(symbol=symbol):
@@ -12715,9 +12719,12 @@ class Passivbot:
                             + 1
                         )
                         self._orchestrator_close_ema_fallback_counts[key] = n_fallbacks
+                        close_ema_fallbacks.setdefault(symbol, []).append(
+                            (span, age_ms, n_fallbacks, reason)
+                        )
                         log_ema_issue(
                             ("close_fallback", symbol, span),
-                            logging.WARNING,
+                            logging.DEBUG,
                             "[ema] close EMA fallback %s span=%.8g ema=%.12g age_ms=%d"
                             " n_fallbacks=%d reason=%s",
                             Passivbot._log_symbol(symbol),
@@ -13094,6 +13101,42 @@ class Passivbot:
                 len(close_ema_recoveries),
                 max_fallbacks,
                 "; ".join(examples),
+            )
+        if close_ema_fallbacks:
+            fallback_count = sum(len(items) for items in close_ema_fallbacks.values())
+            max_fallbacks = max(
+                count
+                for items in close_ema_fallbacks.values()
+                for _span, _age_ms, count, _reason in items
+            )
+            max_age_ms = max(
+                age_ms
+                for items in close_ema_fallbacks.values()
+                for _span, age_ms, _count, _reason in items
+            )
+            examples = []
+            for symbol, items in sorted(close_ema_fallbacks.items())[:8]:
+                spans = ",".join(
+                    f"{span:.8g}" for span, _age, _count, _reason in sorted(items)[:6]
+                )
+                symbol_max_age_ms = max(age for _span, age, _count, _reason in items)
+                symbol_max_fallbacks = max(count for _span, _age, count, _reason in items)
+                reason = next((why for _span, _age, _count, why in items if why), "")
+                examples.append(
+                    f"{Passivbot._log_symbol(symbol)} spans={spans} "
+                    f"max_age_ms={symbol_max_age_ms} max_fallbacks={symbol_max_fallbacks} "
+                    f"reason={str(reason)[:80]}"
+                )
+            log_ema_issue(
+                ("close_ema_fallback_summary",),
+                logging.WARNING,
+                "[ema] close EMA fallback summary | fallbacks=%d symbols=%d max_age_ms=%d max_fallbacks=%d | %s",
+                fallback_count,
+                len(close_ema_fallbacks),
+                max_age_ms,
+                max_fallbacks,
+                "; ".join(examples),
+                interval_ms=15 * 60 * 1000,
             )
         if candidate_ema_unavailable_details:
             parts = []

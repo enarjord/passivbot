@@ -1000,6 +1000,7 @@ def _equity_hard_stop_coin_replay_events(
 ) -> tuple[list[tuple[int, str, float]], bool]:
     replay_events: list[tuple[int, str, float]] = []
     ambiguous = False
+    replay_size = 0.0
     for event in fill_events:
         if _equity_hard_stop_fill_pside(event) != pside:
             continue
@@ -1014,6 +1015,13 @@ def _equity_hard_stop_coin_replay_events(
             (_equity_hard_stop_fill_timestamp_ms(event), action, float(qty))
         )
     replay_events.sort(key=lambda item: item[0])
+    for _event_ts, action, qty in replay_events:
+        if action == "increase":
+            replay_size += qty
+        else:
+            if qty > replay_size + 1e-12:
+                ambiguous = True
+            replay_size = max(0.0, replay_size - qty)
     return replay_events, ambiguous
 
 

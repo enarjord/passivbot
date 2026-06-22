@@ -6257,6 +6257,63 @@ async def test_run_execution_loop_waits_for_clean_authoritative_cycle_before_exe
 
 
 @pytest.mark.asyncio
+async def test_run_execution_loop_does_not_reinitialize_coin_hsl_after_startup():
+    bot = Passivbot.__new__(Passivbot)
+    calls = []
+
+    bot.stop_signal_received = False
+    bot.execution_scheduled = False
+    bot.state_change_detected_by_symbol = set()
+    bot.debug_mode = True
+    bot._equity_hard_stop_coin_initialized = True
+    bot._equity_hard_stop_enabled = lambda *args, **kwargs: True
+    bot._equity_hard_stop_signal_mode = lambda: "coin"
+    bot._equity_hard_stop_check = AsyncMock(return_value=None)
+    bot._equity_hard_stop_coin_red_active = lambda: False
+    bot._equity_hard_stop_initialize_coin_from_history = AsyncMock()
+    bot._set_log_silence_watchdog_context = lambda *args, **kwargs: None
+    bot._maybe_log_health_summary = lambda: None
+    bot._maybe_log_unstuck_status = lambda: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.restart_bot_on_too_many_errors = AsyncMock()
+    bot.live_value = lambda key: 0.0 if key == "execution_delay_seconds" else False
+
+    async def fake_refresh_authoritative_state():
+        bot._begin_authoritative_refresh_epoch()
+        for surface, sig in (
+            ("balance", ("b", 1)),
+            ("positions", ("p", 1)),
+            ("open_orders", ("o", 1)),
+            ("fills", ("f", 1)),
+            ("completed_candles", tuple()),
+        ):
+            bot._record_authoritative_surface(surface, sig)
+        return True
+
+    async def fake_prepare_planning_universe():
+        calls.append("universe")
+
+    async def fake_refresh_market_state_if_needed():
+        calls.append("market")
+        return True
+
+    async def fake_execute_to_exchange(*, prepare_cycle=True):
+        calls.append(("execute", prepare_cycle))
+        return {"ok": True}
+
+    bot.refresh_authoritative_state = fake_refresh_authoritative_state
+    bot.prepare_planning_universe = fake_prepare_planning_universe
+    bot.refresh_market_state_if_needed = fake_refresh_market_state_if_needed
+    bot.execute_to_exchange = fake_execute_to_exchange
+
+    result = await bot.run_execution_loop()
+
+    assert result == {"ok": True}
+    bot._equity_hard_stop_initialize_coin_from_history.assert_not_awaited()
+    assert calls == ["universe", "market", ("execute", False)]
+
+
+@pytest.mark.asyncio
 async def test_run_execution_loop_defers_staged_precondition_without_error_count():
     bot = Passivbot.__new__(Passivbot)
     cycle = {"n": 0}

@@ -617,7 +617,7 @@ def test_trailing_grid_v7_py_orchestrator_rejects_incomplete_strategy_params():
 
 
 @pytest.mark.asyncio
-async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
+async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -630,14 +630,15 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
     prev = {span0: 100.04, span1: 100.03, span2: 100.02}
     bot = _BundleReproBot(symbol, close_mode="timeout", close_value=110.37, prev_close_ema=prev)
 
-    (
-        m1_close_emas,
-        _m1_volume_emas,
-        _m1_log_range_emas,
-        _h1_log_range_emas,
-        _volumes_long,
-        _log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    with caplog.at_level(logging.WARNING):
+        (
+            m1_close_emas,
+            _m1_volume_emas,
+            _m1_log_range_emas,
+            _h1_log_range_emas,
+            _volumes_long,
+            _log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
 
     got = m1_close_emas[symbol]
     assert got[span0] == pytest.approx(prev[span0])
@@ -649,6 +650,11 @@ async def test_kucoin_avax_close_ema_fallback_uses_previous_ema_not_price():
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span0)] == 1
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span1)] == 1
     assert bot._orchestrator_close_ema_fallback_counts[(symbol, span2)] == 1
+    warning_messages = [
+        record.message for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert any("close EMA fallback summary" in message for message in warning_messages)
+    assert not any("close EMA fallback AVAX" in message for message in warning_messages)
 
 
 @pytest.mark.asyncio
