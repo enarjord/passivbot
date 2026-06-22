@@ -6,9 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Fixed two live restart/minute-boundary edge cases: required 1m log-range EMA
   loads now retry bounded open-tail projection when a fresh one-candle tail
-  appears after projection precompute, and coin-HSL balance/equity replay now
-  emits explicit zero coin-UPnL for replay-proven flat symbols with realized
-  history.
+  appears after projection precompute without clearing candidate-only forager
+  qv/log-range maps to `None`, and coin-HSL balance/equity replay now emits
+  explicit zero coin-UPnL for replay-proven flat symbols with realized history.
 - Hardened live forager promotion readiness: newly selected normal forager
   symbols now get targeted candle warmup before normal order planning, and
   missing required forager ranking EMAs still fail loudly for active/normal

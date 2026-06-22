@@ -13377,12 +13377,21 @@ class Passivbot:
                                 ),
                             )
                             raise
-                        close, vol, lr1m = await load_projected_open_tail_bundle(
-                            sym,
-                            late_projection_ctx,
-                            required_m1_lr_for_symbol,
-                            requested_m1_lr_spans,
+                        projected_close, projected_vol, projected_lr1m = (
+                            await load_projected_open_tail_bundle(
+                                sym,
+                                late_projection_ctx,
+                                required_m1_lr_for_symbol,
+                                requested_m1_lr_spans,
+                            )
                         )
+                        close = projected_close
+                        if projected_vol is not None:
+                            vol = projected_vol
+                        if projected_lr1m is not None:
+                            lr1m = projected_lr1m
+                        else:
+                            lr1m = {}
                     else:
                         optional_lr1m = await fetch_map(
                             sym,
