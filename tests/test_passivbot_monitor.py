@@ -7,7 +7,7 @@ import numpy as np
 
 import pytest
 
-from live.event_bus import EventTypes
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 
 class RecorderPublisher:
@@ -78,6 +78,142 @@ class RecorderPublisher:
 
     def close(self):
         self.closed = True
+
+
+def test_live_event_cycle_helpers_emit_structured_events():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _begin_live_event_cycle = pb_mod.Passivbot._begin_live_event_cycle
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_cycle_completed = pb_mod.Passivbot._emit_live_cycle_completed
+        _emit_live_cycle_degraded = pb_mod.Passivbot._emit_live_cycle_degraded
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _set_live_event_context_ids = pb_mod.Passivbot._set_live_event_context_ids
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self._authoritative_refresh_epoch = 7
+            self.execution_scheduled = True
+            self._live_event_cycle_seq = 0
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    cycle_id = bot._begin_live_event_cycle(loop_start_ms=1000)
+    bot._emit_live_cycle_degraded(
+        cycle_id=cycle_id,
+        reason_code="execution_barrier",
+        data={"missing": ["open_orders"]},
+    )
+    bot._emit_live_cycle_completed(
+        cycle_id=cycle_id,
+        loop_start_ms=1000,
+        timings_ms={"execute": 3},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = sink.events
+    assert [event.event_type for event in events] == [
+        EventTypes.CYCLE_STARTED,
+        EventTypes.CYCLE_DEGRADED,
+        EventTypes.CYCLE_COMPLETED,
+    ]
+    assert {event.cycle_id for event in events} == {cycle_id}
+    assert events[1].reason_code == "execution_barrier"
+    assert events[2].data["orders_changed"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_order_wave_summary_emits_live_event(caplog):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _begin_order_wave = pb_mod.Passivbot._begin_order_wave
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_order_wave_completed_event = (
+            pb_mod.Passivbot._emit_order_wave_completed_event
+        )
+        _log_order_wave_summary = pb_mod.Passivbot._log_order_wave_summary
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._order_wave_seq = 0
+            self._live_event_current_cycle_id = "cy_9"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT", "qty": 1, "price": 100.0}],
+        [{"symbol": "ETH/USDT:USDT", "qty": 2, "price": 200.0}],
+    )
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+    wave["cancel_ms"] = 11
+    wave["create_ms"] = 22
+
+    with caplog.at_level(logging.INFO):
+        bot._log_order_wave_summary(wave)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.ORDER_WAVE_COMPLETED
+    assert event.cycle_id == "cy_9"
+    assert event.order_wave_id == "ow_1"
+    assert event.status == "succeeded"
+    assert event.data["cancel_posted"] == 1
+    assert event.data["create_posted"] == 1
+    assert set(event.data["symbols"]) == {"BTC/USDT:USDT", "ETH/USDT:USDT"}
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_monitor_emit_stop_bridges_to_live_event_pipeline():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _monitor_emit_stop = pb_mod.Passivbot._monitor_emit_stop
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._monitor_stop_emitted = False
+            self.monitor_publisher = RecorderPublisher()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._monitor_emit_stop("startup_error", payload={"stage": "init_markets"})
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot.monitor_publisher.events[-1]["kind"] == "bot.stop"
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.BOT_STOPPED
+    assert event.reason_code == "startup_error"
+    assert event.data["stage"] == "init_markets"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
@@ -189,6 +325,7 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_record_error = pb_mod.Passivbot._monitor_record_error
         _monitor_emit_stop = pb_mod.Passivbot._monitor_emit_stop
+        _emit_live_event = staticmethod(lambda *args, **kwargs: None)
         _set_log_silence_watchdog_context = pb_mod.Passivbot._set_log_silence_watchdog_context
         _start_log_silence_watchdog = pb_mod.Passivbot._start_log_silence_watchdog
         _stop_log_silence_watchdog = pb_mod.Passivbot._stop_log_silence_watchdog
@@ -480,6 +617,7 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
+    bot._emit_live_event = lambda *args, **kwargs: None
     bot._monitor_emit_stop = lambda *args, **kwargs: order.append(("stop", None))
 
     async def flush_snapshot(*, force=False, ts=None):

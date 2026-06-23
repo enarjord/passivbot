@@ -107,6 +107,27 @@ def test_live_event_context_propagates_ids_without_overwriting_event_values():
         context.with_ids(unknown_id="x")
 
 
+def test_pipeline_context_ids_can_be_updated_between_cycles():
+    sink = ListEventSink()
+    pipeline = LiveEventPipeline(
+        context=LiveEventContext(exchange="gateio", user="gateio_01"),
+        structured_sinks=[sink],
+        routes={EventTypes.CYCLE_STARTED: EventRoute(structured=True, monitor=False)},
+    )
+
+    pipeline.with_context_ids(cycle_id="cy_1")
+    first = pipeline.emit(LiveEvent(EventTypes.CYCLE_STARTED))
+    pipeline.with_context_ids(cycle_id="cy_2", order_wave_id="ow_1")
+    second = pipeline.emit(LiveEvent(EventTypes.CYCLE_STARTED))
+
+    assert first.cycle_id == "cy_1"
+    assert second.cycle_id == "cy_2"
+    assert second.order_wave_id == "ow_1"
+    assert pipeline.flush(timeout=2.0) is True
+    assert [event.cycle_id for event in sink.events] == ["cy_1", "cy_2"]
+    assert pipeline.close(timeout=2.0) is True
+
+
 def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].structured is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].monitor is True

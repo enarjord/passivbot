@@ -408,6 +408,10 @@ class LiveEventPipeline:
     def route_for(self, event: LiveEvent) -> EventRoute:
         return self.routes.get(event.event_type, DEFAULT_ROUTE)
 
+    def with_context_ids(self, **kwargs: str | None) -> LiveEventContext:
+        self.context = self.context.with_ids(**kwargs)
+        return self.context
+
     def emit(
         self,
         event: LiveEvent | Mapping[str, Any],

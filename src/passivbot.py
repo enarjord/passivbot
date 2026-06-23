@@ -58,7 +58,14 @@ from live.data_packets import (
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
-from live.event_bus import LiveEventContext, LiveEventPipeline, MonitorEventSink
+from live.event_bus import (
+    EventTypes,
+    LiveEventContext,
+    LiveEventPipeline,
+    MonitorEventSink,
+    payload_hash,
+)
+import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
 from live.planning_availability import PlanningAvailability
@@ -591,6 +598,15 @@ def compute_live_warmup_windows(
 
 
 class Passivbot:
+    _begin_live_event_cycle = live_event_emitters.begin_live_event_cycle
+    _current_live_event_cycle_id = live_event_emitters.current_live_event_cycle_id
+    _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
+    _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
+    _emit_live_event = live_event_emitters.emit_live_event
+    _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
+    _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
+
     @staticmethod
     def _log_symbol(symbol: Any) -> str:
         """Return a compact operator-facing symbol label for logs only."""
@@ -769,6 +785,8 @@ class Passivbot:
         self._last_action_summary: dict[tuple[str, str], str] = {}
         self._order_wave_seq = 0
         self._order_wave_last_summary_key = None
+        self._live_event_cycle_seq = 0
+        self._live_event_remote_call_seq = 0
         self._active_candle_incomplete_last_log_ms = {}
         self.start_time_ms = utc_ms()
         self.bot_start_exchange_ts = int(self.get_exchange_time())
@@ -3193,6 +3211,18 @@ class Passivbot:
                 },
                 ts=int(self.start_time_ms),
             )
+            self._emit_live_event(
+                EventTypes.BOT_STARTED,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "start"),
+                status="started",
+                data={
+                    "pid": os.getpid(),
+                    "quote": self.quote,
+                    "start_time_ms": int(self.start_time_ms),
+                },
+            )
 
             # Random boot stagger to spread API load when multiple bots start simultaneously.
             # Applies BEFORE init_markets() so even the first API calls are staggered.
@@ -3310,6 +3340,14 @@ class Passivbot:
                 ("bot", "lifecycle", "ready"),
                 {"debug_mode": bool(self.debug_mode)},
                 ts=ready_ts,
+            )
+            self._emit_live_event(
+                EventTypes.BOT_READY,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "ready"),
+                status="succeeded",
+                data={"debug_mode": bool(self.debug_mode)},
             )
             await self._monitor_flush_snapshot(force=True, ts=ready_ts)
             if not self.debug_mode:
@@ -3748,6 +3786,7 @@ class Passivbot:
         )
         return {
             "id": int(self._order_wave_seq),
+            "event_id": f"ow_{int(self._order_wave_seq)}",
             "started_ms": int(utc_ms()),
             "planned_cancel": len(to_cancel or []),
             "planned_create": len(to_create or []),
@@ -3790,6 +3829,11 @@ class Passivbot:
             logging.INFO
             if elapsed_ms >= 1_000 or cancel_posted or create_posted
             else logging.DEBUG
+        )
+        self._emit_order_wave_completed_event(
+            wave,
+            elapsed_ms=elapsed_ms,
+            level=logging.getLevelName(log_level).lower(),
         )
         if log_level == logging.DEBUG and summary_key == getattr(
             self, "_order_wave_last_summary_key", None
@@ -5318,6 +5362,7 @@ class Passivbot:
             try:
                 loop_start_ms = utc_ms()
                 loop_timings_ms: dict[str, int] = {}
+                cycle_id = self._begin_live_event_cycle(loop_start_ms=loop_start_ms)
 
                 def mark_phase(phase: str, started_ms: int) -> None:
                     try:
@@ -5358,6 +5403,15 @@ class Passivbot:
                         self._maybe_log_pending_pnl_authoritative_block(
                             retry_delay_seconds=retry_delay_seconds
                         )
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="pending_pnl_authoritative_refresh",
+                            data={
+                                "retry_count": pending_pnl_authoritative_retry_count,
+                                "retry_delay_seconds": retry_delay_seconds,
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
                         await self._sleep_unless_shutdown(
                             retry_delay_seconds,
                             stage="pending_pnl_authoritative_retry",
@@ -5365,6 +5419,17 @@ class Passivbot:
                     else:
                         pending_pnl_authoritative_retry_count = 0
                         failed_update_pos_oos_pnls_ohlcvs_count += 1
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="authoritative_refresh_unavailable",
+                            data={
+                                "failed_count": failed_update_pos_oos_pnls_ohlcvs_count,
+                                "last_block_reason": getattr(
+                                    self, "_last_authoritative_block_reason", None
+                                ),
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
                         await self._sleep_unless_shutdown(
                             0.5, stage="authoritative_refresh_retry"
                         )
@@ -5393,6 +5458,14 @@ class Passivbot:
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
                 if blocked:
                     self._log_authoritative_execution_barrier(barrier_details)
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="execution_barrier",
+                        data={
+                            "barrier": dict(barrier_details or {}),
+                            "timings_ms": dict(loop_timings_ms),
+                        },
+                    )
                     self._last_loop_duration_ms = utc_ms() - loop_start_ms
                     self._last_loop_timing_ms = dict(loop_timings_ms)
                     self._maybe_log_health_summary()
@@ -5436,6 +5509,11 @@ class Passivbot:
                     raise
                 mark_phase("market_state", phase_start_ms)
                 if not market_ok:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="market_state_unavailable",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     await self._sleep_unless_shutdown(
                         0.5, stage="market_state_retry"
                     )
@@ -5448,6 +5526,14 @@ class Passivbot:
                 )
                 if not staged_ready:
                     self._last_loop_timing_ms = dict(loop_timings_ms)
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="staged_execution_not_ready",
+                        data={
+                            "details": dict(staged_details or {}),
+                            "timings_ms": dict(loop_timings_ms),
+                        },
+                    )
                     await self._defer_staged_execution_cycle(
                         staged_details, loop_start_ms
                     )
@@ -5474,6 +5560,11 @@ class Passivbot:
                     raise
                 mark_phase("execute", phase_start_ms)
                 if self.debug_mode:
+                    self._emit_live_cycle_completed(
+                        cycle_id=cycle_id,
+                        loop_start_ms=loop_start_ms,
+                        timings_ms=loop_timings_ms,
+                    )
                     if getattr(self, "_execution_loop_task", None) is current_task:
                         self._execution_loop_task = None
                     if (
@@ -5496,6 +5587,11 @@ class Passivbot:
                 phase_start_ms = utc_ms()
                 await self._monitor_flush_snapshot()
                 mark_phase("monitor_flush", phase_start_ms)
+                self._emit_live_cycle_completed(
+                    cycle_id=cycle_id,
+                    loop_start_ms=loop_start_ms,
+                    timings_ms=loop_timings_ms,
+                )
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="execution_delay"
                 )
@@ -5834,6 +5930,15 @@ class Passivbot:
         self._shutdown_in_progress = True
         self.stop_signal_received = True
         stop_ts = utc_ms()
+        self._emit_live_event(
+            EventTypes.BOT_STOPPING,
+            level="info",
+            component="lifecycle",
+            tags=("bot", "lifecycle", "stop"),
+            status="started",
+            reason_code="shutdown_gracefully",
+            data={"reason": "shutdown_gracefully"},
+        )
         self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
         logging.info(
             "[shutdown] shutdown requested; closing background tasks and sessions"
@@ -12247,9 +12352,37 @@ class Passivbot:
                 }
             )
 
+        rust_call_id = self._next_live_event_remote_call_id("rust")
+        orchestrator_started_ms = int(utc_ms())
+        input_hash = payload_hash(input_dict)
+        tradable_count = sum(
+            1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
+        )
+        self._emit_live_event(
+            EventTypes.RUST_ORCHESTRATOR_CALLED,
+            level="debug",
+            component="rust_orchestrator",
+            tags=("planning", "rust", "orchestrator"),
+            cycle_id=self._current_live_event_cycle_id(),
+            remote_call_id=rust_call_id,
+            status="started",
+            raw_hash=input_hash,
+            data={
+                "symbol_count": len(input_dict["symbols"]),
+                "tradable_count": int(tradable_count),
+                "ema_unavailable_count": len(ema_unavailable_symbols),
+                "trailing_unavailable_count": len(trailing_unavailable_symbols),
+                "hedge_mode": bool(effective_hedge_mode),
+                "strategy_kind": strategy_kind,
+                "input_hash": input_hash,
+            },
+        )
         try:
-            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+            input_json = json.dumps(input_dict)
+            out_json = pbr.compute_ideal_orders_json(input_json)
+            out = json.loads(out_json)
         except Exception as e:
+            elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
             if "MissingEma" in msg:
                 match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
@@ -12262,8 +12395,47 @@ class Passivbot:
                             Passivbot._log_symbol(symbol),
                             idx,
                         )
+            self._emit_live_event(
+                EventTypes.RUST_ORCHESTRATOR_RETURNED,
+                level="error",
+                component="rust_orchestrator",
+                tags=("planning", "rust", "orchestrator", "error"),
+                cycle_id=self._current_live_event_cycle_id(),
+                remote_call_id=rust_call_id,
+                status="failed",
+                reason_code=type(e).__name__,
+                raw_hash=input_hash,
+                data={
+                    "elapsed_ms": int(elapsed_ms),
+                    "input_hash": input_hash,
+                    "error_type": type(e).__name__,
+                    "error": str(e)[:500],
+                },
+            )
             raise
-        out = json.loads(out_json)
+        elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
+        output_hash = payload_hash(out)
+        orders = out.get("orders", [])
+        diagnostics = out.get("diagnostics", {})
+        self._emit_live_event(
+            EventTypes.RUST_ORCHESTRATOR_RETURNED,
+            level="debug",
+            component="rust_orchestrator",
+            tags=("planning", "rust", "orchestrator"),
+            cycle_id=self._current_live_event_cycle_id(),
+            remote_call_id=rust_call_id,
+            status="succeeded",
+            raw_hash=output_hash,
+            data={
+                "elapsed_ms": int(elapsed_ms),
+                "input_hash": input_hash,
+                "output_hash": output_hash,
+                "order_count": len(orders),
+                "diagnostic_keys": (
+                    sorted(diagnostics) if isinstance(diagnostics, dict) else []
+                ),
+            },
+        )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -14057,7 +14229,6 @@ class Passivbot:
                 idx_to_symbol,
                 mode_overrides,
             )
-        orders = out.get("orders", [])
         if hasattr(self, "_update_monitor_runtime_hints"):
             self._update_monitor_runtime_hints(
                 symbols=symbols,
