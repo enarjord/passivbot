@@ -199,10 +199,8 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
+def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):
     import passivbot as pb_mod
-
-    sink = ListEventSink()
 
     class FakeBot:
         _emit_live_event = pb_mod.Passivbot._emit_live_event
@@ -214,15 +212,22 @@ def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
-            self._live_event_current_cycle_id = "cy_7"
+            self._live_event_current_cycle_id = cycle_id
             self._live_event_remote_call_seq = 0
             self._live_event_remote_call_ids = {}
+            if map_max is not None:
+                self._live_event_remote_call_map_max = map_max
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
             )
 
-    bot = FakeBot()
+    return FakeBot()
+
+
+def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink)
     base = {
         "kind": "ccxt_fetch_ohlcv",
         "exchange": "okx",
@@ -261,6 +266,141 @@ def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
     assert succeeded.data["rows"] == 100
     assert started.data["params"]["apiKey"] == "[redacted]"
     assert bot._live_event_remote_call_seq == 1
+
+
+def test_candle_remote_fetch_error_sanitizes_and_keeps_correlation():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink)
+    base = {
+        "kind": "ccxt_fetch_ohlcv",
+        "exchange": "okx",
+        "symbol": "BTC/USDT:USDT",
+        "tf": "1m",
+        "since_ts": 123000,
+    }
+
+    bot._handle_candle_remote_fetch_event({**base, "stage": "start"})
+    bot._handle_candle_remote_fetch_event(
+        {
+            **base,
+            "stage": "error",
+            "error_type": "AuthError",
+            "error": "token SECRET apiKey=abc Bearer xyz",
+            "error_repr": "Auth(apiKey=SECRET, token=SECRET) " + ("x" * 700),
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, failed = sink.events
+    assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
+    assert failed.remote_call_id == started.remote_call_id
+    assert failed.remote_call_group_id == started.remote_call_group_id
+    assert "SECRET" not in failed.data["error"]
+    assert "abc" not in failed.data["error"]
+    assert "xyz" not in failed.data["error"].lower()
+    assert "SECRET" not in failed.data["error_repr"]
+    assert len(failed.data["error_repr"]) <= 514
+    assert bot._live_event_remote_call_ids == {}
+
+
+def test_candle_remote_fetch_url_is_sanitized_and_hashed():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink, cycle_id=None)
+    url = "https://data.example/archive.zip?apiKey=SECRET&signature=abc#token"
+    base = {
+        "kind": "archive_http_get",
+        "exchange": "binance",
+        "url": url,
+    }
+
+    bot._handle_candle_remote_fetch_event({**base, "stage": "start"})
+    bot._handle_candle_remote_fetch_event(
+        {**base, "stage": "not_found", "status": 404, "elapsed_ms": 12}
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, skipped = sink.events
+    assert skipped.remote_call_id == started.remote_call_id
+    for event in (started, skipped):
+        assert event.data["url"] == "https://data.example/archive.zip?[redacted]#[redacted]"
+        assert event.data["url_hash"]
+        assert len(event.data["url_hash"]) == 64
+        assert "SECRET" not in event.data["url"]
+        assert "signature=abc" not in event.data["url"]
+
+
+def test_archive_prefetch_progress_does_not_consume_remote_call_id():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink)
+    base = {"kind": "archive_prefetch", "exchange": "binance", "symbol": "BTC/USDT"}
+
+    bot._handle_candle_remote_fetch_event({**base, "stage": "start", "days_to_fetch": 3})
+    bot._handle_candle_remote_fetch_event(
+        {**base, "stage": "progress", "completed": 1, "total": 3}
+    )
+    bot._handle_candle_remote_fetch_event({**base, "stage": "done", "fetched": 3})
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert [event.event_type for event in sink.events] == [
+        EventTypes.REMOTE_CALL_STARTED,
+        EventTypes.REMOTE_CALL_SUCCEEDED,
+    ]
+    started, done = sink.events
+    assert done.remote_call_id == started.remote_call_id
+    assert done.remote_call_group_id == started.remote_call_group_id
+    assert bot._live_event_remote_call_seq == 1
+    assert bot._live_event_remote_call_ids == {}
+
+
+def test_orphan_remote_fetch_result_is_marked_without_synthetic_id():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink)
+
+    bot._handle_candle_remote_fetch_event(
+        {
+            "kind": "ccxt_fetch_ohlcv",
+            "stage": "ok",
+            "exchange": "okx",
+            "symbol": "BTC/USDT:USDT",
+            "tf": "1m",
+            "since_ts": 123000,
+            "rows": 1,
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.REMOTE_CALL_SUCCEEDED
+    assert event.remote_call_id is None
+    assert event.remote_call_group_id is None
+    assert event.data["orphan_result"] is True
+    assert bot._live_event_remote_call_seq == 0
+
+
+def test_remote_fetch_correlation_map_is_bounded():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink, map_max=2)
+
+    for idx in range(5):
+        bot._handle_candle_remote_fetch_event(
+            {
+                "kind": "ccxt_fetch_ohlcv",
+                "stage": "start",
+                "exchange": "okx",
+                "symbol": f"SYM{idx}/USDT:USDT",
+                "tf": "1m",
+                "since_ts": idx,
+            }
+        )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert len(bot._live_event_remote_call_ids) == 2
+    assert bot._live_event_remote_call_seq == 5
 
 
 def test_monitor_emit_stop_records_startup_terminal_structured_stopped():

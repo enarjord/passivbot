@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import re
+from urllib.parse import urlsplit, urlunsplit
 from typing import Any
 
 from live.event_bus import EventTypes, LiveEvent, emit_event, utc_ms
@@ -27,6 +30,60 @@ def next_live_event_remote_call_id(bot: Any, prefix: str = "rc") -> str:
     return f"{prefix}_{int(bot._live_event_remote_call_seq)}"
 
 
+_REMOTE_CALL_DEFAULT_MAP_MAX = 2048
+_REMOTE_CALL_PER_KEY_MAX = 8
+_REMOTE_CALL_NONTERMINAL_STAGES = {"progress"}
+_SENSITIVE_VALUE_RE = re.compile(
+    r"(?i)\b(api[-_]?key|apikey|secret|token|signature|password|passphrase|authorization|auth|cookie)"
+    r"(\s*(?:[:=]|\s)\s*)([^\s,;&]+)"
+)
+_AUTH_HEADER_RE = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+
+
+def _sanitize_remote_text(value: Any, *, max_len: int = 500) -> str:
+    text = str(value)
+    text = _SENSITIVE_VALUE_RE.sub(r"\1\2[redacted]", text)
+    text = _AUTH_HEADER_RE.sub(r"\1 [redacted]", text)
+    if len(text) > max_len:
+        text = f"{text[:max_len]}...<truncated>"
+    return text
+
+
+def _sanitize_remote_url(value: Any) -> tuple[str, str | None]:
+    raw = str(value)
+    raw_hash = hashlib.sha256(raw.encode("utf-8")).hexdigest()
+    try:
+        parsed = urlsplit(raw)
+    except Exception:
+        return _sanitize_remote_text(raw, max_len=500), raw_hash
+    if parsed.query or parsed.fragment:
+        sanitized = urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                parsed.path,
+                "[redacted]" if parsed.query else "",
+                "[redacted]" if parsed.fragment else "",
+            )
+        )
+    else:
+        sanitized = raw
+    return _sanitize_remote_text(sanitized, max_len=500), raw_hash
+
+
+def _sanitize_remote_fetch_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    data = dict(payload)
+    for key in ("error", "error_repr"):
+        if data.get(key) is not None:
+            data[key] = _sanitize_remote_text(data[key], max_len=500)
+    if data.get("url") is not None:
+        url, url_hash = _sanitize_remote_url(data["url"])
+        data["url"] = url
+        if url_hash is not None:
+            data["url_hash"] = url_hash
+    return data
+
+
 def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
     return (
         payload.get("kind"),
@@ -37,12 +94,66 @@ def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _remote_call_map_max(bot: Any) -> int:
+    try:
+        raw = getattr(bot, "_live_event_remote_call_map_max", None)
+        if raw is None:
+            return _REMOTE_CALL_DEFAULT_MAP_MAX
+        return max(1, int(raw))
+    except Exception:
+        return _REMOTE_CALL_DEFAULT_MAP_MAX
+
+
+def _remote_call_map_add(
+    bot: Any,
+    call_map: dict[Any, Any],
+    key: tuple[Any, ...],
+    value: tuple[str, str | None],
+) -> None:
+    existing = call_map.get(key)
+    if existing is None:
+        entries: list[tuple[str, str | None]] = []
+    elif isinstance(existing, list):
+        entries = list(existing)
+    else:
+        entries = [existing]
+    entries.append(value)
+    call_map[key] = entries[-_REMOTE_CALL_PER_KEY_MAX:]
+    while len(call_map) > _remote_call_map_max(bot):
+        oldest_key = next(iter(call_map))
+        call_map.pop(oldest_key, None)
+
+
+def _remote_call_map_pop(
+    call_map: dict[Any, Any],
+    key: tuple[Any, ...],
+) -> tuple[str | None, str | None, bool]:
+    existing = call_map.get(key)
+    if existing is None:
+        return None, None, False
+    if isinstance(existing, list):
+        if not existing:
+            call_map.pop(key, None)
+            return None, None, False
+        remote_call_id, remote_call_group_id = existing.pop(0)
+        if existing:
+            call_map[key] = existing
+        else:
+            call_map.pop(key, None)
+        return remote_call_id, remote_call_group_id, True
+    call_map.pop(key, None)
+    remote_call_id, remote_call_group_id = existing
+    return remote_call_id, remote_call_group_id, True
+
+
 def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
     """Translate CandlestickManager remote-fetch callbacks into LiveEvents."""
     if not isinstance(payload, dict):
         return None
     stage = str(payload.get("stage") or "").lower()
     if not stage:
+        return None
+    if stage in _REMOTE_CALL_NONTERMINAL_STAGES:
         return None
     key = _remote_fetch_payload_key(payload)
     call_map = getattr(bot, "_live_event_remote_call_ids", None)
@@ -53,16 +164,14 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
         remote_call_id = next_live_event_remote_call_id(bot, "rcc")
         cycle_id = current_live_event_cycle_id(bot)
         remote_call_group_id = f"{cycle_id}:candles" if cycle_id else None
-        call_map[key] = (remote_call_id, remote_call_group_id)
+        _remote_call_map_add(bot, call_map, key, (remote_call_id, remote_call_group_id))
         event_type = EventTypes.REMOTE_CALL_STARTED
         status = "started"
         level = "debug"
     else:
-        if key in call_map:
-            remote_call_id, remote_call_group_id = call_map.pop(key)
-        else:
-            remote_call_id = next_live_event_remote_call_id(bot, "rcc")
-            remote_call_group_id = None
+        remote_call_id, remote_call_group_id, matched_start = _remote_call_map_pop(
+            call_map, key
+        )
         cycle_id = current_live_event_cycle_id(bot)
         if stage == "error":
             event_type = EventTypes.REMOTE_CALL_FAILED
@@ -76,10 +185,9 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
             event_type = EventTypes.REMOTE_CALL_SUCCEEDED
             status = "skipped" if stage in {"not_found", "missing"} else "succeeded"
             level = "debug"
-    data = dict(payload)
-    error = data.get("error")
-    if error is not None:
-        data["error"] = str(error)[:500]
+    data = _sanitize_remote_fetch_payload(payload)
+    if stage != "start" and not matched_start:
+        data["orphan_result"] = True
     return bot._emit_live_event(
         event_type,
         level=level,

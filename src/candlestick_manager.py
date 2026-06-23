@@ -3934,7 +3934,7 @@ class CandlestickManager:
                         "stage": "error",
                         "exchange": str(self._ex_id),
                         "symbol": symbol,
-                        "tf": str(tf) if tf is not None else None,
+                        "tf": tf_norm,
                         "since_ts": int(since_ms),
                         "attempt": int(attempt + 1),
                         "elapsed_ms": elapsed_ms,

@@ -297,6 +297,25 @@ async def test_get_candles_aborts_when_stop_requested(tmp_path):
         await cm.get_candles("FOO/USDT")
 
 
+def test_remote_fetch_callback_exception_is_isolated(tmp_path):
+    calls = []
+
+    def callback(payload):
+        calls.append(payload)
+        raise RuntimeError("callback failed")
+
+    cm = CandlestickManager(
+        exchange=None,
+        exchange_name="ex",
+        cache_dir=str(tmp_path / "caches"),
+        remote_fetch_callback=callback,
+    )
+
+    cm._emit_remote_fetch({"kind": "ccxt_fetch_ohlcv", "stage": "start"})
+
+    assert calls == [{"kind": "ccxt_fetch_ohlcv", "stage": "start"}]
+
+
 @pytest.mark.asyncio
 async def test_get_candles_range_and_inclusive(tmp_path):
     class _Ex:
