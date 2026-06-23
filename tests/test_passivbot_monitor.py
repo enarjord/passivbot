@@ -331,6 +331,32 @@ def test_candle_remote_fetch_url_is_sanitized_and_hashed():
         assert "signature=abc" not in event.data["url"]
 
 
+def test_candle_remote_fetch_throttled_stage_emits_throttled_event():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink)
+    base = {
+        "kind": "ccxt_fetch_ohlcv",
+        "exchange": "okx",
+        "symbol": "BTC/USDT:USDT",
+        "tf": "1m",
+        "since_ts": 123000,
+    }
+
+    bot._handle_candle_remote_fetch_event({**base, "stage": "start"})
+    bot._handle_candle_remote_fetch_event(
+        {**base, "stage": "rate_limited", "elapsed_ms": 12}
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, throttled = sink.events
+    assert throttled.event_type == EventTypes.REMOTE_CALL_THROTTLED
+    assert throttled.status == "deferred"
+    assert throttled.remote_call_id == started.remote_call_id
+    assert throttled.remote_call_group_id == started.remote_call_group_id
+    assert bot._live_event_remote_call_ids == {}
+
+
 def test_archive_prefetch_progress_does_not_consume_remote_call_id():
     sink = ListEventSink()
     bot = _make_remote_fetch_event_bot(sink)

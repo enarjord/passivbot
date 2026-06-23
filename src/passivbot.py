@@ -830,8 +830,9 @@ class Passivbot:
             "exchange": self.cca,
             "exchange_name": self.exchange,
             "debug": self.logging_level,
-            "remote_fetch_callback": self._handle_candle_remote_fetch_event,
         }
+        if self._live_event_pipeline is not None:
+            cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
         try:
