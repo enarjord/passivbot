@@ -13350,8 +13350,53 @@ class Passivbot:
                 )
             return out
 
+        class MissingCloseEma(RuntimeError):
+            def __init__(
+                self,
+                symbol: str,
+                missing: list[tuple[float, str]],
+                detail: str,
+            ):
+                super().__init__(
+                    f"[ema] missing required close EMA for {symbol}; "
+                    f"no previous EMA fallback available: {detail}"
+                )
+                self.symbol = symbol
+                self.missing = list(missing)
+                self.detail = detail
+
+        def log_missing_close_ema(symbol: str, missing: list[tuple[float, str]]) -> None:
+            max_fallback_age_ms = int(Passivbot._close_ema_fallback_max_age_ms(self))
+            stale = [
+                (sp, why)
+                for sp, why in missing
+                if "previous close EMA stale" in str(why)
+            ]
+            if stale:
+                log_ema_issue(
+                    ("close_fallback_stale", symbol),
+                    required_ema_log_level(symbol),
+                    "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
+                    Passivbot._log_symbol(symbol),
+                    ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
+                    max_fallback_age_ms,
+                    stale[0][1],
+                    ema_candle_health_context(symbol),
+                    interval_ms=60 * 60 * 1000,
+                )
+            else:
+                log_ema_issue(
+                    ("close_missing", symbol),
+                    required_ema_log_level(symbol),
+                    "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
+                    Passivbot._log_symbol(symbol),
+                    ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
+                    ema_candle_health_context(symbol),
+                    interval_ms=60 * 60 * 1000,
+                )
+
         async def fetch_close_map(
-            symbol: str, spans: list[float]
+            symbol: str, spans: list[float], *, log_on_missing: bool = True
         ) -> dict[float, float]:
             out: dict[float, float] = {}
             if not spans:
@@ -13434,36 +13479,9 @@ class Passivbot:
                 detail = "; ".join(
                     [f"span={sp:.8g} reason={why}" for sp, why in missing]
                 )
-                stale = [
-                    (sp, why)
-                    for sp, why in missing
-                    if "previous close EMA stale" in str(why)
-                ]
-                if stale:
-                    log_ema_issue(
-                        ("close_fallback_stale", symbol),
-                        required_ema_log_level(symbol),
-                        "[ema] close EMA fallback stale %s spans=%s max_age_ms=%d action=block_until_fresh reason=%s | %s",
-                        Passivbot._log_symbol(symbol),
-                        ",".join(f"{sp:.8g}" for sp, _why in stale[:8]),
-                        max_fallback_age_ms,
-                        stale[0][1],
-                        ema_candle_health_context(symbol),
-                        interval_ms=60 * 60 * 1000,
-                    )
-                else:
-                    log_ema_issue(
-                        ("close_missing", symbol),
-                        required_ema_log_level(symbol),
-                        "[ema] missing required close EMA %s spans=%s action=block_until_fresh | %s",
-                        Passivbot._log_symbol(symbol),
-                        ",".join(f"{sp:.8g}" for sp, _why in missing[:8]),
-                        ema_candle_health_context(symbol),
-                        interval_ms=60 * 60 * 1000,
-                    )
-                raise RuntimeError(
-                    f"[ema] missing required close EMA for {symbol}; no previous EMA fallback available: {detail}"
-                )
+                if log_on_missing:
+                    log_missing_close_ema(symbol, missing)
+                raise MissingCloseEma(symbol, missing, detail)
             return out
 
         def projected_optional_map(
@@ -13663,10 +13681,13 @@ class Passivbot:
                     )
                 else:
                     try:
-                        close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
-                    except Exception:
+                        close = await fetch_close_map(
+                            sym, sorted(need_close_spans[sym]), log_on_missing=False
+                        )
+                    except MissingCloseEma as exc:
                         late_projection_ctx = refresh_open_tail_projection_context(sym)
                         if late_projection_ctx is None:
+                            log_missing_close_ema(sym, exc.missing)
                             raise
                         close, vol, lr1m = await load_projected_open_tail_bundle(
                             sym,

@@ -985,7 +985,7 @@ async def test_open_tail_projection_precedes_previous_close_ema_fallback():
 
 
 @pytest.mark.asyncio
-async def test_late_open_tail_projection_recovers_required_close_ema():
+async def test_late_open_tail_projection_recovers_required_close_ema(caplog):
     try:
         import passivbot as pb_mod
     except ImportError:
@@ -1004,14 +1004,17 @@ async def test_late_open_tail_projection_recovers_required_close_ema():
     )
     bot.projected_open_tail_called = False
 
-    (
-        m1_close_emas,
-        m1_volume_emas,
-        m1_log_range_emas,
-        _h1_log_range_emas,
-        volumes_long,
-        log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(bot, [symbol], bot.PB_modes)
+    with caplog.at_level(logging.WARNING):
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            _h1_log_range_emas,
+            volumes_long,
+            log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], bot.PB_modes
+        )
 
     assert bot.completed_candle_health_calls >= 2
     assert bot.projected_open_tail_called is True
@@ -1025,6 +1028,10 @@ async def test_late_open_tail_projection_recovers_required_close_ema():
     assert log_ranges_long[symbol] == pytest.approx(0.0015)
     assert bot._orchestrator_close_ema_fallback_counts == {}
     assert bot._orchestrator_ema_projection_details[symbol]["tail_gap_age_ms"] == 60_000
+    warning_messages = [
+        record.message for record in caplog.records if record.levelno >= logging.WARNING
+    ]
+    assert not any("missing required close EMA" in message for message in warning_messages)
 
 
 @pytest.mark.asyncio
