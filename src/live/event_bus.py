@@ -27,6 +27,10 @@ class EventTypes:
     DATA_PACKET_UPDATED = "data_packet.updated"
     SNAPSHOT_BUILT = "snapshot.built"
     PLANNING_UNAVAILABLE = "planning.unavailable"
+    REMOTE_CALL_STARTED = "remote_call.started"
+    REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
+    REMOTE_CALL_FAILED = "remote_call.failed"
+    REMOTE_CALL_THROTTLED = "remote_call.throttled"
     RUST_ORCHESTRATOR_CALLED = "rust_orchestrator.called"
     RUST_ORCHESTRATOR_RETURNED = "rust_orchestrator.returned"
     ORDER_WAVE_COMPLETED = "order_wave.completed"
@@ -44,6 +48,10 @@ PHASE1_EVENT_TYPES = {
     EventTypes.DATA_PACKET_UPDATED,
     EventTypes.SNAPSHOT_BUILT,
     EventTypes.PLANNING_UNAVAILABLE,
+    EventTypes.REMOTE_CALL_STARTED,
+    EventTypes.REMOTE_CALL_SUCCEEDED,
+    EventTypes.REMOTE_CALL_FAILED,
+    EventTypes.REMOTE_CALL_THROTTLED,
     EventTypes.RUST_ORCHESTRATOR_CALLED,
     EventTypes.RUST_ORCHESTRATOR_RETURNED,
     EventTypes.ORDER_WAVE_COMPLETED,
@@ -284,6 +292,10 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.PLANNING_UNAVAILABLE: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),
+    EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
+    EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),
+    EventTypes.REMOTE_CALL_FAILED: EventRoute(console=False),
+    EventTypes.REMOTE_CALL_THROTTLED: EventRoute(console=False),
     EventTypes.RUST_ORCHESTRATOR_CALLED: EventRoute(console=False),
     EventTypes.RUST_ORCHESTRATOR_RETURNED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000

@@ -27,6 +27,74 @@ def next_live_event_remote_call_id(bot: Any, prefix: str = "rc") -> str:
     return f"{prefix}_{int(bot._live_event_remote_call_seq)}"
 
 
+def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
+    return (
+        payload.get("kind"),
+        payload.get("symbol"),
+        payload.get("tf") or payload.get("timeframe"),
+        payload.get("since_ts"),
+        payload.get("url"),
+    )
+
+
+def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
+    """Translate CandlestickManager remote-fetch callbacks into LiveEvents."""
+    if not isinstance(payload, dict):
+        return None
+    stage = str(payload.get("stage") or "").lower()
+    if not stage:
+        return None
+    key = _remote_fetch_payload_key(payload)
+    call_map = getattr(bot, "_live_event_remote_call_ids", None)
+    if not isinstance(call_map, dict):
+        call_map = {}
+        bot._live_event_remote_call_ids = call_map
+    if stage == "start":
+        remote_call_id = next_live_event_remote_call_id(bot, "rcc")
+        cycle_id = current_live_event_cycle_id(bot)
+        remote_call_group_id = f"{cycle_id}:candles" if cycle_id else None
+        call_map[key] = (remote_call_id, remote_call_group_id)
+        event_type = EventTypes.REMOTE_CALL_STARTED
+        status = "started"
+        level = "debug"
+    else:
+        if key in call_map:
+            remote_call_id, remote_call_group_id = call_map.pop(key)
+        else:
+            remote_call_id = next_live_event_remote_call_id(bot, "rcc")
+            remote_call_group_id = None
+        cycle_id = current_live_event_cycle_id(bot)
+        if stage == "error":
+            event_type = EventTypes.REMOTE_CALL_FAILED
+            status = "failed"
+            level = "warning"
+        elif stage in {"throttled", "rate_limited"}:
+            event_type = EventTypes.REMOTE_CALL_THROTTLED
+            status = "deferred"
+            level = "debug"
+        else:
+            event_type = EventTypes.REMOTE_CALL_SUCCEEDED
+            status = "skipped" if stage in {"not_found", "missing"} else "succeeded"
+            level = "debug"
+    data = dict(payload)
+    error = data.get("error")
+    if error is not None:
+        data["error"] = str(error)[:500]
+    return bot._emit_live_event(
+        event_type,
+        level=level,
+        component="candles.remote_fetch",
+        tags=("remote_call", "candle"),
+        cycle_id=cycle_id,
+        remote_call_id=remote_call_id,
+        remote_call_group_id=remote_call_group_id,
+        symbol=str(payload.get("symbol")) if payload.get("symbol") is not None else None,
+        status=status,
+        reason_code=str(payload.get("kind") or "remote_fetch"),
+        data=data,
+    )
+
+
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
     bot._live_event_cycle_seq = int(getattr(bot, "_live_event_cycle_seq", 0) or 0) + 1
     cycle_id = f"cy_{int(bot._live_event_cycle_seq)}"

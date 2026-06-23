@@ -199,6 +199,70 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _handle_candle_remote_fetch_event = (
+            pb_mod.Passivbot._handle_candle_remote_fetch_event
+        )
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_7"
+            self._live_event_remote_call_seq = 0
+            self._live_event_remote_call_ids = {}
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    base = {
+        "kind": "ccxt_fetch_ohlcv",
+        "exchange": "okx",
+        "symbol": "BTC/USDT:USDT",
+        "tf": "1m",
+        "since_ts": 123000,
+    }
+
+    bot._handle_candle_remote_fetch_event(
+        {**base, "stage": "start", "limit": 100, "params": {"apiKey": "secret"}}
+    )
+    bot._handle_candle_remote_fetch_event(
+        {
+            **base,
+            "stage": "ok",
+            "rows": 100,
+            "first_ts": 123000,
+            "last_ts": 183000,
+            "elapsed_ms": 42,
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert [event.event_type for event in sink.events] == [
+        EventTypes.REMOTE_CALL_STARTED,
+        EventTypes.REMOTE_CALL_SUCCEEDED,
+    ]
+    started, succeeded = sink.events
+    assert started.remote_call_id == succeeded.remote_call_id
+    assert started.remote_call_group_id == "cy_7:candles"
+    assert succeeded.remote_call_group_id == "cy_7:candles"
+    assert started.cycle_id == "cy_7"
+    assert succeeded.cycle_id == "cy_7"
+    assert started.symbol == "BTC/USDT:USDT"
+    assert succeeded.data["rows"] == 100
+    assert started.data["params"]["apiKey"] == "[redacted]"
+    assert bot._live_event_remote_call_seq == 1
+
+
 def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
     import passivbot as pb_mod
 

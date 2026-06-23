@@ -604,6 +604,7 @@ class Passivbot:
     _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
     _emit_live_event = live_event_emitters.emit_live_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
 
@@ -787,6 +788,7 @@ class Passivbot:
         self._order_wave_last_summary_key = None
         self._live_event_cycle_seq = 0
         self._live_event_remote_call_seq = 0
+        self._live_event_remote_call_ids = {}
         self._active_candle_incomplete_last_log_ms = {}
         self.start_time_ms = utc_ms()
         self.bot_start_exchange_ts = int(self.get_exchange_time())
@@ -828,6 +830,7 @@ class Passivbot:
             "exchange": self.cca,
             "exchange_name": self.exchange,
             "debug": self.logging_level,
+            "remote_fetch_callback": self._handle_candle_remote_fetch_event,
         }
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
