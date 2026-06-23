@@ -4,10 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
-- Fixed live forager EMA readiness for flat approved-universe symbols: missing
-  close/required EMA data now marks the flat symbol nontradable for that
-  planning cycle instead of restarting the execution loop, while explicit
-  normal symbols and held/open-order symbols remain fail-loud.
+- Fixed live forager EMA readiness for flat approved-universe and transient
+  forager-selected symbols: missing close/required EMA data now marks the flat
+  symbol nontradable for that planning cycle instead of restarting the execution
+  loop, while explicit normal symbols and held/open-order symbols remain
+  fail-loud.
 - Fixed two live restart/minute-boundary edge cases: required 1m log-range EMA
   loads now retry bounded open-tail projection when a fresh one-candle tail
   appears after projection precompute without clearing candidate-only forager

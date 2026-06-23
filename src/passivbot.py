@@ -12780,7 +12780,6 @@ class Passivbot:
 
         def has_explicit_normal_planning_mode(symbol: str) -> bool:
             """Return True when config/runtime state explicitly selected normal."""
-            pb_modes = getattr(self, "PB_modes", {})
             for pside in ("long", "short"):
                 explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
                 if explicit_mode is not None:
@@ -12792,6 +12791,10 @@ class Passivbot:
                     ):
                         return True
                     continue
+            if bool(is_forager_mode()):
+                return False
+            pb_modes = getattr(self, "PB_modes", {})
+            for pside in ("long", "short"):
                 pside_modes = (
                     pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
                 )
