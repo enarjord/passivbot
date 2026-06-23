@@ -566,23 +566,59 @@ Reasoning:
 - Phase boundaries let reviewers verify that observability does not silently
   change execution behavior or add unacceptable VPS load.
 
-## Open Questions
+## Settled Design Decisions
 
-1. Should raw Rust input/output payload capture be enabled by default with short
-   retention, or only under explicit debug mode?
-2. Should raw exchange payload capture ever be allowed outside targeted debug
-   sessions, given secret/disk risk?
-3. Should the structured event sink reuse monitor event directories as the
-   canonical file sink, or write a new `events/` tree while the monitor migrates?
-   Recommendation: reuse monitor storage and evolve its schema with
-   compatibility.
-4. Should the event writer use a dedicated thread or asyncio background task?
-   Recommendation: dedicated thread with bounded queue, because logging must
-   keep draining even when the event loop is busy.
-5. What is the default disk budget per bot on a 1 vCPU VPS? This should set
-   rotation/retention defaults before TRACE/raw-ref features are enabled.
-6. How much of the existing stdlib logging should be migrated? Recommendation:
-   migrate meaningful decision/action logs, bridge the rest temporarily, and do
-   not spend time converting low-value maintenance noise.
-7. Should the first implementation include a replay CLI, or wait until Phase 2
-   once remote-call and cache events exist?
+These decisions should guide the first implementation unless later live evidence
+forces a revision.
+
+1. Implement the pipeline in a new live logging module or package, not inside
+   `passivbot.py`. The intended first home is `src/live/event_bus.py` or a small
+   `src/live/logging/` package if the sink/router split grows.
+2. Console output is a sink fed from the structured event stream. Aside from
+   early startup/bootstrap messages, default console text should not contain
+   material that is absent from the event stream.
+3. Console output is operator-facing and trading-focused. It should hide
+   internal technical detail by default and emphasize fills, position changes,
+   balance changes, order create/cancel results, HSL/WEL/TWEL/unstuck
+   transitions, staged entries blocked by high-level gates, trailing orders
+   waiting for threshold/retracement, and compact health summaries.
+4. EMA, candle, and forager internals belong in structured events. Console INFO
+   should summarize only user-relevant effects, such as entries deferred,
+   forager unavailable counts, stale market data, or degraded readiness. Per-span
+   EMA diagnostics are DEBUG/TRACE material.
+5. Raw Rust input/output payloads default to summary plus hash. Full redacted raw
+   refs are enabled only by explicit DEBUG/targeted diagnostic policy with short
+   retention.
+6. Raw exchange payloads are never default-on. They are allowed only in targeted
+   DEBUG/TRACE sessions with strict redaction, byte caps, and short retention.
+   Default events keep hashes and bounded summaries.
+7. Reuse and evolve monitor storage as the canonical structured sink instead of
+   creating a parallel `events/` tree. Monitor snapshots remain projections of
+   the structured event stream.
+8. Use a dedicated writer thread with a bounded queue. Sink failure or overflow
+   emits `sink.degraded` and drop counters but must not change trading behavior.
+9. Conservative default disk budgets per bot on a small VPS:
+   - structured event stream: roughly 100-250 MB
+   - human text projection: roughly 25-50 MB
+   - raw payload refs: disabled by default; when enabled, roughly 50-100 MB with
+     short retention
+   These limits should be configurable.
+10. Migrate meaningful decision/action stdlib logs first: lifecycle, cycle
+    summary, Rust planning, reconciliation, order lifecycle, fills, positions,
+    balance, HSL/WEL/TWEL/unstuck, forager selection summaries, and
+    blocking/degraded states. Bridge remaining stdlib logs temporarily and avoid
+    churn on low-value maintenance chatter.
+11. Phase 1 should include only a minimal event validator/query helper that can
+    validate rotated NDJSON and reconstruct a single `cycle_id` chain. A richer
+    replay CLI should wait until remote-call and cache instrumentation exist.
+12. Gatekeeper diagnostics should be one producer in the same event pipeline, not
+    a separate logging system. Console shows gate decisions that affect
+    execution; structured events retain the full reason tree within volume
+    policy.
+13. Add a compact `live.logging` config surface eventually. Phase 1 may use
+    conservative defaults and environment overrides to avoid schema churn.
+    Durable knobs should include level, structured retention, console verbosity,
+    raw payload policy, redaction mode, and queue size.
+14. Event emission is behavior-neutral. Logging failures may degrade
+    observability, but they must not block order execution, alter risk decisions,
+    or become a trading control plane.
