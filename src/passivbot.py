@@ -13662,9 +13662,21 @@ class Passivbot:
                         requested_m1_lr_spans,
                     )
                 else:
-                    close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
-                    vol = None
-                    lr1m = None
+                    try:
+                        close = await fetch_close_map(sym, sorted(need_close_spans[sym]))
+                    except Exception:
+                        late_projection_ctx = refresh_open_tail_projection_context(sym)
+                        if late_projection_ctx is None:
+                            raise
+                        close, vol, lr1m = await load_projected_open_tail_bundle(
+                            sym,
+                            late_projection_ctx,
+                            required_m1_lr_for_symbol,
+                            requested_m1_lr_spans,
+                        )
+                    else:
+                        vol = None
+                        lr1m = None
                 Passivbot._raise_if_shutdown_requested(self, "orchestrator_ema_bundle")
                 h1 = await fetch_required_map(
                     sym, sorted(need_h1_lr_spans[sym]), ema_lr_1h, "h1_log_range"
