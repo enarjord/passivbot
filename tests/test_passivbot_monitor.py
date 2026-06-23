@@ -7,6 +7,8 @@ import numpy as np
 
 import pytest
 
+from live.event_bus import EventTypes
+
 
 class RecorderPublisher:
     def __init__(self):
@@ -193,6 +195,9 @@ async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypat
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
         _raise_if_shutdown_requested = pb_mod.Passivbot._raise_if_shutdown_requested
         _sleep_unless_shutdown = pb_mod.Passivbot._sleep_unless_shutdown
+        _startup_exception_is_terminal = staticmethod(
+            pb_mod.Passivbot._startup_exception_is_terminal
+        )
 
         def __init__(self):
             self.monitor_publisher = RecorderPublisher()
@@ -381,6 +386,120 @@ def test_monitor_handle_candlestick_persist_requires_ready_bot():
     assert entry["timeframe"] == "1m"
     assert entry["candles"][0]["ts"] == 60_000
     assert entry["candles"][1]["bv"] == pytest.approx(11.0)
+
+
+def test_live_event_pipeline_install_routes_diagnostics_to_monitor_projection():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _install_live_event_pipeline = pb_mod.Passivbot._install_live_event_pipeline
+        _close_live_event_pipeline = pb_mod.Passivbot._close_live_event_pipeline
+
+        def __init__(self):
+            self.monitor_publisher = RecorderPublisher()
+            self._live_event_pipeline = None
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+
+        def config_get(self, keys):
+            return self.user
+
+    bot = FakeBot()
+    pipeline = bot._install_live_event_pipeline()
+
+    emitted = pb_mod.emit_diagnostic_event(
+        bot,
+        pb_mod.DiagnosticEvent.build(
+            "planning_unavailable",
+            ("diagnostic", "planning"),
+            {"cycle_id": 7, "defer_reason": "stale_ema", "apiKey": "secret"},
+            ts_ms=1234,
+            symbol="BTC/USDT:USDT",
+            pside="long",
+        ),
+    )
+
+    assert emitted.event_type == EventTypes.PLANNING_UNAVAILABLE
+    assert pipeline.flush(timeout=2.0) is True
+    event = bot.monitor_publisher.events[-1]
+    assert event["kind"] == EventTypes.PLANNING_UNAVAILABLE
+    assert event["symbol"] == "BTC/USDT:USDT"
+    assert event["pside"] == "long"
+    assert event["payload"]["cycle_id"] == 7
+    assert event["payload"]["defer_reason"] == "stale_ema"
+    assert event["payload"]["apiKey"] == "[redacted]"
+    live_event = event["payload"]["_live_event"]
+    assert live_event["event_type"] == EventTypes.PLANNING_UNAVAILABLE
+    assert live_event["ids"]["bot_id"] == "bot_1"
+    assert live_event["data"]["apiKey"] == "[redacted]"
+    assert bot._close_live_event_pipeline(timeout=2.0) is True
+    assert bot._live_event_pipeline is None
+
+
+def test_close_live_event_pipeline_is_best_effort_and_clears_reference():
+    import passivbot as pb_mod
+
+    class FakePipeline:
+        def __init__(self):
+            self.closed_with = None
+
+        def close(self, timeout):
+            self.closed_with = timeout
+            return True
+
+    class FakeBot:
+        _close_live_event_pipeline = pb_mod.Passivbot._close_live_event_pipeline
+
+        def __init__(self):
+            self._live_event_pipeline = FakePipeline()
+
+    bot = FakeBot()
+    pipeline = bot._live_event_pipeline
+
+    assert bot._close_live_event_pipeline(timeout=1.25) is True
+    assert pipeline.closed_with == 1.25
+    assert bot._live_event_pipeline is None
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publisher():
+    import passivbot as pb_mod
+
+    order = []
+
+    class FakePipeline:
+        def close(self, timeout):
+            order.append(("pipeline", timeout))
+            return True
+
+    class FakePublisher:
+        def close(self):
+            order.append(("publisher", None))
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._monitor_emit_stop = lambda *args, **kwargs: order.append(("stop", None))
+
+    async def flush_snapshot(*, force=False, ts=None):
+        order.append(("snapshot", force))
+        return True
+
+    bot._monitor_flush_snapshot = flush_snapshot
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = None
+    bot._execution_loop_stopped = None
+    bot.ccp = None
+    bot.cca = None
+    bot._live_event_pipeline = FakePipeline()
+    bot.monitor_publisher = FakePublisher()
+
+    await bot.shutdown_gracefully()
+
+    assert order[-3:] == [("snapshot", True), ("pipeline", 2.0), ("publisher", None)]
+    assert bot._live_event_pipeline is None
 
 
 @pytest.mark.asyncio

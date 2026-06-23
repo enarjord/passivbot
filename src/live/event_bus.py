@@ -195,7 +195,8 @@ class LiveEvent:
         return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
 
     def to_monitor_event(self) -> tuple[str, tuple[str, ...], dict[str, Any]]:
-        payload = {
+        payload = dict(self.data)
+        payload["_live_event"] = {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
             "event_type": self.event_type,

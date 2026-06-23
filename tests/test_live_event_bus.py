@@ -231,8 +231,9 @@ def test_monitor_sink_preserves_current_monitor_record_event_contract():
     assert result["symbol"] == "BTC/USDT:USDT"
     assert result["pside"] == "long"
     assert result["ts"] == 12345
-    assert result["payload"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
-    assert result["payload"]["data"] == {"reason": "stale_ema"}
+    assert result["payload"]["reason"] == "stale_ema"
+    assert result["payload"]["_live_event"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
+    assert result["payload"]["_live_event"]["data"] == {"reason": "stale_ema"}
 
 
 def test_diagnostic_event_uses_pipeline_when_available_and_legacy_when_absent():
@@ -336,10 +337,12 @@ def test_monitor_event_sink_writes_real_monitor_event_stream(tmp_path):
     assert rows[0]["kind"] == EventTypes.PLANNING_UNAVAILABLE
     assert rows[0]["symbol"] == "ETH/USDT:USDT"
     assert rows[0]["pside"] == "long"
-    assert rows[0]["payload"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
-    assert rows[0]["payload"]["ids"]["cycle_id"] == "cy_1"
-    assert rows[0]["payload"]["reason_code"] == "stale_ema"
-    assert rows[0]["payload"]["data"]["apiKey"] == REDACTED
+    assert rows[0]["payload"]["age_ms"] == 300_000
+    assert rows[0]["payload"]["apiKey"] == REDACTED
+    assert rows[0]["payload"]["_live_event"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
+    assert rows[0]["payload"]["_live_event"]["ids"]["cycle_id"] == "cy_1"
+    assert rows[0]["payload"]["_live_event"]["reason_code"] == "stale_ema"
+    assert rows[0]["payload"]["_live_event"]["data"]["apiKey"] == REDACTED
 
 
 def test_cycle_events_are_reconstructable_by_cycle_id():

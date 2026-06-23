@@ -58,6 +58,7 @@ from live.data_packets import (
 )
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
+from live.event_bus import LiveEventContext, LiveEventPipeline, MonitorEventSink
 from monitor_publisher import MonitorPublisher
 from live.market_snapshot import MarketSnapshot, MarketSnapshotProvider
 from live.planning_availability import PlanningAvailability
@@ -778,6 +779,7 @@ class Passivbot:
         self._monitor_last_equity = float(self.balance_raw)
         self._monitor_stop_emitted = False
         self.monitor_publisher: Optional[MonitorPublisher] = None
+        self._live_event_pipeline: Optional[LiveEventPipeline] = None
         self.monitor_enabled = bool(
             get_optional_config_value(config, "monitor.enabled", False)
         )
@@ -793,6 +795,15 @@ class Passivbot:
                     "[monitor] failed to initialize monitor publisher: %s", exc
                 )
                 self.monitor_publisher = None
+                self._live_event_pipeline = None
+            if self.monitor_publisher is not None:
+                try:
+                    self._install_live_event_pipeline()
+                except Exception as exc:
+                    logging.warning(
+                        "[monitor] live event pipeline disabled: %s", exc
+                    )
+                    self._live_event_pipeline = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {
@@ -5784,6 +5795,39 @@ class Passivbot:
                     )
                 )
 
+    def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
+        publisher = getattr(self, "monitor_publisher", None)
+        if publisher is None:
+            return None
+        existing = getattr(self, "_live_event_pipeline", None)
+        if existing is not None:
+            return existing
+        pipeline = LiveEventPipeline(
+            context=LiveEventContext(
+                exchange=getattr(self, "exchange", None),
+                user=getattr(self, "user", None),
+                bot_id=getattr(self, "bot_id", None),
+            ),
+            monitor_sinks=[MonitorEventSink(publisher)],
+        )
+        self._live_event_pipeline = pipeline
+        return pipeline
+
+    def _close_live_event_pipeline(self, *, timeout: float = 2.0) -> bool:
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        if pipeline is None:
+            return True
+        try:
+            closed = bool(pipeline.close(timeout=float(timeout)))
+            if not closed:
+                logging.warning("[monitor] live event pipeline close timed out")
+            return closed
+        except Exception as exc:
+            logging.warning("[monitor] live event pipeline close failed: %s", exc)
+            return False
+        finally:
+            self._live_event_pipeline = None
+
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
             return
@@ -5898,6 +5942,7 @@ class Passivbot:
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+        self._close_live_event_pipeline(timeout=2.0)
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             publisher.close()
@@ -15676,6 +15721,7 @@ class Passivbot:
         await self.cca.close()
         if self.ccp is not None:
             await self.ccp.close()
+        self._close_live_event_pipeline(timeout=2.0)
 
     def add_to_coins_lists(self, content, k_coins, log_psides=None):
         """Update approved/ignored coin sets from configuration content."""
