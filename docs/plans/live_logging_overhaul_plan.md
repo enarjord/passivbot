@@ -481,6 +481,11 @@ After the event bus exists.
 Milestone 1 should be a unified local event stream, not a broad conversion of
 all logging call sites.
 
+Companion pre-implementation docs:
+
+- `docs/plans/live_logging_phase0_phase1_spec.md`
+- `docs/plans/live_logging_migration_audit.md`
+
 Scope:
 
 - `LiveEvent`
