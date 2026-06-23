@@ -1,5 +1,6 @@
 import json
 import logging
+import queue
 import threading
 import time
 
@@ -298,6 +299,56 @@ def test_pipeline_rejects_new_async_events_after_close_begins():
         is None
     )
     assert pipeline.degraded_events[-1].reason_code == "pipeline_closing"
+
+
+def test_pipeline_close_waits_for_in_flight_enqueue_before_sentinel():
+    class BlockingQueue(queue.Queue):
+        def __init__(self):
+            super().__init__(maxsize=10)
+            self.entered_put_nowait = threading.Event()
+            self.release_put_nowait = threading.Event()
+
+        def put_nowait(self, item):
+            if isinstance(item, LiveEvent):
+                self.entered_put_nowait.set()
+                assert self.release_put_nowait.wait(timeout=2.0)
+            return super().put_nowait(item)
+
+    sink = ListEventSink()
+    blocking_queue = BlockingQueue()
+    pipeline = LiveEventPipeline(
+        start=False,
+        structured_sinks=[sink],
+        routes={EventTypes.DATA_PACKET_UPDATED: EventRoute(structured=True, monitor=False)},
+    )
+    pipeline._queue = blocking_queue
+    pipeline.start()
+
+    emit_result = {}
+    close_result = {}
+
+    def emit_event():
+        emit_result["event"] = pipeline.emit(
+            LiveEvent(EventTypes.DATA_PACKET_UPDATED),
+            require_enqueue=True,
+        )
+
+    emitter = threading.Thread(target=emit_event)
+    emitter.start()
+    assert blocking_queue.entered_put_nowait.wait(timeout=2.0)
+
+    closer = threading.Thread(target=lambda: close_result.update(ok=pipeline.close(timeout=2.0)))
+    closer.start()
+    time.sleep(0.05)
+    blocking_queue.release_put_nowait.set()
+
+    emitter.join(timeout=2.0)
+    closer.join(timeout=2.0)
+
+    assert close_result["ok"] is True
+    assert emit_result["event"].event_type == EventTypes.DATA_PACKET_UPDATED
+    assert [event.event_type for event in sink.events] == [EventTypes.DATA_PACKET_UPDATED]
+    assert blocking_queue.unfinished_tasks == 0
 
 
 def test_monitor_sink_preserves_current_monitor_record_event_contract():

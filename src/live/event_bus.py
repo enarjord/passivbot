@@ -389,6 +389,7 @@ class LiveEventPipeline:
         self.degraded_events: deque[LiveEvent] = deque(maxlen=1_000)
         self._queue: queue.Queue[LiveEvent | None] = queue.Queue(maxsize=queue_maxsize)
         self._stop = threading.Event()
+        self._enqueue_lock = threading.RLock()
         self._state_lock = threading.RLock()
         self._worker: threading.Thread | None = None
         if start:
@@ -428,27 +429,28 @@ class LiveEventPipeline:
             self._write_sink("text", self.text_sink, live_event)
         enqueued = True
         if route.structured or route.monitor:
-            if self._stop.is_set():
-                enqueued = False
-                with self._state_lock:
-                    self.drop_counters[live_event.event_type] += 1
-                self._record_degraded(
-                    reason_code="pipeline_closing",
-                    message=f"live event pipeline closing; dropped {live_event.event_type}",
-                    data={"dropped_event_type": live_event.event_type},
-                )
-            else:
-                try:
-                    self._queue.put_nowait(live_event)
-                except queue.Full:
+            with self._enqueue_lock:
+                if self._stop.is_set():
                     enqueued = False
                     with self._state_lock:
                         self.drop_counters[live_event.event_type] += 1
                     self._record_degraded(
-                        reason_code="queue_full",
-                        message=f"live event queue full; dropped {live_event.event_type}",
+                        reason_code="pipeline_closing",
+                        message=f"live event pipeline closing; dropped {live_event.event_type}",
                         data={"dropped_event_type": live_event.event_type},
                     )
+                else:
+                    try:
+                        self._queue.put_nowait(live_event)
+                    except queue.Full:
+                        enqueued = False
+                        with self._state_lock:
+                            self.drop_counters[live_event.event_type] += 1
+                        self._record_degraded(
+                            reason_code="queue_full",
+                            message=f"live event queue full; dropped {live_event.event_type}",
+                            data={"dropped_event_type": live_event.event_type},
+                        )
         if require_enqueue and not enqueued:
             return None
         return live_event
@@ -463,15 +465,20 @@ class LiveEventPipeline:
 
     def close(self, timeout: float = 2.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)
-        self._stop.set()
+        with self._enqueue_lock:
+            self._stop.set()
         if self._worker is None:
             return self.flush(timeout=max(0.0, deadline - time.monotonic()))
         sentinel_queued = False
         while time.monotonic() < deadline:
             try:
-                self._queue.put(None, timeout=min(0.05, max(0.0, deadline - time.monotonic())))
-                sentinel_queued = True
-                break
+                with self._enqueue_lock:
+                    self._queue.put(
+                        None,
+                        timeout=min(0.05, max(0.0, deadline - time.monotonic())),
+                    )
+                    sentinel_queued = True
+                    break
             except queue.Full:
                 continue
         if not sentinel_queued:
