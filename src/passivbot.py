@@ -5723,6 +5723,12 @@ class Passivbot:
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=False
                 ):
+                    if getattr(self, "_live_event_current_cycle_id", None) == cycle_id:
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="execution_loop_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                     break
             except FillHistoryCoverageUnavailable as e:
                 if self._shutdown_requested():
@@ -6156,15 +6162,17 @@ class Passivbot:
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
-        self._emit_live_event(
-            EventTypes.BOT_STOPPED,
-            level="info",
-            component="lifecycle",
-            tags=("bot", "lifecycle", "stop"),
-            status="succeeded",
-            reason_code="shutdown_gracefully",
-            data={"reason": "shutdown_gracefully"},
-        )
+        if not getattr(self, "_live_event_bot_stopped_emitted", False):
+            self._emit_live_event(
+                EventTypes.BOT_STOPPED,
+                level="info",
+                component="lifecycle",
+                tags=("bot", "lifecycle", "stop"),
+                status="succeeded",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully"},
+            )
+            self._live_event_bot_stopped_emitted = True
         self._close_live_event_pipeline(timeout=2.0)
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:

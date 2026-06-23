@@ -523,6 +523,47 @@ def test_console_format_is_compact_and_operator_facing():
     assert format_console_event(event) == expected
 
 
+def test_route_throttle_applies_only_to_console_and_text_sinks():
+    structured = ListEventSink()
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[structured],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+        routes={
+            EventTypes.CYCLE_STARTED: EventRoute(
+                structured=True,
+                monitor=False,
+                console=True,
+                text=True,
+                throttle_interval_ms=60_000,
+            )
+        },
+    )
+
+    for ts_ms in (1_000, 2_000, 61_000):
+        pipeline.emit(
+            LiveEvent(
+                EventTypes.CYCLE_STARTED,
+                status="started",
+                cycle_id=f"cy_{ts_ms}",
+                ts_ms=ts_ms,
+            )
+        )
+
+    assert pipeline.flush(timeout=2.0) is True
+    assert pipeline.close(timeout=2.0) is True
+    assert [event.cycle_id for event in structured.events] == [
+        "cy_1000",
+        "cy_2000",
+        "cy_61000",
+    ]
+    assert [event.cycle_id for event in console.events] == ["cy_1000", "cy_61000"]
+    assert [event.cycle_id for event in text.events] == ["cy_1000", "cy_61000"]
+
+
 def test_monitor_event_sink_writes_real_monitor_event_stream(tmp_path):
     publisher = _make_monitor_publisher(tmp_path)
     pipeline = LiveEventPipeline(

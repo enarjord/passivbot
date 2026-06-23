@@ -392,6 +392,7 @@ class LiveEventPipeline:
         self.drop_counters: Counter[str] = Counter()
         self.sink_error_counters: Counter[str] = Counter()
         self.degraded_events: deque[LiveEvent] = deque(maxlen=1_000)
+        self._throttle_last_emit_ms: dict[tuple[str, str], int] = {}
         self._queue: queue.Queue[LiveEvent | None] = queue.Queue(maxsize=queue_maxsize)
         self._stop = threading.Event()
         self._enqueue_lock = threading.RLock()
@@ -432,9 +433,17 @@ class LiveEventPipeline:
             live_event = replace(live_event, **overrides)
         live_event = live_event.with_context(self.context)
         route = self.route_for(live_event)
-        if route.console and self.console_sink is not None:
+        if (
+            route.console
+            and self.console_sink is not None
+            and self._should_emit_throttled_sink("console", live_event, route)
+        ):
             self._write_sink("console", self.console_sink, live_event)
-        if route.text and self.text_sink is not None:
+        if (
+            route.text
+            and self.text_sink is not None
+            and self._should_emit_throttled_sink("text", live_event, route)
+        ):
             self._write_sink("text", self.text_sink, live_event)
         enqueued = True
         if route.structured or route.monitor:
@@ -463,6 +472,21 @@ class LiveEventPipeline:
         if require_enqueue and not enqueued:
             return None
         return live_event
+
+    def _should_emit_throttled_sink(
+        self, sink_name: str, event: LiveEvent, route: EventRoute
+    ) -> bool:
+        interval_ms = int(route.throttle_interval_ms or 0)
+        if interval_ms <= 0:
+            return True
+        key = (str(sink_name), event.event_type)
+        now_ms = int(event.ts_ms)
+        with self._state_lock:
+            last_ms = self._throttle_last_emit_ms.get(key)
+            if last_ms is not None and now_ms - int(last_ms) < interval_ms:
+                return False
+            self._throttle_last_emit_ms[key] = now_ms
+        return True
 
     def flush(self, timeout: float = 2.0) -> bool:
         deadline = time.monotonic() + max(0.0, timeout)

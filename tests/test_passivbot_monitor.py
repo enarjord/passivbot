@@ -199,7 +199,7 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_monitor_emit_stop_records_legacy_stop_without_structured_stopped():
+def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -226,7 +226,12 @@ def test_monitor_emit_stop_records_legacy_stop_without_structured_stopped():
 
     assert bot.monitor_publisher.events[-1]["kind"] == "bot.stop"
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
-    assert sink.events == []
+    assert [event.event_type for event in sink.events] == [EventTypes.BOT_STOPPED]
+    event = sink.events[0]
+    assert event.status == "failed"
+    assert event.reason_code == "startup_error"
+    assert event.data["reason"] == "startup_error"
+    assert event.data["stage"] == "init_markets"
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
