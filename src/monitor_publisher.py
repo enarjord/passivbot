@@ -5,7 +5,9 @@ import errno
 import json
 import logging
 import os
+import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Optional
@@ -29,13 +31,28 @@ def _json_default(value: Any) -> Any:
 
 def _atomic_write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp_path = path.with_suffix(path.suffix + ".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as f:
-        json.dump(payload, f, separators=(",", ":"), sort_keys=True, default=_json_default)
-        f.write("\n")
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp_path, path)
+    tmp_path = path.with_name(
+        f"{path.name}.{os.getpid()}.{threading.get_ident()}.{uuid.uuid4().hex}.tmp"
+    )
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(
+                payload,
+                f,
+                separators=(",", ":"),
+                sort_keys=True,
+                default=_json_default,
+            )
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp_path, path)
+    finally:
+        try:
+            if tmp_path.exists():
+                tmp_path.unlink()
+        except FileNotFoundError:
+            pass
 
 
 def _is_disk_full_error(exc: BaseException) -> bool:
@@ -102,6 +119,7 @@ class MonitorPublisher:
         self._last_candle_ts_by_key: dict[tuple[str, str], int] = {}
         self._disk_full_last_log_ms = 0
         self._disk_full_suppressed = 0
+        self._lock = threading.RLock()
         self.seq = 0
         self._ensure_layout()
         self._load_manifest_state()
@@ -224,10 +242,11 @@ class MonitorPublisher:
         }
 
     def _write_manifest(self, now_ms: Optional[int] = None) -> None:
-        try:
-            _atomic_write_json(self.manifest_path, self._build_manifest(now_ms=now_ms))
-        except Exception as exc:
-            self._log_write_failure("writing manifest", exc)
+        with self._lock:
+            try:
+                _atomic_write_json(self.manifest_path, self._build_manifest(now_ms=now_ms))
+            except Exception as exc:
+                self._log_write_failure("writing manifest", exc)
 
     def _log_write_failure(self, action: str, exc: BaseException) -> None:
         if not _is_disk_full_error(exc):
@@ -276,72 +295,88 @@ class MonitorPublisher:
         return sorted(files, key=lambda path: path.stat().st_mtime)
 
     def _prune_retention(self, now_ms: Optional[int] = None) -> None:
-        now_ms = self._now_ms() if now_ms is None else int(now_ms)
-        if self.last_retention_ms and now_ms - self.last_retention_ms < 60_000:
-            return
-        self.last_retention_ms = now_ms
-        try:
-            cutoff_ms = now_ms - int(self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0)
-            if self.retain_days >= 0.0:
-                for path in list(self._rotatable_files()):
+        with self._lock:
+            now_ms = self._now_ms() if now_ms is None else int(now_ms)
+            if self.last_retention_ms and now_ms - self.last_retention_ms < 60_000:
+                return
+            self.last_retention_ms = now_ms
+            try:
+                cutoff_ms = now_ms - int(self.retain_days * 24.0 * 60.0 * 60.0 * 1000.0)
+                if self.retain_days >= 0.0:
+                    for path in list(self._rotatable_files()):
+                        try:
+                            if int(path.stat().st_mtime * 1000.0) < cutoff_ms:
+                                path.unlink()
+                        except FileNotFoundError:
+                            continue
+
+                total_bytes = 0
+                all_files: list[Path] = []
+                for path in self.root.rglob("*"):
+                    if not path.is_file():
+                        continue
+                    total_bytes += path.stat().st_size
+                    all_files.append(path)
+                if total_bytes <= self.max_total_bytes:
+                    return
+
+                protected = {
+                    self.manifest_path,
+                    self.state_latest_path,
+                    self.current_events_path,
+                    *self._current_history_paths.values(),
+                }
+                candidates = [path for path in self._rotatable_files() if path not in protected]
+                for path in candidates:
+                    if total_bytes <= self.max_total_bytes:
+                        break
                     try:
-                        if int(path.stat().st_mtime * 1000.0) < cutoff_ms:
-                            path.unlink()
+                        size = path.stat().st_size
                     except FileNotFoundError:
                         continue
+                    path.unlink()
+                    total_bytes -= size
+            except Exception as exc:
+                logging.error("[monitor] retention pruning failed: %s", exc)
 
-            total_bytes = 0
-            all_files: list[Path] = []
-            for path in self.root.rglob("*"):
-                if not path.is_file():
-                    continue
-                total_bytes += path.stat().st_size
-                all_files.append(path)
-            if total_bytes <= self.max_total_bytes:
-                return
-
-            protected = {
-                self.manifest_path,
-                self.state_latest_path,
-                self.current_events_path,
-                *self._current_history_paths.values(),
-            }
-            candidates = [path for path in self._rotatable_files() if path not in protected]
-            for path in candidates:
-                if total_bytes <= self.max_total_bytes:
-                    break
-                try:
-                    size = path.stat().st_size
-                except FileNotFoundError:
-                    continue
-                path.unlink()
-                total_bytes -= size
-        except Exception as exc:
-            logging.error("[monitor] retention pruning failed: %s", exc)
+    def _rotated_path(self, directory: Path, stem: str, suffix: str) -> Path:
+        path = directory / f"{stem}{suffix}"
+        if not path.exists() and not path.with_suffix(path.suffix + ".gz").exists():
+            return path
+        for _ in range(1000):
+            candidate = directory / f"{stem}.{uuid.uuid4().hex[:8]}{suffix}"
+            if not candidate.exists() and not candidate.with_suffix(
+                candidate.suffix + ".gz"
+            ).exists():
+                return candidate
+        return directory / f"{stem}.{uuid.uuid4().hex}{suffix}"
 
     def _rotate_events_if_needed(self, now_ms: Optional[int] = None) -> None:
-        now_ms = self._now_ms() if now_ms is None else int(now_ms)
-        try:
-            if not self.current_events_path.exists():
+        with self._lock:
+            now_ms = self._now_ms() if now_ms is None else int(now_ms)
+            try:
+                if not self.current_events_path.exists():
+                    self.current_events_path.touch()
+                    self.current_segment_started_ms = now_ms
+                    return
+                size_bytes = self.current_events_path.stat().st_size
+                age_ms = now_ms - self.current_segment_started_ms
+                if size_bytes <= 0:
+                    return
+                if size_bytes < self.event_rotation_bytes and age_ms < self.event_rotation_interval_ms:
+                    return
+                rotated = self._rotated_path(
+                    self.events_dir, self._segment_label(now_ms), ".ndjson"
+                )
+                os.replace(self.current_events_path, rotated)
+                if self.compress_rotated_segments:
+                    rotated = self._gzip_file(rotated)
                 self.current_events_path.touch()
                 self.current_segment_started_ms = now_ms
-                return
-            size_bytes = self.current_events_path.stat().st_size
-            age_ms = now_ms - self.current_segment_started_ms
-            if size_bytes <= 0:
-                return
-            if size_bytes < self.event_rotation_bytes and age_ms < self.event_rotation_interval_ms:
-                return
-            rotated = self.events_dir / f"{self._segment_label(now_ms)}.ndjson"
-            os.replace(self.current_events_path, rotated)
-            if self.compress_rotated_segments:
-                rotated = self._gzip_file(rotated)
-            self.current_events_path.touch()
-            self.current_segment_started_ms = now_ms
-            self._write_manifest(now_ms=now_ms)
-            self._prune_retention(now_ms=now_ms)
-        except Exception as exc:
-            logging.error("[monitor] event rotation failed: %s", exc)
+                self._write_manifest(now_ms=now_ms)
+                self._prune_retention(now_ms=now_ms)
+            except Exception as exc:
+                logging.error("[monitor] event rotation failed: %s", exc)
 
     def _history_current_path(self, stream: str) -> Path:
         path = self._current_history_paths.get(stream)
@@ -351,29 +386,32 @@ class MonitorPublisher:
         return path
 
     def _rotate_history_if_needed(self, stream: str, *, now_ms: int) -> None:
-        try:
-            current_path = self._history_current_path(stream)
-            started_ms = int(self.history_segment_started_ms.get(stream, self.created_ts_ms))
-            if not current_path.exists():
+        with self._lock:
+            try:
+                current_path = self._history_current_path(stream)
+                started_ms = int(self.history_segment_started_ms.get(stream, self.created_ts_ms))
+                if not current_path.exists():
+                    current_path.touch()
+                    self.history_segment_started_ms[stream] = now_ms
+                    return
+                size_bytes = current_path.stat().st_size
+                age_ms = now_ms - started_ms
+                if size_bytes <= 0:
+                    return
+                if size_bytes < self.event_rotation_bytes and age_ms < self.event_rotation_interval_ms:
+                    return
+                rotated = self._rotated_path(
+                    self.history_dir, f"{stream}.{self._segment_label(now_ms)}", ".ndjson"
+                )
+                os.replace(current_path, rotated)
+                if self.compress_rotated_segments:
+                    rotated = self._gzip_file(rotated)
                 current_path.touch()
                 self.history_segment_started_ms[stream] = now_ms
-                return
-            size_bytes = current_path.stat().st_size
-            age_ms = now_ms - started_ms
-            if size_bytes <= 0:
-                return
-            if size_bytes < self.event_rotation_bytes and age_ms < self.event_rotation_interval_ms:
-                return
-            rotated = self.history_dir / f"{stream}.{self._segment_label(now_ms)}.ndjson"
-            os.replace(current_path, rotated)
-            if self.compress_rotated_segments:
-                rotated = self._gzip_file(rotated)
-            current_path.touch()
-            self.history_segment_started_ms[stream] = now_ms
-            self._write_manifest(now_ms=now_ms)
-            self._prune_retention(now_ms=now_ms)
-        except Exception as exc:
-            logging.error("[monitor] history rotation failed for %s: %s", stream, exc)
+                self._write_manifest(now_ms=now_ms)
+                self._prune_retention(now_ms=now_ms)
+            except Exception as exc:
+                logging.error("[monitor] history rotation failed for %s: %s", stream, exc)
 
     def record_history_entry(
         self,
@@ -386,36 +424,42 @@ class MonitorPublisher:
         pside: Optional[str] = None,
         timeframe: Optional[str] = None,
     ) -> Optional[dict]:
-        now_ms = self._now_ms() if ts is None else int(ts)
-        try:
-            self._rotate_history_if_needed(stream, now_ms=now_ms)
-            envelope = {
-                "ts": now_ms,
-                "kind": str(kind),
-                "stream": str(stream),
-                "exchange": self.exchange,
-                "user": self.user,
-                "payload": payload or {},
-            }
-            if symbol is not None:
-                envelope["symbol"] = str(symbol)
-            if pside is not None:
-                envelope["pside"] = str(pside)
-            if timeframe is not None:
-                envelope["timeframe"] = str(timeframe)
-            current_path = self._history_current_path(stream)
-            if not current_path.exists():
-                current_path.touch()
-                self.history_segment_started_ms[stream] = now_ms
-            line = json.dumps(envelope, separators=(",", ":"), sort_keys=True, default=_json_default)
-            with open(current_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._write_manifest(now_ms=now_ms)
-            self._prune_retention(now_ms=now_ms)
-            return envelope
-        except Exception as exc:
-            self._log_write_failure(f"recording history entry {stream}/{kind}", exc)
-            return None
+        with self._lock:
+            now_ms = self._now_ms() if ts is None else int(ts)
+            try:
+                self._rotate_history_if_needed(stream, now_ms=now_ms)
+                envelope = {
+                    "ts": now_ms,
+                    "kind": str(kind),
+                    "stream": str(stream),
+                    "exchange": self.exchange,
+                    "user": self.user,
+                    "payload": payload or {},
+                }
+                if symbol is not None:
+                    envelope["symbol"] = str(symbol)
+                if pside is not None:
+                    envelope["pside"] = str(pside)
+                if timeframe is not None:
+                    envelope["timeframe"] = str(timeframe)
+                current_path = self._history_current_path(stream)
+                if not current_path.exists():
+                    current_path.touch()
+                    self.history_segment_started_ms[stream] = now_ms
+                line = json.dumps(
+                    envelope,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                    default=_json_default,
+                )
+                with open(current_path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+                self._write_manifest(now_ms=now_ms)
+                self._prune_retention(now_ms=now_ms)
+                return envelope
+            except Exception as exc:
+                self._log_write_failure(f"recording history entry {stream}/{kind}", exc)
+                return None
 
     def record_fill(
         self,
@@ -450,34 +494,35 @@ class MonitorPublisher:
         ask: Optional[float] = None,
         source: Optional[str] = None,
     ) -> Optional[dict]:
-        if not self.retain_price_ticks:
-            return None
-        now_ms = self._now_ms() if ts is None else int(ts)
-        symbol = str(symbol)
-        last_emitted_ms = int(self._last_price_tick_emitted_ms.get(symbol, 0))
-        if (
-            self.price_tick_min_interval_ms > 0
-            and last_emitted_ms
-            and now_ms - last_emitted_ms < self.price_tick_min_interval_ms
-        ):
-            return None
-        entry_payload = {"last": float(last)}
-        if bid is not None:
-            entry_payload["bid"] = float(bid)
-        if ask is not None:
-            entry_payload["ask"] = float(ask)
-        if source is not None:
-            entry_payload["source"] = str(source)
-        entry = self.record_history_entry(
-            "price_ticks",
-            "price_tick",
-            entry_payload,
-            ts=now_ms,
-            symbol=symbol,
-        )
-        if entry is not None:
-            self._last_price_tick_emitted_ms[symbol] = now_ms
-        return entry
+        with self._lock:
+            if not self.retain_price_ticks:
+                return None
+            now_ms = self._now_ms() if ts is None else int(ts)
+            symbol = str(symbol)
+            last_emitted_ms = int(self._last_price_tick_emitted_ms.get(symbol, 0))
+            if (
+                self.price_tick_min_interval_ms > 0
+                and last_emitted_ms
+                and now_ms - last_emitted_ms < self.price_tick_min_interval_ms
+            ):
+                return None
+            entry_payload = {"last": float(last)}
+            if bid is not None:
+                entry_payload["bid"] = float(bid)
+            if ask is not None:
+                entry_payload["ask"] = float(ask)
+            if source is not None:
+                entry_payload["source"] = str(source)
+            entry = self.record_history_entry(
+                "price_ticks",
+                "price_tick",
+                entry_payload,
+                ts=now_ms,
+                symbol=symbol,
+            )
+            if entry is not None:
+                self._last_price_tick_emitted_ms[symbol] = now_ms
+            return entry
 
     def record_completed_candles(
         self,
@@ -485,37 +530,40 @@ class MonitorPublisher:
         timeframe: str,
         candles: Iterable[dict],
     ) -> list[dict]:
-        if not (self.retain_candles and self.emit_completed_candles):
-            return []
-        timeframe = str(timeframe)
-        stream = f"candles_{timeframe}"
-        candles_list = list(candles)
-        if not candles_list:
-            return []
-        key = (str(symbol), timeframe)
-        sorted_candles = sorted(candles_list, key=lambda candle: int(candle["ts"]))
-        last_known_ts = self._last_candle_ts_by_key.get(key)
-        if last_known_ts is None:
-            to_emit = [sorted_candles[-1]]
-        else:
-            to_emit = [candle for candle in sorted_candles if int(candle["ts"]) > last_known_ts]
-        if not to_emit:
+        with self._lock:
+            if not (self.retain_candles and self.emit_completed_candles):
+                return []
+            timeframe = str(timeframe)
+            stream = f"candles_{timeframe}"
+            candles_list = list(candles)
+            if not candles_list:
+                return []
+            key = (str(symbol), timeframe)
+            sorted_candles = sorted(candles_list, key=lambda candle: int(candle["ts"]))
+            last_known_ts = self._last_candle_ts_by_key.get(key)
+            if last_known_ts is None:
+                to_emit = [sorted_candles[-1]]
+            else:
+                to_emit = [
+                    candle for candle in sorted_candles if int(candle["ts"]) > last_known_ts
+                ]
+            if not to_emit:
+                self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
+                return []
+            emitted: list[dict] = []
+            for candle in to_emit:
+                entry = self.record_history_entry(
+                    stream,
+                    "completed_candle",
+                    dict(candle),
+                    ts=int(candle["ts"]),
+                    symbol=symbol,
+                    timeframe=timeframe,
+                )
+                if entry is not None:
+                    emitted.append(entry)
             self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
-            return []
-        emitted: list[dict] = []
-        for candle in to_emit:
-            entry = self.record_history_entry(
-                stream,
-                "completed_candle",
-                dict(candle),
-                ts=int(candle["ts"]),
-                symbol=symbol,
-                timeframe=timeframe,
-            )
-            if entry is not None:
-                emitted.append(entry)
-        self._last_candle_ts_by_key[key] = int(sorted_candles[-1]["ts"])
-        return emitted
+            return emitted
 
     def record_event(
         self,
@@ -527,32 +575,38 @@ class MonitorPublisher:
         symbol: Optional[str] = None,
         pside: Optional[str] = None,
     ) -> Optional[dict]:
-        now_ms = self._now_ms() if ts is None else int(ts)
-        try:
-            self._rotate_events_if_needed(now_ms=now_ms)
-            self.seq += 1
-            envelope = {
-                "ts": now_ms,
-                "seq": self.seq,
-                "kind": str(kind),
-                "tags": [str(tag) for tag in tags],
-                "exchange": self.exchange,
-                "user": self.user,
-                "payload": payload or {},
-            }
-            if symbol is not None:
-                envelope["symbol"] = str(symbol)
-            if pside is not None:
-                envelope["pside"] = str(pside)
-            line = json.dumps(envelope, separators=(",", ":"), sort_keys=True, default=_json_default)
-            with open(self.current_events_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
-            self._write_manifest(now_ms=now_ms)
-            self._prune_retention(now_ms=now_ms)
-            return envelope
-        except Exception as exc:
-            self._log_write_failure(f"recording event {kind}", exc)
-            return None
+        with self._lock:
+            now_ms = self._now_ms() if ts is None else int(ts)
+            try:
+                self._rotate_events_if_needed(now_ms=now_ms)
+                self.seq += 1
+                envelope = {
+                    "ts": now_ms,
+                    "seq": self.seq,
+                    "kind": str(kind),
+                    "tags": [str(tag) for tag in tags],
+                    "exchange": self.exchange,
+                    "user": self.user,
+                    "payload": payload or {},
+                }
+                if symbol is not None:
+                    envelope["symbol"] = str(symbol)
+                if pside is not None:
+                    envelope["pside"] = str(pside)
+                line = json.dumps(
+                    envelope,
+                    separators=(",", ":"),
+                    sort_keys=True,
+                    default=_json_default,
+                )
+                with open(self.current_events_path, "a", encoding="utf-8") as f:
+                    f.write(line + "\n")
+                self._write_manifest(now_ms=now_ms)
+                self._prune_retention(now_ms=now_ms)
+                return envelope
+            except Exception as exc:
+                self._log_write_failure(f"recording event {kind}", exc)
+                return None
 
     def record_error(
         self,
@@ -580,36 +634,42 @@ class MonitorPublisher:
     def write_snapshot(
         self, snapshot: dict, *, ts: Optional[int] = None, force: bool = False
     ) -> bool:
-        now_ms = self._now_ms() if ts is None else int(ts)
-        if not force and self.last_snapshot_ms and (
-            now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
-        ):
-            return False
-        try:
-            payload = dict(snapshot)
-            payload["schema_version"] = self.schema_version
-            meta = dict(payload.get("meta") or {})
-            meta.setdefault("exchange", self.exchange)
-            meta.setdefault("user", self.user)
-            meta["snapshot_ts_ms"] = now_ms
-            meta["seq"] = self.seq
-            payload["meta"] = meta
-            _atomic_write_json(self.state_latest_path, payload)
-            self.last_snapshot_ms = now_ms
-            if self.checkpoint_interval_ms > 0 and (
-                force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
+        with self._lock:
+            now_ms = self._now_ms() if ts is None else int(ts)
+            if not force and self.last_snapshot_ms and (
+                now_ms - self.last_snapshot_ms < self.snapshot_interval_ms
             ):
-                checkpoint = self.checkpoints_dir / f"state.{self._segment_label(now_ms)}.json"
-                _atomic_write_json(checkpoint, payload)
-                if self.compress_rotated_segments:
-                    self._gzip_file(checkpoint)
-                self.last_checkpoint_ms = now_ms
-            self._write_manifest(now_ms=now_ms)
-            self._prune_retention(now_ms=now_ms)
-            return True
-        except Exception as exc:
-            self._log_write_failure("writing snapshot", exc)
-            return False
+                return False
+            try:
+                payload = dict(snapshot)
+                payload["schema_version"] = self.schema_version
+                meta = dict(payload.get("meta") or {})
+                meta.setdefault("exchange", self.exchange)
+                meta.setdefault("user", self.user)
+                meta["snapshot_ts_ms"] = now_ms
+                meta["seq"] = self.seq
+                payload["meta"] = meta
+                _atomic_write_json(self.state_latest_path, payload)
+                self.last_snapshot_ms = now_ms
+                if self.checkpoint_interval_ms > 0 and (
+                    force or now_ms - self.last_checkpoint_ms >= self.checkpoint_interval_ms
+                ):
+                    checkpoint = self._rotated_path(
+                        self.checkpoints_dir,
+                        f"state.{self._segment_label(now_ms)}",
+                        ".json",
+                    )
+                    _atomic_write_json(checkpoint, payload)
+                    if self.compress_rotated_segments:
+                        self._gzip_file(checkpoint)
+                    self.last_checkpoint_ms = now_ms
+                self._write_manifest(now_ms=now_ms)
+                self._prune_retention(now_ms=now_ms)
+                return True
+            except Exception as exc:
+                self._log_write_failure("writing snapshot", exc)
+                return False
 
     def close(self) -> None:
-        self._write_manifest()
+        with self._lock:
+            self._write_manifest()

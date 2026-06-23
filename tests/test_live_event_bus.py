@@ -1,4 +1,5 @@
 import json
+import logging
 
 import pytest
 
@@ -177,13 +178,44 @@ def test_pipeline_queue_overflow_is_observable_without_raising():
     assert pipeline.degraded_events[-1].reason_code == "queue_full"
 
 
+def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
+    monitor = ListEventSink()
+    pipeline = LiveEventPipeline(
+        queue_maxsize=1,
+        start=False,
+        monitor_sinks=[monitor],
+        routes={
+            EventTypes.DATA_PACKET_UPDATED: EventRoute(
+                structured=False, monitor=True, console=False
+            )
+        },
+    )
+
+    with caplog.at_level(logging.WARNING):
+        assert pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED)) is not None
+        assert (
+            pipeline.emit(
+                LiveEvent(EventTypes.DATA_PACKET_UPDATED),
+                require_enqueue=True,
+            )
+            is None
+        )
+
+    assert pipeline.drop_counters[EventTypes.DATA_PACKET_UPDATED] == 1
+    assert monitor.events[-1].event_type == EventTypes.SINK_DEGRADED
+    assert monitor.events[-1].reason_code == "queue_full"
+    assert any("live event queue full" in record.message for record in caplog.records)
+
+
 def test_sink_failure_degrades_observability_without_raising():
     class FailingSink:
         def write(self, event):
             raise OSError("disk full")
 
+    monitor = ListEventSink()
     pipeline = LiveEventPipeline(
         structured_sinks=[FailingSink()],
+        monitor_sinks=[monitor],
         routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=True, monitor=False)},
     )
 
@@ -193,6 +225,8 @@ def test_sink_failure_degrades_observability_without_raising():
     assert pipeline.flush(timeout=2.0) is True
     assert pipeline.sink_error_counters["structured"] == 1
     assert pipeline.degraded_events[-1].reason_code == "structured_sink_failed"
+    assert monitor.events[-1].event_type == EventTypes.SINK_DEGRADED
+    assert monitor.events[-1].reason_code == "structured_sink_failed"
     assert pipeline.close(timeout=2.0) is True
 
 
@@ -286,6 +320,41 @@ def test_diagnostic_event_uses_pipeline_when_available_and_legacy_when_absent():
         ("planning",),
         {"apiKey": "secret", "reason": "stale"},
     )
+
+
+def test_diagnostic_event_falls_back_to_legacy_recorder_when_pipeline_queue_is_full():
+    class BotWithFullPipeline:
+        exchange = "binance"
+        bot_id = "bot_1"
+
+        def __init__(self):
+            self.calls = []
+            self._live_event_pipeline = LiveEventPipeline(
+                queue_maxsize=1,
+                start=False,
+                structured_sinks=[],
+                monitor_sinks=[],
+                routes={
+                    EventTypes.PLANNING_UNAVAILABLE: EventRoute(
+                        structured=True, monitor=False, console=False
+                    )
+                },
+            )
+
+        def config_get(self, keys):
+            return "binance_01"
+
+        def _monitor_record_event(self, *args, **kwargs):
+            self.calls.append((args, kwargs))
+            return "legacy"
+
+    bot = BotWithFullPipeline()
+    first = DiagnosticEvent.build("planning_unavailable", ("planning",), {"n": 1})
+    second = DiagnosticEvent.build("planning_unavailable", ("planning",), {"n": 2})
+
+    assert first.emit(bot).event_type == EventTypes.PLANNING_UNAVAILABLE
+    assert second.emit(bot) == "legacy"
+    assert bot.calls[0][0][:3] == ("planning_unavailable", ("planning",), {"n": 2})
 
 
 def test_console_format_is_compact_and_operator_facing():

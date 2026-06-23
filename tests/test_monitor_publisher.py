@@ -1,6 +1,7 @@
 import errno
 import json
 import logging
+import threading
 
 from monitor_publisher import MonitorPublisher
 import monitor_publisher as monitor_publisher_module
@@ -145,6 +146,56 @@ def test_monitor_publisher_rotates_event_segments(tmp_path):
     assert json.loads(rotated_lines[0])["kind"] == "one"
     assert len(current_lines) == 1
     assert json.loads(current_lines[0])["kind"] == "two"
+
+
+def test_monitor_publisher_concurrent_event_writes_keep_seq_and_manifest(tmp_path):
+    publisher = _make_publisher(
+        tmp_path,
+        event_rotation_mb=0.00001,
+        event_rotation_minutes=60.0,
+    )
+    n_threads = 4
+    n_per_thread = 50
+    results = []
+    errors = []
+    results_lock = threading.Lock()
+
+    def write_events(worker_no):
+        try:
+            for event_no in range(n_per_thread):
+                event = publisher.record_event(
+                    "stress.event",
+                    ("test",),
+                    {"worker": worker_no, "event": event_no, "blob": "x" * 200},
+                )
+                if event_no % 10 == 0:
+                    assert publisher.write_snapshot({"worker": worker_no}, force=True)
+                with results_lock:
+                    results.append(event)
+        except Exception as exc:
+            with results_lock:
+                errors.append(exc)
+
+    threads = [threading.Thread(target=write_events, args=(idx,)) for idx in range(n_threads)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=10.0)
+
+    assert errors == []
+    assert len(results) == n_threads * n_per_thread
+    assert all(event is not None for event in results)
+    seqs = sorted(event["seq"] for event in results)
+    assert seqs == list(range(1, n_threads * n_per_thread + 1))
+
+    root = tmp_path / "bybit" / "user01"
+    manifest = json.loads((root / "manifest.json").read_text())
+    assert manifest["last_seq"] == n_threads * n_per_thread
+    event_lines = []
+    for path in sorted((root / "events").glob("*.ndjson")):
+        event_lines.extend(path.read_text().splitlines())
+    assert len(event_lines) == n_threads * n_per_thread
+    assert not list(root.rglob("*.tmp"))
 
 
 def test_monitor_disk_full_errors_are_coalesced(tmp_path, monkeypatch, caplog):

@@ -43,7 +43,7 @@ class DiagnosticEvent:
         )
 
     def emit(self, bot) -> Any:
-        emitted = emit_event(bot, self.to_live_event(bot))
+        emitted = emit_event(bot, self.to_live_event(bot), require_enqueue=True)
         if emitted is not None:
             return emitted
         recorder = getattr(bot, "_monitor_record_event", None)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections import Counter
+from collections import Counter, deque
 from dataclasses import asdict, dataclass, field, replace
 import hashlib
 import json
@@ -383,9 +383,10 @@ class LiveEventPipeline:
         self.text_sink = text_sink
         self.drop_counters: Counter[str] = Counter()
         self.sink_error_counters: Counter[str] = Counter()
-        self.degraded_events: list[LiveEvent] = []
+        self.degraded_events: deque[LiveEvent] = deque(maxlen=1_000)
         self._queue: queue.Queue[LiveEvent | None] = queue.Queue(maxsize=queue_maxsize)
         self._stop = threading.Event()
+        self._state_lock = threading.RLock()
         self._worker: threading.Thread | None = None
         if start:
             self.start()
@@ -403,7 +404,13 @@ class LiveEventPipeline:
     def route_for(self, event: LiveEvent) -> EventRoute:
         return self.routes.get(event.event_type, DEFAULT_ROUTE)
 
-    def emit(self, event: LiveEvent | Mapping[str, Any], **overrides: Any) -> LiveEvent:
+    def emit(
+        self,
+        event: LiveEvent | Mapping[str, Any],
+        *,
+        require_enqueue: bool = False,
+        **overrides: Any,
+    ) -> LiveEvent | None:
         if isinstance(event, LiveEvent):
             live_event = event
         else:
@@ -416,16 +423,21 @@ class LiveEventPipeline:
             self._write_sink("console", self.console_sink, live_event)
         if route.text and self.text_sink is not None:
             self._write_sink("text", self.text_sink, live_event)
+        enqueued = True
         if route.structured or route.monitor:
             try:
                 self._queue.put_nowait(live_event)
             except queue.Full:
-                self.drop_counters[live_event.event_type] += 1
+                enqueued = False
+                with self._state_lock:
+                    self.drop_counters[live_event.event_type] += 1
                 self._record_degraded(
                     reason_code="queue_full",
                     message=f"live event queue full; dropped {live_event.event_type}",
                     data={"dropped_event_type": live_event.event_type},
                 )
+        if require_enqueue and not enqueued:
+            return None
         return live_event
 
     def flush(self, timeout: float = 2.0) -> bool:
@@ -468,7 +480,8 @@ class LiveEventPipeline:
         try:
             return sink.write(event)
         except Exception as exc:
-            self.sink_error_counters[name] += 1
+            with self._state_lock:
+                self.sink_error_counters[name] += 1
             self._record_degraded(
                 reason_code=f"{name}_sink_failed",
                 message=f"{name} sink failed: {type(exc).__name__}",
@@ -494,22 +507,42 @@ class LiveEventPipeline:
             message=message,
             data=data or {},
         ).with_context(self.context)
-        self.degraded_events.append(degraded)
+        with self._state_lock:
+            self.degraded_events.append(degraded)
+        logging.warning("[event] %s | reason=%s", message, reason_code)
         if self.console_sink is not None:
             try:
                 self.console_sink.write(degraded)
             except Exception:
-                self.sink_error_counters["console"] += 1
+                with self._state_lock:
+                    self.sink_error_counters["console"] += 1
+        if reason_code != "monitor_sink_failed":
+            for sink in self.monitor_sinks:
+                try:
+                    sink.write(degraded)
+                except Exception as exc:
+                    with self._state_lock:
+                        self.sink_error_counters["monitor"] += 1
+                    logging.warning(
+                        "[event] failed to emit sink.degraded to monitor: %s",
+                        type(exc).__name__,
+                    )
 
 
-def emit_event(bot: Any, event: LiveEvent | Mapping[str, Any], **overrides: Any) -> Any:
+def emit_event(
+    bot: Any,
+    event: LiveEvent | Mapping[str, Any],
+    *,
+    require_enqueue: bool = False,
+    **overrides: Any,
+) -> Any:
     pipeline = getattr(bot, "_live_event_pipeline", None)
     if pipeline is None:
         pipeline = getattr(bot, "live_event_pipeline", None)
     if pipeline is None or not callable(getattr(pipeline, "emit", None)):
         return None
     try:
-        return pipeline.emit(event, **overrides)
+        return pipeline.emit(event, require_enqueue=require_enqueue, **overrides)
     except Exception as exc:
         logging.debug(
             "[event] failed to emit %s: %s",

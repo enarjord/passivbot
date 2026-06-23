@@ -14,6 +14,22 @@ event set through it.
 Do not migrate broad logging call sites in Phase 1. Do not change trading
 decisions, freshness gates, order generation, exchange writes, or risk behavior.
 
+## Current Implementation Status
+
+The initial `codex/v8-live-event-pipeline-phase1` branch is Phase 1a, not the
+full Phase 1 target. It currently delivers the event envelope, route table,
+redaction helpers, bounded pipeline, monitor-backed diagnostic adapter, monitor
+publisher thread-safety, shutdown flush/close, and tests for monitor relay/TUI
+compatibility.
+
+Still pending before calling Phase 1 complete:
+
+- a first-class structured NDJSON sink for full `LiveEvent` envelopes
+- console sink wiring from the event stream
+- lifecycle, cycle, Rust-orchestrator, and order-wave instrumentation
+- top-level `cycle_id` propagation for reconstructing a full order wave
+- broad migration of existing direct monitor/log call sites
+
 ## Module Layout
 
 Preferred first layout:
