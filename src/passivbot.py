@@ -12610,6 +12610,8 @@ class Passivbot:
             return True
 
         def required_ema_can_mark_nontradable(symbol: str) -> bool:
+            if flat_forager_default_normal_symbol(symbol):
+                return True
             if has_normal_planning_mode(symbol):
                 return False
             if symbol in cache_only_symbols or candidate_only_forager_symbol(symbol):
@@ -12775,6 +12777,43 @@ class Passivbot:
                 ):
                     return True
             return False
+
+        def has_explicit_normal_planning_mode(symbol: str) -> bool:
+            """Return True when config/runtime state explicitly selected normal."""
+            pb_modes = getattr(self, "PB_modes", {})
+            for pside in ("long", "short"):
+                explicit_mode = (modes.get(pside, {}) or {}).get(symbol)
+                if explicit_mode is not None:
+                    if (
+                        Passivbot._mode_override_to_orchestrator_mode(
+                            self, explicit_mode
+                        )
+                        == "normal"
+                    ):
+                        return True
+                    continue
+                pside_modes = (
+                    pb_modes.get(pside, {}) if isinstance(pb_modes, dict) else {}
+                )
+                if not isinstance(pside_modes, dict) or symbol not in pside_modes:
+                    continue
+                if (
+                    Passivbot._pb_mode_to_orchestrator_mode(
+                        self, pside_modes.get(symbol)
+                    )
+                    == "normal"
+                ):
+                    return True
+            return False
+
+        def flat_forager_default_normal_symbol(symbol: str) -> bool:
+            if not bool(is_forager_mode()):
+                return False
+            if has_position_or_open_order(symbol):
+                return False
+            if has_explicit_normal_planning_mode(symbol):
+                return False
+            return symbol in set(getattr(self, "active_symbols", []) or [])
 
         forager_cached_max_age_by_symbol: dict[str, int] = {}
         if is_forager_mode():
