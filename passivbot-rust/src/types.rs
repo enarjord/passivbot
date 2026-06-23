@@ -461,6 +461,17 @@ pub enum WeExcessAllowanceMode {
     LegacyRaw,
 }
 
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize, EnumString, Display,
+)]
+#[serde(rename_all = "snake_case")]
+#[strum(serialize_all = "snake_case")]
+pub enum TwelEnforcerPolicy {
+    #[default]
+    ReduceOverweight,
+    ReducePortfolio,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct ForagerScoreWeights {
@@ -584,7 +595,11 @@ pub struct BotParams {
     pub risk_wel_enforcer_enabled: bool,
     pub risk_wel_enforcer_threshold: f64,
     #[serde(default = "default_true")]
+    pub risk_twel_entry_gate_enabled: bool,
+    #[serde(default = "default_true")]
     pub risk_twel_enforcer_enabled: bool,
+    #[serde(default)]
+    pub risk_twel_enforcer_policy: TwelEnforcerPolicy,
     pub risk_twel_enforcer_threshold: f64,
     pub risk_we_excess_allowance_pct: f64,
     #[serde(default)]
@@ -641,7 +656,9 @@ impl Default for BotParams {
             wallet_exposure_limit: 0.0,
             risk_wel_enforcer_enabled: true,
             risk_wel_enforcer_threshold: 0.0,
+            risk_twel_entry_gate_enabled: true,
             risk_twel_enforcer_enabled: true,
+            risk_twel_enforcer_policy: TwelEnforcerPolicy::default(),
             risk_twel_enforcer_threshold: 0.0,
             risk_we_excess_allowance_pct: 0.0,
             risk_we_excess_allowance_mode: WeExcessAllowanceMode::default(),

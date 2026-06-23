@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Implemented the v8 TWEL policy contract: TWEL entry gating is now controlled
+  separately from TWEL auto-reduce, entry gating uses the capped thresholded
+  portfolio cap, and TWEL auto-reduce supports `reduce_overweight` and
+  `reduce_portfolio` policies while remaining subject to the realized-loss gate.
+  Manual and panic exposure now counts toward same-side TWEL measurement while
+  remaining excluded from TWEL auto-reduce candidate selection.
 - Fixed live forager EMA readiness for flat approved-universe and transient
   forager-selected symbols: missing close/required EMA data now marks the flat
   symbol nontradable for that planning cycle instead of restarting the execution

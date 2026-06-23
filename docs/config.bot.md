@@ -183,8 +183,11 @@ unstuck, this trim is not gated by EMA distance or loss allowance.
 
 ## Total Exposure Enforcer
 
-The total exposure enforcer keeps the sum of bot-scope exposures below
-`total_wallet_exposure_limit * total_exposure_enforcer_threshold`. For each
+The total exposure enforcer repairs same-side portfolio exposure when the sum of
+all open same-side exchange positions exceeds
+`total_wallet_exposure_limit * total_exposure_enforcer_threshold`. Manual and
+panic positions count toward this same-side exposure measurement, but they are
+not repair candidates and never receive TWEL auto-reduce orders. For each
 position:
 
 ```text
@@ -192,17 +195,22 @@ if not total_exposure_enforcer_enabled:
     disabled
 
 exposure_i      = wallet_exposure(...)
-floor_i         = min(wel_base_i,
-                      total_wallet_exposure_limit * total_exposure_enforcer_threshold
-                      / effective_n_positions)
-floor_psize_i   = floor_i * balance / (price_i * c_mult_i)
+overweight_i       = total_wallet_exposure_limit * total_exposure_enforcer_threshold
+                     / n_positions
+overweight_psize_i = overweight_i * balance / (price_i * c_mult_i)
 ```
 
-While bot-scope `Σ exposure_i` exceeds the threshold:
+While same-side `Σ exposure_i` exceeds the threshold:
 
-1. Pick the position with the smallest relative price move from entry.
-2. First reduce only exposure above `floor_i`.
-3. If total exposure is still above target, continue reducing below that floor.
+1. Build the current-TWE measurement from all same-side exchange positions.
+2. Build the repair candidate set from managed open positions only: `normal`,
+   `graceful_stop`, and `tp_only`.
+3. Under `reduce_overweight`, keep only candidates above `overweight_i`. Under
+   `reduce_portfolio`, any managed open candidate can be reduced.
+4. Prefer profitable or breakeven reductions first, then shallowest adverse-loss
+   reductions, with stable symbol tie-breaks.
+5. Emit TWEL auto-reduce orders only until projected raw-balance TWE is at or
+   below the repair target.
 
 The final reduce-only order is:
 
@@ -213,21 +221,24 @@ order_type = CloseAutoReduceTwel{Long,Short}
 ```
 
 By construction the quantity never exceeds the live position size.
-Positions already earmarked for `CloseAutoReduceWel*` during the same scheduling cycle are skipped so that reductions do not double-up; they can be considered again on subsequent iterations once the WEL order has been filled.
+TWEL auto-reduce is computed before WEL auto-reduce. If a position receives a
+TWEL auto-reduce order, the WEL enforcer skips that position for the same
+scheduling cycle.
 
-The first reduction pass respects the per-position floor as a fairness rule. If
-bot-scope total exposure is still above target, a second pass continues reducing
-least-stuck bot-managed positions even below that floor. If exchange min-qty,
-min-cost, or rounding constraints prevent reaching the target, the reducer emits
-a warning.
+`reduce_overweight` respects the thresholded per-position target as a candidate
+filter. `reduce_portfolio` is the broader deleveraging policy and may reduce a
+managed position below that target when needed to bring same-side TWE back to the
+repair target. Exchange min-qty, min-cost, rounding, or a lack of managed
+candidates can leave the account above target.
 
 Setting `total_exposure_enforcer_enabled = false` disables this enforcer. When it
 is enabled, `total_exposure_enforcer_threshold` must be finite and greater than
 zero.
 
-Manual-mode positions are outside bot scope: the bot does not create or cancel
-orders for them, and they do not count toward active slots, total exposure
-accounting, auto unstuck, or either exposure enforcer.
+Manual and panic positions are outside normal bot management: the bot does not
+create or cancel ordinary orders for them, and they do not count toward active
+slots, auto unstuck, or WEL/TWEL candidate selection. They still count toward
+same-side TWEL measurement and toward the TWEL entry-gate baseline.
 
 ## Risk-Control Stack
 
@@ -237,7 +248,7 @@ intervention:
 1. Close logic and negative markup handle normal position reduction.
 2. Auto unstuck reduces stuck positions only when loss allowance and EMA gating permit it.
 3. Position exposure enforcer trims individual positions to enforce or actively recycle per-position exposure.
-4. Total exposure enforcer keeps bot-scope portfolio exposure under the configured total limit.
+4. Total exposure enforcer repairs same-side portfolio exposure using managed candidates.
 5. HSL is the equity-level circuit breaker.
 
 ## Parameter Interactions at a Glance
@@ -251,7 +262,7 @@ intervention:
 | `close_trailing_*`                             | Mirrors trailing entries but for exits                    | `threshold_close`, `retracement_close` |
 | `unstuck_*`, `unstuck_enabled`                 | Loss realization rules                                    | `unstuck_allowed`, `close_price` |
 | `position_exposure_enforcer_threshold`, `risk_we_excess_allowance_pct` | Per-position exposure cap                                | `target_i`, `qty` |
-| `total_exposure_enforcer_threshold`             | Bot-scope portfolio exposure cap                         | `floor_i`, `qty` |
+| `total_exposure_enforcer_threshold`             | Same-side portfolio exposure repair target               | `overweight_i`, `qty` |
 
 For worked examples on a per-parameter basis, see the comments sprinkled in
 `passivbot-rust/src/entries.rs` and the optimiser notebooks under `notebooks/`.

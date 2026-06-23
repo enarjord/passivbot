@@ -1,7 +1,11 @@
 import math
 
 from .access import require_config_dict
-from .bot import validate_bot_config, validate_forager_config
+from .bot import (
+    normalize_twel_enforcer_policy,
+    validate_bot_config,
+    validate_forager_config,
+)
 from .coerce import normalize_hsl_cooldown_position_policy, normalize_hsl_signal_mode
 from .shared_bot import get_grouped_bot_value
 from .strategy import (
@@ -39,6 +43,10 @@ def validate_config(
         normalize_we_excess_allowance_mode(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_mode"),
             path=f"bot.{pside}.risk.we_excess_allowance_mode",
+        )
+        normalize_twel_enforcer_policy(
+            get_grouped_bot_value(bot_side, "risk_twel_enforcer_policy"),
+            path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
         )
         active_strategy = get_active_strategy_side(bot_side, strategy_kind=strategy_kind, pside=pside)
         if not isinstance(active_strategy, dict) or not active_strategy:
