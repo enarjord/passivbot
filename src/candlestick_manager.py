@@ -43,7 +43,7 @@ import sys
 import time
 import zlib
 import atexit
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple, TypedDict, TYPE_CHECKING
@@ -729,8 +729,10 @@ class CandlestickManager:
         self._lock_stale_seconds = float(_LOCK_STALE_SECONDS)
         self._lock_backoff_initial = float(_LOCK_BACKOFF_INITIAL)
         self._lock_backoff_max = float(_LOCK_BACKOFF_MAX)
+        self._lock_hold_timeout_seconds = max(60.0, self._lock_timeout_seconds * 6.0)
         # Reentrant bookkeeping for portalocker fetch locks: key -> _LockRecord
         self._held_fetch_locks: Dict[Tuple[str, str], _LockRecord] = {}
+        self._fetch_lock_watchdogs: Dict[Tuple[str, str], asyncio.Task] = {}
         self._shutdown_guard = threading.Lock()
         self._closed = False
         atexit.register(self._cleanup_on_exit)
@@ -1070,6 +1072,10 @@ class CandlestickManager:
             self._closed = True
         records = list(self._held_fetch_locks.values())
         self._held_fetch_locks.clear()
+        watchdogs = list(self._fetch_lock_watchdogs.values())
+        self._fetch_lock_watchdogs.clear()
+        for task in watchdogs:
+            task.cancel()
         for record in records:
             self._release_lock_sync(record)
 
@@ -1129,13 +1135,98 @@ class CandlestickManager:
         finally:
             self._remove_lockfile(path)
 
-    def _touch_lockfile(self, path: str) -> None:
+    def _touch_lockfile(
+        self,
+        path: str,
+        *,
+        symbol: str | None = None,
+        timeframe: str | None = None,
+        acquired_at: float | None = None,
+        attempt: int | None = None,
+    ) -> None:
+        payload = {
+            "pid": os.getpid(),
+            "exchange": str(self.exchange_name),
+            "symbol": symbol,
+            "timeframe": timeframe,
+            "acquired_at": float(acquired_at if acquired_at is not None else time.time()),
+            "attempt": attempt,
+        }
         try:
-            os.utime(path, None)
+            task = asyncio.current_task()
+            if task is not None:
+                payload["task"] = task.get_name()
+        except RuntimeError:
+            pass
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, sort_keys=True)
         except FileNotFoundError:
             return
         except Exception:
+            with suppress(Exception):
+                os.utime(path, None)
+
+    def _read_lockfile_owner(self, path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                payload = json.load(f)
+        except Exception:
+            return "-"
+        if not isinstance(payload, dict):
+            return "-"
+        bits = []
+        for key in ("pid", "exchange", "symbol", "timeframe", "task", "attempt"):
+            value = payload.get(key)
+            if value is not None:
+                bits.append(f"{key}={value}")
+        acquired_at = payload.get("acquired_at")
+        if acquired_at is not None:
+            try:
+                bits.append(f"held_s={max(0.0, time.time() - float(acquired_at)):.1f}")
+            except Exception:
+                pass
+        return " ".join(bits) if bits else "-"
+
+    def _cancel_fetch_lock_watchdog(self, key: Tuple[str, str]) -> None:
+        task = self._fetch_lock_watchdogs.pop(key, None)
+        if task is not None:
+            task.cancel()
+
+    def _start_fetch_lock_watchdog(
+        self,
+        key: Tuple[str, str],
+        *,
+        symbol: str,
+        timeframe: str,
+        acquired_at: float,
+    ) -> None:
+        timeout_s = float(getattr(self, "_lock_hold_timeout_seconds", 0.0) or 0.0)
+        if timeout_s <= 0.0 or not math.isfinite(timeout_s):
             return
+
+        async def _watchdog() -> None:
+            try:
+                await asyncio.sleep(timeout_s)
+            except asyncio.CancelledError:
+                return
+            record = self._held_fetch_locks.get(key)
+            if record is None or float(record.acquired_at) != float(acquired_at):
+                return
+            owner = self._read_lockfile_owner(record.path)
+            self._log(
+                "warning",
+                "fetch_lock_hold_timeout",
+                symbol=symbol,
+                timeframe=timeframe,
+                held_seconds=f"{timeout_s:.1f}",
+                lock_path=record.path,
+                owner=owner,
+                action="holder_still_active",
+            )
+
+        self._cancel_fetch_lock_watchdog(key)
+        self._fetch_lock_watchdogs[key] = asyncio.create_task(_watchdog())
 
     def _lockfile_age(self, path: str) -> Optional[float]:
         try:
@@ -1709,6 +1800,7 @@ class CandlestickManager:
                     return
                 if record.count <= 1:
                     self._held_fetch_locks.pop(key, None)
+                    self._cancel_fetch_lock_watchdog(key)
                     await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 else:
                     self._held_fetch_locks[key] = _LockRecord(
@@ -1729,11 +1821,23 @@ class CandlestickManager:
             try:
                 await asyncio.to_thread(lock_obj.acquire)
                 acquired_at = time.time()
-                self._touch_lockfile(lock_path)
+                self._touch_lockfile(
+                    lock_path,
+                    symbol=symbol,
+                    timeframe=tf_norm,
+                    acquired_at=acquired_at,
+                    attempt=attempt,
+                )
                 self._held_fetch_locks[key] = _LockRecord(
                     lock=lock_obj,
                     path=lock_path,
                     count=1,
+                    acquired_at=acquired_at,
+                )
+                self._start_fetch_lock_watchdog(
+                    key,
+                    symbol=symbol,
+                    timeframe=tf_norm,
                     acquired_at=acquired_at,
                 )
                 self._log(
@@ -1747,6 +1851,7 @@ class CandlestickManager:
                     yield
                 finally:
                     record = self._held_fetch_locks.pop(key, None)
+                    self._cancel_fetch_lock_watchdog(key)
                     if record is not None:
                         await self._release_lock(record.lock, record.path, symbol, tf_norm)
                 return
@@ -1760,6 +1865,7 @@ class CandlestickManager:
                         timeframe=tf_norm,
                         age=f"{age:.2f}",
                         lock_path=lock_path,
+                        owner=self._read_lockfile_owner(lock_path),
                     )
 
                 if time.monotonic() >= deadline:
@@ -3931,6 +4037,10 @@ class CandlestickManager:
                     ts = _floor_minute(ts)
                 o, h, l, c = map(float, (r[1], r[2], r[3], r[4]))
                 bv = float(r[5]) if len(r) > 5 else 0.0
+                if not all(math.isfinite(x) for x in (o, h, l, c, bv)):
+                    continue
+                if min(o, h, l, c) <= 0.0 or bv < 0.0:
+                    continue
                 bv = normalize_ccxt_volume_to_base(self._ex_id or "", c, bv)
                 out.append((ts, o, h, l, c, bv))
             except Exception:
@@ -6519,10 +6629,20 @@ class CandlestickManager:
         alpha = 2.0 / (span + 1.0)
         one_minus = 1.0 - alpha
         out = np.empty((n,), dtype=np.float64)
-        num = float(values[0])
+        first_finite_idx = None
+        for i in range(n):
+            if np.isfinite(float(values[i])):
+                first_finite_idx = i
+                break
+        if first_finite_idx is None:
+            out.fill(float("nan"))
+            return out
+        if first_finite_idx > 0:
+            out[:first_finite_idx] = float("nan")
+        num = float(values[first_finite_idx])
         den = 1.0
-        out[0] = num / den
-        for i in range(1, n):
+        out[first_finite_idx] = num / den
+        for i in range(first_finite_idx + 1, n):
             v = float(values[i])
             if not np.isfinite(v):
                 out[i] = out[i - 1]
@@ -6699,6 +6819,94 @@ class CandlestickManager:
                 else:
                     metric_out[span] = float(self._ema(tail, span))
             out[metric_key] = metric_out
+        return out
+
+    async def get_latest_cached_ema_metrics(
+        self,
+        symbol: str,
+        spans_by_metric: Dict[str, Any],
+        *,
+        max_staleness_ms: Optional[int],
+        window_candles: Optional[int] = None,
+        timeframe: str = "1m",
+    ) -> Dict[str, float]:
+        """Return EMA metrics ending at the newest locally cached completed candle.
+
+        This is for non-critical live candidate ranking where callers may carry
+        forward qv/log-range EMAs through a bounded unknown stale tail. It never
+        fetches remote candles and never appends synthetic tail rows.
+        """
+        period_ms = _tf_to_ms(timeframe)
+        normalized = self._normalize_spans_by_metric(spans_by_metric)
+        if not normalized:
+            return {}
+        last_cached = _floor_minute(int(self.get_last_final_ts(symbol) or 0))
+        if last_cached <= 0:
+            return {}
+        latest_expected = (int(self._now_ms()) // period_ms) * period_ms - period_ms
+        stale_tail_ms = max(0, int(latest_expected) - int(last_cached))
+        if (
+            max_staleness_ms is not None
+            and int(max_staleness_ms) >= 0
+            and stale_tail_ms > int(max_staleness_ms)
+        ):
+            return {}
+        max_span = max(span for spans in normalized.values() for span in spans)
+        max_candles = max(1, int(math.ceil(max_span)))
+        if window_candles is not None:
+            try:
+                max_candles = max(max_candles, int(window_candles))
+            except Exception:
+                pass
+        start_ts = int(last_cached - period_ms * (max_candles - 1))
+        raw = await self.get_candles(
+            symbol,
+            start_ts=start_ts,
+            end_ts=int(last_cached),
+            max_age_ms=None,
+            strict=False,
+            timeframe=timeframe,
+            max_lookback_candles=max_candles,
+            fill_trailing_gaps=False,
+            allow_remote_fetch=False,
+        )
+        if raw.size == 0 or not self._ema_window_has_expected_tail(raw, int(last_cached)):
+            return {}
+
+        out: Dict[str, float] = {}
+        tf_key = str(period_ms)
+        now = self._now_ms()
+        cache = self._ema_cache.setdefault(symbol, {})
+        for metric_key, spans in normalized.items():
+            for span in spans:
+                span_candles = max(1, int(math.ceil(span)))
+                metric_start_ts = int(last_cached - period_ms * (span_candles - 1))
+                tail = self._slice_ts_range(
+                    raw, metric_start_ts, int(last_cached), assume_sorted=True
+                )
+                if period_ms == ONE_MIN_MS:
+                    tail = self.standardize_gaps(
+                        tail,
+                        start_ts=metric_start_ts,
+                        end_ts=int(last_cached),
+                        strict=False,
+                        fill_trailing_gaps=False,
+                        assume_sorted=True,
+                        symbol=symbol,
+                    )
+                if tail.size == 0:
+                    continue
+                series = self._ema_metric_series(metric_key, tail)
+                if series.shape[0] == 0:
+                    continue
+                val = float(self._ema(series, span))
+                if math.isfinite(val):
+                    out[str(metric_key)] = val
+                    cache[(str(metric_key), float(span), tf_key)] = (
+                        val,
+                        int(last_cached),
+                        int(now),
+                    )
         return out
 
     async def _latest_finalized_range(

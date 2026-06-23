@@ -10,6 +10,7 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import passivbot_rust as pbr
 
+from live.event_bus import EventTypes
 from trailing_diagnostics import (
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
@@ -146,12 +147,35 @@ def _monitor_emit_stop(
     stop_payload = {"reason": str(reason)}
     if payload:
         stop_payload.update(payload)
-    return self._monitor_record_event(
+    event = self._monitor_record_event(
         "bot.stop",
         ("bot", "lifecycle", "stop"),
         stop_payload,
         ts=ts,
     )
+    if (
+        str(reason) != "shutdown_gracefully"
+        and not getattr(self, "_live_event_bot_stopped_emitted", False)
+    ):
+        emit_live_event = getattr(self, "_emit_live_event", None)
+        if callable(emit_live_event):
+            try:
+                status = "failed" if str(reason) == "startup_error" else "skipped"
+                emit_live_event(
+                    EventTypes.BOT_STOPPED,
+                    level="info",
+                    component="lifecycle",
+                    tags=("bot", "lifecycle", "stop"),
+                    status=status,
+                    reason_code=str(reason),
+                    data=stop_payload,
+                )
+                self._live_event_bot_stopped_emitted = True
+            except Exception as exc:
+                logging.debug(
+                    "[monitor] failed to emit structured terminal stop: %s", exc
+                )
+    return event
 
 
 def _monitor_hsl_payload(self, pside: str) -> dict:

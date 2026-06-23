@@ -10,6 +10,51 @@ All notable user-facing changes will be documented in this file.
   `reduce_portfolio` policies while remaining subject to the realized-loss gate.
   Manual and panic exposure now counts toward same-side TWEL measurement while
   remaining excluded from TWEL auto-reduce candidate selection.
+- Fixed live forager EMA readiness for flat approved-universe and transient
+  forager-selected symbols: missing close/required EMA data now marks the flat
+  symbol nontradable for that planning cycle instead of restarting the execution
+  loop, while explicit normal symbols and held/open-order symbols remain
+  fail-loud.
+- Fixed two live restart/minute-boundary edge cases: required 1m log-range EMA
+  loads now retry bounded open-tail projection when a fresh one-candle tail
+  appears after projection precompute without clearing candidate-only forager
+  qv/log-range maps to `None`, and coin-HSL balance/equity replay now emits
+  explicit zero coin-UPnL for replay-proven flat symbols with realized history.
+- Hardened live forager promotion readiness: newly selected normal forager
+  symbols now get targeted candle warmup before normal order planning, and
+  missing required forager ranking EMAs still fail loudly for active/normal
+  symbols instead of silently making them nontradable.
+- Fixed live HSL restart replay so historical drawdown threshold crossings no
+  longer create a fresh RED panic after recovery; startup now panics only when
+  current drawdown is RED or when exchange-derived panic/cooldown markers
+  reconstruct an active prior HSL stop.
+- Hardened v8 live startup after overnight VPS probes: deterministic coin-HSL
+  validation errors stop as terminal startup failures instead of restart loops,
+  stale candle fetch locks now include owner diagnostics and local hold-timeout
+  warnings, partial fill-history gap repairs persist correctly, true secondary
+  forager symbols with unavailable required EMA inputs are marked nontradable
+  until fresh data is available, active/normal EMA inputs remain fail-loud, and
+  Gateio history replay uses single-fetch concurrency by default.
+- Hardened v8 live restart behavior by clearing successfully retried empty
+  fill-history gaps, failing loudly on ambiguous coin-HSL carry-in replay,
+  avoiding duplicate coin-HSL startup replay, keeping active/normal forager
+  EMA inputs fail-loud, and summarizing close-EMA fallbacks.
+- Reduced v8 live startup noise and CPU pressure by summarizing flat forager
+  candidate EMA readiness failures, optimizing coin-HSL restart replay, adding
+  coin-HSL replay progress logs, and suppressing known websocket timeout futures.
+- Reduced live Kucoin fill-history churn by keeping old synthetic PnL records out of
+  routine/latest repair windows, and made flat forager candidates with unavailable
+  required EMA volatility inputs non-tradable for that planning cycle instead of
+  restarting the execution loop.
+- Fixed v8 live fill-history startup/restart behavior so unproven
+  `pnls_max_lookback_days` coverage triggers a blocking lookback refresh and
+  retry/defer instead of sending neutral PnL inputs or repeatedly restarting the
+  execution loop.
+- Reduced repeated live fill-history repair work when coverage remains blocked
+  by the same unresolved gap, and made live execution-loop retry delays respond
+  promptly to shutdown.
+- Hardened live candle EMA inputs by filtering invalid OHLCV rows at ingestion and
+  preventing a leading non-finite candle sample from poisoning log-range EMAs.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
   backtest metrics for average and median daily-worst strategy-equity drawdown.
 - Changed the v8 default backtest candle interval to 1 minute and added
@@ -331,6 +376,8 @@ All notable user-facing changes will be documented in this file.
 - Fixed all-zero `forager_score_weights` configs to normalize to EMA-readiness-only ranking consistently across Python config prep, Rust selection, and optimizer inputs instead of drifting into ambiguous fallback behavior.
 - Stopped hydrating omitted `config.bot.{long,short}` fields from schema-tuned bot defaults in legacy/current configs. Newly omitted feature-style params now hydrate to explicit off/compatibility values with config logs, sparse disabled sides remain loadable, legacy `n_closes` and `min_markup` aliases are preserved, and the Rust parser now fails loudly instead of silently supplying bot-key fallbacks.
 - Hyperliquid live balance reconciliation no longer republishes bot-managed resting-order reserve after `fetch_open_orders()`. This removes the old `REST`/`REST+open_orders` balance oscillation path that could trigger self-induced order-size churn.
+- Live balance/equity replay now skips unsupported historical fill symbols that have no current position, and coin-mode HSL restart reconstruction accepts realized-only rows only when fill replay proves that coin side is flat. This avoids restart loops from stale delisted/unsupported history while preserving hard failures for open or ambiguous risk inputs.
+- New/generated live configs now enable bounded text log rotation by default while preserving explicit `logging.rotation = false` in existing configs.
 - Fixed OHLCV cache backfills so earlier requested ranges are no longer silently suppressed just because later shards already exist on disk. CandlestickManager now separates earliest observed cached candles from authoritative exchange-history lower bounds, migrates stale legacy `pre_inception` gaps out of old indexes, and warns when a requested span is clipped by an authoritative start boundary.
 - Live bots now watch for newer Passivbot-managed open orders they did not emit during the current runtime and stop after repeated detections within a rolling window. This ignores manual/non-Passivbot orders and older inherited orders, reducing the chance of two Passivbot instances silently competing on the same account indefinitely.
 - Staged live bots now route orchestrator latest-price reads through `CandlestickManager`, and `CandlestickManager.get_last_prices()` now uses cheap cache hits plus one bulk ticker snapshot when safe before any per-symbol fallback. This materially reduces staged live market-data call bursts on exchanges like Bybit.

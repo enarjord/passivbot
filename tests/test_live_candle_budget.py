@@ -635,8 +635,8 @@ async def test_orchestrator_ema_bundle_marks_missing_required_forager_ema_unavai
         }
         positions = {}
         open_orders = {}
-        PB_modes = {"long": {symbol: "normal"}, "short": {}}
-        active_symbols = [symbol]
+        PB_modes = {"long": {}, "short": {}}
+        active_symbols = []
         inactive_coin_candle_ttl_ms = 600_000
         cm = FakeCM()
 
@@ -704,6 +704,328 @@ async def test_orchestrator_ema_bundle_marks_missing_required_forager_ema_unavai
 
     assert m1_close_emas[symbol]
     assert m1_volume_emas[symbol] == {}
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_lr_unavailable(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 2_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    symbol = "NEAR/USDT:USDT"
+
+    class FakeCM:
+        def get_last_refresh_ms(self, symbol):
+            return now_ms
+
+        def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
+            return {"ok": True, "timeframes": {"1m": {"coverage_ok": True}}}
+
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return 100.0
+
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return 1.0
+
+        async def get_latest_ema_log_range(
+            self,
+            symbol,
+            *,
+            span,
+            tf=None,
+            max_age_ms=None,
+            allow_remote_fetch=True,
+            **kwargs,
+        ):
+            return float("nan")
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_staleness_minutes": 10,
+                "strategy_kind": "trailing_martingale",
+            }
+        }
+        positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        PB_modes = {"long": {}, "short": {}}
+        active_symbols = []
+        inactive_coin_candle_ttl_ms = 600_000
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def has_position(self, pside=None, symbol=None):
+            if pside is None:
+                return any(
+                    abs(float(pos.get("size", 0.0) or 0.0)) > 0.0
+                    for pos in self.positions.get(symbol, {}).values()
+                )
+            return (
+                abs(float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)))
+                > 0.0
+            )
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {
+                "ema_span_0": 10.0,
+                "ema_span_1": 20.0,
+                "volatility_ema_span_1m": 5.0,
+                "volatility_ema_span_1h": 0.0,
+                "entry": {
+                    "threshold_volatility_1m_weight": 1.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                    "threshold_volatility_1h_weight": 0.0,
+                    "retracement_volatility_1h_weight": 0.0,
+                },
+                "close": {
+                    "threshold_volatility_1m_weight": 0.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                    "threshold_volatility_1h_weight": 0.0,
+                    "retracement_volatility_1h_weight": 0.0,
+                },
+            }
+
+        def bot_value(self, pside, key):
+            if key in {"forager_volume_ema_span_1m", "forager_volatility_ema_span_1m"}:
+                return 0.0
+            if key == "forager_volume_drop_pct":
+                return 0.0
+            if key == "forager_score_weights":
+                return _forager_score_weights()
+            return 0.0
+
+        _mode_override_to_orchestrator_mode = pb_mod.Passivbot._mode_override_to_orchestrator_mode
+        _pb_mode_to_orchestrator_mode = pb_mod.Passivbot._pb_mode_to_orchestrator_mode
+        _pside_blocks_new_entries = pb_mod.Passivbot._pside_blocks_new_entries
+        _completed_candle_health_now_ms = pb_mod.Passivbot._completed_candle_health_now_ms
+        _completed_candle_tail_gap_fallback_signature = (
+            pb_mod.Passivbot._completed_candle_tail_gap_fallback_signature
+        )
+        _active_candle_tail_gap_max_ms = pb_mod.Passivbot._active_candle_tail_gap_max_ms
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+
+    bot = FakeBot()
+    (
+        m1_close_emas,
+        _m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        _volumes_long,
+        _log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], modes=bot.PB_modes
+    )
+
+    assert m1_close_emas[symbol] == {}
+    assert m1_log_range_emas[symbol] == {}
+    assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+
+    bot_active = FakeBot()
+    bot_active.PB_modes = {"long": {symbol: "normal"}, "short": {}}
+    bot_active.active_symbols = [symbol]
+    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot_active, [symbol], modes=bot_active.PB_modes
+        )
+
+    bot_with_position = FakeBot()
+    bot_with_position.positions = {
+        symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}
+    }
+    with pytest.raises(RuntimeError, match="missing required m1_log_range EMA"):
+        await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot_with_position, [symbol], modes=bot_with_position.PB_modes
+        )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailable(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 2_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+    symbol = "LATE/USDT:USDT"
+
+    class FakeCM:
+        def __init__(self):
+            self.health_calls = 0
+
+        def get_last_refresh_ms(self, symbol):
+            return now_ms - 30_000
+
+        def get_last_final_ts(self, symbol):
+            return 0
+
+        def get_completed_candle_health(self, symbol, windows=None, now_ms=None):
+            self.health_calls += 1
+            if windows == {"1m": 1} and self.health_calls == 1:
+                return {"ok": True, "timeframes": {"1m": {"coverage_ok": True}}}
+            return {
+                "ok": False,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": False,
+                        "timeframe": "1m",
+                        "open_tail_gap": True,
+                        "latest_expected_ts": 1_920_000,
+                        "last_cached_ts": 1_860_000,
+                        "missing_spans": [(1_920_000, 1_920_000)],
+                        "tail_gap_age_ms": 60_000,
+                        "tail_gap_candles": 1,
+                        "missing_candles": 1,
+                    }
+                },
+            }
+
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return 100.0
+
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            return 42.0
+
+        async def get_latest_ema_log_range(
+            self,
+            symbol,
+            *,
+            span,
+            tf=None,
+            max_age_ms=None,
+            allow_remote_fetch=True,
+            **kwargs,
+        ):
+            if tf == "1h":
+                return 0.01
+            return float("nan")
+
+        async def get_latest_cached_ema_metrics(
+            self,
+            symbol,
+            spans_by_metric,
+            *,
+            max_staleness_ms=None,
+            window_candles=None,
+            timeframe="1m",
+        ):
+            return {}
+
+        async def get_projected_open_tail_ema_metrics(
+            self,
+            symbol,
+            spans_by_metric,
+            *,
+            latest_expected_ts,
+            last_cached_ts,
+            max_tail_gap_ms,
+        ):
+            return {
+                "close": {float(span): 100.0 for span in spans_by_metric.get("close", [])},
+                "qv": {float(span): 0.0 for span in spans_by_metric.get("qv", [])},
+                "log_range": {
+                    float(span): 0.0 for span in spans_by_metric.get("log_range", [])
+                },
+            }
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_staleness_minutes": 10,
+                "strategy_kind": "trailing_martingale",
+            }
+        }
+        positions = {symbol: {"long": {"size": 0.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        PB_modes = {"long": {}, "short": {}}
+        active_symbols = []
+        inactive_coin_candle_ttl_ms = 600_000
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return pside in (None, "long")
+
+        def has_position(self, pside=None, symbol=None):
+            return False
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def _strategy_params_to_rust_dict(self, pside, symbol):
+            return {
+                "ema_span_0": 10.0,
+                "ema_span_1": 20.0,
+                "volatility_ema_span_1m": 5.0,
+                "volatility_ema_span_1h": 0.0,
+                "entry": {
+                    "threshold_volatility_1m_weight": 1.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                    "threshold_volatility_1h_weight": 0.0,
+                    "retracement_volatility_1h_weight": 0.0,
+                },
+                "close": {
+                    "threshold_volatility_1m_weight": 0.0,
+                    "retracement_volatility_1m_weight": 0.0,
+                    "threshold_volatility_1h_weight": 0.0,
+                    "retracement_volatility_1h_weight": 0.0,
+                },
+            }
+
+        def bot_value(self, pside, key):
+            if key == "forager_volume_ema_span_1m":
+                return 5.0
+            if key == "forager_volatility_ema_span_1m":
+                return 7.0
+            if key == "forager_volume_drop_pct":
+                return 0.0
+            if key == "forager_score_weights":
+                return _forager_score_weights(volatility=1.0 if pside == "long" else 0.0)
+            return 0.0
+
+        _mode_override_to_orchestrator_mode = pb_mod.Passivbot._mode_override_to_orchestrator_mode
+        _pb_mode_to_orchestrator_mode = pb_mod.Passivbot._pb_mode_to_orchestrator_mode
+        _pside_blocks_new_entries = pb_mod.Passivbot._pside_blocks_new_entries
+        _completed_candle_health_now_ms = pb_mod.Passivbot._completed_candle_health_now_ms
+        _completed_candle_tail_gap_fallback_signature = (
+            pb_mod.Passivbot._completed_candle_tail_gap_fallback_signature
+        )
+        _active_candle_tail_gap_max_ms = pb_mod.Passivbot._active_candle_tail_gap_max_ms
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+
+    bot = FakeBot()
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], modes=bot.PB_modes
+    )
+
+    assert m1_close_emas[symbol]
+    assert m1_volume_emas[symbol][5.0] == pytest.approx(42.0)
+    assert m1_log_range_emas[symbol] == {}
+    assert volumes_long[symbol] == pytest.approx(42.0)
+    assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
 
 
@@ -815,14 +1137,14 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
     assert m1_volume_emas["FETCH/USDT:USDT"] == {}
     assert m1_log_range_emas["FETCH/USDT:USDT"] == {}
     assert h1_log_range_emas["FETCH/USDT:USDT"] == {}
-    assert volumes_long["FETCH/USDT:USDT"] == 0.0
-    assert log_ranges_long["FETCH/USDT:USDT"] == 0.0
+    assert "FETCH/USDT:USDT" not in volumes_long
+    assert "FETCH/USDT:USDT" not in log_ranges_long
     assert m1_close_emas["SKIP/USDT:USDT"] == {}
     assert m1_volume_emas["SKIP/USDT:USDT"] == {}
     assert m1_log_range_emas["SKIP/USDT:USDT"] == {}
     assert h1_log_range_emas["SKIP/USDT:USDT"] == {}
-    assert volumes_long["SKIP/USDT:USDT"] == 0.0
-    assert log_ranges_long["SKIP/USDT:USDT"] == 0.0
+    assert "SKIP/USDT:USDT" not in volumes_long
+    assert "SKIP/USDT:USDT" not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {
         "FETCH/USDT:USDT",
         "SKIP/USDT:USDT",
@@ -837,6 +1159,167 @@ async def test_orchestrator_ema_bundle_skips_cache_only_never_fetched_secondarie
         in record.message
         for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_orchestrator_ema_bundle_carries_cached_forager_qv_log_range(
+    monkeypatch,
+):
+    import passivbot as pb_mod
+
+    now_ms = 2_000_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        def __init__(self):
+            self.calls = []
+            self.cached_calls = []
+
+        def get_last_refresh_ms(self, symbol):
+            return 1
+
+        def get_last_final_ts(self, symbol):
+            return 1_860_000 if symbol == "SECONDARY/USDT:USDT" else 1_920_000
+
+        async def get_latest_ema_close(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            self.calls.append(("close", symbol, None, int(max_age_ms), allow_remote_fetch))
+            return 1.0
+
+        async def get_latest_ema_quote_volume(
+            self, symbol, *, span, max_age_ms=None, allow_remote_fetch=True, **kwargs
+        ):
+            self.calls.append(("qv", symbol, None, int(max_age_ms), allow_remote_fetch))
+            return float("nan") if symbol == "SECONDARY/USDT:USDT" else 1.0
+
+        async def get_latest_ema_log_range(
+            self,
+            symbol,
+            *,
+            span,
+            tf=None,
+            max_age_ms=None,
+            allow_remote_fetch=True,
+            **kwargs,
+        ):
+            self.calls.append(("lr", symbol, tf, int(max_age_ms), allow_remote_fetch))
+            if symbol == "SECONDARY/USDT:USDT" and tf is None:
+                return float("nan")
+            return 1.0
+
+        async def get_latest_cached_ema_metrics(
+            self,
+            symbol,
+            spans_by_metric,
+            *,
+            max_staleness_ms=None,
+            window_candles=None,
+            timeframe="1m",
+        ):
+            self.cached_calls.append((symbol, dict(spans_by_metric), int(max_staleness_ms)))
+            out = {}
+            if symbol == "SECONDARY/USDT:USDT":
+                if "qv" in spans_by_metric:
+                    out["qv"] = 321.0
+                if "log_range" in spans_by_metric:
+                    out["log_range"] = 0.006
+            return out
+
+        async def get_projected_open_tail_ema_metrics(
+            self,
+            symbol,
+            spans_by_metric,
+            *,
+            latest_expected_ts,
+            last_cached_ts,
+            max_tail_gap_ms,
+        ):
+            return {
+                "close": {float(span): 1.0 for span in spans_by_metric.get("close", [])},
+                "qv": {float(span): 0.0 for span in spans_by_metric.get("qv", [])},
+                "log_range": {
+                    float(span): 0.0 for span in spans_by_metric.get("log_range", [])
+                },
+            }
+
+    class FakeBot:
+        config = {
+            "live": {
+                "max_ohlcv_fetches_per_minute": 4,
+                "max_forager_candle_staleness_minutes": 5,
+            }
+        }
+        positions = {"POS/USDT:USDT": {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+        open_orders = {}
+        inactive_coin_candle_ttl_ms = 600_000
+        cm = FakeCM()
+
+        def is_forager_mode(self, pside=None):
+            return True
+
+        def get_max_n_positions(self, pside):
+            return 2 if pside == "long" else 0
+
+        def get_current_n_positions(self, pside):
+            return 1 if pside == "long" else 0
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        def bp(self, pside, key, symbol):
+            if key == "ema_span_0":
+                return 10.0
+            if key == "ema_span_1":
+                return 20.0
+            if key == "entry_volatility_ema_span_hours":
+                return 2.0
+            return 0.0
+
+        def bot_value(self, pside, key):
+            if key == "forager_volume_ema_span_1m":
+                return 5.0
+            if key == "forager_volatility_ema_span_1m":
+                return 7.0
+            if key == "forager_volume_drop_pct":
+                return 0.0
+            if key == "forager_score_weights":
+                return _forager_score_weights(
+                    volume=1.0 if pside == "long" else 0.0,
+                    volatility=1.0 if pside == "long" else 0.0,
+                )
+            return 0.0
+
+        has_position = pb_mod.Passivbot.has_position
+        _compute_fetch_budget_ttls = pb_mod.Passivbot._compute_fetch_budget_ttls
+        _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
+        _rank_symbols_by_candle_staleness = (
+            pb_mod.Passivbot._rank_symbols_by_candle_staleness
+        )
+        _forager_target_staleness_ms = pb_mod.Passivbot._forager_target_staleness_ms
+        _token_bucket_budget = pb_mod.Passivbot._token_bucket_budget
+
+    bot = FakeBot()
+    (
+        _m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, ["POS/USDT:USDT", "SECONDARY/USDT:USDT"], modes={}
+    )
+
+    assert m1_volume_emas["SECONDARY/USDT:USDT"][5.0] == pytest.approx(321.0)
+    assert m1_log_range_emas["SECONDARY/USDT:USDT"][7.0] == pytest.approx(0.006)
+    assert volumes_long["SECONDARY/USDT:USDT"] == pytest.approx(321.0)
+    assert log_ranges_long["SECONDARY/USDT:USDT"] == pytest.approx(0.006)
+    secondary_calls = [call for call in bot.cm.calls if call[1] == "SECONDARY/USDT:USDT"]
+    assert secondary_calls
+    assert not any(call[4] for call in secondary_calls)
+    assert bot.cm.cached_calls
+    assert bot._orchestrator_ema_unavailable_symbols == set()
 
 
 @pytest.mark.asyncio
@@ -1156,12 +1639,12 @@ async def test_orchestrator_ema_bundle_marks_incomplete_cache_only_symbol_unavai
 
     called_symbols = {symbol for _kind, symbol, _tf, _max_age_ms in bot.cm.calls}
     assert "CACHE/USDT:USDT" in called_symbols
-    assert m1_close_emas["CACHE/USDT:USDT"] == {}
+    assert m1_close_emas["CACHE/USDT:USDT"]
     assert m1_volume_emas["CACHE/USDT:USDT"] == {}
-    assert m1_log_range_emas["CACHE/USDT:USDT"] == {}
-    assert h1_log_range_emas["CACHE/USDT:USDT"] == {}
-    assert volumes_long["CACHE/USDT:USDT"] == 0.0
-    assert log_ranges_long["CACHE/USDT:USDT"] == 0.0
+    assert isinstance(m1_log_range_emas["CACHE/USDT:USDT"], dict)
+    assert isinstance(h1_log_range_emas["CACHE/USDT:USDT"], dict)
+    assert "CACHE/USDT:USDT" not in volumes_long
+    assert isinstance(log_ranges_long["CACHE/USDT:USDT"], float)
     assert bot._orchestrator_ema_unavailable_symbols == {
         "CACHE/USDT:USDT",
         "FETCH/USDT:USDT",

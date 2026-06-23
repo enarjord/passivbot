@@ -49,6 +49,12 @@ At a high level, forager selection is:
 
 The canonical shortlist logic now lives in Rust and is shared by live selection and orchestrator/backtest selection.
 
+Live refreshes of broad candidate candles are best-effort and budgeted. The live bot should refresh
+the stalest eligible candidates first and spread remote candle calls over time, but stale candles
+within `live.max_forager_candle_staleness_minutes` do not by themselves remove a flat candidate
+from ranking. This prevents the shortlist from being chosen from a random subset of candidates
+that happened to have the freshest candles.
+
 ## Feature Definitions
 
 ### Volume
@@ -131,18 +137,38 @@ zero, the canonical config is EMA-readiness-only ranking, so the saved config wi
 closest to their real initial-entry threshold when filling empty slots; it does not mean every
 approved symbol will immediately open or keep adding entries.
 
+## Live Stale-Candle Policy
+
+Forager ranking inputs are decision-critical, but broad flat-candidate candles do not have the
+same freshness contract as candles for held symbols or symbols about to receive an order. For live
+forager ranking:
+
+- The candidate universe should be refreshed oldest-first in the background.
+- Candidates inside `live.max_forager_candle_staleness_minutes` remain rankable even if their
+  latest completed candle is stale.
+- Close EMA readiness may use bounded flat-close/no-trade projection for the stale tail.
+- Quote-volume and log-range EMA inputs should use the latest known EMA value without appending
+  synthetic zero-volume or zero-range tail candles.
+- Synthetic zero volume/log-range is valid for verified no-trade continuity gaps, not for unknown
+  stale tails caused by REST delay or refresh budgeting.
+- A candidate with no prior feature basis, non-finite carried values, or feature age beyond the
+  configured cap is unavailable for new forager entries until refreshed.
+
+When a candidate becomes unavailable, that state should be explicit in diagnostics. The bot should
+not silently replace missing volume/log-range with neutral values such as `0.0`, `(0.0, 0.0)`, or
+`inf`. If unavailable candidates materially narrow the ranking universe, the degraded universe
+should be visible and new forager entries may be deferred; the bot should not silently fill empty
+slots from the subset of symbols that refreshed first.
+
 ## Failure Policy
 
-Forager inputs are trading-critical.
+Forager inputs are trading-critical once a symbol is selected for an actual initial entry. Before
+placing or keeping an initial-entry order, the live bot still needs fresh account-critical surfaces,
+a fresh enough market snapshot, finite candidate features, and feature age within policy.
 
-That means:
-
-- missing required forager data should raise
-- non-finite required forager data should raise
-- fetch-budget exhaustion should raise if it prevents building required shortlist inputs
-- neutral defaults like `0.0`, `(0.0, 0.0)`, or `inf` are not acceptable for required shortlist inputs
-
-The only fallback philosophy accepted in Passivbot for critical indicator paths is the explicitly reviewed and bounded EMA fallback used in approved EMA paths. Forager should not invent local substitute values.
+The only fallback philosophy accepted in Passivbot for critical indicator paths is explicitly
+reviewed, bounded, observable reuse of prior indicator state in approved paths. Forager should not
+invent local substitute values.
 
 ## Caveats
 

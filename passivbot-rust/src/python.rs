@@ -300,7 +300,8 @@ impl EquityHardStopRuntimePy {
         red_threshold,
         ema_span_minutes,
         tier_ratio_yellow,
-        tier_ratio_orange
+        tier_ratio_orange,
+        latch_red = true
     ))]
     pub fn apply_sample(
         &mut self,
@@ -312,6 +313,7 @@ impl EquityHardStopRuntimePy {
         ema_span_minutes: f64,
         tier_ratio_yellow: f64,
         tier_ratio_orange: f64,
+        latch_red: bool,
     ) -> PyResult<Py<PyDict>> {
         self.last_rolling_peak = peak_strategy_equity;
         let cfg = ehsl::HardStopConfig {
@@ -322,12 +324,13 @@ impl EquityHardStopRuntimePy {
                 orange: tier_ratio_orange,
             },
         };
-        let step = ehsl::step_with_peak_strategy_equity(
+        let step = ehsl::step_with_peak_strategy_equity_latch(
             &mut self.state,
             cfg,
             equity,
             peak_strategy_equity,
             timestamp_ms,
+            latch_red,
         )
         .map_err(PyValueError::new_err)?;
 
