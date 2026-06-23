@@ -203,6 +203,101 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
     )
 
 
+def _authoritative_result_summary(surface: str, result: Any) -> dict[str, Any]:
+    if surface == "balance":
+        try:
+            raw, normalized = result
+            return {
+                "has_raw_payload": raw is not None,
+                "balance": round(float(normalized), 12),
+            }
+        except Exception:
+            return {"result_type": type(result).__name__}
+    if surface == "positions":
+        try:
+            _raw, positions = result
+            return {"count": len(positions or [])}
+        except Exception:
+            return {"result_type": type(result).__name__}
+    if surface == "open_orders":
+        try:
+            return {"count": len(result or [])}
+        except Exception:
+            return {"result_type": type(result).__name__}
+    if surface == "fills":
+        return {"ok": bool(result)}
+    return {"result_type": type(result).__name__}
+
+
+def emit_authoritative_remote_call_event(
+    bot: Any,
+    *,
+    surface: str,
+    stage: str,
+    started_ms: int,
+    elapsed_ms: int | None = None,
+    remote_call_id: str | None = None,
+    result: Any = None,
+    error: BaseException | None = None,
+) -> str | None:
+    """Emit remote-call events for staged authoritative account-state fetches."""
+    emit = getattr(bot, "_emit_live_event", None)
+    if not callable(emit):
+        return remote_call_id
+    stage = str(stage or "").lower()
+    surface = str(surface or "unknown")
+    cycle_id = current_live_event_cycle_id(bot)
+    authoritative_epoch = int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0)
+    remote_call_group_id = (
+        f"{cycle_id}:authoritative" if cycle_id else f"auth_{authoritative_epoch}:authoritative"
+    )
+    if stage == "start":
+        remote_call_id = next_live_event_remote_call_id(bot, "rca")
+        event_type = EventTypes.REMOTE_CALL_STARTED
+        status = "started"
+        level = "debug"
+    elif error is not None:
+        event_type = EventTypes.REMOTE_CALL_FAILED
+        status = "failed"
+        level = "warning"
+    else:
+        event_type = EventTypes.REMOTE_CALL_SUCCEEDED
+        status = "succeeded"
+        level = "debug"
+    data: dict[str, Any] = {
+        "kind": "authoritative_state_fetch",
+        "surface": surface,
+        "stage": stage,
+        "started_ms": int(started_ms),
+        "state_epoch": authoritative_epoch,
+        "pending_confirmations": sorted(
+            str(item)
+            for item in (getattr(bot, "_authoritative_pending_confirmations", {}) or {})
+        ),
+    }
+    if elapsed_ms is not None:
+        data["elapsed_ms"] = int(elapsed_ms)
+    if error is not None:
+        data["error_type"] = type(error).__name__
+        data["error"] = _sanitize_remote_text(error, max_len=500)
+        data["error_repr"] = _sanitize_remote_text(repr(error), max_len=500)
+    elif stage != "start":
+        data.update(_authoritative_result_summary(surface, result))
+    emit(
+        event_type,
+        level=level,
+        component="state.authoritative_fetch",
+        tags=("remote_call", "state", "authoritative", surface),
+        cycle_id=cycle_id,
+        remote_call_id=remote_call_id,
+        remote_call_group_id=remote_call_group_id,
+        status=status,
+        reason_code=f"authoritative_{surface}",
+        data=data,
+    )
+    return remote_call_id
+
+
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
     bot._live_event_cycle_seq = int(getattr(bot, "_live_event_cycle_seq", 0) or 0) + 1
     cycle_id = f"cy_{int(bot._live_event_cycle_seq)}"
