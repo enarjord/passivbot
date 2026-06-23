@@ -1,5 +1,7 @@
 import json
 import logging
+import threading
+import time
 
 import pytest
 
@@ -228,6 +230,74 @@ def test_sink_failure_degrades_observability_without_raising():
     assert monitor.events[-1].event_type == EventTypes.SINK_DEGRADED
     assert monitor.events[-1].reason_code == "structured_sink_failed"
     assert pipeline.close(timeout=2.0) is True
+
+
+def test_monitor_sink_none_ack_records_monitor_sink_failure():
+    class NonePublisher:
+        def record_event(self, *args, **kwargs):
+            return None
+
+    pipeline = LiveEventPipeline(
+        monitor_sinks=[MonitorEventSink(NonePublisher())],
+        routes={EventTypes.SNAPSHOT_BUILT: EventRoute(structured=False, monitor=True)},
+    )
+
+    event = pipeline.emit(LiveEvent(EventTypes.SNAPSHOT_BUILT))
+
+    assert event.event_type == EventTypes.SNAPSHOT_BUILT
+    assert pipeline.flush(timeout=2.0) is True
+    assert pipeline.sink_error_counters["monitor"] == 1
+    assert pipeline.degraded_events[-1].reason_code == "monitor_sink_failed"
+    assert pipeline.close(timeout=2.0) is True
+
+
+def test_pipeline_close_drains_queued_events_after_close_starts():
+    class SlowSink:
+        def __init__(self):
+            self.events = []
+
+        def write(self, event):
+            time.sleep(0.02)
+            self.events.append(event)
+            return event
+
+    sink = SlowSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        routes={EventTypes.DATA_PACKET_UPDATED: EventRoute(structured=True, monitor=False)},
+    )
+
+    for _ in range(5):
+        pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED))
+
+    assert pipeline.close(timeout=2.0) is True
+    assert [event.event_type for event in sink.events] == [
+        EventTypes.DATA_PACKET_UPDATED,
+        EventTypes.DATA_PACKET_UPDATED,
+        EventTypes.DATA_PACKET_UPDATED,
+        EventTypes.DATA_PACKET_UPDATED,
+        EventTypes.DATA_PACKET_UPDATED,
+    ]
+
+
+def test_pipeline_rejects_new_async_events_after_close_begins():
+    pipeline = LiveEventPipeline(
+        start=False,
+        routes={EventTypes.DATA_PACKET_UPDATED: EventRoute(structured=True, monitor=False)},
+    )
+
+    closer = threading.Thread(target=lambda: pipeline.close(timeout=0.1))
+    closer.start()
+    closer.join(timeout=1.0)
+
+    assert (
+        pipeline.emit(
+            LiveEvent(EventTypes.DATA_PACKET_UPDATED),
+            require_enqueue=True,
+        )
+        is None
+    )
+    assert pipeline.degraded_events[-1].reason_code == "pipeline_closing"
 
 
 def test_monitor_sink_preserves_current_monitor_record_event_contract():

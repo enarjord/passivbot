@@ -299,7 +299,7 @@ class MonitorEventSink:
 
     def write(self, event: LiveEvent) -> Any:
         kind, tags, payload = event.to_monitor_event()
-        return self.publisher.record_event(
+        result = self.publisher.record_event(
             kind,
             tags,
             payload,
@@ -307,6 +307,9 @@ class MonitorEventSink:
             symbol=event.symbol,
             pside=event.pside,
         )
+        if result is None:
+            raise RuntimeError(f"monitor publisher returned None for {kind}")
+        return result
 
 
 class ListEventSink:
@@ -425,17 +428,27 @@ class LiveEventPipeline:
             self._write_sink("text", self.text_sink, live_event)
         enqueued = True
         if route.structured or route.monitor:
-            try:
-                self._queue.put_nowait(live_event)
-            except queue.Full:
+            if self._stop.is_set():
                 enqueued = False
                 with self._state_lock:
                     self.drop_counters[live_event.event_type] += 1
                 self._record_degraded(
-                    reason_code="queue_full",
-                    message=f"live event queue full; dropped {live_event.event_type}",
+                    reason_code="pipeline_closing",
+                    message=f"live event pipeline closing; dropped {live_event.event_type}",
                     data={"dropped_event_type": live_event.event_type},
                 )
+            else:
+                try:
+                    self._queue.put_nowait(live_event)
+                except queue.Full:
+                    enqueued = False
+                    with self._state_lock:
+                        self.drop_counters[live_event.event_type] += 1
+                    self._record_degraded(
+                        reason_code="queue_full",
+                        message=f"live event queue full; dropped {live_event.event_type}",
+                        data={"dropped_event_type": live_event.event_type},
+                    )
         if require_enqueue and not enqueued:
             return None
         return live_event
@@ -449,19 +462,31 @@ class LiveEventPipeline:
         return self._queue.unfinished_tasks == 0
 
     def close(self, timeout: float = 2.0) -> bool:
-        self.flush(timeout=timeout)
+        deadline = time.monotonic() + max(0.0, timeout)
         self._stop.set()
-        try:
-            self._queue.put_nowait(None)
-        except queue.Full:
-            pass
+        if self._worker is None:
+            return self.flush(timeout=max(0.0, deadline - time.monotonic()))
+        sentinel_queued = False
+        while time.monotonic() < deadline:
+            try:
+                self._queue.put(None, timeout=min(0.05, max(0.0, deadline - time.monotonic())))
+                sentinel_queued = True
+                break
+            except queue.Full:
+                continue
+        if not sentinel_queued:
+            logging.warning("[event] live event pipeline close timed out before sentinel")
+            return False
         if self._worker is not None:
-            self._worker.join(timeout=max(0.0, timeout))
-            return not self._worker.is_alive()
+            self._worker.join(timeout=max(0.0, deadline - time.monotonic()))
+            closed = not self._worker.is_alive()
+            if not closed:
+                logging.warning("[event] live event pipeline close timed out while draining")
+            return closed
         return True
 
     def _drain(self) -> None:
-        while not self._stop.is_set():
+        while True:
             item = self._queue.get()
             try:
                 if item is None:
