@@ -1,0 +1,518 @@
+from __future__ import annotations
+
+from collections import Counter
+from dataclasses import asdict, dataclass, field, replace
+import hashlib
+import json
+import logging
+import queue
+import threading
+import time
+import uuid
+from typing import Any, Iterable, Mapping, Protocol
+
+
+SCHEMA_VERSION = 1
+REDACTED = "[redacted]"
+
+
+class EventTypes:
+    BOT_STARTED = "bot.started"
+    BOT_READY = "bot.ready"
+    BOT_STOPPING = "bot.stopping"
+    BOT_STOPPED = "bot.stopped"
+    CYCLE_STARTED = "cycle.started"
+    CYCLE_COMPLETED = "cycle.completed"
+    CYCLE_DEGRADED = "cycle.degraded"
+    DATA_PACKET_UPDATED = "data_packet.updated"
+    SNAPSHOT_BUILT = "snapshot.built"
+    PLANNING_UNAVAILABLE = "planning.unavailable"
+    RUST_ORCHESTRATOR_CALLED = "rust_orchestrator.called"
+    RUST_ORCHESTRATOR_RETURNED = "rust_orchestrator.returned"
+    ORDER_WAVE_COMPLETED = "order_wave.completed"
+    SINK_DEGRADED = "sink.degraded"
+
+
+PHASE1_EVENT_TYPES = {
+    EventTypes.BOT_STARTED,
+    EventTypes.BOT_READY,
+    EventTypes.BOT_STOPPING,
+    EventTypes.BOT_STOPPED,
+    EventTypes.CYCLE_STARTED,
+    EventTypes.CYCLE_COMPLETED,
+    EventTypes.CYCLE_DEGRADED,
+    EventTypes.DATA_PACKET_UPDATED,
+    EventTypes.SNAPSHOT_BUILT,
+    EventTypes.PLANNING_UNAVAILABLE,
+    EventTypes.RUST_ORCHESTRATOR_CALLED,
+    EventTypes.RUST_ORCHESTRATOR_RETURNED,
+    EventTypes.ORDER_WAVE_COMPLETED,
+    EventTypes.SINK_DEGRADED,
+}
+
+
+LEGACY_EVENT_TYPE_ALIASES = {
+    "planning_unavailable": EventTypes.PLANNING_UNAVAILABLE,
+}
+
+
+VALID_LEVELS = {"trace", "debug", "info", "warning", "error", "critical"}
+VALID_STATUSES = {
+    "started",
+    "succeeded",
+    "failed",
+    "deferred",
+    "skipped",
+    "recovered",
+    "degraded",
+}
+
+
+_SENSITIVE_KEY_FRAGMENTS = {
+    "apikey",
+    "api_key",
+    "api-key",
+    "authorization",
+    "auth",
+    "cookie",
+    "passphrase",
+    "password",
+    "privatekey",
+    "private_key",
+    "private-key",
+    "secret",
+    "signature",
+    "token",
+    "walletaddress",
+    "wallet_address",
+    "wallet-address",
+    "x-mbx-apikey",
+}
+
+
+def utc_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def monotonic_ms() -> int:
+    return int(time.monotonic() * 1000)
+
+
+def normalize_event_type(event_type: object) -> str:
+    raw = str(event_type)
+    return LEGACY_EVENT_TYPE_ALIASES.get(raw, raw)
+
+
+def payload_hash(payload: Any) -> str:
+    raw = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _is_sensitive_key(key: object) -> bool:
+    cleaned = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch in "_-")
+    compact = cleaned.replace("-", "").replace("_", "")
+    return any(
+        fragment in cleaned or fragment.replace("-", "").replace("_", "") in compact
+        for fragment in _SENSITIVE_KEY_FRAGMENTS
+    )
+
+
+def redact_payload(value: Any) -> Any:
+    if isinstance(value, Mapping):
+        return {
+            str(key): REDACTED if _is_sensitive_key(key) else redact_payload(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [redact_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_payload(item) for item in value]
+    return value
+
+
+@dataclass(frozen=True)
+class LiveEvent:
+    event_type: str
+    level: str = "info"
+    source: str = "live"
+    component: str | None = None
+    tags: tuple[str, ...] = ()
+    exchange: str | None = None
+    user: str | None = None
+    bot_id: str | None = None
+    symbol: str | None = None
+    pside: str | None = None
+    side: str | None = None
+    order_id: str | None = None
+    client_order_id: str | None = None
+    cycle_id: str | None = None
+    snapshot_id: str | None = None
+    plan_id: str | None = None
+    action_id: str | None = None
+    order_wave_id: str | None = None
+    remote_call_id: str | None = None
+    remote_call_group_id: str | None = None
+    status: str | None = None
+    reason_code: str | None = None
+    message: str | None = None
+    data: Mapping[str, Any] = field(default_factory=dict)
+    raw_ref: str | None = None
+    raw_hash: str | None = None
+    schema_version: int = SCHEMA_VERSION
+    event_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    ts_ms: int = field(default_factory=utc_ms)
+    monotonic_ms: int = field(default_factory=monotonic_ms)
+
+    def __post_init__(self) -> None:
+        level = str(self.level).lower()
+        if level not in VALID_LEVELS:
+            raise ValueError(f"invalid live event level: {self.level}")
+        object.__setattr__(self, "level", level)
+        if self.status is not None:
+            status = str(self.status).lower()
+            if status not in VALID_STATUSES:
+                raise ValueError(f"invalid live event status: {self.status}")
+            object.__setattr__(self, "status", status)
+        object.__setattr__(self, "event_type", normalize_event_type(self.event_type))
+        object.__setattr__(self, "tags", tuple(str(tag) for tag in self.tags))
+        object.__setattr__(self, "data", dict(redact_payload(dict(self.data or {}))))
+
+    def with_context(self, context: "LiveEventContext") -> "LiveEvent":
+        return context.apply(self)
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["tags"] = list(self.tags)
+        data["data"] = dict(self.data)
+        return data
+
+    def to_json(self) -> str:
+        return json.dumps(self.to_dict(), sort_keys=True, separators=(",", ":"))
+
+    def to_monitor_event(self) -> tuple[str, tuple[str, ...], dict[str, Any]]:
+        payload = {
+            "schema_version": self.schema_version,
+            "event_id": self.event_id,
+            "event_type": self.event_type,
+            "level": self.level,
+            "source": self.source,
+            "component": self.component,
+            "status": self.status,
+            "reason_code": self.reason_code,
+            "message": self.message,
+            "data": dict(self.data),
+            "raw_ref": self.raw_ref,
+            "raw_hash": self.raw_hash,
+            "ids": {
+                "bot_id": self.bot_id,
+                "cycle_id": self.cycle_id,
+                "snapshot_id": self.snapshot_id,
+                "plan_id": self.plan_id,
+                "action_id": self.action_id,
+                "order_wave_id": self.order_wave_id,
+                "remote_call_id": self.remote_call_id,
+                "remote_call_group_id": self.remote_call_group_id,
+            },
+        }
+        return self.event_type, self.tags, payload
+
+
+@dataclass(frozen=True)
+class LiveEventContext:
+    exchange: str | None = None
+    user: str | None = None
+    bot_id: str | None = None
+    cycle_id: str | None = None
+    snapshot_id: str | None = None
+    plan_id: str | None = None
+    action_id: str | None = None
+    order_wave_id: str | None = None
+    remote_call_id: str | None = None
+    remote_call_group_id: str | None = None
+
+    def with_ids(self, **kwargs: str | None) -> "LiveEventContext":
+        valid = {key: value for key, value in kwargs.items() if hasattr(self, key)}
+        unknown = set(kwargs) - set(valid)
+        if unknown:
+            raise KeyError(f"unknown live event context fields: {sorted(unknown)}")
+        return replace(self, **valid)
+
+    def apply(self, event: LiveEvent) -> LiveEvent:
+        updates: dict[str, str | None] = {}
+        for key, value in asdict(self).items():
+            if value is not None and getattr(event, key) is None:
+                updates[key] = value
+        return replace(event, **updates) if updates else event
+
+
+@dataclass(frozen=True)
+class EventRoute:
+    structured: bool = True
+    monitor: bool = True
+    console: bool = False
+    text: bool = False
+    throttle_interval_ms: int = 0
+    raw_payload_policy: str = "summary_hash_only"
+
+
+DEFAULT_ROUTE = EventRoute(structured=True, monitor=True, console=False, text=False)
+DEFAULT_ROUTES: dict[str, EventRoute] = {
+    EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
+    EventTypes.BOT_READY: EventRoute(console=True, text=True),
+    EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
+    EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
+    EventTypes.CYCLE_STARTED: EventRoute(
+        console=True, text=True, throttle_interval_ms=60_000
+    ),
+    EventTypes.CYCLE_COMPLETED: EventRoute(
+        console=True, text=True, throttle_interval_ms=60_000
+    ),
+    EventTypes.CYCLE_DEGRADED: EventRoute(console=True, text=True),
+    EventTypes.DATA_PACKET_UPDATED: EventRoute(console=False),
+    EventTypes.SNAPSHOT_BUILT: EventRoute(console=False),
+    EventTypes.PLANNING_UNAVAILABLE: EventRoute(
+        console=True, text=True, throttle_interval_ms=60_000
+    ),
+    EventTypes.RUST_ORCHESTRATOR_CALLED: EventRoute(console=False),
+    EventTypes.RUST_ORCHESTRATOR_RETURNED: EventRoute(
+        console=True, text=True, throttle_interval_ms=60_000
+    ),
+    EventTypes.ORDER_WAVE_COMPLETED: EventRoute(console=True, text=True),
+    EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
+}
+
+
+class LiveEventSink(Protocol):
+    def write(self, event: LiveEvent) -> Any:
+        ...
+
+
+class MonitorEventSink:
+    def __init__(self, publisher: Any):
+        self.publisher = publisher
+
+    def write(self, event: LiveEvent) -> Any:
+        kind, tags, payload = event.to_monitor_event()
+        return self.publisher.record_event(
+            kind,
+            tags,
+            payload,
+            ts=event.ts_ms,
+            symbol=event.symbol,
+            pside=event.pside,
+        )
+
+
+class ListEventSink:
+    def __init__(self) -> None:
+        self.events: list[LiveEvent] = []
+
+    def write(self, event: LiveEvent) -> LiveEvent:
+        self.events.append(event)
+        return event
+
+
+def format_console_event(event: LiveEvent) -> str:
+    base = f"[{event.event_type}]"
+    if event.status:
+        base += f" {event.status}"
+    if event.cycle_id:
+        base += f" cycle={event.cycle_id}"
+    if event.symbol:
+        base += f" symbol={event.symbol}"
+    if event.pside:
+        base += f" pside={event.pside}"
+    if event.reason_code:
+        base += f" reason={event.reason_code}"
+    if event.message:
+        base += f" {event.message}"
+    return base
+
+
+class ConsoleSummarySink:
+    def __init__(self, logger: logging.Logger | None = None):
+        self.logger = logger or logging.getLogger(__name__)
+
+    def write(self, event: LiveEvent) -> str:
+        message = format_console_event(event)
+        self.logger.log(_logging_level(event.level), message)
+        return message
+
+
+def _logging_level(level: str) -> int:
+    if level == "critical":
+        return logging.CRITICAL
+    if level == "error":
+        return logging.ERROR
+    if level == "warning":
+        return logging.WARNING
+    if level == "debug":
+        return logging.DEBUG
+    trace_level = getattr(logging, "TRACE", 5)
+    if level == "trace":
+        return int(trace_level)
+    return logging.INFO
+
+
+class LiveEventPipeline:
+    def __init__(
+        self,
+        *,
+        context: LiveEventContext | None = None,
+        routes: Mapping[str, EventRoute] | None = None,
+        structured_sinks: Iterable[LiveEventSink] = (),
+        monitor_sinks: Iterable[LiveEventSink] = (),
+        console_sink: LiveEventSink | None = None,
+        text_sink: LiveEventSink | None = None,
+        queue_maxsize: int = 10_000,
+        start: bool = True,
+    ):
+        self.context = context or LiveEventContext()
+        self.routes = dict(DEFAULT_ROUTES)
+        if routes:
+            self.routes.update(routes)
+        self.structured_sinks = tuple(structured_sinks)
+        self.monitor_sinks = tuple(monitor_sinks)
+        self.console_sink = console_sink
+        self.text_sink = text_sink
+        self.drop_counters: Counter[str] = Counter()
+        self.sink_error_counters: Counter[str] = Counter()
+        self.degraded_events: list[LiveEvent] = []
+        self._queue: queue.Queue[LiveEvent | None] = queue.Queue(maxsize=queue_maxsize)
+        self._stop = threading.Event()
+        self._worker: threading.Thread | None = None
+        if start:
+            self.start()
+
+    def start(self) -> None:
+        if self._worker is not None and self._worker.is_alive():
+            return
+        self._worker = threading.Thread(
+            target=self._drain,
+            name="live-event-pipeline",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def route_for(self, event: LiveEvent) -> EventRoute:
+        return self.routes.get(event.event_type, DEFAULT_ROUTE)
+
+    def emit(self, event: LiveEvent | Mapping[str, Any], **overrides: Any) -> LiveEvent:
+        if isinstance(event, LiveEvent):
+            live_event = event
+        else:
+            live_event = LiveEvent(**dict(event))
+        if overrides:
+            live_event = replace(live_event, **overrides)
+        live_event = live_event.with_context(self.context)
+        route = self.route_for(live_event)
+        if route.console and self.console_sink is not None:
+            self._write_sink("console", self.console_sink, live_event)
+        if route.text and self.text_sink is not None:
+            self._write_sink("text", self.text_sink, live_event)
+        if route.structured or route.monitor:
+            try:
+                self._queue.put_nowait(live_event)
+            except queue.Full:
+                self.drop_counters[live_event.event_type] += 1
+                self._record_degraded(
+                    reason_code="queue_full",
+                    message=f"live event queue full; dropped {live_event.event_type}",
+                    data={"dropped_event_type": live_event.event_type},
+                )
+        return live_event
+
+    def flush(self, timeout: float = 2.0) -> bool:
+        deadline = time.monotonic() + max(0.0, timeout)
+        while time.monotonic() < deadline:
+            if self._queue.unfinished_tasks == 0:
+                return True
+            time.sleep(0.01)
+        return self._queue.unfinished_tasks == 0
+
+    def close(self, timeout: float = 2.0) -> bool:
+        self.flush(timeout=timeout)
+        self._stop.set()
+        try:
+            self._queue.put_nowait(None)
+        except queue.Full:
+            pass
+        if self._worker is not None:
+            self._worker.join(timeout=max(0.0, timeout))
+            return not self._worker.is_alive()
+        return True
+
+    def _drain(self) -> None:
+        while not self._stop.is_set():
+            item = self._queue.get()
+            try:
+                if item is None:
+                    return
+                route = self.route_for(item)
+                if route.structured:
+                    for sink in self.structured_sinks:
+                        self._write_sink("structured", sink, item)
+                if route.monitor:
+                    for sink in self.monitor_sinks:
+                        self._write_sink("monitor", sink, item)
+            finally:
+                self._queue.task_done()
+
+    def _write_sink(self, name: str, sink: LiveEventSink, event: LiveEvent) -> Any:
+        try:
+            return sink.write(event)
+        except Exception as exc:
+            self.sink_error_counters[name] += 1
+            self._record_degraded(
+                reason_code=f"{name}_sink_failed",
+                message=f"{name} sink failed: {type(exc).__name__}",
+                data={"sink": name, "error_type": type(exc).__name__, "error": str(exc)},
+            )
+            return None
+
+    def _record_degraded(
+        self,
+        *,
+        reason_code: str,
+        message: str,
+        data: Mapping[str, Any] | None = None,
+    ) -> None:
+        degraded = LiveEvent(
+            EventTypes.SINK_DEGRADED,
+            level="warning",
+            source="live",
+            component="event_bus",
+            tags=("logging", "sink"),
+            status="degraded",
+            reason_code=reason_code,
+            message=message,
+            data=data or {},
+        ).with_context(self.context)
+        self.degraded_events.append(degraded)
+        if self.console_sink is not None:
+            try:
+                self.console_sink.write(degraded)
+            except Exception:
+                self.sink_error_counters["console"] += 1
+
+
+def emit_event(bot: Any, event: LiveEvent | Mapping[str, Any], **overrides: Any) -> Any:
+    pipeline = getattr(bot, "_live_event_pipeline", None)
+    if pipeline is None:
+        pipeline = getattr(bot, "live_event_pipeline", None)
+    if pipeline is None or not callable(getattr(pipeline, "emit", None)):
+        return None
+    try:
+        return pipeline.emit(event, **overrides)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            getattr(event, "event_type", event),
+            exc,
+        )
+        return None

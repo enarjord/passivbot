@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 import logging
 from typing import Any, Iterable, Mapping, TypeVar
 
+from live.event_bus import LiveEvent, emit_event
+
 
 T = TypeVar("T")
 
@@ -41,6 +43,9 @@ class DiagnosticEvent:
         )
 
     def emit(self, bot) -> Any:
+        emitted = emit_event(bot, self.to_live_event(bot))
+        if emitted is not None:
+            return emitted
         recorder = getattr(bot, "_monitor_record_event", None)
         if not callable(recorder):
             return None
@@ -60,6 +65,34 @@ class DiagnosticEvent:
                 exc,
             )
             return None
+
+    def to_live_event(self, bot=None) -> LiveEvent:
+        exchange = None
+        user = None
+        bot_id = None
+        if bot is not None:
+            exchange = getattr(bot, "exchange", None)
+            try:
+                user = bot.config_get(["live", "user"])
+            except Exception:
+                user = getattr(bot, "user", None)
+            bot_id = getattr(bot, "bot_id", None)
+        kwargs = {
+            "event_type": self.kind,
+            "level": "debug",
+            "source": "live",
+            "component": "diagnostic",
+            "tags": self.tags,
+            "exchange": None if exchange is None else str(exchange),
+            "user": None if user is None else str(user),
+            "bot_id": None if bot_id is None else str(bot_id),
+            "symbol": self.symbol,
+            "pside": self.pside,
+            "data": dict(self.payload),
+        }
+        if self.ts_ms is not None:
+            kwargs["ts_ms"] = self.ts_ms
+        return LiveEvent(**kwargs)
 
 
 def emit_diagnostic_event(bot, event: DiagnosticEvent) -> Any:
