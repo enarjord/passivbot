@@ -63,7 +63,7 @@ from live.event_bus import (
     LiveEventContext,
     LiveEventPipeline,
     MonitorEventSink,
-    payload_hash,
+    payload_hash_raw,
 )
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
@@ -5359,9 +5359,10 @@ class Passivbot:
             ):
                 await self._equity_hard_stop_initialize_from_history()
         while not self.stop_signal_received:
+            loop_start_ms = utc_ms()
+            loop_timings_ms: dict[str, int] = {}
+            cycle_id = None
             try:
-                loop_start_ms = utc_ms()
-                loop_timings_ms: dict[str, int] = {}
                 cycle_id = self._begin_live_event_cycle(loop_start_ms=loop_start_ms)
 
                 def mark_phase(phase: str, started_ms: int) -> None:
@@ -5380,6 +5381,11 @@ class Passivbot:
                     authoritative_ok = await self.refresh_authoritative_state()
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_authoritative_refresh_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug(
                             "[shutdown] authoritative refresh cancelled during shutdown"
                         )
@@ -5388,6 +5394,11 @@ class Passivbot:
                 mark_phase("authoritative", phase_start_ms)
                 if not authoritative_ok:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_requested",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         break
                     if (
                         getattr(self, "_last_authoritative_block_reason", None)
@@ -5439,11 +5450,21 @@ class Passivbot:
                 pending_pnl_authoritative_retry_count = 0
                 failed_update_pos_oos_pnls_ohlcvs_count = 0
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 if self._equity_hard_stop_enabled():
                     await self._equity_hard_stop_check()
                     if self._equity_hard_stop_signal_mode() == "coin":
                         if self._equity_hard_stop_coin_red_active():
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code="coin_hsl_red_supervisor",
+                                data={"timings_ms": dict(loop_timings_ms)},
+                            )
                             await self._equity_hard_stop_run_coin_red_supervisor()
                             continue
                     else:
@@ -5453,6 +5474,11 @@ class Passivbot:
                             for pside in self._hsl_psides()
                             if self._equity_hard_stop_enabled(pside)
                         ):
+                            self._emit_live_cycle_degraded(
+                                cycle_id=cycle_id,
+                                reason_code="hsl_red_supervisor",
+                                data={"timings_ms": dict(loop_timings_ms)},
+                            )
                             await self._equity_hard_stop_run_red_supervisor()
                             continue
                 blocked, barrier_details = self._authoritative_execution_barrier_state()
@@ -5485,6 +5511,11 @@ class Passivbot:
                     )
                     continue
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="prepare_planning_universe"
@@ -5493,6 +5524,11 @@ class Passivbot:
                 await self.prepare_planning_universe()
                 mark_phase("planning_universe", phase_start_ms)
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="refresh_market_state_if_needed"
@@ -5502,6 +5538,11 @@ class Passivbot:
                     market_ok = await self.refresh_market_state_if_needed()
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_market_refresh_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug(
                             "[shutdown] market refresh cancelled during shutdown"
                         )
@@ -5520,6 +5561,11 @@ class Passivbot:
                     continue
                 Passivbot._startup_timing_mark(self, "market")
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 staged_ready, staged_details = self._staged_execution_ready_state(
                     include_market_snapshot=False, context="market snapshot refresh"
@@ -5546,6 +5592,11 @@ class Passivbot:
                     res = await self.execute_to_exchange(prepare_cycle=False)
                 except asyncio.CancelledError:
                     if self._shutdown_requested():
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="shutdown_execution_cancelled",
+                            data={"timings_ms": dict(loop_timings_ms)},
+                        )
                         logging.debug("[shutdown] execution cancelled during shutdown")
                         break
                     raise
@@ -5555,6 +5606,14 @@ class Passivbot:
                     )
                     if handled:
                         self._last_loop_timing_ms = dict(loop_timings_ms)
+                        self._emit_live_cycle_degraded(
+                            cycle_id=cycle_id,
+                            reason_code="staged_execution_precondition",
+                            data={
+                                "details": dict(details or {}),
+                                "timings_ms": dict(loop_timings_ms),
+                            },
+                        )
                         await self._defer_staged_execution_cycle(details, loop_start_ms)
                         continue
                     raise
@@ -5574,6 +5633,11 @@ class Passivbot:
                         execution_loop_stopped.set()
                     return res
                 if self.stop_signal_received:
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_requested",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     break
                 # Track loop duration for health reporting
                 self._last_loop_duration_ms = utc_ms() - loop_start_ms
@@ -5611,10 +5675,21 @@ class Passivbot:
                         break
                     await asyncio.sleep(0.1)
                 mark_phase("scheduled_wait", phase_start_ms)
-            except (RestartBotException, FatalBotException):
+            except (RestartBotException, FatalBotException) as e:
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code=type(e).__name__,
+                    data={"timings_ms": dict(loop_timings_ms)},
+                    level="warning",
+                )
                 raise  # Propagate restart without incrementing error count
             except RateLimitExceeded as e:
                 if self._shutdown_requested():
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_rate_limit_handling",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     logging.debug(
                         "[shutdown] execution loop stopped during rate-limit handling: %s",
                         e,
@@ -5631,6 +5706,15 @@ class Passivbot:
                 logging.warning(
                     "[rate] execution loop hit rate limit; backing off 5s..."
                 )
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code="rate_limit",
+                    data={
+                        "error_type": type(e).__name__,
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="warning",
+                )
                 await self.restart_bot_on_too_many_errors()
                 await self._sleep_unless_shutdown(
                     5.0, stage="rate_limit_backoff"
@@ -5642,6 +5726,11 @@ class Passivbot:
                     break
             except FillHistoryCoverageUnavailable as e:
                 if self._shutdown_requested():
+                    self._emit_live_cycle_degraded(
+                        cycle_id=cycle_id,
+                        reason_code="shutdown_fill_history_coverage_retry",
+                        data={"timings_ms": dict(loop_timings_ms)},
+                    )
                     logging.debug(
                         "[shutdown] execution loop stopped during fill-history coverage retry: %s",
                         e,
@@ -5653,10 +5742,30 @@ class Passivbot:
                     "action=refresh_lookback_before_retry error=%s",
                     e,
                 )
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code="fill_history_coverage_unavailable",
+                    data={
+                        "error_type": type(e).__name__,
+                        "error": str(e)[:500],
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="warning",
+                )
                 await self._sleep_unless_shutdown(
                     1.0, stage="fill_history_coverage_retry"
                 )
             except Exception as e:
+                self._emit_live_cycle_degraded(
+                    cycle_id=cycle_id,
+                    reason_code=type(e).__name__,
+                    data={
+                        "error_type": type(e).__name__,
+                        "error": str(e)[:500],
+                        "timings_ms": dict(loop_timings_ms),
+                    },
+                    level="error",
+                )
                 if not await self._handle_execution_loop_failure(
                     e, allow_time_sync_recovery=True
                 ):
@@ -6047,6 +6156,15 @@ class Passivbot:
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+        self._emit_live_event(
+            EventTypes.BOT_STOPPED,
+            level="info",
+            component="lifecycle",
+            tags=("bot", "lifecycle", "stop"),
+            status="succeeded",
+            reason_code="shutdown_gracefully",
+            data={"reason": "shutdown_gracefully"},
+        )
         self._close_live_event_pipeline(timeout=2.0)
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
@@ -12352,37 +12470,9 @@ class Passivbot:
                 }
             )
 
-        rust_call_id = self._next_live_event_remote_call_id("rust")
-        orchestrator_started_ms = int(utc_ms())
-        input_hash = payload_hash(input_dict)
-        tradable_count = sum(
-            1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
-        )
-        self._emit_live_event(
-            EventTypes.RUST_ORCHESTRATOR_CALLED,
-            level="debug",
-            component="rust_orchestrator",
-            tags=("planning", "rust", "orchestrator"),
-            cycle_id=self._current_live_event_cycle_id(),
-            remote_call_id=rust_call_id,
-            status="started",
-            raw_hash=input_hash,
-            data={
-                "symbol_count": len(input_dict["symbols"]),
-                "tradable_count": int(tradable_count),
-                "ema_unavailable_count": len(ema_unavailable_symbols),
-                "trailing_unavailable_count": len(trailing_unavailable_symbols),
-                "hedge_mode": bool(effective_hedge_mode),
-                "strategy_kind": strategy_kind,
-                "input_hash": input_hash,
-            },
-        )
         try:
-            input_json = json.dumps(input_dict)
-            out_json = pbr.compute_ideal_orders_json(input_json)
-            out = json.loads(out_json)
+            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
         except Exception as e:
-            elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
             if "MissingEma" in msg:
                 match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
@@ -12395,47 +12485,9 @@ class Passivbot:
                             Passivbot._log_symbol(symbol),
                             idx,
                         )
-            self._emit_live_event(
-                EventTypes.RUST_ORCHESTRATOR_RETURNED,
-                level="error",
-                component="rust_orchestrator",
-                tags=("planning", "rust", "orchestrator", "error"),
-                cycle_id=self._current_live_event_cycle_id(),
-                remote_call_id=rust_call_id,
-                status="failed",
-                reason_code=type(e).__name__,
-                raw_hash=input_hash,
-                data={
-                    "elapsed_ms": int(elapsed_ms),
-                    "input_hash": input_hash,
-                    "error_type": type(e).__name__,
-                    "error": str(e)[:500],
-                },
-            )
             raise
-        elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
-        output_hash = payload_hash(out)
+        out = json.loads(out_json)
         orders = out.get("orders", [])
-        diagnostics = out.get("diagnostics", {})
-        self._emit_live_event(
-            EventTypes.RUST_ORCHESTRATOR_RETURNED,
-            level="debug",
-            component="rust_orchestrator",
-            tags=("planning", "rust", "orchestrator"),
-            cycle_id=self._current_live_event_cycle_id(),
-            remote_call_id=rust_call_id,
-            status="succeeded",
-            raw_hash=output_hash,
-            data={
-                "elapsed_ms": int(elapsed_ms),
-                "input_hash": input_hash,
-                "output_hash": output_hash,
-                "order_count": len(orders),
-                "diagnostic_keys": (
-                    sorted(diagnostics) if isinstance(diagnostics, dict) else []
-                ),
-            },
-        )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)
@@ -12451,7 +12503,6 @@ class Passivbot:
                 idx_to_symbol,
                 mode_overrides,
             )
-        orders = out.get("orders", [])
 
         ideal_orders: dict[str, list] = {}
         for o in orders:
@@ -14197,9 +14248,41 @@ class Passivbot:
                 }
             )
 
+        input_json = json.dumps(input_dict)
+        rust_call_id = self._next_live_event_remote_call_id("rust")
+        orchestrator_started_ms = int(utc_ms())
+        input_hash = payload_hash_raw(input_json)
         try:
-            out_json = pbr.compute_ideal_orders_json(json.dumps(input_dict))
+            tradable_count = sum(
+                1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
+            )
+            self._emit_live_event(
+                EventTypes.RUST_ORCHESTRATOR_CALLED,
+                level="debug",
+                component="rust_orchestrator",
+                tags=("planning", "rust", "orchestrator"),
+                cycle_id=self._current_live_event_cycle_id(),
+                remote_call_id=rust_call_id,
+                status="started",
+                raw_hash=input_hash,
+                data={
+                    "symbol_count": len(input_dict["symbols"]),
+                    "tradable_count": int(tradable_count),
+                    "ema_unavailable_count": len(ema_unavailable_symbols),
+                    "trailing_unavailable_count": len(trailing_unavailable_symbols),
+                    "hedge_mode": bool(effective_hedge_mode),
+                    "strategy_kind": strategy_kind,
+                    "input_hash": input_hash,
+                },
+            )
+        except Exception as event_exc:
+            logging.debug(
+                "[event] failed preparing rust_orchestrator.called: %s", event_exc
+            )
+        try:
+            out_json = pbr.compute_ideal_orders_json(input_json)
         except Exception as e:
+            elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
             msg = str(e)
             if "MissingEma" in msg:
                 match = re.search(r"symbol_idx\s*:\s*(\d+)", msg)
@@ -14212,8 +14295,48 @@ class Passivbot:
                             Passivbot._log_symbol(symbol),
                             idx,
                         )
+            self._emit_live_event(
+                EventTypes.RUST_ORCHESTRATOR_RETURNED,
+                level="error",
+                component="rust_orchestrator",
+                tags=("planning", "rust", "orchestrator", "error"),
+                cycle_id=self._current_live_event_cycle_id(),
+                remote_call_id=rust_call_id,
+                status="failed",
+                reason_code=type(e).__name__,
+                raw_hash=input_hash,
+                data={
+                    "elapsed_ms": int(elapsed_ms),
+                    "input_hash": input_hash,
+                    "error_type": type(e).__name__,
+                    "error": str(e)[:500],
+                },
+            )
             raise
         out = json.loads(out_json)
+        elapsed_ms = max(0, int(utc_ms()) - orchestrator_started_ms)
+        output_hash = payload_hash_raw(out_json)
+        orders = out.get("orders", [])
+        diagnostics = out.get("diagnostics", {})
+        self._emit_live_event(
+            EventTypes.RUST_ORCHESTRATOR_RETURNED,
+            level="debug",
+            component="rust_orchestrator",
+            tags=("planning", "rust", "orchestrator"),
+            cycle_id=self._current_live_event_cycle_id(),
+            remote_call_id=rust_call_id,
+            status="succeeded",
+            raw_hash=output_hash,
+            data={
+                "elapsed_ms": int(elapsed_ms),
+                "input_hash": input_hash,
+                "output_hash": output_hash,
+                "order_count": len(orders),
+                "diagnostic_keys": (
+                    sorted(diagnostics) if isinstance(diagnostics, dict) else []
+                ),
+            },
+        )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):
             self._log_min_effective_cost_blocks(out, idx_to_symbol)

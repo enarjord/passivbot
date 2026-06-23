@@ -770,10 +770,19 @@ def test_entry_cooldown_anchor_merge_prefers_available_or_newer_timestamp():
 
 @pytest.mark.asyncio
 async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monkeypatch):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
     import passivbot_rust as pbr
+
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_live"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
 
     bot._bp_defaults["risk_entry_cooldown_minutes"] = 1.0
     bot._update_entry_cooldown_position_delta_guard([symbol], now_ms=120_000)
@@ -822,6 +831,25 @@ async def test_live_orchestrator_passes_merged_entry_cooldown_delta_anchor(monke
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["last_increase_fill_timestamp_ms"] == 121_000
     assert snapshot["last_increase_fill_timestamps"][symbol]["long"] == 121_000
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    rust_events = [
+        event
+        for event in sink.events
+        if event.event_type
+        in {
+            EventTypes.RUST_ORCHESTRATOR_CALLED,
+            EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        }
+    ]
+    assert [event.event_type for event in rust_events] == [
+        EventTypes.RUST_ORCHESTRATOR_CALLED,
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+    ]
+    assert {event.cycle_id for event in rust_events} == {"cy_live"}
+    assert rust_events[0].remote_call_id == rust_events[1].remote_call_id
+    assert rust_events[0].data["input_hash"] == rust_events[1].data["input_hash"]
+    assert rust_events[1].data["order_count"] == 0
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

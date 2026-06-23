@@ -113,6 +113,11 @@ def payload_hash(payload: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def payload_hash_raw(payload: bytes | str) -> str:
+    raw = payload.encode("utf-8") if isinstance(payload, str) else bytes(payload)
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _is_sensitive_key(key: object) -> bool:
     cleaned = "".join(ch for ch in str(key).lower() if ch.isalnum() or ch in "_-")
     compact = cleaned.replace("-", "").replace("_", "")

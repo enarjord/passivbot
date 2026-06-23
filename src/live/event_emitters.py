@@ -31,7 +31,6 @@ def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
     bot._live_event_cycle_seq = int(getattr(bot, "_live_event_cycle_seq", 0) or 0) + 1
     cycle_id = f"cy_{int(bot._live_event_cycle_seq)}"
     bot._live_event_current_cycle_id = cycle_id
-    bot._set_live_event_context_ids(cycle_id=cycle_id)
     bot._emit_live_event(
         EventTypes.CYCLE_STARTED,
         level="debug",
@@ -75,6 +74,8 @@ def emit_live_cycle_completed(
             "orders_changed": bool(getattr(bot, "execution_scheduled", False)),
         },
     )
+    if getattr(bot, "_live_event_current_cycle_id", None) == cycle_id:
+        bot._live_event_current_cycle_id = None
 
 
 def emit_live_cycle_degraded(
@@ -84,6 +85,7 @@ def emit_live_cycle_degraded(
     reason_code: str,
     data: dict | None = None,
     level: str = "debug",
+    terminal: bool = True,
 ) -> None:
     if not cycle_id:
         return
@@ -101,6 +103,8 @@ def emit_live_cycle_degraded(
         reason_code=reason_code,
         data=payload,
     )
+    if terminal and getattr(bot, "_live_event_current_cycle_id", None) == cycle_id:
+        bot._live_event_current_cycle_id = None
 
 
 def emit_live_event(

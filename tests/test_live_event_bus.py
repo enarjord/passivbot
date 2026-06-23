@@ -19,6 +19,7 @@ from live.event_bus import (
     format_console_event,
     normalize_event_type,
     payload_hash,
+    payload_hash_raw,
     redact_payload,
 )
 from live.events import DiagnosticEvent
@@ -145,6 +146,11 @@ def test_redact_payload_recurses_and_payload_hash_is_stable():
         "items": [{"secret": REDACTED}],
     }
     assert payload_hash({"b": 2, "a": 1}) == payload_hash({"a": 1, "b": 2})
+
+
+def test_payload_hash_raw_hashes_exact_wire_payload():
+    assert payload_hash_raw('{"b":2,"a":1}') != payload_hash_raw('{"a":1,"b":2}')
+    assert payload_hash_raw("abc") == payload_hash_raw(b"abc")
 
 
 def test_legacy_event_type_names_normalize_to_phase1_schema():

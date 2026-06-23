@@ -10,7 +10,6 @@ from typing import Any, Iterable, Optional
 import numpy as np
 import passivbot_rust as pbr
 
-from live.event_bus import EventTypes
 from trailing_diagnostics import (
     build_trailing_close_diagnostic,
     build_trailing_entry_diagnostic,
@@ -147,17 +146,6 @@ def _monitor_emit_stop(
     stop_payload = {"reason": str(reason)}
     if payload:
         stop_payload.update(payload)
-    emitter = getattr(self, "_emit_live_event", None)
-    if callable(emitter):
-        emitter(
-            EventTypes.BOT_STOPPED,
-            level="info",
-            component="lifecycle",
-            tags=("bot", "lifecycle", "stop"),
-            status="succeeded",
-            reason_code=str(reason),
-            data=dict(stop_payload),
-        )
     return self._monitor_record_event(
         "bot.stop",
         ("bot", "lifecycle", "stop"),

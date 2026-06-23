@@ -113,10 +113,19 @@ def test_live_event_cycle_helpers_emit_structured_events():
         reason_code="execution_barrier",
         data={"missing": ["open_orders"]},
     )
+    assert bot._current_live_event_cycle_id() is None
+    cycle_id_2 = bot._begin_live_event_cycle(loop_start_ms=1000)
     bot._emit_live_cycle_completed(
-        cycle_id=cycle_id,
+        cycle_id=cycle_id_2,
         loop_start_ms=1000,
         timings_ms={"execute": 3},
+    )
+    assert bot._current_live_event_cycle_id() is None
+    bot._emit_live_event(
+        EventTypes.BOT_STOPPING,
+        component="lifecycle",
+        tags=("bot", "lifecycle", "stop"),
+        status="started",
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -124,11 +133,19 @@ def test_live_event_cycle_helpers_emit_structured_events():
     assert [event.event_type for event in events] == [
         EventTypes.CYCLE_STARTED,
         EventTypes.CYCLE_DEGRADED,
+        EventTypes.CYCLE_STARTED,
         EventTypes.CYCLE_COMPLETED,
+        EventTypes.BOT_STOPPING,
     ]
-    assert {event.cycle_id for event in events} == {cycle_id}
+    assert [event.cycle_id for event in events] == [
+        cycle_id,
+        cycle_id,
+        cycle_id_2,
+        cycle_id_2,
+        None,
+    ]
     assert events[1].reason_code == "execution_barrier"
-    assert events[2].data["orders_changed"] is True
+    assert events[3].data["orders_changed"] is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -182,7 +199,7 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
-def test_monitor_emit_stop_bridges_to_live_event_pipeline():
+def test_monitor_emit_stop_records_legacy_stop_without_structured_stopped():
     import passivbot as pb_mod
 
     sink = ListEventSink()
@@ -207,12 +224,9 @@ def test_monitor_emit_stop_bridges_to_live_event_pipeline():
 
     bot._monitor_emit_stop("startup_error", payload={"stage": "init_markets"})
 
-    assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot.monitor_publisher.events[-1]["kind"] == "bot.stop"
-    event = sink.events[-1]
-    assert event.event_type == EventTypes.BOT_STOPPED
-    assert event.reason_code == "startup_error"
-    assert event.data["stage"] == "init_markets"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events == []
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -617,7 +631,9 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
     bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
     bot._shutdown_in_progress = False
     bot.stop_signal_received = False
-    bot._emit_live_event = lambda *args, **kwargs: None
+    bot._emit_live_event = lambda event_type, *args, **kwargs: order.append(
+        ("event", event_type)
+    )
     bot._monitor_emit_stop = lambda *args, **kwargs: order.append(("stop", None))
 
     async def flush_snapshot(*, force=False, ts=None):
@@ -636,7 +652,12 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
 
     await bot.shutdown_gracefully()
 
-    assert order[-3:] == [("snapshot", True), ("pipeline", 2.0), ("publisher", None)]
+    assert order[-4:] == [
+        ("snapshot", True),
+        ("event", EventTypes.BOT_STOPPED),
+        ("pipeline", 2.0),
+        ("publisher", None),
+    ]
     assert bot._live_event_pipeline is None
 
 
