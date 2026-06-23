@@ -318,10 +318,10 @@ positions are below their thresholded per-slot target.
 Behavior:
 
 1. If the entry gate is enabled, enforce the global TWEL entry gate at `twel_entry_cap`.
-2. If auto-reduce is enabled and current TWE exceeds `twel_repair_target`, all open same-side
-   positions are candidates.
-3. Evaluate all open same-side positions as candidates, but emit auto-reduce orders only until
-   projected raw-balance TWE is `<= twel_repair_target`.
+2. If auto-reduce is enabled and current TWE exceeds `twel_repair_target`, measure current TWE
+   from all open same-side exchange positions.
+3. Evaluate all managed open same-side positions as candidates, but emit auto-reduce orders only
+   until projected raw-balance TWE is `<= twel_repair_target`.
 4. Size reductions with the initial deterministic reducer described below while reducing TWE toward
    `twel_repair_target`.
 
