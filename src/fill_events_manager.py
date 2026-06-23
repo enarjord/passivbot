@@ -1895,30 +1895,46 @@ class FillEventCache:
         self.save_metadata(metadata)
 
     def clear_gap(self, start_ts: int, end_ts: int) -> bool:
-        """Remove a gap that has been filled. Returns True if a gap was removed."""
+        """Remove a filled interval from known gaps and persist any mutation."""
         metadata = self.load_metadata()
         gaps = metadata.get("known_gaps", [])
-        original_count = len(gaps)
+        changed = False
 
-        # Remove gaps that are fully contained in the filled range
         remaining = []
         for gap in gaps:
-            if gap["start_ts"] >= start_ts and gap["end_ts"] <= end_ts:
+            gap_start = int(gap["start_ts"])
+            gap_end = int(gap["end_ts"])
+            if gap_end <= start_ts or gap_start >= end_ts:
+                remaining.append(gap)
+                continue
+            changed = True
+            if gap_start >= start_ts and gap_end <= end_ts:
                 logger.info(
                     "FillEventCache.clear_gap: removed gap %s → %s",
-                    _format_ms(gap["start_ts"]),
-                    _format_ms(gap["end_ts"]),
+                    _format_ms(gap_start),
+                    _format_ms(gap_end),
                 )
                 continue
-            # Partial overlap - trim the gap
-            if gap["start_ts"] < start_ts < gap["end_ts"]:
-                gap["end_ts"] = start_ts
-            if gap["start_ts"] < end_ts < gap["end_ts"]:
-                gap["start_ts"] = end_ts
-            if gap["start_ts"] < gap["end_ts"]:
-                remaining.append(gap)
 
-        if len(remaining) != original_count:
+            if gap_start < start_ts:
+                left = dict(gap)
+                left["end_ts"] = start_ts
+                if int(left["start_ts"]) < int(left["end_ts"]):
+                    remaining.append(left)
+            if end_ts < gap_end:
+                right = dict(gap)
+                right["start_ts"] = end_ts
+                if int(right["start_ts"]) < int(right["end_ts"]):
+                    remaining.append(right)
+            logger.info(
+                "FillEventCache.clear_gap: trimmed gap %s → %s by filled range %s → %s",
+                _format_ms(gap_start),
+                _format_ms(gap_end),
+                _format_ms(start_ts),
+                _format_ms(end_ts),
+            )
+
+        if changed:
             metadata["known_gaps"] = remaining
             self.save_metadata(metadata)
             return True
@@ -4555,15 +4571,17 @@ class FillEventsManager:
                 day_payload = self._events_for_days(self._events, all_days_persisted)
                 self.cache.save_days(day_payload)
 
+        fetched_bounded_range = start_ms is not None and end_ms is not None
+
         # Update cache metadata with timestamps
         if self._events:
             self.cache.update_metadata_from_events(self._events)
-
-            # If we successfully fetched data for a gap range, clear it
-            if start_ms is not None and end_ms is not None and added_ids:
-                self.cache.clear_gap(start_ms, end_ms)
         else:
             self.cache.mark_refreshed()
+        if fetched_bounded_range:
+            # A successful bounded fetch proves the retried range even when the
+            # exchange returns no new fills or only duplicates.
+            self.cache.clear_gap(start_ms, end_ms)
 
         # Consolidated refresh summary log
         # Only log at INFO when there are actually new fills; routine refreshes go to DEBUG
@@ -4611,8 +4629,7 @@ class FillEventsManager:
         recent_synthetic_pnl_events = [
             ev
             for ev in synthetic_pnl_events
-            if str(getattr(ev, "pnl_source", "") or "") != PNL_SOURCE_SYNTHETIC_DEGRADED
-            or int(getattr(ev, "timestamp", 0) or 0) >= now_ms - synthetic_refresh_margin_ms
+            if int(getattr(ev, "timestamp", 0) or 0) >= now_ms - synthetic_refresh_margin_ms
         ]
         old_synthetic_count = len(synthetic_pnl_events) - len(recent_synthetic_pnl_events)
         pnl_refresh_events = pending_pnl_events + recent_synthetic_pnl_events
@@ -4668,6 +4685,82 @@ class FillEventsManager:
                 force_refetch_gaps=force_refetch_gaps,
             )
             return
+
+        coverage_end_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+
+        def gap_bounds(gap: KnownGap) -> Optional[Tuple[int, int]]:
+            try:
+                gap_start = int(gap["start_ts"])
+                gap_end = int(gap["end_ts"])
+            except (KeyError, TypeError, ValueError):
+                return None
+            if gap_end <= gap_start:
+                return None
+            return gap_start, gap_end
+
+        def gap_confirmed_legitimate(gap: KnownGap) -> bool:
+            reason = str(gap.get("reason", "") or "").lower()
+            try:
+                confidence = float(gap.get("confidence", 0.0) or 0.0)
+            except (TypeError, ValueError):
+                confidence = 0.0
+            return reason == GAP_REASON_CONFIRMED or confidence >= GAP_CONFIDENCE_CONFIRMED
+
+        def blocking_known_gaps() -> List[KnownGap]:
+            gaps: List[KnownGap] = []
+            for gap in self.cache.get_known_gaps():
+                if gap_confirmed_legitimate(gap):
+                    continue
+                bounds = gap_bounds(gap)
+                if bounds is None:
+                    gaps.append(gap)
+                    continue
+                gap_start, gap_end = bounds
+                if gap_start < coverage_end_ms and gap_end > start_ms:
+                    gaps.append(gap)
+            return gaps
+
+        blocking_gaps = blocking_known_gaps()
+        if blocking_gaps:
+            retried_ranges: List[Tuple[int, int]] = []
+            for gap in blocking_gaps:
+                bounds = gap_bounds(gap)
+                if bounds is None:
+                    continue
+                if not force_refetch_gaps and not self.cache.should_retry_gap(gap):
+                    continue
+                gap_start, gap_end = bounds
+                retry_start = max(start_ms, gap_start)
+                retry_end = min(coverage_end_ms, gap_end)
+                if retry_start < retry_end:
+                    retried_ranges.append((retry_start, retry_end))
+            for retry_start, retry_end in self._merge_intervals(retried_ranges):
+                logger.info(
+                    "[fills] retrying known fill-history gap before lookback coverage proof | range=%s..%s",
+                    _format_ms(retry_start),
+                    _format_ms(retry_end),
+                )
+                await self.refresh(start_ms=retry_start, end_ms=retry_end)
+            if retried_ranges:
+                await self.refresh_latest(overlap=overlap)
+                blocking_gaps = blocking_known_gaps()
+            if blocking_gaps:
+                gap = blocking_gaps[0]
+                bounds = gap_bounds(gap)
+                range_label = (
+                    f"{_format_ms(bounds[0])}..{_format_ms(bounds[1])}"
+                    if bounds is not None
+                    else "unknown"
+                )
+                logger.warning(
+                    "[fills] lookback coverage remains unproven because known gap overlaps requested window | start=%s gap=%s reason=%s retry_count=%s confidence=%s",
+                    _format_ms(start_ms),
+                    range_label,
+                    str(gap.get("reason", "unknown")),
+                    str(gap.get("retry_count", "unknown")),
+                    str(gap.get("confidence", "unknown")),
+                )
+                return
 
         metadata = self.cache.load_metadata()
         covered_start_ms = int(metadata.get("covered_start_ms", 0) or 0)

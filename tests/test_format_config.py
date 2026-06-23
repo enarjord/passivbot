@@ -249,7 +249,7 @@ def test_format_config_adds_logging_defaults():
         "max_bytes_mb": 10.0,
         "memory_snapshot_interval_minutes": 30,
         "persist_to_file": True,
-        "rotation": False,
+        "rotation": True,
         "volume_refresh_info_threshold_seconds": 30,
     }
 
