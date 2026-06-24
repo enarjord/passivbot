@@ -398,6 +398,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
 
     class FakeBot:
         _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_bundle_started_event = (
+            pb_mod.Passivbot._emit_ema_bundle_started_event
+        )
         _emit_ema_bundle_completed_event = (
             pb_mod.Passivbot._emit_ema_bundle_completed_event
         )
@@ -444,6 +447,13 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         feature_unavailable_count=2,
         volatility_dropped_count=1,
     )
+    bot._emit_ema_bundle_started_event(
+        symbols=["BTC/USDT:USDT", "ETH/USDT:USDT"],
+        modes={
+            "BTC/USDT:USDT": {"long": "normal", "short": ""},
+            "ETH/USDT:USDT": {"long": "forager", "short": ""},
+        },
+    )
     bot._emit_ema_bundle_completed_event(
         symbols=["BTC/USDT:USDT", "ETH/USDT:USDT"],
         m1_close_emas={"BTC/USDT:USDT": {100.0: 50_000.0}},
@@ -475,6 +485,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert [event.event_type for event in events] == [
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         EventTypes.FORAGER_SELECTION,
+        EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
@@ -482,11 +493,18 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert {event.cycle_id for event in events} == {"cy_11"}
     assert events[0].data["unavailable"]["count"] == 2
     assert events[1].data["selected_symbols"] == ["BTC/USDT:USDT"]
-    assert events[2].data["cache_only"]["sample"] == ["ETH/USDT:USDT"]
-    assert events[3].level == "warning"
-    assert events[3].data["close_fallback_count"] == 1
-    assert events[4].status == "degraded"
-    assert events[4].data["candidate_unavailable"]["sample"] == ["XRP/USDT:USDT"]
+    assert events[2].status == "started"
+    assert events[2].data["symbol_count"] == 2
+    assert events[2].data["symbols"]["sample"] == [
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+    ]
+    assert events[2].data["mode_counts"] == {"forager": 1, "normal": 1}
+    assert events[3].data["cache_only"]["sample"] == ["ETH/USDT:USDT"]
+    assert events[4].level == "warning"
+    assert events[4].data["close_fallback_count"] == 1
+    assert events[5].status == "degraded"
+    assert events[5].data["candidate_unavailable"]["sample"] == ["XRP/USDT:USDT"]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -519,6 +537,11 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             max_age_ms=60_000,
             fetch_budget=1,
         )
+        pb_mod.Passivbot._emit_ema_bundle_started_event(
+            bot,
+            symbols=object(),
+            modes=object(),
+        )
         pb_mod.Passivbot._emit_ema_bundle_completed_event(
             bot,
             symbols=["BTC/USDT:USDT"],
@@ -541,6 +564,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     messages = [record.message for record in caplog.records]
     assert any(EventTypes.FORAGER_FEATURE_UNAVAILABLE in msg for msg in messages)
     assert any(EventTypes.FORAGER_SELECTION in msg for msg in messages)
+    assert any(EventTypes.EMA_BUNDLE_STARTED in msg for msg in messages)
     assert any(EventTypes.EMA_BUNDLE_COMPLETED in msg for msg in messages)
     assert any(EventTypes.EMA_FALLBACK_USED in msg for msg in messages)
     assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)

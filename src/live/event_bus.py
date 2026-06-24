@@ -31,6 +31,7 @@ class EventTypes:
     PLANNING_SYMBOL_STATE = "planning.symbol_state"
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
+    EMA_BUNDLE_STARTED = "ema.bundle.started"
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
     EMA_FALLBACK_USED = "ema.fallback_used"
     EMA_UNAVAILABLE = "ema.unavailable"
@@ -82,6 +83,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.PLANNING_SYMBOL_STATE,
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+    EventTypes.EMA_BUNDLE_STARTED,
     EventTypes.EMA_BUNDLE_COMPLETED,
     EventTypes.EMA_FALLBACK_USED,
     EventTypes.EMA_UNAVAILABLE,
@@ -364,6 +366,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.PLANNING_SYMBOL_STATE: EventRoute(console=False, text=False),
     EventTypes.FORAGER_SELECTION: EventRoute(console=False, text=False),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
+    EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),
     EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),

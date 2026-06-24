@@ -983,6 +983,53 @@ def emit_forager_selection_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         )
 
 
+def _mode_counts(modes: dict[str, dict[str, str]] | None) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for symbol_modes in (modes or {}).values():
+        if not isinstance(symbol_modes, dict):
+            continue
+        for mode in symbol_modes.values():
+            key = str(mode or "")
+            if not key:
+                continue
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _emit_ema_bundle_started_event_unchecked(
+    bot: Any,
+    *,
+    symbols: list[str] | tuple[str, ...],
+    modes: dict[str, dict[str, str]] | None = None,
+) -> None:
+    _safe_emit(
+        bot,
+        EventTypes.EMA_BUNDLE_STARTED,
+        level="debug",
+        component="ema.bundle",
+        tags=("ema", "bundle"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="started",
+        reason_code="orchestrator_ema_bundle",
+        data={
+            "symbol_count": len(symbols or []),
+            "symbols": _symbol_sample(symbols or ()),
+            "mode_counts": _mode_counts(modes),
+        },
+    )
+
+
+def emit_ema_bundle_started_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_ema_bundle_started_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.EMA_BUNDLE_STARTED,
+            exc,
+        )
+
+
 def _emit_ema_bundle_completed_event_unchecked(
     bot: Any,
     *,
