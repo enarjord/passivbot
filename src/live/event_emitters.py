@@ -557,6 +557,469 @@ def _safe_float(value: Any) -> float | None:
     return number if number == number else None
 
 
+def _safe_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
+    if symbols is None:
+        values = []
+    else:
+        try:
+            values = sorted({str(symbol) for symbol in symbols})
+        except TypeError:
+            values = [str(symbols)]
+    return {
+        "count": len(values),
+        "sample": values[:limit],
+        "truncated": max(0, len(values) - limit),
+    }
+
+
+def _span_sample(spans: Any, *, limit: int = 8) -> list[float]:
+    out: list[float] = []
+    values = []
+    for raw_span in spans or []:
+        span = _safe_float(raw_span)
+        if span is not None:
+            values.append(span)
+    iterable = sorted(values)
+    for span in iterable:
+        if span == span:
+            out.append(span)
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _ema_map_summary(values: dict[str, dict[float, float]] | None) -> dict[str, int]:
+    mapping = values or {}
+    return {
+        "symbols": len(mapping),
+        "values": sum(len(item or {}) for item in mapping.values()),
+    }
+
+
+def _fallback_examples(
+    values: dict[str, list[tuple[Any, ...]]] | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    examples: list[dict[str, Any]] = []
+    for symbol, items in sorted((values or {}).items())[:limit]:
+        spans: list[float] = []
+        ages: list[int] = []
+        counts: list[int] = []
+        metrics: set[str] = set()
+        reason = None
+        for item in items or []:
+            if not isinstance(item, (list, tuple)):
+                continue
+            if len(item) >= 1 and isinstance(item[0], str):
+                metrics.add(str(item[0]))
+                if len(item) >= 2:
+                    span = _safe_float(item[1])
+                    if span is not None:
+                        spans.append(span)
+                if len(item) >= 3:
+                    age = _safe_int(item[2])
+                    if age is not None:
+                        ages.append(age)
+            else:
+                if len(item) >= 1:
+                    span = _safe_float(item[0])
+                    if span is not None:
+                        spans.append(span)
+                if len(item) >= 2:
+                    age = _safe_int(item[1])
+                    if age is not None:
+                        ages.append(age)
+                if len(item) >= 3:
+                    count = _safe_int(item[2])
+                    if count is not None:
+                        counts.append(count)
+                if len(item) >= 4 and item[3] is not None:
+                    reason = str(item[3])[:160]
+        example: dict[str, Any] = {
+            "symbol": str(symbol),
+            "count": len(items or []),
+            "spans": _span_sample(spans),
+        }
+        if metrics:
+            example["metrics"] = sorted(metrics)
+        if ages:
+            example["max_age_ms"] = max(ages)
+        if counts:
+            example["max_fallbacks"] = max(counts)
+        if reason:
+            example["reason"] = reason
+        examples.append(example)
+    return examples
+
+
+def _candidate_unavailable_summary(
+    values: dict[str, list[tuple[str, str, str]]] | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for reason, items in sorted((values or {}).items())[:limit]:
+        symbols = sorted({str(symbol) for symbol, _error_type, _error in items or []})
+        error_types = sorted(
+            {str(error_type) for _symbol, error_type, _error in items or []}
+        )
+        example_error = next(
+            (str(error) for _symbol, _error_type, error in items or [] if error),
+            "",
+        )
+        out.append(
+            {
+                "reason": str(reason),
+                "symbols": _symbol_sample(symbols),
+                "error_types": error_types[:4],
+                "example_error": example_error[:160] if example_error else None,
+            }
+        )
+    return out
+
+
+def _reason_symbol_summary(
+    values: dict[str, list[str]] | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for reason, symbols in sorted((values or {}).items())[:limit]:
+        out.append({"reason": str(reason), "symbols": _symbol_sample(symbols)})
+    return out
+
+
+def _forager_top_score_sample(
+    top_scores: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    *,
+    limit: int = 8,
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for item in list(top_scores or [])[:limit]:
+        if not isinstance(item, dict):
+            continue
+        payload: dict[str, Any] = {
+            "symbol": str(item.get("symbol")) if item.get("symbol") is not None else None,
+            "rank": _safe_int(item.get("rank")),
+            "score": _safe_float(item.get("score")),
+            "selected": bool(item.get("selected")),
+            "incumbent": bool(item.get("incumbent")),
+        }
+        for key in (
+            "volume_component",
+            "ema_readiness_component",
+            "volatility_component",
+        ):
+            value = _safe_float(item.get(key))
+            if value is not None:
+                payload[key] = value
+        out.append({key: value for key, value in payload.items() if value is not None})
+    return out
+
+
+def _safe_emit(bot: Any, event_type: str, **kwargs: Any) -> Any:
+    try:
+        return bot._emit_live_event(event_type, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit %s: %s", event_type, exc)
+        return None
+
+
+def _emit_forager_feature_unavailable_event_unchecked(
+    bot: Any,
+    *,
+    pside: str,
+    symbols: list[str] | tuple[str, ...] | set[str],
+    candidate_count: int,
+    volume_count: int,
+    log_range_count: int,
+    max_age_ms: int | None,
+    fetch_budget: int | None,
+) -> None:
+    if not symbols:
+        return
+    _safe_emit(
+        bot,
+        EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+        level="debug",
+        component="forager.selection",
+        tags=("forager", "selection", "ema"),
+        cycle_id=current_live_event_cycle_id(bot),
+        pside=str(pside),
+        status="skipped",
+        reason_code="ranking_features_unavailable",
+        data={
+            "candidate_count": int(candidate_count),
+            "unavailable": _symbol_sample(symbols),
+            "volume_count": int(volume_count),
+            "log_range_count": int(log_range_count),
+            "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
+            "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
+        },
+    )
+
+
+def emit_forager_feature_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_forager_feature_unavailable_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+            exc,
+        )
+
+
+def _emit_forager_selection_event_unchecked(
+    bot: Any,
+    *,
+    pside: str,
+    candidate_count: int,
+    eligible_count: int,
+    selected_symbols: list[str] | tuple[str, ...],
+    slots_open: bool,
+    max_n_positions: int | None,
+    clip_pct: float | None,
+    volatility_drop_pct: float | None,
+    max_age_ms: int | None,
+    fetch_budget: int | None,
+    incumbent_symbols: list[str] | tuple[str, ...] | None = None,
+    slots_to_fill: int | None = None,
+    score_hysteresis_pct: float | None = None,
+    top_scores: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    hysteresis_event_count: int = 0,
+    source: str = "python_filter",
+    feature_unavailable_count: int = 0,
+    volatility_dropped_count: int = 0,
+    reason_code: str = "selected",
+    status: str = "succeeded",
+) -> None:
+    selected = [str(symbol) for symbol in selected_symbols or []]
+    incumbent = [str(symbol) for symbol in incumbent_symbols or []]
+    _safe_emit(
+        bot,
+        EventTypes.FORAGER_SELECTION,
+        level="debug",
+        component="forager.selection",
+        tags=("forager", "selection"),
+        cycle_id=current_live_event_cycle_id(bot),
+        pside=str(pside),
+        status=status,
+        reason_code=reason_code,
+        data={
+            "candidate_count": int(candidate_count),
+            "eligible_count": int(eligible_count),
+            "selected_count": len(selected),
+            "selected_symbols": selected[:12],
+            "incumbent_count": len(incumbent),
+            "incumbent_symbols": incumbent[:12],
+            "slots_open": bool(slots_open),
+            "max_n_positions": int(max_n_positions) if max_n_positions is not None else None,
+            "slots_to_fill": int(slots_to_fill) if slots_to_fill is not None else None,
+            "clip_pct": float(clip_pct) if clip_pct is not None else None,
+            "volatility_drop_pct": (
+                float(volatility_drop_pct)
+                if volatility_drop_pct is not None
+                else None
+            ),
+            "score_hysteresis_pct": (
+                float(score_hysteresis_pct)
+                if score_hysteresis_pct is not None
+                else None
+            ),
+            "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
+            "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
+            "source": str(source),
+            "feature_unavailable_count": int(feature_unavailable_count),
+            "volatility_dropped_count": int(volatility_dropped_count),
+            "hysteresis_event_count": int(hysteresis_event_count),
+            "top_scores": _forager_top_score_sample(top_scores),
+        },
+    )
+
+
+def emit_forager_selection_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_forager_selection_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.FORAGER_SELECTION,
+            exc,
+        )
+
+
+def _emit_ema_bundle_completed_event_unchecked(
+    bot: Any,
+    *,
+    symbols: list[str] | tuple[str, ...],
+    m1_close_emas: dict[str, dict[float, float]],
+    m1_volume_emas: dict[str, dict[float, float]],
+    m1_log_range_emas: dict[str, dict[float, float]],
+    h1_log_range_emas: dict[str, dict[float, float]],
+    cache_only_symbols: set[str] | None = None,
+    projection_contexts: dict[str, dict] | None = None,
+) -> None:
+    _safe_emit(
+        bot,
+        EventTypes.EMA_BUNDLE_COMPLETED,
+        level="debug",
+        component="ema.bundle",
+        tags=("ema", "bundle"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        data={
+            "symbol_count": len(symbols or []),
+            "cache_only": _symbol_sample(cache_only_symbols or set()),
+            "projection_contexts": _symbol_sample((projection_contexts or {}).keys()),
+            "m1_close": _ema_map_summary(m1_close_emas),
+            "m1_volume": _ema_map_summary(m1_volume_emas),
+            "m1_log_range": _ema_map_summary(m1_log_range_emas),
+            "h1_log_range": _ema_map_summary(h1_log_range_emas),
+        },
+    )
+
+
+def emit_ema_bundle_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_ema_bundle_completed_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.EMA_BUNDLE_COMPLETED,
+            exc,
+        )
+
+
+def _emit_ema_fallback_used_event_unchecked(
+    bot: Any,
+    *,
+    close_ema_recoveries: dict[str, list[tuple[float, int]]] | None = None,
+    close_ema_fallbacks: dict[str, list[tuple[float, int, int, str]]] | None = None,
+    forager_cached_ema_fallbacks: dict[str, list[tuple[str, float, int]]] | None = None,
+) -> None:
+    recovered_count = sum(len(items) for items in (close_ema_recoveries or {}).values())
+    close_fallback_count = sum(len(items) for items in (close_ema_fallbacks or {}).values())
+    forager_count = sum(len(items) for items in (forager_cached_ema_fallbacks or {}).values())
+    if not (recovered_count or close_fallback_count or forager_count):
+        return
+    level = "warning" if close_fallback_count else "debug"
+    _safe_emit(
+        bot,
+        EventTypes.EMA_FALLBACK_USED,
+        level=level,
+        component="ema.bundle",
+        tags=("ema", "fallback"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="recovered",
+        reason_code="ema_fallback_used",
+        data={
+            "close_recovered_count": int(recovered_count),
+            "close_recovered_symbols": _symbol_sample((close_ema_recoveries or {}).keys()),
+            "close_fallback_count": int(close_fallback_count),
+            "close_fallback_symbols": _symbol_sample((close_ema_fallbacks or {}).keys()),
+            "forager_cached_fallback_count": int(forager_count),
+            "forager_cached_fallback_symbols": _symbol_sample(
+                (forager_cached_ema_fallbacks or {}).keys()
+            ),
+            "examples": {
+                "close_recovered": _fallback_examples(close_ema_recoveries),
+                "close_fallback": _fallback_examples(close_ema_fallbacks),
+                "forager_cached": _fallback_examples(forager_cached_ema_fallbacks),
+            },
+        },
+    )
+
+
+def emit_ema_fallback_used_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_ema_fallback_used_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.EMA_FALLBACK_USED,
+            exc,
+        )
+
+
+def _emit_ema_unavailable_event_unchecked(
+    bot: Any,
+    *,
+    optional_ema_drops: dict[tuple[str, str], list[tuple[str, float]]] | None = None,
+    candidate_ema_unavailable_details: dict[str, list[tuple[str, str, str]]] | None = None,
+    ema_unavailable_reasons: dict[str, list[str]] | None = None,
+) -> None:
+    optional_count = sum(len(items) for items in (optional_ema_drops or {}).values())
+    candidate_symbols = {
+        str(symbol)
+        for items in (candidate_ema_unavailable_details or {}).values()
+        for symbol, _error_type, _error in items
+    }
+    unavailable_symbols = {
+        str(symbol)
+        for items in (ema_unavailable_reasons or {}).values()
+        for symbol in items
+    }
+    if not (optional_count or candidate_symbols or unavailable_symbols):
+        return
+    level = "warning" if candidate_symbols else "debug"
+    status = "degraded" if candidate_symbols or unavailable_symbols else "skipped"
+    reason_code = (
+        "required_ema_unavailable"
+        if candidate_symbols or unavailable_symbols
+        else "optional_ema_dropped"
+    )
+    optional_summary = []
+    for (ema_type, reason), items in sorted((optional_ema_drops or {}).items())[:8]:
+        optional_summary.append(
+            {
+                "ema_type": str(ema_type),
+                "reason": str(reason)[:160],
+                "symbols": _symbol_sample(symbol for symbol, _span in items),
+                "spans": _span_sample(span for _symbol, span in items),
+            }
+        )
+    _safe_emit(
+        bot,
+        EventTypes.EMA_UNAVAILABLE,
+        level=level,
+        component="ema.bundle",
+        tags=("ema", "unavailable"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status=status,
+        reason_code=reason_code,
+        data={
+            "optional_drop_count": int(optional_count),
+            "optional_drop_groups": optional_summary,
+            "candidate_unavailable": _symbol_sample(candidate_symbols),
+            "candidate_unavailable_groups": _candidate_unavailable_summary(
+                candidate_ema_unavailable_details
+            ),
+            "unavailable": _symbol_sample(unavailable_symbols),
+            "unavailable_reasons": _reason_symbol_summary(ema_unavailable_reasons),
+        },
+    )
+
+
+def emit_ema_unavailable_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_ema_unavailable_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.EMA_UNAVAILABLE,
+            exc,
+        )
+
+
 def _short_order_id(value: Any, *, max_len: int = 32) -> str | None:
     if value is None:
         return None

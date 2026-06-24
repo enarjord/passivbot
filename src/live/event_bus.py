@@ -27,6 +27,11 @@ class EventTypes:
     DATA_PACKET_UPDATED = "data_packet.updated"
     SNAPSHOT_BUILT = "snapshot.built"
     PLANNING_UNAVAILABLE = "planning.unavailable"
+    FORAGER_SELECTION = "forager.selection"
+    FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
+    EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
+    EMA_FALLBACK_USED = "ema.fallback_used"
+    EMA_UNAVAILABLE = "ema.unavailable"
     REMOTE_CALL_STARTED = "remote_call.started"
     REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
     REMOTE_CALL_FAILED = "remote_call.failed"
@@ -68,6 +73,11 @@ PHASE1_EVENT_TYPES = {
     EventTypes.DATA_PACKET_UPDATED,
     EventTypes.SNAPSHOT_BUILT,
     EventTypes.PLANNING_UNAVAILABLE,
+    EventTypes.FORAGER_SELECTION,
+    EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+    EventTypes.EMA_BUNDLE_COMPLETED,
+    EventTypes.EMA_FALLBACK_USED,
+    EventTypes.EMA_UNAVAILABLE,
     EventTypes.REMOTE_CALL_STARTED,
     EventTypes.REMOTE_CALL_SUCCEEDED,
     EventTypes.REMOTE_CALL_FAILED,
@@ -340,6 +350,11 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.PLANNING_UNAVAILABLE: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),
+    EventTypes.FORAGER_SELECTION: EventRoute(console=False, text=False),
+    EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
+    EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
+    EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),
+    EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_FAILED: EventRoute(console=False),

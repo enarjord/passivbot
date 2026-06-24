@@ -200,6 +200,161 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_forager_and_ema_summary_emitters_emit_structured_events():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_bundle_completed_event = (
+            pb_mod.Passivbot._emit_ema_bundle_completed_event
+        )
+        _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_forager_feature_unavailable_event = (
+            pb_mod.Passivbot._emit_forager_feature_unavailable_event
+        )
+        _emit_forager_selection_event = pb_mod.Passivbot._emit_forager_selection_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_11"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_forager_feature_unavailable_event(
+        pside="long",
+        symbols=["ETH/USDT:USDT", "BTC/USDT:USDT"],
+        candidate_count=4,
+        volume_count=3,
+        log_range_count=2,
+        max_age_ms=300_000,
+        fetch_budget=1,
+    )
+    bot._emit_forager_selection_event(
+        pside="long",
+        candidate_count=4,
+        eligible_count=2,
+        selected_symbols=["BTC/USDT:USDT"],
+        slots_open=True,
+        max_n_positions=3,
+        clip_pct=0.1,
+        volatility_drop_pct=0.25,
+        max_age_ms=300_000,
+        fetch_budget=1,
+        feature_unavailable_count=2,
+        volatility_dropped_count=1,
+    )
+    bot._emit_ema_bundle_completed_event(
+        symbols=["BTC/USDT:USDT", "ETH/USDT:USDT"],
+        m1_close_emas={"BTC/USDT:USDT": {100.0: 50_000.0}},
+        m1_volume_emas={"BTC/USDT:USDT": {60.0: 123.0}},
+        m1_log_range_emas={"BTC/USDT:USDT": {60.0: 0.01}},
+        h1_log_range_emas={},
+        cache_only_symbols={"ETH/USDT:USDT"},
+        projection_contexts={"ETH/USDT:USDT": {"tail_gap_age_ms": 120_000}},
+    )
+    bot._emit_ema_fallback_used_event(
+        close_ema_recoveries={"BTC/USDT:USDT": [(100.0, 1)]},
+        close_ema_fallbacks={"ETH/USDT:USDT": [(100.0, 120_000, 2, "stale")]},
+        forager_cached_ema_fallbacks={
+            "DOGE/USDT:USDT": [("qv", 60.0, 180_000)]
+        },
+    )
+    bot._emit_ema_unavailable_event(
+        optional_ema_drops={
+            ("h1_log_range", "missing_optional"): [("SOL/USDT:USDT", 24.0)]
+        },
+        candidate_ema_unavailable_details={
+            "required_missing": [("XRP/USDT:USDT", "ValueError", "missing")]
+        },
+        ema_unavailable_reasons={"cache_only_never_fetched": ["ADA/USDT:USDT"]},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = sink.events
+    assert [event.event_type for event in events] == [
+        EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+        EventTypes.FORAGER_SELECTION,
+        EventTypes.EMA_BUNDLE_COMPLETED,
+        EventTypes.EMA_FALLBACK_USED,
+        EventTypes.EMA_UNAVAILABLE,
+    ]
+    assert {event.cycle_id for event in events} == {"cy_11"}
+    assert events[0].data["unavailable"]["count"] == 2
+    assert events[1].data["selected_symbols"] == ["BTC/USDT:USDT"]
+    assert events[2].data["cache_only"]["sample"] == ["ETH/USDT:USDT"]
+    assert events[3].level == "warning"
+    assert events[3].data["close_fallback_count"] == 1
+    assert events[4].status == "degraded"
+    assert events[4].data["candidate_unavailable"]["sample"] == ["XRP/USDT:USDT"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(caplog):
+    import passivbot as pb_mod
+
+    bot = object()
+
+    with caplog.at_level(logging.DEBUG):
+        pb_mod.Passivbot._emit_forager_feature_unavailable_event(
+            bot,
+            pside="long",
+            symbols=["BTC/USDT:USDT"],
+            candidate_count="not-an-int",
+            volume_count=1,
+            log_range_count=1,
+            max_age_ms=60_000,
+            fetch_budget=1,
+        )
+        pb_mod.Passivbot._emit_forager_selection_event(
+            bot,
+            pside="long",
+            candidate_count="not-an-int",
+            eligible_count=1,
+            selected_symbols=["BTC/USDT:USDT"],
+            slots_open=True,
+            max_n_positions=1,
+            clip_pct=0.0,
+            volatility_drop_pct=0.0,
+            max_age_ms=60_000,
+            fetch_budget=1,
+        )
+        pb_mod.Passivbot._emit_ema_bundle_completed_event(
+            bot,
+            symbols=["BTC/USDT:USDT"],
+            m1_close_emas={"BTC/USDT:USDT": object()},
+            m1_volume_emas={},
+            m1_log_range_emas={},
+            h1_log_range_emas={},
+        )
+        pb_mod.Passivbot._emit_ema_fallback_used_event(
+            bot,
+            close_ema_fallbacks={"BTC/USDT:USDT": object()},
+        )
+        pb_mod.Passivbot._emit_ema_unavailable_event(
+            bot,
+            candidate_ema_unavailable_details={
+                "required_missing": [("BTC/USDT:USDT", "ValueError")]
+            },
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(EventTypes.FORAGER_FEATURE_UNAVAILABLE in msg for msg in messages)
+    assert any(EventTypes.FORAGER_SELECTION in msg for msg in messages)
+    assert any(EventTypes.EMA_BUNDLE_COMPLETED in msg for msg in messages)
+    assert any(EventTypes.EMA_FALLBACK_USED in msg for msg in messages)
+    assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)
+
+
 def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):
     import passivbot as pb_mod
 
