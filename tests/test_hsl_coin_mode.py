@@ -222,6 +222,58 @@ def test_coin_hsl_slot_budget_rejects_zero_n_positions():
         bot._equity_hard_stop_apply_coin_sample("long", "A", 60_000, 100.0, -1.0)
 
 
+def test_hsl_transition_falls_back_to_monitor_when_pipeline_absent():
+    bot = make_coin_bot()
+    captured = []
+    bot._live_event_pipeline = None
+    bot._live_event_current_cycle_id = "cy_absent_pipeline"
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    def record_event(kind, tags, payload, *, pside=None, symbol=None, ts=None):
+        captured.append(
+            {
+                "kind": kind,
+                "tags": tuple(tags),
+                "payload": payload,
+                "pside": pside,
+                "symbol": symbol,
+                "ts": ts,
+            }
+        )
+
+    bot._monitor_record_event = record_event
+    metrics = {
+        "pside": "long",
+        "signal_mode": "pside",
+        "timestamp_ms": 180_000,
+        "balance": 100.0,
+        "strategy_equity": 98.0,
+        "peak_strategy_equity": 100.0,
+        "rolling_peak_strategy_equity": 100.0,
+        "drawdown_raw": 0.02,
+        "drawdown_ema": 0.01,
+        "drawdown_score": 0.01,
+        "strategy_pnl": -2.0,
+        "peak_strategy_pnl": 0.0,
+        "red_threshold": 0.5,
+        "tier": "yellow",
+        "changed": True,
+    }
+
+    bot._equity_hard_stop_log_transition("long", metrics, "green")
+
+    assert len(captured) == 1
+    event = captured[0]
+    assert event["kind"] == "hsl.transition"
+    assert event["tags"] == ("hsl", "risk", "transition")
+    assert event["pside"] == "long"
+    assert event["ts"] == 180_000
+    assert event["payload"]["previous_tier"] == "green"
+    assert event["payload"]["tier"] == "yellow"
+    assert event["payload"]["metrics"]["tier"] == "yellow"
+    assert event["payload"]["metrics"]["changed"] is True
+
+
 @pytest.mark.asyncio
 async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
     from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline

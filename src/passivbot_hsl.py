@@ -47,10 +47,12 @@ def _emit_hsl_event(
     status: str | None = None,
     reason_code: str | None = None,
 ) -> None:
+    live_event_delivered = False
     try:
         emit = getattr(self, "_emit_live_event", None)
-        if callable(emit):
-            emit(
+        pipeline = getattr(self, "_live_event_pipeline", None)
+        if callable(emit) and pipeline is not None:
+            live_event_delivered = emit(
                 event_type,
                 level=level,
                 component="risk.hsl",
@@ -61,8 +63,12 @@ def _emit_hsl_event(
                 status=status,
                 reason_code=reason_code,
                 data=data,
-            )
-            return
+            ) is not None
+    except Exception as exc:
+        logging.debug("[event] failed to emit HSL live event type=%s: %s", event_type, exc)
+    if live_event_delivered:
+        return
+    try:
         record = getattr(self, "_monitor_record_event", None)
         if callable(record):
             record(
@@ -74,7 +80,11 @@ def _emit_hsl_event(
                 ts=ts,
             )
     except Exception as exc:
-        logging.debug("[event] failed to emit HSL event type=%s: %s", event_type, exc)
+        logging.debug(
+            "[event] failed to emit HSL legacy monitor event type=%s: %s",
+            event_type,
+            exc,
+        )
 
 
 def _calc_hsl_pnl(position_side, entry_price, close_price, qty, c_mult):
@@ -1186,7 +1196,13 @@ def _equity_hard_stop_log_transition(self, pside: str, metrics: dict, prev_tier:
         self,
         "hsl.transition",
         ("hsl", "risk", "transition"),
-        _hsl_event_data(metrics, {"previous_tier": prev_tier}),
+        _hsl_event_data(
+            metrics,
+            {
+                "previous_tier": prev_tier,
+                "metrics": dict(metrics),
+            },
+        ),
         pside=pside,
         symbol=metrics.get("symbol") if metrics.get("signal_mode") == "coin" else None,
         ts=int(metrics.get("timestamp_ms", 0) or 0) or None,
@@ -2850,46 +2866,55 @@ def _equity_hard_stop_log_coin_cooldown_status(self, pside: str, symbol: str, no
 
 
 def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: dict) -> None:
-    state = self._hsl_coin_state(pside, symbol)
-    now_ms = int(metrics["timestamp_ms"])
-    if (
-        state["last_status_log_ms"] != 0
-        and now_ms - state["last_status_log_ms"] < self._equity_hard_stop_status_log_interval_ms
-    ):
-        return
-    state["last_status_log_ms"] = now_ms
-    red_threshold = float(metrics["red_threshold"])
-    drawdown_score = float(metrics["drawdown_score"])
-    dist_to_red = max(0.0, red_threshold - drawdown_score)
-    cooldown_remaining = None
-    if state["cooldown_until_ms"] is not None:
-        cooldown_remaining = _equity_hard_stop_format_remaining_time(
-            max(0.0, (state["cooldown_until_ms"] - now_ms) / 1000.0)
+    try:
+        state = self._hsl_coin_state(pside, symbol)
+        now_ms = int(metrics["timestamp_ms"])
+        if (
+            state["last_status_log_ms"] != 0
+            and now_ms - state["last_status_log_ms"]
+            < self._equity_hard_stop_status_log_interval_ms
+        ):
+            return
+        state["last_status_log_ms"] = now_ms
+        red_threshold = float(metrics["red_threshold"])
+        drawdown_score = float(metrics["drawdown_score"])
+        dist_to_red = max(0.0, red_threshold - drawdown_score)
+        cooldown_remaining = None
+        if state["cooldown_until_ms"] is not None:
+            cooldown_remaining = _equity_hard_stop_format_remaining_time(
+                max(0.0, (state["cooldown_until_ms"] - now_ms) / 1000.0)
+            )
+        last_red_ts = None
+        if state["last_stop_event"] is not None:
+            last_red_ts = state["last_stop_event"].get("stop_event_timestamp_ms")
+        if last_red_ts is None:
+            last_red_ts = state["pending_red_since_ms"]
+        _emit_hsl_event(
+            self,
+            "hsl.status",
+            ("hsl", "risk", "status"),
+            _hsl_event_data(
+                metrics,
+                {
+                    "dist_to_red": float(dist_to_red),
+                    "cooldown_remaining": cooldown_remaining,
+                    "last_red_ts": last_red_ts,
+                    "pending_red_since_ms": state["pending_red_since_ms"],
+                },
+            ),
+            pside=pside,
+            symbol=symbol,
+            ts=now_ms,
+            status="succeeded",
+            reason_code=str(metrics["tier"]),
         )
-    last_red_ts = None
-    if state["last_stop_event"] is not None:
-        last_red_ts = state["last_stop_event"].get("stop_event_timestamp_ms")
-    if last_red_ts is None:
-        last_red_ts = state["pending_red_since_ms"]
-    _emit_hsl_event(
-        self,
-        "hsl.status",
-        ("hsl", "risk", "status"),
-        _hsl_event_data(
-            metrics,
-            {
-                "dist_to_red": float(dist_to_red),
-                "cooldown_remaining": cooldown_remaining,
-                "last_red_ts": last_red_ts,
-                "pending_red_since_ms": state["pending_red_since_ms"],
-            },
-        ),
-        pside=pside,
-        symbol=symbol,
-        ts=now_ms,
-        status="succeeded",
-        reason_code=str(metrics["tier"]),
-    )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit HSL coin status symbol=%s pside=%s: %s",
+            symbol,
+            pside,
+            exc,
+        )
 
 
 async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
