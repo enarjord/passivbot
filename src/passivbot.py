@@ -616,6 +616,7 @@ class Passivbot:
         live_event_emitters.emit_forager_feature_unavailable_event
     )
     _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
+    _emit_ema_bundle_started_event = live_event_emitters.emit_ema_bundle_started_event
     _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
     _emit_ema_fallback_used_event = live_event_emitters.emit_ema_fallback_used_event
     _emit_ema_unavailable_event = live_event_emitters.emit_ema_unavailable_event
@@ -12811,6 +12812,7 @@ class Passivbot:
         """
         # Gather full EMA context for the live symbol universe.
         # Python should provide the market-state bundle; Rust decides which branches use it.
+        Passivbot._emit_ema_bundle_started_event(self, symbols=symbols, modes=modes)
         need_close_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_m1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}
         need_h1_lr_spans: dict[str, set[float]] = {s: set() for s in symbols}

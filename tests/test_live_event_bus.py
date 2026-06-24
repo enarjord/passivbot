@@ -136,6 +136,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
     for event_type in (
         EventTypes.FORAGER_SELECTION,
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+        EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
