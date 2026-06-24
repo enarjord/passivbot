@@ -177,6 +177,41 @@ def test_passivbot_binds_coin_hsl_replay_support_helper():
     assert hasattr(Passivbot, "_equity_hard_stop_symbol_supported_for_coin_replay")
 
 
+@pytest.mark.asyncio
+async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_load():
+    bot = make_coin_bot()
+    bot.stop_signal_received = False
+    bot._shutdown_in_progress = False
+
+    async def fake_history(current_balance=None):
+        bot.stop_signal_received = True
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {},
+                    "unrealized_pnl_by_coin_pside": {},
+                }
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    async def fail_calc_upnl(*_args, **_kwargs):
+        raise AssertionError("shutdown should cancel before live upnl fetch")
+
+    bot.get_balance_equity_history = fake_history
+    bot._calc_upnl_sum_strict = fail_calc_upnl
+
+    with pytest.raises(asyncio.CancelledError, match="hsl_coin_history_replay_history_loaded"):
+        await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert bot.stop_signal_received is True
+    assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is False
+
+
 def test_calc_upnl_sum_strict_preserves_symbol_filter():
     bot = FakeHslBot()
     bind_hsl_methods(bot)

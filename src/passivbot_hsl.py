@@ -2099,11 +2099,23 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         return
     prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
     prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
+    raise_if_shutdown = getattr(self, "_raise_if_shutdown_requested", None)
+
+    def check_shutdown(stage: str) -> None:
+        if callable(raise_if_shutdown):
+            raise_if_shutdown(stage)
+            return
+        if getattr(self, "stop_signal_received", False) or getattr(
+            self, "_shutdown_in_progress", False
+        ):
+            raise asyncio.CancelledError(f"shutdown requested during {stage}")
+
     if hasattr(self, "_set_log_silence_watchdog_context"):
         self._set_log_silence_watchdog_context(
             phase=prev_phase, stage="equity_hard_stop_initialize_coin_from_history"
         )
     try:
+        check_shutdown("hsl_coin_history_replay_start")
         self._equity_hard_stop_coin = {"long": {}, "short": {}}
         self._runtime_forced_modes = {"long": {}, "short": {}}
         lookback = parse_pnls_max_lookback_days(
@@ -2115,6 +2127,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             lookback.display_value,
         )
         history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
+        check_shutdown("hsl_coin_history_replay_history_loaded")
         panic_flatten_events = history["panic_flatten_events"] if "panic_flatten_events" in history else []
         if panic_flatten_events is None:
             panic_flatten_events = []
@@ -2289,6 +2302,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
         pair_idx = 0
         for pside in self._hsl_psides():
+            check_shutdown("hsl_coin_history_replay_pside")
             if not self._equity_hard_stop_coin_active_pside(pside):
                 continue
             cfg = self.hsl[pside]
@@ -2296,6 +2310,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
             no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
             for symbol in sorted(symbols):
+                check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
                 state = self._hsl_coin_state(pside, symbol)
                 contract = self._equity_hard_stop_infer_coin_replay_contract(
@@ -2352,6 +2367,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 for row_idx, row in enumerate(timeline_rows, start=1):
                     if row_idx % 1000 == 0:
                         await asyncio.sleep(0)
+                        check_shutdown("hsl_coin_history_replay_rows")
                         log_replay_progress(pair_idx, pside, symbol, applied_rows)
                     ts = int(row["timestamp"])
                     if replay_start_boundary_ts is not None and ts < replay_start_boundary_ts:
@@ -2616,6 +2632,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     continue
                 if applied_rows == 0:
                     self._equity_hard_stop_prime_coin_runtime_for_replay(pside, symbol, now_ms)
+                check_shutdown("hsl_coin_history_replay_current_sample")
                 current_metrics = self._equity_hard_stop_apply_coin_sample(
                     pside,
                     symbol,
