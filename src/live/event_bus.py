@@ -49,6 +49,11 @@ class EventTypes:
     FILL_INGESTED = "fill.ingested"
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
+    HSL_TRANSITION = "hsl.transition"
+    HSL_STATUS = "hsl.status"
+    HSL_RED_TRIGGERED = "hsl.red_triggered"
+    HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
+    HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
     SINK_DEGRADED = "sink.degraded"
 
 
@@ -85,6 +90,11 @@ PHASE1_EVENT_TYPES = {
     EventTypes.FILL_INGESTED,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
+    EventTypes.HSL_TRANSITION,
+    EventTypes.HSL_STATUS,
+    EventTypes.HSL_RED_TRIGGERED,
+    EventTypes.HSL_COOLDOWN_STARTED,
+    EventTypes.HSL_COOLDOWN_ENDED,
     EventTypes.SINK_DEGRADED,
 }
 
@@ -354,6 +364,11 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.FILL_INGESTED: EventRoute(console=False, text=False),
     EventTypes.POSITION_CHANGED: EventRoute(console=False, text=False),
     EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
+    EventTypes.HSL_STATUS: EventRoute(console=False, text=False),
+    EventTypes.HSL_RED_TRIGGERED: EventRoute(console=False, text=False),
+    EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
+    EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 

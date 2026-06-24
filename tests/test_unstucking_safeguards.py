@@ -2642,8 +2642,16 @@ async def test_hard_stop_check_defers_stop_event_until_flat_confirmation(monkeyp
 
 
 def test_hard_stop_status_logging_is_throttled(caplog):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_hsl"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
     _hsl_state(bot)["last_stop_event"] = {"stop_event_timestamp_ms": 1_600_000}
     _hsl_state(bot)["last_status_log_ms"] = 0
     bot._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
@@ -2668,6 +2676,15 @@ def test_hard_stop_status_logging_is_throttled(caplog):
     assert len(msgs) == 1
     assert "dist_to_red=0.020000" in msgs[0]
     assert "last_red_ts=1600000" in msgs[0]
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_STATUS]
+    assert len(events) == 1
+    assert events[0].cycle_id == "cy_hsl"
+    assert events[0].pside == "long"
+    assert events[0].reason_code == "yellow"
+    assert events[0].data["dist_to_red"] == pytest.approx(0.02)
+    assert events[0].data["last_red_ts"] == 1_600_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

@@ -2649,6 +2649,7 @@ class Passivbot:
     _equity_hard_stop_log_coin_cooldown_status = (
         pb_hsl._equity_hard_stop_log_coin_cooldown_status
     )
+    _equity_hard_stop_emit_coin_status = pb_hsl._equity_hard_stop_emit_coin_status
     _equity_hard_stop_prime_coin_runtime_for_replay = (
         pb_hsl._equity_hard_stop_prime_coin_runtime_for_replay
     )

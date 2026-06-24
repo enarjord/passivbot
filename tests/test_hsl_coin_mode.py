@@ -82,6 +82,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_finalize_coin_red_stop",
         "_equity_hard_stop_latest_panic_fill_timestamp_ms",
         "_equity_hard_stop_log_coin_cooldown_status",
+        "_equity_hard_stop_emit_coin_status",
         "_equity_hard_stop_make_state",
         "_equity_hard_stop_prime_coin_runtime_for_replay",
         "_equity_hard_stop_reset_coin_after_restart",
@@ -223,10 +224,20 @@ def test_coin_hsl_slot_budget_rejects_zero_n_positions():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     bot = make_coin_bot()
     symbol = "A"
     bot.hsl["short"]["enabled"] = True
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_hsl"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
     def bot_value(pside, key):
         values = {
@@ -242,6 +253,15 @@ async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
     assert set(out) == {f"long:{symbol}"}
     assert symbol in bot._equity_hard_stop_coin["long"]
     assert bot._equity_hard_stop_coin["short"] == {}
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_STATUS]
+    assert len(events) == 1
+    assert events[0].cycle_id == "cy_coin_hsl"
+    assert events[0].symbol == symbol
+    assert events[0].pside == "long"
+    assert events[0].data["signal_mode"] == "coin"
+    assert events[0].data["dist_to_red"] == pytest.approx(0.5)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

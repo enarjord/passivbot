@@ -133,6 +133,17 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].structured is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].monitor is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].console is False
+    for event_type in (
+        EventTypes.HSL_TRANSITION,
+        EventTypes.HSL_STATUS,
+        EventTypes.HSL_RED_TRIGGERED,
+        EventTypes.HSL_COOLDOWN_STARTED,
+        EventTypes.HSL_COOLDOWN_ENDED,
+    ):
+        assert DEFAULT_ROUTES[event_type].structured is True
+        assert DEFAULT_ROUTES[event_type].monitor is True
+        assert DEFAULT_ROUTES[event_type].console is False
+        assert DEFAULT_ROUTES[event_type].text is False
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
 
