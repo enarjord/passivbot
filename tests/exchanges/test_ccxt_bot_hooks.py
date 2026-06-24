@@ -1,5 +1,6 @@
 """Tests for CCXTBot Template Method hooks."""
 
+import logging
 import pytest
 from unittest.mock import MagicMock, AsyncMock
 
@@ -433,6 +434,64 @@ class TestBybitCreateCcxtSessions:
         )
 
         assert signed["headers"]["Referer"] == "passivbotbybit"
+
+    @pytest.mark.asyncio
+    async def test_price_limit_guard_skips_only_too_deep_entry_grid_buys(self, caplog):
+        """Bybit guard should remove invalid creates without touching cancels."""
+        from exchanges.bybit import BybitBot
+
+        symbol = "POPCAT/USDT:USDT"
+        bot = BybitBot.__new__(BybitBot)
+        bot.markets_dict = {
+            symbol: {"info": {"riskParameters": {"priceLimitRatioX": "0.1"}}}
+        }
+        bot._is_market_execution_order = lambda order: str(
+            order.get("type", "limit")
+        ).lower() == "market"
+        bot._resolve_pb_order_type = lambda order: order.get("pb_order_type", "")
+
+        async def fake_last_prices(symbols, **_kwargs):
+            return {symbol: 0.0465 for symbol in symbols}
+
+        bot._get_live_last_prices = fake_last_prices
+        to_cancel = [
+            {
+                "symbol": symbol,
+                "side": "buy",
+                "position_side": "long",
+                "qty": 15363.0,
+                "price": 0.00538,
+                "reduce_only": False,
+            }
+        ]
+        too_deep = {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 17687.0,
+            "price": 0.0033,
+            "reduce_only": False,
+            "type": "limit",
+            "pb_order_type": "entry_grid_normal_long",
+        }
+        allowed = {**too_deep, "price": 0.0047}
+
+        with caplog.at_level(logging.INFO):
+            cancels, creates, skipped = await bot._filter_exchange_price_limit_creations(
+                to_cancel, [too_deep, allowed]
+            )
+            await bot._filter_exchange_price_limit_creations(to_cancel, [too_deep])
+
+        assert cancels == to_cancel
+        assert creates == [allowed]
+        assert skipped == 1
+        messages = [rec.message for rec in caplog.records]
+        info_messages = [msg for msg in messages if "bybit price-limit guard" in msg]
+        assert len(info_messages) == 1
+        log_msg = info_messages[0]
+        assert "skipped=1" in log_msg
+        assert "prices=0.0033" in log_msg
+        assert "min_buy=0.00465" in log_msg
 
 
 class TestBitgetCreateCcxtSessions:

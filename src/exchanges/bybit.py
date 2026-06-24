@@ -3,6 +3,7 @@ from passivbot import logging, clip_by_timestamp
 from uuid import uuid4
 import asyncio
 import ccxt
+import math
 from copy import deepcopy
 from collections import defaultdict
 from utils import symbol_to_coin, ts_to_date, utc_ms
@@ -33,6 +34,130 @@ class BybitBot(CCXTBot):
     def _get_position_side_for_order(self, order: dict) -> str:
         """Bybit: Use determine_pos_side_ccxt helper."""
         return determine_pos_side_ccxt(order)
+
+    async def _filter_exchange_price_limit_creations(
+        self, to_cancel: list[dict], to_create: list[dict]
+    ) -> tuple[list[dict], list[dict], int]:
+        """Skip Bybit entry-grid buy creates below its dynamic lower price band."""
+
+        def num(value):
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                return None
+            return value if math.isfinite(value) and value > 0.0 else None
+
+        candidates = [
+            order
+            for order in to_create
+            if not self._is_market_execution_order(order)
+            and str(order.get("side") or "").lower() == "buy"
+            and not (order.get("reduce_only") or order.get("reduceOnly"))
+            and self._resolve_pb_order_type(order).lower().startswith("entry_grid_")
+        ]
+        if not candidates:
+            return to_cancel, to_create, 0
+
+        symbols = set()
+        for order in candidates:
+            symbol = str(order.get("symbol") or "")
+            if not symbol:
+                raise ValueError("missing symbol for Bybit price-limit guard")
+            symbols.add(symbol)
+        last_prices = await self._get_live_last_prices(
+            symbols,
+            max_age_ms=10_000,
+            context="bybit_price_limit_guard",
+            allow_completed_candle_fallback=True,
+        )
+
+        blocked_create_ids = set()
+        blocked_summary = defaultdict(
+            lambda: {"prices": [], "market": 0.0, "min_buy": 0.0, "ratio": 0.0}
+        )
+        for order in candidates:
+            symbol = str(order["symbol"])
+            try:
+                price_limit_ratio_x = self.markets_dict[symbol]["info"][
+                    "riskParameters"
+                ]["priceLimitRatioX"]
+            except KeyError as exc:
+                raise ValueError(
+                    f"{symbol}: missing Bybit priceLimitRatioX for price-limit guard"
+                ) from exc
+            ratio = num(price_limit_ratio_x)
+            if symbol not in last_prices:
+                raise ValueError(
+                    f"{symbol}: missing live price for Bybit price-limit guard"
+                )
+            last_price = num(last_prices[symbol])
+            if "price" not in order:
+                raise ValueError(
+                    f"{symbol}: missing order price for Bybit price-limit guard"
+                )
+            order_price = num(order["price"])
+            if ratio is None or ratio >= 1.0:
+                raise ValueError(
+                    f"{symbol}: invalid Bybit priceLimitRatioX for price-limit guard: "
+                    f"{price_limit_ratio_x!r}"
+                )
+            if last_price is None or order_price is None:
+                raise ValueError(
+                    f"{symbol}: invalid price-limit guard input last={last_price!r} "
+                    f"order={order_price!r}"
+                )
+            min_buy = last_price * ratio
+            if order_price >= min_buy:
+                continue
+
+            blocked_create_ids.add(id(order))
+            coin = symbol_to_coin(symbol, verbose=False) or symbol
+            pb_type = self._resolve_pb_order_type(order)
+            summary_key = (coin, str(order.get("position_side") or ""), pb_type)
+            blocked_summary[summary_key]["prices"].append(order_price)
+            blocked_summary[summary_key]["market"] = last_price
+            blocked_summary[summary_key]["min_buy"] = min_buy
+            blocked_summary[summary_key]["ratio"] = ratio
+            logging.debug(
+                "[order] bybit price-limit guard skipped create | symbol=%s "
+                "qty=%.10g price=%.10g market=%.10g min_buy=%.10g ratio=%.6g",
+                coin,
+                float(order["qty"]),
+                order_price,
+                last_price,
+                min_buy,
+                ratio,
+            )
+
+        if not blocked_create_ids:
+            return to_cancel, to_create, 0
+        if not hasattr(self, "_bybit_price_limit_guard_info_ms"):
+            self._bybit_price_limit_guard_info_ms = {}
+        now_ms = utc_ms()
+        for (coin, pside, pb_type), summary in blocked_summary.items():
+            prices = ",".join(f"{price:.10g}" for price in summary["prices"])
+            log_key = (coin, pside, pb_type, prices)
+            last_info_ms = (
+                int(self._bybit_price_limit_guard_info_ms[log_key])
+                if log_key in self._bybit_price_limit_guard_info_ms
+                else 0
+            )
+            message = (
+                f"[order] bybit price-limit guard skipped creates | symbol={coin} "
+                f"pside={pside} type={pb_type} skipped={len(summary['prices'])} "
+                f"prices={prices} market={summary['market']:.10g} "
+                f"min_buy={summary['min_buy']:.10g} ratio={summary['ratio']:.6g}"
+            )
+            if now_ms - last_info_ms >= 60 * 60 * 1000:
+                self._bybit_price_limit_guard_info_ms[log_key] = now_ms
+                logging.info(message)
+            else:
+                logging.debug(message)
+        return (
+            to_cancel,
+            [order for order in to_create if id(order) not in blocked_create_ids],
+            len(blocked_create_ids),
+        )
 
     # ═══════════════════ BYBIT-SPECIFIC METHODS ═══════════════════
 

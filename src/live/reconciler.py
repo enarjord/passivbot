@@ -810,18 +810,27 @@ async def calc_orders_to_cancel_and_create(bot):
     to_create, initial_entry_gate_skipped = (
         await bot._apply_initial_entry_distance_gate(to_create)
     )
+    exchange_price_limit_skipped = 0
+    exchange_price_limit_hook = getattr(
+        bot, "_filter_exchange_price_limit_creations", None
+    )
+    if callable(exchange_price_limit_hook):
+        to_cancel, to_create, exchange_price_limit_skipped = (
+            await exchange_price_limit_hook(to_cancel, to_create)
+        )
     to_cancel = await bot._sort_orders_by_market_diff(to_cancel, "to_cancel")
     to_create = await bot._sort_orders_by_market_diff(to_create, "to_create")
     to_create, freshness_skipped = bot._apply_freshness_creation_guardrails(to_create)
     if plan_summaries:
         total_pre_cancel = sum(p[1] for p in plan_summaries)
-        total_cancel = sum(p[2] for p in plan_summaries)
+        total_cancel = len(to_cancel)
         total_pre_create = sum(p[3] for p in plan_summaries)
         total_create = len(to_create)
         total_skipped = (
             sum(p[5] for p in plan_summaries)
             + freshness_skipped
             + initial_entry_gate_skipped
+            + exchange_price_limit_skipped
         )
         detail_parts = []
         untouched_cancel = total_pre_cancel - total_cancel

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Bybit live entry-grid creation so buy orders below Bybit's dynamic
+  lower price band are skipped before submission and logged with throttled
+  skipped counts plus planned prices, avoiding repeated `110003` invalid-price
+  rejects.
 - Fixed Bitget UTA / Elite close-order placement by omitting the one-way-only
   `reduceOnly` flag from hedge-mode v3 orders that already send `posSide`.
 - Fixed Bitget UTA / Elite open-order normalization so hedge-mode close orders
