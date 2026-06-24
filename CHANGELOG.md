@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed v8 backtests/optimizer runs so candidates with depleted raw wallet
+  balance terminate through the normal liquidation path and emit incomplete
+  `backtest_completion_ratio` metrics instead of crashing coin-HSL slot-budget
+  evaluation.
 - Implemented the v8 TWEL policy contract: TWEL entry gating is now controlled
   separately from TWEL auto-reduce, entry gating uses the capped thresholded
   portfolio cap, and TWEL auto-reduce supports `reduce_overweight` and
