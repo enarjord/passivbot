@@ -2367,11 +2367,14 @@ impl<'a> Backtest<'a> {
             return false;
         };
         let floor_usd = self.liquidation_equity_floor_usd();
-        let liquidated = if floor_usd > 0.0 {
-            equity_usd <= floor_usd
-        } else {
-            equity_usd <= 0.0
-        };
+        let raw_balance_depleted =
+            self.balance.usd_total_balance.is_finite() && self.balance.usd_total_balance <= 0.0;
+        let liquidated = raw_balance_depleted
+            || if floor_usd > 0.0 {
+                equity_usd <= floor_usd
+            } else {
+                equity_usd <= 0.0
+            };
         if !liquidated {
             return false;
         }
@@ -9002,6 +9005,141 @@ mod tests {
         assert!(bt.check_and_apply_liquidation(0));
         assert!((bt.equities.usd_total_equity[0] - 50.0).abs() < 1e-12);
         assert!((bt.equities.btc_total_equity[0] - 0.0025).abs() < 1e-12);
+    }
+
+    #[test]
+    fn nonpositive_raw_balance_liquidates_even_when_equity_is_above_floor() {
+        for raw_balance in [0.0, -1.0] {
+            let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![1.0; 2 * 1 * 4]).unwrap();
+            let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+            let mut bp_pair = BotParamsPair::default();
+            bp_pair.long.n_positions = 1;
+            bp_pair.long.ema_span_0 = 10.0;
+            bp_pair.long.ema_span_1 = 20.0;
+
+            let backtest_params = BacktestParams {
+                starting_balance: 1000.0,
+                maker_fee: 0.0,
+                taker_fee: 0.00055,
+                coins: vec!["TEST".to_string()],
+                active_coin_indices: None,
+                first_timestamp_ms: 0,
+                requested_start_timestamp_ms: 0,
+                first_valid_indices: vec![0],
+                last_valid_indices: vec![1],
+                warmup_minutes: vec![0],
+                trade_start_indices: vec![0],
+                global_warmup_bars: 0,
+                btc_collateral_cap: 0.0,
+                btc_collateral_ltv_cap: None,
+                metrics_only: true,
+                skip_btc_analysis: false,
+                filter_by_min_effective_cost: false,
+                dynamic_wel_by_tradability: true,
+                hedge_mode: true,
+                max_realized_loss_pct: 1.0,
+                pnls_max_lookback_days: 30.0,
+                liquidation_threshold: 0.05,
+                equity_hard_stop_loss: EquityHardStopLossConfig::default(),
+                market_orders_allowed: false,
+                market_order_near_touch_threshold: 0.001,
+                market_order_slippage_pct: 0.0005,
+                forager_score_hysteresis_pct: 0.0,
+                candle_interval_minutes: 1,
+            };
+
+            let mut bt = Backtest::new(
+                hlcvs.view(),
+                btc_usd_prices.view(),
+                vec![bp_pair],
+                vec![ExchangeParams::default()],
+                &backtest_params,
+            );
+
+            bt.balance.usd_total_balance = raw_balance;
+            bt.equities.timestamps_ms.push(0);
+            bt.equities.usd_total_equity.push(100.0);
+            bt.equities.btc_total_equity.push(0.005);
+
+            assert!(bt.check_and_apply_liquidation(0));
+            assert!(bt.liquidated());
+            assert!((bt.equities.usd_total_equity[0] - 50.0).abs() < 1e-12);
+            assert!((bt.equities.btc_total_equity[0] - 0.0025).abs() < 1e-12);
+        }
+    }
+
+    #[test]
+    fn depleted_raw_balance_preempts_coin_hsl_slot_budget_error() {
+        let hlcvs = Array3::from_shape_vec((2, 1, 4), vec![100.0; 2 * 1 * 4]).unwrap();
+        let btc_usd_prices = Array1::from_vec(vec![20_000.0, 20_000.0]);
+
+        let mut bp_pair = BotParamsPair::default();
+        bp_pair.long.n_positions = 1;
+        bp_pair.long.total_wallet_exposure_limit = 1.5;
+        bp_pair.long.wallet_exposure_limit = 1.5;
+        bp_pair.long.ema_span_0 = 10.0;
+        bp_pair.long.ema_span_1 = 20.0;
+        bp_pair.long.hsl_enabled = true;
+        bp_pair.long.hsl_red_threshold = 0.5;
+        bp_pair.long.hsl_ema_span_minutes = 1.0;
+        bp_pair.long.hsl_tier_ratio_yellow = 0.5;
+        bp_pair.long.hsl_tier_ratio_orange = 0.75;
+
+        let mut hs = EquityHardStopLossConfig::default();
+        hs.enabled = true;
+        hs.signal_mode = "coin".to_string();
+        hs.red_threshold = 0.5;
+        hs.ema_span_minutes = 1.0;
+
+        let backtest_params = BacktestParams {
+            starting_balance: 100.0,
+            maker_fee: 0.0,
+            taker_fee: 0.00055,
+            coins: vec!["TEST".to_string()],
+            active_coin_indices: None,
+            first_timestamp_ms: 0,
+            requested_start_timestamp_ms: 0,
+            first_valid_indices: vec![0],
+            last_valid_indices: vec![1],
+            warmup_minutes: vec![0],
+            trade_start_indices: vec![0],
+            global_warmup_bars: 0,
+            btc_collateral_cap: 0.0,
+            btc_collateral_ltv_cap: None,
+            metrics_only: true,
+            skip_btc_analysis: false,
+            filter_by_min_effective_cost: false,
+            dynamic_wel_by_tradability: true,
+            hedge_mode: true,
+            max_realized_loss_pct: 1.0,
+            pnls_max_lookback_days: 30.0,
+            liquidation_threshold: 0.05,
+            equity_hard_stop_loss: hs,
+            market_orders_allowed: false,
+            market_order_near_touch_threshold: 0.001,
+            market_order_slippage_pct: 0.0005,
+            forager_score_hysteresis_pct: 0.0,
+            candle_interval_minutes: 1,
+        };
+
+        let mut bt = Backtest::new(
+            hlcvs.view(),
+            btc_usd_prices.view(),
+            vec![bp_pair],
+            vec![ExchangeParams::default()],
+            &backtest_params,
+        );
+
+        bt.balance.usd_total_balance = -1.0;
+        bt.equities.timestamps_ms.push(0);
+        bt.equities.usd_total_equity.push(100.0);
+        bt.equities.btc_total_equity.push(0.005);
+
+        assert!(bt.check_and_apply_liquidation(0));
+        assert!(bt.liquidated());
+        assert!(bt.hard_stop_coin[LONG][0].state.is_none());
+        assert!(bt.hard_stop_drawdown_samples_pside[LONG].is_empty());
     }
 
     #[test]
