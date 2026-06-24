@@ -229,7 +229,7 @@ def _authoritative_result_summary(surface: str, result: Any) -> dict[str, Any]:
     return {"result_type": type(result).__name__}
 
 
-def emit_authoritative_remote_call_event(
+def _emit_authoritative_remote_call_event_unchecked(
     bot: Any,
     *,
     surface: str,
@@ -296,6 +296,44 @@ def emit_authoritative_remote_call_event(
         data=data,
     )
     return remote_call_id
+
+
+def emit_authoritative_remote_call_event(
+    bot: Any,
+    *,
+    surface: str,
+    stage: str,
+    started_ms: int,
+    elapsed_ms: int | None = None,
+    remote_call_id: str | None = None,
+    result: Any = None,
+    error: BaseException | None = None,
+) -> str | None:
+    """Best-effort authoritative fetch event emission.
+
+    This function is called from account-critical refresh paths. Event
+    construction, sanitization, and sink emission must never prevent the
+    underlying exchange fetch from running or mask its original exception.
+    """
+    try:
+        return _emit_authoritative_remote_call_event_unchecked(
+            bot,
+            surface=surface,
+            stage=stage,
+            started_ms=started_ms,
+            elapsed_ms=elapsed_ms,
+            remote_call_id=remote_call_id,
+            result=result,
+            error=error,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit authoritative remote call event surface=%s stage=%s: %s",
+            surface,
+            stage,
+            exc,
+        )
+        return remote_call_id
 
 
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:

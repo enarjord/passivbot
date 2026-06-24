@@ -530,6 +530,72 @@ async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_eve
     assert "SECRET" not in failed.data["error_repr"]
 
 
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_emit_failure_does_not_skip_fetch():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_12"
+            self._authoritative_refresh_epoch = 20
+            self._authoritative_pending_confirmations = {}
+            self._live_event_remote_call_seq = 0
+            self.fetch_called = False
+
+        def _emit_live_event(self, *args, **kwargs):
+            raise RuntimeError("event sink boom")
+
+    async def fetch_ok():
+        bot.fetch_called = True
+        return ["ok"]
+
+    bot = FakeBot()
+    timings_ms = {}
+    result = await bot._timed_authoritative_fetch("open_orders", fetch_ok(), timings_ms)
+
+    assert result == ["ok"]
+    assert bot.fetch_called is True
+    assert "open_orders" in timings_ms
+
+
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception():
+    import passivbot as pb_mod
+
+    original_error = RuntimeError("positions failed")
+
+    class FakeBot:
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_13"
+            self._authoritative_refresh_epoch = 21
+            self._authoritative_pending_confirmations = {}
+            self._live_event_remote_call_seq = 0
+
+        def _emit_live_event(self, *args, **kwargs):
+            raise RuntimeError("event sink boom")
+
+    async def fetch_fail():
+        raise original_error
+
+    bot = FakeBot()
+    timings_ms = {}
+    with pytest.raises(RuntimeError) as exc_info:
+        await bot._timed_authoritative_fetch("positions", fetch_fail(), timings_ms)
+
+    assert exc_info.value is original_error
+    assert "positions" in timings_ms
+
+
 def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
     import passivbot as pb_mod
 
