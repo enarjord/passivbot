@@ -612,6 +612,13 @@ class Passivbot:
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
+    _emit_forager_feature_unavailable_event = (
+        live_event_emitters.emit_forager_feature_unavailable_event
+    )
+    _emit_forager_selection_event = live_event_emitters.emit_forager_selection_event
+    _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
+    _emit_ema_fallback_used_event = live_event_emitters.emit_ema_fallback_used_event
+    _emit_ema_unavailable_event = live_event_emitters.emit_ema_unavailable_event
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
@@ -7602,6 +7609,9 @@ class Passivbot:
         except Exception:
             slots_open = False
         if self.is_forager_mode(pside):
+            forager_candidate_count = len(candidates)
+            feature_unavailable_count = 0
+            volatility_dropped_count = 0
             # filter coins by relative volume and log range
             clip_pct = self.bot_value(pside, "forager_volume_drop_pct")
             if not clip_pct:
@@ -7668,6 +7678,17 @@ class Passivbot:
                 if symbol not in volumes or symbol not in log_ranges
             ]
             if feature_unavailable:
+                feature_unavailable_count = len(feature_unavailable)
+                Passivbot._emit_forager_feature_unavailable_event(
+                    self,
+                    pside=pside,
+                    symbols=feature_unavailable,
+                    candidate_count=forager_candidate_count,
+                    volume_count=len(volumes),
+                    log_range_count=len(log_ranges),
+                    max_age_ms=max_age_ms,
+                    fetch_budget=fetch_budget,
+                )
                 logging.debug(
                     "[forager] %s unavailable ranking features | unavailable=%d candidates=%d symbols=%s",
                     pside,
@@ -7681,6 +7702,23 @@ class Passivbot:
                     if symbol in volumes and symbol in log_ranges
                 ]
                 if not candidates:
+                    Passivbot._emit_forager_selection_event(
+                        self,
+                        pside=pside,
+                        candidate_count=forager_candidate_count,
+                        eligible_count=0,
+                        selected_symbols=[],
+                        slots_open=slots_open,
+                        max_n_positions=max_n_positions,
+                        clip_pct=clip_pct,
+                        volatility_drop_pct=volatility_drop,
+                        max_age_ms=max_age_ms,
+                        fetch_budget=fetch_budget,
+                        feature_unavailable_count=feature_unavailable_count,
+                        volatility_dropped_count=0,
+                        status="skipped",
+                        reason_code="all_features_unavailable",
+                    )
                     return []
             if volatility_drop > 0.0:
                 ranked = sorted(
@@ -7692,8 +7730,26 @@ class Passivbot:
                     len(ranked),
                     max(0, int(round(len(ranked) * float(volatility_drop)))),
                 )
+                volatility_dropped_count = keep_from
                 candidates = ranked[keep_from:]
                 if not candidates:
+                    Passivbot._emit_forager_selection_event(
+                        self,
+                        pside=pside,
+                        candidate_count=forager_candidate_count,
+                        eligible_count=0,
+                        selected_symbols=[],
+                        slots_open=slots_open,
+                        max_n_positions=max_n_positions,
+                        clip_pct=clip_pct,
+                        volatility_drop_pct=volatility_drop,
+                        max_age_ms=max_age_ms,
+                        fetch_budget=fetch_budget,
+                        feature_unavailable_count=feature_unavailable_count,
+                        volatility_dropped_count=volatility_dropped_count,
+                        status="skipped",
+                        reason_code="all_candidates_dropped_by_volatility",
+                    )
                     return []
             features = [
                 {
@@ -7713,6 +7769,23 @@ class Passivbot:
                 True,
             )
             ideal_coins = [candidates[i] for i in selected]
+            Passivbot._emit_forager_selection_event(
+                self,
+                pside=pside,
+                candidate_count=forager_candidate_count,
+                eligible_count=len(candidates),
+                selected_symbols=ideal_coins,
+                slots_open=slots_open,
+                max_n_positions=max_n_positions,
+                clip_pct=clip_pct,
+                volatility_drop_pct=volatility_drop,
+                max_age_ms=max_age_ms,
+                fetch_budget=fetch_budget,
+                feature_unavailable_count=feature_unavailable_count,
+                volatility_dropped_count=volatility_dropped_count,
+                status="succeeded" if ideal_coins else "skipped",
+                reason_code="selected" if ideal_coins else "none_selected",
+            )
             if not ideal_coins and self.live_value("filter_by_min_effective_cost"):
                 if any(not flag for flag in min_cost_flags.values()):
                     self.warn_on_high_effective_min_cost(pside)
@@ -10302,6 +10375,16 @@ class Passivbot:
                 return f"idx:{idx_int}"
             return symbol_to_coin(symbol, verbose=False) or symbol
 
+        def _event_symbol(idx) -> str:
+            try:
+                idx_int = int(idx)
+            except (TypeError, ValueError):
+                return "idx:unknown"
+            symbol = idx_to_symbol.get(idx_int)
+            if symbol is None:
+                return f"idx:{idx_int}"
+            return str(symbol)
+
         def _fmt_top(items: list[dict], limit: int, *, with_components: bool) -> str:
             parts = []
             for item in items[:limit]:
@@ -10388,6 +10471,58 @@ class Passivbot:
             )
             selected_set_key = tuple(sorted(selected_symbols))
             slots_to_fill = int(selection.get("slots_to_fill", 0) or 0)
+            top_score_payload = []
+            for item in top_scores[:8]:
+                top_score_payload.append(
+                    {
+                        "symbol": _event_symbol(item.get("symbol_idx")),
+                        "rank": int(
+                            item.get("rank", len(top_score_payload) + 1)
+                            or len(top_score_payload) + 1
+                        ),
+                        "score": float(item.get("score") or 0.0),
+                        "volume_component": float(
+                            item.get("volume_component") or 0.0
+                        ),
+                        "ema_readiness_component": float(
+                            item.get("ema_readiness_component") or 0.0
+                        ),
+                        "volatility_component": float(
+                            item.get("volatility_component") or 0.0
+                        ),
+                        "selected": bool(item.get("selected")),
+                        "incumbent": bool(item.get("incumbent")),
+                    }
+                )
+            Passivbot._emit_forager_selection_event(
+                self,
+                pside=pside,
+                candidate_count=len(top_scores),
+                eligible_count=len(top_scores),
+                selected_symbols=tuple(
+                    _event_symbol(idx)
+                    for idx in (selection.get("selected_symbol_indices") or [])
+                ),
+                incumbent_symbols=tuple(
+                    _event_symbol(idx)
+                    for idx in (selection.get("incumbent_symbol_indices") or [])
+                ),
+                slots_open=slots_to_fill > 0,
+                max_n_positions=None,
+                slots_to_fill=slots_to_fill,
+                clip_pct=None,
+                volatility_drop_pct=None,
+                score_hysteresis_pct=float(
+                    selection.get("score_hysteresis_pct") or 0.0
+                ),
+                max_age_ms=None,
+                fetch_budget=None,
+                top_scores=top_score_payload,
+                hysteresis_event_count=len(events),
+                source="rust_orchestrator",
+                status="succeeded" if selected_symbols else "skipped",
+                reason_code="rust_orchestrator_selection",
+            )
             info_key = (selected_set_key, slots_to_fill)
             debug_key = (info_key, score_key)
             state = self._forager_selection_log_state.setdefault(pside, {})
@@ -14089,6 +14224,12 @@ class Passivbot:
                 "; ".join(parts[:4]),
                 interval_ms=15 * 60 * 1000,
             )
+        Passivbot._emit_ema_fallback_used_event(
+            self,
+            close_ema_recoveries=close_ema_recoveries,
+            close_ema_fallbacks=close_ema_fallbacks,
+            forager_cached_ema_fallbacks=forager_cached_ema_fallbacks,
+        )
         if errors:
             fatal = next(
                 (err for _sym, err in errors if not isinstance(err, Exception)), None
@@ -14118,6 +14259,12 @@ class Passivbot:
                 len(ema_unavailable_reasons),
                 "; ".join(parts[:4]),
             )
+        Passivbot._emit_ema_unavailable_event(
+            self,
+            optional_ema_drops=optional_ema_drops,
+            candidate_ema_unavailable_details=candidate_ema_unavailable_details,
+            ema_unavailable_reasons=ema_unavailable_reasons,
+        )
 
         # Convenience: compute the single-span values used by legacy forager logging.
         volumes_long = {
@@ -14131,6 +14278,16 @@ class Passivbot:
             if lr_span_long in m1_log_range_emas[s]
         }
         self._orchestrator_ema_unavailable_symbols = set(ema_unavailable_symbols)
+        Passivbot._emit_ema_bundle_completed_event(
+            self,
+            symbols=symbols,
+            m1_close_emas=m1_close_emas,
+            m1_volume_emas=m1_volume_emas,
+            m1_log_range_emas=m1_log_range_emas,
+            h1_log_range_emas=h1_log_range_emas,
+            cache_only_symbols=cache_only_symbols,
+            projection_contexts=projection_contexts,
+        )
 
         return (
             m1_close_emas,

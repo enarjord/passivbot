@@ -1860,6 +1860,15 @@ def test_min_effective_cost_blocks_are_aggregated(caplog):
 
 def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
     bot = Passivbot.__new__(Passivbot)
+    sink = ListEventSink()
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_forager"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
     out = {
         "diagnostics": {
             "forager_selections": [
@@ -1924,6 +1933,20 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
     assert not any("DOGE/USDT:USDT" in msg for msg in messages)
     assert any("[forager] long score detail" in msg for msg in messages)
     assert any("vol=0.400" in msg for msg in messages)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FORAGER_SELECTION
+    ]
+    assert len(events) == 2
+    assert events[0].cycle_id == "cy_forager"
+    assert events[0].data["source"] == "rust_orchestrator"
+    assert events[0].data["selected_symbols"] == ["DOGE/USDT:USDT"]
+    assert events[0].data["incumbent_symbols"] == ["DOGE/USDT:USDT"]
+    assert events[0].data["hysteresis_event_count"] == 1
+    assert events[0].data["top_scores"][0]["symbol"] == "SOL/USDT:USDT"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def test_forager_selection_diagnostics_demotes_rank_only_changes(caplog):
