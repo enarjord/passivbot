@@ -28,11 +28,13 @@ _LOCK_HANDLE = None
 
 def _extension_suffixes() -> list[str]:
     # Prefer the exact interpreter suffix when available (e.g. `.cpython-312-darwin.so`),
-    # but keep broad fallbacks for non-standard environments.
+    # but keep ABI-stable and broad fallbacks for non-standard environments.
     suffix = sysconfig.get_config_var("EXT_SUFFIX")
+    suffixes: list[str] = []
     if suffix:
-        return [suffix.lstrip(".")]
-    return ["so", "pyd", "dll", "dylib", "bundle", "sl"]
+        suffixes.append(suffix.lstrip("."))
+    suffixes.extend(["abi3.so", "so", "pyd", "dll", "dylib", "bundle", "sl"])
+    return list(dict.fromkeys(suffixes))
 
 
 def _local_extension_candidates() -> list[Path]:
