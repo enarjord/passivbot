@@ -5,6 +5,7 @@ import logging
 import sys
 
 from config.access import get_optional_config_value
+from live import event_emitters
 from utils import ts_to_date, utc_ms
 
 
@@ -261,8 +262,24 @@ async def routine_fill_refresh_prefetch_task(bot, *, reason: str) -> None:
 async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[str, int]):
     """Measure one staged authoritative fetch while preserving exceptions."""
     started = _utc_ms()
+    remote_call_id = event_emitters.emit_authoritative_remote_call_event(
+        bot,
+        surface=surface,
+        stage="start",
+        started_ms=started,
+    )
     try:
         result = await coro
+        elapsed_ms = int(max(0, _utc_ms() - started))
+        event_emitters.emit_authoritative_remote_call_event(
+            bot,
+            surface=surface,
+            stage="ok",
+            started_ms=started,
+            elapsed_ms=elapsed_ms,
+            remote_call_id=remote_call_id,
+            result=result,
+        )
         recorder = getattr(bot, "_capture_live_data_packet_fetch_metadata", None)
         if callable(recorder):
             try:
@@ -270,7 +287,7 @@ async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[st
                     surface,
                     result,
                     call_started_ts_ms=started,
-                    response_received_ts_ms=_utc_ms(),
+                    response_received_ts_ms=started + elapsed_ms,
                 )
             except Exception as exc:
                 logging.debug(
@@ -279,6 +296,17 @@ async def timed_authoritative_fetch(bot, surface: str, coro, timings_ms: dict[st
                     exc,
                 )
         return result
+    except Exception as exc:
+        event_emitters.emit_authoritative_remote_call_event(
+            bot,
+            surface=surface,
+            stage="error",
+            started_ms=started,
+            elapsed_ms=int(max(0, _utc_ms() - started)),
+            remote_call_id=remote_call_id,
+            error=exc,
+        )
+        raise
     finally:
         timings_ms[surface] = int(max(0, _utc_ms() - started))
 

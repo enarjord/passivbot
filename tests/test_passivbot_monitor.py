@@ -429,6 +429,173 @@ def test_remote_fetch_correlation_map_is_bounded():
     assert bot._live_event_remote_call_seq == 5
 
 
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_11"
+            self._authoritative_refresh_epoch = 17
+            self._authoritative_pending_confirmations = {"open_orders": 18}
+            self._live_event_remote_call_seq = 0
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    async def fetch_open_orders():
+        return [
+            {"id": "a", "symbol": "BTC/USDT:USDT"},
+            {"id": "b", "symbol": "ETH/USDT:USDT"},
+        ]
+
+    bot = FakeBot()
+    timings_ms = {}
+    result = await bot._timed_authoritative_fetch(
+        "open_orders", fetch_open_orders(), timings_ms
+    )
+
+    assert len(result) == 2
+    assert "open_orders" in timings_ms
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, succeeded = sink.events
+    assert [event.event_type for event in sink.events] == [
+        EventTypes.REMOTE_CALL_STARTED,
+        EventTypes.REMOTE_CALL_SUCCEEDED,
+    ]
+    assert started.remote_call_id == succeeded.remote_call_id
+    assert started.remote_call_group_id == "cy_11:authoritative"
+    assert succeeded.remote_call_group_id == "cy_11:authoritative"
+    assert started.reason_code == "authoritative_open_orders"
+    assert succeeded.data["surface"] == "open_orders"
+    assert succeeded.data["count"] == 2
+    assert succeeded.data["state_epoch"] == 17
+    assert succeeded.data["pending_confirmations"] == ["open_orders"]
+
+
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_failure_emits_sanitized_remote_call_event():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = None
+            self._authoritative_refresh_epoch = 19
+            self._authoritative_pending_confirmations = {}
+            self._live_event_remote_call_seq = 0
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    async def fetch_positions():
+        raise RuntimeError("apiKey=SECRET token SECRET Bearer abc123")
+
+    bot = FakeBot()
+    timings_ms = {}
+    with pytest.raises(RuntimeError, match="apiKey=SECRET"):
+        await bot._timed_authoritative_fetch("positions", fetch_positions(), timings_ms)
+
+    assert "positions" in timings_ms
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, failed = sink.events
+    assert failed.event_type == EventTypes.REMOTE_CALL_FAILED
+    assert failed.remote_call_id == started.remote_call_id
+    assert failed.remote_call_group_id == "auth_19:authoritative"
+    assert failed.data["surface"] == "positions"
+    assert failed.data["error_type"] == "RuntimeError"
+    assert "SECRET" not in failed.data["error"]
+    assert "abc123" not in failed.data["error"]
+    assert "SECRET" not in failed.data["error_repr"]
+
+
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_emit_failure_does_not_skip_fetch():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_12"
+            self._authoritative_refresh_epoch = 20
+            self._authoritative_pending_confirmations = {}
+            self._live_event_remote_call_seq = 0
+            self.fetch_called = False
+
+        def _emit_live_event(self, *args, **kwargs):
+            raise RuntimeError("event sink boom")
+
+    async def fetch_ok():
+        bot.fetch_called = True
+        return ["ok"]
+
+    bot = FakeBot()
+    timings_ms = {}
+    result = await bot._timed_authoritative_fetch("open_orders", fetch_ok(), timings_ms)
+
+    assert result == ["ok"]
+    assert bot.fetch_called is True
+    assert "open_orders" in timings_ms
+
+
+@pytest.mark.asyncio
+async def test_authoritative_timed_fetch_emit_failure_preserves_fetch_exception():
+    import passivbot as pb_mod
+
+    original_error = RuntimeError("positions failed")
+
+    class FakeBot:
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_13"
+            self._authoritative_refresh_epoch = 21
+            self._authoritative_pending_confirmations = {}
+            self._live_event_remote_call_seq = 0
+
+        def _emit_live_event(self, *args, **kwargs):
+            raise RuntimeError("event sink boom")
+
+    async def fetch_fail():
+        raise original_error
+
+    bot = FakeBot()
+    timings_ms = {}
+    with pytest.raises(RuntimeError) as exc_info:
+        await bot._timed_authoritative_fetch("positions", fetch_fail(), timings_ms)
+
+    assert exc_info.value is original_error
+    assert "positions" in timings_ms
+
+
 def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
     import passivbot as pb_mod
 
