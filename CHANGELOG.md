@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Fixed Rust extension freshness detection for Python abi3 builds so
+  `passivbot_rust.abi3.so` artifacts are discovered, source-stamped, and reused
+  instead of triggering repeated rebuilds followed by stale-extension failures.
 - Fixed v8 backtests/optimizer runs so candidates with depleted raw wallet
   balance terminate through the normal liquidation path and emit incomplete
   `backtest_completion_ratio` metrics instead of crashing coin-HSL slot-budget
