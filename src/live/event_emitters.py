@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import hashlib
 import re
+from collections import Counter
 from urllib.parse import urlsplit, urlunsplit
 from typing import Any
 
@@ -516,6 +517,90 @@ def emit_planning_defer_summary_event(
         )
     except Exception as exc:
         logging.debug("[event] failed to emit planning defer summary event: %s", exc)
+
+
+def emit_planning_symbol_state_event(
+    bot: Any,
+    availability: Any,
+    *,
+    context: str,
+    sample_limit: int = 32,
+) -> None:
+    try:
+        records = tuple(getattr(availability, "records", ()) or ())
+        summary = dict(availability.summary())
+        unavailable = [
+            record
+            for record in records
+            if str(getattr(record, "status", "")) == "unavailable"
+        ]
+        reason_counts = Counter(
+            str(getattr(record, "reason_code", "") or "unknown")
+            for record in unavailable
+        )
+        order_class_counts = Counter(
+            str(getattr(record, "order_class", "") or "unknown")
+            for record in unavailable
+        )
+        surface_counts: Counter[str] = Counter()
+        for record in unavailable:
+            surface_counts.update(
+                str(surface)
+                for surface in getattr(record, "unavailable_surfaces", ()) or ()
+            )
+        symbols = sorted(
+            {
+                str(getattr(record, "symbol", ""))
+                for record in unavailable
+                if getattr(record, "symbol", None)
+            }
+        )
+
+        samples = []
+        for record in unavailable[: max(0, int(sample_limit))]:
+            samples.append(
+                {
+                    "symbol": str(getattr(record, "symbol", "")),
+                    "pside": str(getattr(record, "position_side", "")),
+                    "order_class": str(getattr(record, "order_class", "")),
+                    "reason_code": str(getattr(record, "reason_code", "") or "unknown"),
+                    "unavailable_surfaces": [
+                        str(surface)
+                        for surface in getattr(record, "unavailable_surfaces", ()) or ()
+                    ],
+                    "required_surfaces": [
+                        str(surface)
+                        for surface in getattr(record, "required_surfaces", ()) or ()
+                    ],
+                }
+            )
+
+        bot._emit_live_event(
+            EventTypes.PLANNING_SYMBOL_STATE,
+            level="debug",
+            component="planning_availability",
+            tags=("planning", "snapshot", "availability"),
+            cycle_id=current_live_event_cycle_id(bot),
+            snapshot_id=str(getattr(availability, "snapshot_id", "") or ""),
+            status="succeeded",
+            reason_code="snapshot_symbol_state",
+            data={
+                "context": str(context),
+                "summary": summary,
+                "unavailable_count": len(unavailable),
+                "unavailable_by_reason": dict(sorted(reason_counts.items())),
+                "unavailable_by_order_class": dict(sorted(order_class_counts.items())),
+                "unavailable_by_surface": dict(sorted(surface_counts.items())),
+                "unavailable_symbols": symbols[:32],
+                "unavailable_symbols_count": len(symbols),
+                "unavailable_symbols_truncated": len(symbols) > 32,
+                "records_sample": samples,
+                "records_sample_count": len(samples),
+                "records_truncated": len(unavailable) > len(samples),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit planning symbol state event: %s", exc)
 
 
 def emit_order_wave_completed_event(

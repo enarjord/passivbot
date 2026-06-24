@@ -28,6 +28,7 @@ class EventTypes:
     SNAPSHOT_BUILT = "snapshot.built"
     PLANNING_UNAVAILABLE = "planning.unavailable"
     PLANNING_DEFER_SUMMARY = "planning.defer_summary"
+    PLANNING_SYMBOL_STATE = "planning.symbol_state"
     FORAGER_SELECTION = "forager.selection"
     FORAGER_FEATURE_UNAVAILABLE = "forager.feature_unavailable"
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
@@ -78,6 +79,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.SNAPSHOT_BUILT,
     EventTypes.PLANNING_UNAVAILABLE,
     EventTypes.PLANNING_DEFER_SUMMARY,
+    EventTypes.PLANNING_SYMBOL_STATE,
     EventTypes.FORAGER_SELECTION,
     EventTypes.FORAGER_FEATURE_UNAVAILABLE,
     EventTypes.EMA_BUNDLE_COMPLETED,
@@ -359,6 +361,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
         console=True, text=True, throttle_interval_ms=60_000
     ),
     EventTypes.PLANNING_DEFER_SUMMARY: EventRoute(console=False, text=False),
+    EventTypes.PLANNING_SYMBOL_STATE: EventRoute(console=False, text=False),
     EventTypes.FORAGER_SELECTION: EventRoute(console=False, text=False),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
