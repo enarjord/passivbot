@@ -624,6 +624,9 @@ class Passivbot:
     _emit_planning_defer_summary_event = (
         live_event_emitters.emit_planning_defer_summary_event
     )
+    _emit_planning_symbol_state_event = (
+        live_event_emitters.emit_planning_symbol_state_event
+    )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
@@ -8405,6 +8408,7 @@ class Passivbot:
                 ts_ms=snapshot.ts_ms,
             ),
         )
+        self._emit_planning_symbol_state_event(availability, context=context)
 
     def _emit_planning_unavailable_diagnostic(self, details: dict) -> None:
         emit_diagnostic_event(

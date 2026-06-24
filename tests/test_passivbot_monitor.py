@@ -243,6 +243,104 @@ def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_planning_symbol_state_event_summarizes_and_bounds_records():
+    import passivbot as pb_mod
+    from live.planning_availability import (
+        PlanningAvailability,
+        PlanningAvailabilityRecord,
+    )
+
+    structured_sink = ListEventSink()
+    monitor_sink = ListEventSink()
+
+    class FakeBot:
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_planning_symbol_state_event = (
+            pb_mod.Passivbot._emit_planning_symbol_state_event
+        )
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_3"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[structured_sink],
+                monitor_sinks=[monitor_sink],
+            )
+
+    records = tuple(
+        PlanningAvailabilityRecord(
+            cycle_id=7,
+            snapshot_id="snap_7",
+            symbol=f"S{i:02d}/USDT:USDT",
+            position_side="long" if i % 2 == 0 else "short",
+            order_class="initial_entry" if i % 3 else "hsl_panic_close",
+            status="unavailable",
+            reason_code=(
+                "missing_canonical_candles" if i % 2 == 0 else "market_prices_too_old"
+            ),
+            required_surfaces=("balance", "market_prices", "canonical_candles"),
+            unavailable_surfaces=(
+                ("canonical_candles",) if i % 2 == 0 else ("market_prices",)
+            ),
+            packet_revisions=(("balance", 1),),
+            surface_epochs=(("completed_candles", 1, 2),),
+        )
+        for i in range(40)
+    )
+    availability = PlanningAvailability(
+        cycle_id=7,
+        snapshot_id="snap_7",
+        records=records,
+    )
+    bot = FakeBot()
+
+    bot._emit_planning_symbol_state_event(
+        availability,
+        context="rust order calculation",
+        sample_limit=5,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(structured_sink.events) == 1
+    assert monitor_sink.events == structured_sink.events
+    event = structured_sink.events[0]
+    assert event.event_type == EventTypes.PLANNING_SYMBOL_STATE
+    assert event.level == "debug"
+    assert event.cycle_id == "cy_3"
+    assert event.snapshot_id == "snap_7"
+    assert event.status == "succeeded"
+    assert event.reason_code == "snapshot_symbol_state"
+    assert event.data["context"] == "rust order calculation"
+    assert event.data["summary"]["cycle_id"] == 7
+    assert event.data["summary"]["record_count"] == 40
+    assert event.data["summary"]["status_counts"] == {"unavailable": 40}
+    assert event.data["unavailable_count"] == 40
+    assert event.data["unavailable_by_reason"] == {
+        "market_prices_too_old": 20,
+        "missing_canonical_candles": 20,
+    }
+    assert event.data["unavailable_by_surface"] == {
+        "canonical_candles": 20,
+        "market_prices": 20,
+    }
+    assert event.data["unavailable_symbols_count"] == 40
+    assert event.data["unavailable_symbols_truncated"] is True
+    assert len(event.data["unavailable_symbols"]) == 32
+    assert event.data["records_sample_count"] == 5
+    assert event.data["records_truncated"] is True
+    assert event.data["records_sample"][0] == {
+        "symbol": "S00/USDT:USDT",
+        "pside": "long",
+        "order_class": "hsl_panic_close",
+        "reason_code": "missing_canonical_candles",
+        "unavailable_surfaces": ["canonical_candles"],
+        "required_surfaces": ["balance", "market_prices", "canonical_candles"],
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_order_wave_summary_emits_live_event(caplog):
     import passivbot as pb_mod
 
