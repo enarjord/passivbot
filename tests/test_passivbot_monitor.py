@@ -150,6 +150,83 @@ def test_live_event_cycle_helpers_emit_structured_events():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_planning_defer_summary_event = (
+            pb_mod.Passivbot._emit_planning_defer_summary_event
+        )
+        _record_routine_completed_candle_defer = (
+            pb_mod.Passivbot._record_routine_completed_candle_defer
+        )
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_3"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+            self._routine_completed_candle_defer_summary = {
+                "window_start_ms": 1_000,
+                "last_log_ms": 0,
+                "count": 19,
+                "symbols": {"XRP/USDT:USDT"},
+            }
+
+        def _log_symbols(self, symbols, limit=8):
+            del limit
+            return ",".join(str(symbol) for symbol in symbols)
+
+    bot = FakeBot()
+    monkeypatch.setattr(pb_mod.planning_gates, "_utc_ms", lambda: 1_861_000)
+
+    bot._record_routine_completed_candle_defer(
+        {
+            "missing": ["completed_candles"],
+            "required": ["balance", "completed_candles", "market_snapshot"],
+            "context": "rust order calculation",
+            "epoch": 42,
+            "invalid": {
+                "completed_candles": [
+                    {
+                        "reason": "signature_mismatch",
+                        "mismatch_type": "completed_candle_target_changed",
+                        "changed_symbols": ["BTC/USDT:USDT"],
+                        "missing_symbols": ["ETH/USDT:USDT"],
+                    }
+                ]
+            },
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.event_type == EventTypes.PLANNING_DEFER_SUMMARY
+    assert event.cycle_id == "cy_3"
+    assert event.reason_code == "completed_candle_target_changed"
+    assert event.status == "deferred"
+    assert event.data["count"] == 20
+    assert event.data["window_s"] == 1860
+    assert event.data["symbols"] == [
+        "BTC/USDT:USDT",
+        "ETH/USDT:USDT",
+        "XRP/USDT:USDT",
+    ]
+    assert event.data["missing"] == ["completed_candles"]
+    assert event.data["invalid_surfaces"] == ["completed_candles"]
+    assert bot._routine_completed_candle_defer_summary["count"] == 0
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_order_wave_summary_emits_live_event(caplog):
     import passivbot as pb_mod
 

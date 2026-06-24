@@ -146,6 +146,7 @@ stable names:
 - `data_packet.updated`
 - `snapshot.built`
 - `planning.unavailable`
+- `planning.defer_summary`
 - `planning.symbol_state`
 - `forager.selection`
 - `forager.feature_unavailable`

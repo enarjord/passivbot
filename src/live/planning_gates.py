@@ -342,6 +342,18 @@ def record_routine_completed_candle_defer(bot, details: dict) -> None:
             window_s,
             bot._log_symbols(tuple(sorted(state_symbols)), limit=8),
         )
+        emitter = getattr(bot, "_emit_planning_defer_summary_event", None)
+        if callable(emitter):
+            run_diagnostic_step(
+                "emit planning.defer_summary event",
+                lambda: emitter(
+                    reason_code="completed_candle_target_changed",
+                    count=int(state.get("count", 0) or 0),
+                    window_s=window_s,
+                    symbols=tuple(sorted(state_symbols)),
+                    details=details,
+                ),
+            )
         bot._routine_completed_candle_defer_summary = {
             "window_start_ms": now_ms,
             "last_log_ms": now_ms,
