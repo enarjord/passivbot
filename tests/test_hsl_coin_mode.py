@@ -179,9 +179,17 @@ def test_passivbot_binds_coin_hsl_replay_support_helper():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_load():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     bot = make_coin_bot()
     bot.stop_signal_received = False
     bot._shutdown_in_progress = False
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
     async def fake_history(current_balance=None):
         bot.stop_signal_received = True
@@ -210,6 +218,93 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
 
     assert bot.stop_signal_received is True
     assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is False
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type.startswith("hsl.replay.")]
+    assert [event.event_type for event in events] == [
+        EventTypes.HSL_REPLAY_STARTED,
+        EventTypes.HSL_REPLAY_COMPLETED,
+    ]
+    assert events[0].status == "started"
+    assert events[0].reason_code == "coin_history_replay"
+    assert events[1].status == "failed"
+    assert events[1].reason_code == "shutdown_cancelled"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_history_replay_emits_lifecycle_events():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_hsl_replay"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 0.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": -1.0, "short": 0.0}
+                    },
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 1.0,
+                    "realized_pnl_by_coin_pside": {
+                        symbol: {"long": 1.0, "short": 0.0}
+                    },
+                    "unrealized_pnl_by_coin_pside": {
+                        symbol: {"long": -0.5, "short": 0.0}
+                    },
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert getattr(bot, "_equity_hard_stop_coin_initialized", False) is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type.startswith("hsl.replay.")]
+    assert [event.event_type for event in events] == [
+        EventTypes.HSL_REPLAY_STARTED,
+        EventTypes.HSL_REPLAY_PROGRESS,
+        EventTypes.HSL_REPLAY_COMPLETED,
+    ]
+    assert {event.cycle_id for event in events} == {"cy_hsl_replay"}
+    assert events[0].status == "started"
+    assert events[0].reason_code == "coin_history_replay"
+    assert events[1].reason_code == "history_loaded"
+    assert events[1].data["symbols"] == 1
+    assert events[1].data["pairs"] == 1
+    assert events[1].data["timeline_rows"] == 2
+    assert events[2].status == "succeeded"
+    assert events[2].reason_code == "coin_history_replay_completed"
+    assert events[2].data["rows"] == 2
+    assert events[2].data["pairs"] == 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def test_calc_upnl_sum_strict_preserves_symbol_filter():

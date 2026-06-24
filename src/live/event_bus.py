@@ -57,6 +57,9 @@ class EventTypes:
     BALANCE_CHANGED = "balance.changed"
     HSL_TRANSITION = "hsl.transition"
     HSL_STATUS = "hsl.status"
+    HSL_REPLAY_STARTED = "hsl.replay.started"
+    HSL_REPLAY_PROGRESS = "hsl.replay.progress"
+    HSL_REPLAY_COMPLETED = "hsl.replay.completed"
     HSL_RED_TRIGGERED = "hsl.red_triggered"
     HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
@@ -104,6 +107,9 @@ PHASE1_EVENT_TYPES = {
     EventTypes.BALANCE_CHANGED,
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
+    EventTypes.HSL_REPLAY_STARTED,
+    EventTypes.HSL_REPLAY_PROGRESS,
+    EventTypes.HSL_REPLAY_COMPLETED,
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
@@ -384,6 +390,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
     EventTypes.HSL_STATUS: EventRoute(console=False, text=False),
+    EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
+    EventTypes.HSL_REPLAY_PROGRESS: EventRoute(console=False, text=False),
+    EventTypes.HSL_REPLAY_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.HSL_RED_TRIGGERED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
