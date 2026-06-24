@@ -221,9 +221,25 @@ def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
         "ETH/USDT:USDT",
         "XRP/USDT:USDT",
     ]
+    assert event.data["symbols_count"] == 3
+    assert event.data["symbols_truncated"] is False
     assert event.data["missing"] == ["completed_candles"]
     assert event.data["invalid_surfaces"] == ["completed_candles"]
     assert bot._routine_completed_candle_defer_summary["count"] == 0
+
+    bot._emit_planning_defer_summary_event(
+        reason_code="completed_candle_target_changed",
+        count=40,
+        window_s=60,
+        symbols=[f"S{i:02d}/USDT:USDT" for i in range(40)],
+        details={},
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    wide_event = sink.events[-1]
+    assert wide_event.event_type == EventTypes.PLANNING_DEFER_SUMMARY
+    assert wide_event.data["symbols_count"] == 40
+    assert wide_event.data["symbols_truncated"] is True
+    assert len(wide_event.data["symbols"]) == 32
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

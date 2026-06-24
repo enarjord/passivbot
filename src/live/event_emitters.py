@@ -489,6 +489,8 @@ def emit_planning_defer_summary_event(
     try:
         details = dict(details or {})
         invalid = details.get("invalid") if isinstance(details.get("invalid"), dict) else {}
+        all_symbols = sorted(str(symbol) for symbol in (symbols or []) if symbol)
+        symbol_limit = 32
         bot._emit_live_event(
             EventTypes.PLANNING_DEFER_SUMMARY,
             level="info",
@@ -501,7 +503,9 @@ def emit_planning_defer_summary_event(
             data={
                 "count": int(count),
                 "window_s": int(window_s),
-                "symbols": sorted(str(symbol) for symbol in (symbols or []) if symbol),
+                "symbols": all_symbols[:symbol_limit],
+                "symbols_count": len(all_symbols),
+                "symbols_truncated": len(all_symbols) > symbol_limit,
                 "missing": sorted(str(item) for item in details.get("missing") or []),
                 "required": sorted(str(item) for item in details.get("required") or []),
                 "context": str(details.get("context") or "planning"),
