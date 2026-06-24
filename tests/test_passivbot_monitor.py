@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -717,8 +718,10 @@ def test_log_new_fill_events_emits_fill_ingested_event():
             self._health_fills = 0
             self._health_pnl = 0.0
 
+    source_ids = ["trade-a", "trade-b"]
+    source_derived_fill_id = "+".join(source_ids)
     event = SimpleNamespace(
-        id="fill-1234567890abcdef",
+        id=source_derived_fill_id,
         timestamp=1_782_271_234_000,
         symbol="ETH/USDT:USDT",
         side="sell",
@@ -730,7 +733,7 @@ def test_log_new_fill_events_emits_fill_ingested_event():
         fee_paid=-0.5,
         pb_order_type="close_grid_normal_long",
         client_order_id="client-abcdef123456",
-        source_ids=["trade-a", "trade-b"],
+        source_ids=source_ids,
         pnl_status="complete",
     )
     bot = FakeBot()
@@ -749,8 +752,14 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert live_event.side == "sell"
     assert live_event.data["qty"] == pytest.approx(0.5)
     assert live_event.data["pnl"] == pytest.approx(12.0)
+    assert live_event.data["fill_id_hash"] == hashlib.sha256(
+        source_derived_fill_id.encode("utf-8")
+    ).hexdigest()
     assert live_event.data["source_ids_count"] == 2
+    assert "id_short" not in live_event.data
     assert "source_ids" not in live_event.data
+    assert "trade-a" not in str(live_event.data)
+    assert "trade-b" not in str(live_event.data)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

@@ -567,6 +567,12 @@ def _short_order_id(value: Any, *, max_len: int = 32) -> str | None:
     return f"{text[:keep]}...{text[-keep:]}"
 
 
+def _event_fingerprint(value: Any) -> str | None:
+    if value is None:
+        return None
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
+
+
 def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
     if not isinstance(order, dict):
         return {"order_type": type(order).__name__}
@@ -802,7 +808,7 @@ def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = Non
         client_order_id = getattr(event, "client_order_id", None)
         source_ids = list(getattr(event, "source_ids", []) or [])
         data = {
-            "id_short": _short_order_id(fill_id),
+            "fill_id_hash": _event_fingerprint(fill_id),
             "client_order_id_short": _short_order_id(client_order_id),
             "timestamp": int(getattr(event, "timestamp", 0) or 0),
             "qty": _safe_float(getattr(event, "qty", None)),
