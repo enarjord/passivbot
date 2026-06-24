@@ -621,6 +621,9 @@ class Passivbot:
     _emit_ema_unavailable_event = live_event_emitters.emit_ema_unavailable_event
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _emit_planning_defer_summary_event = (
+        live_event_emitters.emit_planning_defer_summary_event
+    )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
