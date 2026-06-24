@@ -670,7 +670,11 @@ async def test_handle_balance_update_records_monitor_balance_event():
 async def test_execute_orders_parent_records_order_opened_event():
     import passivbot as pb_mod
 
+    sink = ListEventSink()
+
     class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
         _monitor_order_payload = pb_mod.Passivbot._monitor_order_payload
         _is_market_execution_order = staticmethod(
@@ -682,6 +686,15 @@ async def test_execute_orders_parent_records_order_opened_event():
             self.monitor_publisher = RecorderPublisher()
             self._health_orders_placed = 0
             self.debug_mode = False
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_11"
+            self._order_wave_in_progress = {"id": 7, "event_id": "ow_7"}
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
 
         def live_value(self, key):
             assert key == "max_n_creations_per_batch"
@@ -726,6 +739,186 @@ async def test_execute_orders_parent_records_order_opened_event():
     assert bot.monitor_publisher.events[-1]["kind"] == "order.opened"
     assert bot.monitor_publisher.events[-1]["symbol"] == "BTC/USDT:USDT"
     assert bot.monitor_publisher.events[-1]["payload"]["pb_order_type"] == "entry_grid_normal_long"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event_types = [event.event_type for event in sink.events]
+    assert event_types == [
+        EventTypes.EXECUTION_CREATE_SENT,
+        EventTypes.EXECUTION_CREATE_SUCCEEDED,
+    ]
+    sent, succeeded = sink.events
+    assert sent.cycle_id == "cy_11"
+    assert sent.order_wave_id == "ow_7"
+    assert sent.action_id == "ow_7:create:0"
+    assert sent.symbol == "BTC/USDT:USDT"
+    assert sent.client_order_id == "cid123"
+    assert succeeded.order_id == "abc123"
+    assert succeeded.status == "succeeded"
+    assert succeeded.data["result_order_id_short"] == "abc123"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_confirmation_requested_event = (
+            pb_mod.Passivbot._emit_execution_confirmation_requested_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _monitor_order_payload = staticmethod(lambda order, source="POST": dict(order))
+        _request_authoritative_confirmation = (
+            pb_mod.Passivbot._request_authoritative_confirmation
+        )
+        _cancel_result_requires_full_authoritative_confirmation = (
+            pb_mod.Passivbot._cancel_result_requires_full_authoritative_confirmation
+        )
+
+        def __init__(self):
+            self.exchange = "hyperliquid"
+            self.user = "hyperliquid_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_12"
+            self._authoritative_pending_confirmations = {}
+            self._authoritative_refresh_epoch = 4
+            self._order_wave_in_progress = {"id": 9, "event_id": "ow_9"}
+            self._health_orders_cancelled = 0
+            self.state_change_detected_by_symbol = set()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+        def live_value(self, key):
+            assert key == "max_n_cancellations_per_batch"
+            return 5
+
+        def add_to_recent_order_cancellations(self, order):
+            return None
+
+        def log_order_action(self, *args, **kwargs):
+            return None
+
+        def _log_order_action_summary(self, *args, **kwargs):
+            return None
+
+        async def execute_cancellations(self, orders):
+            return [
+                {
+                    "status": "success",
+                    "_passivbot_cancel_requires_full_authoritative_confirmation": True,
+                    **orders[0],
+                }
+            ]
+
+        def did_cancel_order(self, executed, order):
+            return True
+
+        def remove_order(self, order, source="POST"):
+            return None
+
+        def _monitor_record_event(self, *args, **kwargs):
+            return None
+
+        def _authoritative_full_confirmation_surfaces(self):
+            return {"balance", "positions", "open_orders", "fills"}
+
+    bot = FakeBot()
+    order = {
+        "id": "order-1",
+        "symbol": "ETH/USDT:USDT",
+        "side": "sell",
+        "position_side": "long",
+        "qty": 0.5,
+        "price": 2500.0,
+        "reduce_only": True,
+        "custom_id": "cid-cancel",
+    }
+
+    res = await pb_mod.Passivbot.execute_cancellations_parent(bot, [order])
+
+    assert len(res) == 1
+    assert bot._authoritative_pending_confirmations == {
+        "balance": 5,
+        "positions": 5,
+        "open_orders": 5,
+        "fills": 5,
+    }
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event_types = [event.event_type for event in sink.events]
+    assert event_types == [
+        EventTypes.EXECUTION_CANCEL_SENT,
+        EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+        EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+    ]
+    ambiguous = sink.events[1]
+    assert ambiguous.status == "degraded"
+    assert ambiguous.reason_code == "requires_full_authoritative_confirmation"
+    assert ambiguous.order_wave_id == "ow_9"
+    requested = sink.events[2]
+    assert requested.data["target_epoch"] == 5
+    assert requested.data["surfaces"] == ["balance", "fills", "open_orders", "positions"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_order_wave_settlement_emits_confirmation_satisfied_event():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_confirmation_satisfied_event = (
+            pb_mod.Passivbot._emit_execution_confirmation_satisfied_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _log_settled_order_waves = pb_mod.Passivbot._log_settled_order_waves
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_13"
+            self._pending_order_waves = [
+                {
+                    "id": 3,
+                    "event_id": "ow_3",
+                    "started_ms": 1_000,
+                    "posted_ms": 2_000,
+                    "planned_cancel": 1,
+                    "planned_create": 1,
+                    "cancel_posted": 1,
+                    "create_posted": 1,
+                    "symbols": ["BTC/USDT:USDT"],
+                    "confirmations": {"open_orders": 6},
+                }
+            ]
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._log_settled_order_waves(
+        current_epoch=6,
+        fresh_surfaces={"open_orders"},
+        changed_surfaces=["open_orders"],
+    )
+
+    assert bot._pending_order_waves == []
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.EXECUTION_CONFIRMATION_SATISFIED
+    assert event.cycle_id == "cy_13"
+    assert event.order_wave_id == "ow_3"
+    assert event.status == "succeeded"
+    assert event.data["confirmations"] == {"open_orders": 6}
+    assert event.data["fresh_surfaces"] == ["open_orders"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

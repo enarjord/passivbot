@@ -603,6 +603,14 @@ class Passivbot:
     _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
     _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
     _emit_live_event = live_event_emitters.emit_live_event
+    _emit_execution_confirmation_requested_event = (
+        live_event_emitters.emit_execution_confirmation_requested_event
+    )
+    _emit_execution_confirmation_satisfied_event = (
+        live_event_emitters.emit_execution_confirmation_satisfied_event
+    )
+    _emit_execution_order_event = live_event_emitters.emit_execution_order_event
+    _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
@@ -3788,7 +3796,7 @@ class Passivbot:
                 if order.get("symbol")
             }
         )
-        return {
+        wave = {
             "id": int(self._order_wave_seq),
             "event_id": f"ow_{int(self._order_wave_seq)}",
             "started_ms": int(utc_ms()),
@@ -3804,6 +3812,10 @@ class Passivbot:
             "skipped_create": 0,
             "requested_confirmations": {},
         }
+        emit_started = getattr(self, "_emit_order_wave_started_event", None)
+        if callable(emit_started):
+            emit_started(wave)
+        return wave
 
     def _log_order_wave_summary(self, wave: dict | None) -> None:
         """Emit one compact lifecycle summary for plan-to-exchange timing."""
@@ -3938,6 +3950,20 @@ class Passivbot:
             log_level = (
                 logging.INFO if confirm_ms >= 10_000 or significant_changed else logging.DEBUG
             )
+            emit_confirmation_satisfied = getattr(
+                self, "_emit_execution_confirmation_satisfied_event", None
+            )
+            if callable(emit_confirmation_satisfied):
+                emit_confirmation_satisfied(
+                    wave=wave,
+                    confirmations=confirmations,
+                    current_epoch=current_epoch,
+                    fresh_surfaces=fresh_surfaces,
+                    changed_surfaces=changed_surfaces,
+                    elapsed_ms=elapsed_ms,
+                    confirm_ms=confirm_ms,
+                    level=logging.getLevelName(log_level).lower(),
+                )
             logging.log(
                 log_level,
                 "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "
@@ -8365,6 +8391,16 @@ class Passivbot:
         current_wave = getattr(self, "_order_wave_in_progress", None)
         if isinstance(current_wave, dict):
             wave_confirmations = current_wave.setdefault("requested_confirmations", {})
+        emit_confirmation_requested = getattr(
+            self, "_emit_execution_confirmation_requested_event", None
+        )
+        if callable(emit_confirmation_requested):
+            emit_confirmation_requested(
+                surfaces=requested,
+                target_epoch=target_epoch,
+                wave=current_wave,
+                min_epoch=min_epoch,
+            )
         for surface in requested:
             prev = int(self._authoritative_pending_confirmations.get(surface, 0) or 0)
             self._authoritative_pending_confirmations[surface] = max(prev, target_epoch)
