@@ -40,7 +40,7 @@ def _emit_hsl_event(
     tags: tuple[str, ...],
     data: dict,
     *,
-    pside: str,
+    pside: str | None,
     symbol: str | None = None,
     ts: int | None = None,
     level: str = "info",
@@ -85,6 +85,30 @@ def _emit_hsl_event(
             event_type,
             exc,
         )
+
+
+def _emit_hsl_replay_event(
+    self,
+    event_type: str,
+    data: dict[str, Any],
+    *,
+    pside: str | None = None,
+    symbol: str | None = None,
+    level: str = "debug",
+    status: str | None = None,
+    reason_code: str | None = None,
+) -> None:
+    _emit_hsl_event(
+        self,
+        event_type,
+        ("hsl", "risk", "replay"),
+        data,
+        pside=pside,
+        symbol=symbol,
+        level=level,
+        status=status,
+        reason_code=reason_code,
+    )
 
 
 def _calc_hsl_pnl(position_side, entry_price, close_price, qty, c_mult):
@@ -2126,6 +2150,16 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             "[risk] HSL coin history reconstruction starting | lookback_days=%s",
             lookback.display_value,
         )
+        _emit_hsl_replay_event(
+            self,
+            "hsl.replay.started",
+            {
+                "signal_mode": "coin",
+                "lookback_days": lookback.display_value,
+            },
+            status="started",
+            reason_code="coin_history_replay",
+        )
         history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
         check_shutdown("hsl_coin_history_replay_history_loaded")
         panic_flatten_events = history["panic_flatten_events"] if "panic_flatten_events" in history else []
@@ -2275,6 +2309,22 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             len(fill_events),
             len(panic_flatten_events),
         )
+        _emit_hsl_replay_event(
+            self,
+            "hsl.replay.progress",
+            {
+                "signal_mode": "coin",
+                "stage": "loaded",
+                "symbols": len(symbols),
+                "pairs": len(active_pairs),
+                "timeline_rows": len(timeline_rows),
+                "fill_events": len(fill_events),
+                "panic_events": len(panic_flatten_events),
+                "skipped_unsupported_symbols": len(skipped_unsupported_symbols),
+            },
+            status="started",
+            reason_code="history_loaded",
+        )
 
         def log_replay_progress(
             pair_idx: int,
@@ -2298,6 +2348,23 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 applied_rows,
                 rows,
                 now_s - replay_started_s,
+            )
+            _emit_hsl_replay_event(
+                self,
+                "hsl.replay.progress",
+                {
+                    "signal_mode": "coin",
+                    "stage": "pair_replay",
+                    "pair_idx": int(pair_idx),
+                    "pairs": len(active_pairs),
+                    "applied_rows": int(applied_rows),
+                    "total_applied_rows": int(rows),
+                    "elapsed_s": round(now_s - replay_started_s, 3),
+                },
+                pside=pside,
+                symbol=symbol,
+                status="started",
+                reason_code="pair_replay_progress",
             )
 
         pair_idx = 0
@@ -2655,6 +2722,48 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             len(active_pairs),
             time.monotonic() - replay_started_s,
         )
+        _emit_hsl_replay_event(
+            self,
+            "hsl.replay.completed",
+            {
+                "signal_mode": "coin",
+                "rows": int(rows),
+                "pairs": len(active_pairs),
+                "elapsed_s": round(time.monotonic() - replay_started_s, 3),
+            },
+            status="succeeded",
+            reason_code="coin_history_replay_completed",
+        )
+    except asyncio.CancelledError:
+        _emit_hsl_replay_event(
+            self,
+            "hsl.replay.completed",
+            {
+                "signal_mode": "coin",
+                "elapsed_s": round(time.monotonic() - replay_started_s, 3)
+                if "replay_started_s" in locals()
+                else None,
+            },
+            status="failed",
+            reason_code="shutdown_cancelled",
+        )
+        raise
+    except Exception as exc:
+        _emit_hsl_replay_event(
+            self,
+            "hsl.replay.completed",
+            {
+                "signal_mode": "coin",
+                "error_type": type(exc).__name__,
+                "elapsed_s": round(time.monotonic() - replay_started_s, 3)
+                if "replay_started_s" in locals()
+                else None,
+            },
+            level="warning",
+            status="failed",
+            reason_code="coin_history_replay_failed",
+        )
+        raise
     finally:
         if hasattr(self, "_set_log_silence_watchdog_context"):
             self._set_log_silence_watchdog_context(phase=prev_phase, stage=prev_stage)
