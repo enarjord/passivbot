@@ -524,3 +524,236 @@ def emit_order_wave_completed_event(
             ),
         },
     )
+
+
+def emit_order_wave_started_event(bot: Any, wave: dict | None) -> None:
+    if not wave:
+        return
+    try:
+        bot._emit_live_event(
+            EventTypes.ORDER_WAVE_STARTED,
+            level="debug",
+            component="order_wave",
+            tags=("order", "wave", "execution"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
+            status="started",
+            data={
+                "id": int(wave.get("id", 0) or 0),
+                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+                "planned_create": int(wave.get("planned_create", 0) or 0),
+                "symbols": list(wave.get("symbols") or []),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit order wave started event: %s", exc)
+
+
+def _safe_float(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number == number else None
+
+
+def _short_order_id(value: Any, *, max_len: int = 32) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    keep = max(4, (max_len - 3) // 2)
+    return f"{text[:keep]}...{text[-keep:]}"
+
+
+def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
+    if not isinstance(order, dict):
+        return {"order_type": type(order).__name__}
+    data: dict[str, Any] = {
+        "index": index,
+        "pb_order_type": order.get("pb_order_type"),
+        "order_type": str(order.get("type") or order.get("execution_type") or "limit"),
+        "context": order.get("_context"),
+        "reason": order.get("_reason"),
+        "reduce_only": bool(order.get("reduce_only") or order.get("reduceOnly")),
+    }
+    price = _safe_float(order.get("price"))
+    qty = _safe_float(order.get("qty"))
+    if price is not None:
+        data["price"] = price
+    if qty is not None:
+        data["qty"] = qty
+    custom_id = order.get("custom_id") or order.get("clientOrderId")
+    if custom_id is not None:
+        data["client_order_id_short"] = _short_order_id(custom_id)
+    exchange_id = order.get("id") or order.get("order_id")
+    if exchange_id is not None:
+        data["order_id_short"] = _short_order_id(exchange_id)
+    delta = order.get("_delta")
+    if isinstance(delta, dict):
+        compact_delta = {
+            key: delta.get(key)
+            for key in ("price_pct_diff", "qty_pct_diff")
+            if delta.get(key) is not None
+        }
+        if compact_delta:
+            data["delta"] = compact_delta
+    return {key: value for key, value in data.items() if value is not None}
+
+
+def _execution_event_ids(
+    wave: dict | None,
+    *,
+    action: str,
+    index: int | None,
+) -> tuple[str | None, str | None]:
+    order_wave_id = None
+    action_id = None
+    if isinstance(wave, dict):
+        order_wave_id = str(wave.get("event_id") or f"ow_{wave.get('id', '')}")
+        if index is not None:
+            action_id = f"{order_wave_id}:{action}:{int(index)}"
+    return order_wave_id, action_id
+
+
+def emit_execution_order_event(
+    bot: Any,
+    *,
+    event_type: str,
+    order: dict | None,
+    action: str,
+    status: str,
+    reason_code: str | None = None,
+    level: str = "debug",
+    index: int | None = None,
+    wave: dict | None = None,
+    result: dict | BaseException | None = None,
+    error: BaseException | None = None,
+    extra: dict | None = None,
+) -> None:
+    try:
+        order_wave_id, action_id = _execution_event_ids(wave, action=action, index=index)
+        data = _order_event_data(order, index=index)
+        if isinstance(result, dict):
+            data.update(
+                {
+                    "result_status": result.get("status"),
+                    "result_order_id_short": _short_order_id(
+                        result.get("id") or result.get("order_id")
+                    ),
+                    "result_client_order_id_short": _short_order_id(
+                        result.get("custom_id") or result.get("clientOrderId")
+                    ),
+                }
+            )
+        elif isinstance(result, BaseException):
+            error = result
+        if error is not None:
+            data["error_type"] = type(error).__name__
+            data["error"] = _sanitize_remote_text(error, max_len=500)
+        if extra:
+            data.update(extra)
+        bot._emit_live_event(
+            event_type,
+            level=level,
+            component="execution.order_write",
+            tags=("execution", "order", action),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=order_wave_id,
+            action_id=action_id,
+            symbol=str(order.get("symbol")) if isinstance(order, dict) and order.get("symbol") else None,
+            pside=str(order.get("position_side")) if isinstance(order, dict) and order.get("position_side") else None,
+            side=str(order.get("side")) if isinstance(order, dict) and order.get("side") else None,
+            order_id=str((result or {}).get("id")) if isinstance(result, dict) and (result or {}).get("id") else None,
+            client_order_id=str(order.get("custom_id")) if isinstance(order, dict) and order.get("custom_id") else None,
+            status=status,
+            reason_code=reason_code,
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit execution order event type=%s action=%s status=%s: %s",
+            event_type,
+            action,
+            status,
+            exc,
+        )
+
+
+def emit_execution_confirmation_requested_event(
+    bot: Any,
+    *,
+    surfaces: set[str],
+    target_epoch: int,
+    wave: dict | None = None,
+    min_epoch: int | None = None,
+) -> None:
+    try:
+        order_wave_id = (
+            str(wave.get("event_id") or f"ow_{wave.get('id', '')}")
+            if isinstance(wave, dict)
+            else None
+        )
+        bot._emit_live_event(
+            EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+            level="debug",
+            component="execution.confirmation",
+            tags=("execution", "confirmation"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=order_wave_id,
+            status="started",
+            reason_code="authoritative_confirmation",
+            data={
+                "surfaces": sorted(str(surface) for surface in surfaces),
+                "target_epoch": int(target_epoch),
+                "current_epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
+                "min_epoch": int(min_epoch) if min_epoch is not None else None,
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit confirmation requested event: %s", exc)
+
+
+def emit_execution_confirmation_satisfied_event(
+    bot: Any,
+    *,
+    wave: dict,
+    confirmations: dict,
+    current_epoch: int,
+    fresh_surfaces: set[str],
+    changed_surfaces: list[str],
+    elapsed_ms: int,
+    confirm_ms: int,
+    level: str = "debug",
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+            level=str(level).lower(),
+            component="execution.confirmation",
+            tags=("execution", "confirmation"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
+            status="succeeded",
+            reason_code="authoritative_confirmation",
+            data={
+                "id": int(wave.get("id", 0) or 0),
+                "elapsed_ms": int(elapsed_ms),
+                "confirm_ms": int(confirm_ms),
+                "current_epoch": int(current_epoch),
+                "confirmations": {
+                    str(surface): int(epoch)
+                    for surface, epoch in dict(confirmations or {}).items()
+                },
+                "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
+                "changed_surfaces": list(changed_surfaces or []),
+                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+                "planned_create": int(wave.get("planned_create", 0) or 0),
+                "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
+                "create_posted": int(wave.get("create_posted", 0) or 0),
+                "symbols": list(wave.get("symbols") or []),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit confirmation satisfied event: %s", exc)

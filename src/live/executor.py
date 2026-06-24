@@ -7,6 +7,7 @@ import traceback
 from collections import defaultdict
 
 from passivbot_exceptions import RestartBotException
+from live.event_bus import EventTypes
 from procedures import print_async_exception
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
@@ -71,6 +72,33 @@ def _order_is_panic(order: dict) -> bool:
 
 def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order) or _order_is_panic(order)
+
+
+def _create_rejection_reason(result) -> str:
+    if isinstance(result, BaseException):
+        return "result_exception"
+    if not isinstance(result, dict):
+        return "create_not_acknowledged"
+    status = str(result.get("status") or "").lower()
+    info = result.get("info")
+    info_status = ""
+    if isinstance(info, dict):
+        info_status = str(
+            info.get("status") or info.get("ordStatus") or info.get("state") or ""
+        ).lower()
+    terminal = {
+        "canceled",
+        "cancelled",
+        "closed",
+        "expired",
+        "failed",
+        "rejected",
+    }
+    if status in terminal or info_status in terminal:
+        return "terminal_rejection"
+    if not (result.get("id") or result.get("order_id")):
+        return "missing_exchange_order_id"
+    return "create_not_acknowledged"
 
 
 def _remember_ambiguous_create(
@@ -312,12 +340,36 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "post")
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    for idx, order in enumerate(orders):
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_SENT,
+            order=order,
+            action="create",
+            status="started",
+            reason_code="submitted_to_exchange",
+            index=idx,
+            wave=wave,
+        )
     try:
         res = await bot.execute_orders(orders)
     except RestartBotException:
         raise
     except Exception as exc:
-        for order in orders:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code="exchange_exception",
+                level="warning",
+                index=idx,
+                wave=wave,
+                error=exc,
+            )
             _remember_ambiguous_create(
                 bot,
                 passivbot_cls,
@@ -329,7 +381,19 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         raise
     if not res:
-        for order in orders:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code="empty_response",
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": 0, "request_count": len(orders)},
+            )
             _remember_ambiguous_create(
                 bot,
                 passivbot_cls,
@@ -345,7 +409,19 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             f"{len(orders)} orders, {len(res)} executions",
             res,
         )
-        for order in orders:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="create",
+                status="degraded",
+                reason_code="length_mismatch",
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": len(res), "request_count": len(orders)},
+            )
             _remember_ambiguous_create(
                 bot,
                 passivbot_cls,
@@ -356,9 +432,21 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             )
         return []
     to_return = []
-    for ex, order in zip(res, orders):
+    for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_create_order(ex):
             if isinstance(ex, Exception):
+                passivbot_cls._emit_execution_order_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                    order=order,
+                    action="create",
+                    status="degraded",
+                    reason_code="result_exception",
+                    level="warning",
+                    index=idx,
+                    wave=wave,
+                    result=ex,
+                )
                 _remember_ambiguous_create(
                     bot,
                     passivbot_cls,
@@ -367,6 +455,25 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                     status="create_error_ambiguous",
                     reason="result_exception",
                     error=ex,
+                )
+            else:
+                reason_code = _create_rejection_reason(ex)
+                event_type = (
+                    EventTypes.EXECUTION_CREATE_REJECTED
+                    if reason_code == "terminal_rejection"
+                    else EventTypes.EXECUTION_CREATE_FAILED
+                )
+                passivbot_cls._emit_execution_order_event(
+                    bot,
+                    event_type=event_type,
+                    order=order,
+                    action="create",
+                    status="failed",
+                    reason_code=reason_code,
+                    level="warning",
+                    index=idx,
+                    wave=wave,
+                    result=ex if isinstance(ex, dict) else None,
                 )
             print(f"debug did_create_order false {ex}")
             continue
@@ -382,6 +489,17 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             print("debug create_orders", debug_prints)
         passivbot_cls._record_emitted_order_custom_id(bot, ex, emitted_ts=emitted_ts)
         bot.add_to_recent_order_executions(ex)
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED,
+            order=order,
+            action="create",
+            status="succeeded",
+            reason_code="exchange_acknowledged",
+            index=idx,
+            wave=wave,
+            result=ex,
+        )
         to_return.append(ex)
     if to_return:
         for elm in to_return:
@@ -427,11 +545,53 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
         )
         grouped_orders[order["symbol"]].append(order)
     bot._log_order_action_summary(grouped_orders, "cancel")
-    res = await bot.execute_cancellations(orders)
+    wave = getattr(bot, "_order_wave_in_progress", None)
+    for idx, order in enumerate(orders):
+        passivbot_cls._emit_execution_order_event(
+            bot,
+            event_type=EventTypes.EXECUTION_CANCEL_SENT,
+            order=order,
+            action="cancel",
+            status="started",
+            reason_code="submitted_to_exchange",
+            index=idx,
+            wave=wave,
+        )
+    try:
+        res = await bot.execute_cancellations(orders)
+    except RestartBotException:
+        raise
+    except Exception as exc:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+                order=order,
+                action="cancel",
+                status="failed",
+                reason_code="exchange_exception",
+                level="warning",
+                index=idx,
+                wave=wave,
+                error=exc,
+            )
+        raise
     to_return = []
     if len(orders) != len(res):
         bot.execution_scheduled = True
-        for order in orders:
+        for idx, order in enumerate(orders):
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_AMBIGUOUS,
+                order=order,
+                action="cancel",
+                status="degraded",
+                reason_code="length_mismatch",
+                level="warning",
+                index=idx,
+                wave=wave,
+                extra={"response_count": len(res), "request_count": len(orders)},
+            )
             bot.state_change_detected_by_symbol.add(order["symbol"])
         print(
             f"debug unequal lengths execute_cancellations_parent: "
@@ -439,9 +599,22 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             res,
         )
         return []
-    for ex, order in zip(res, orders):
+    for idx, (ex, order) in enumerate(zip(res, orders)):
         if not bot.did_cancel_order(ex, order):
             bot.state_change_detected_by_symbol.add(order["symbol"])
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_FAILED,
+                order=order,
+                action="cancel",
+                status="failed",
+                reason_code="cancel_not_acknowledged",
+                level="warning",
+                index=idx,
+                wave=wave,
+                result=ex if isinstance(ex, dict) else None,
+                error=ex if isinstance(ex, BaseException) else None,
+            )
             print(f"debug did_cancel_order false {ex} {order}")
             continue
         ambiguous_terminal_state = (
@@ -459,6 +632,31 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 ex[key] = order[key]
         if debug_prints and bot.debug_mode:
             print("debug cancel_orders", debug_prints)
+        if ambiguous_terminal_state:
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+                order=order,
+                action="cancel",
+                status="degraded",
+                reason_code="requires_full_authoritative_confirmation",
+                level="warning",
+                index=idx,
+                wave=wave,
+                result=ex,
+            )
+        else:
+            passivbot_cls._emit_execution_order_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+                order=order,
+                action="cancel",
+                status="succeeded",
+                reason_code="exchange_acknowledged",
+                index=idx,
+                wave=wave,
+                result=ex,
+            )
         to_return.append(ex)
     if to_return:
         for elm in to_return:

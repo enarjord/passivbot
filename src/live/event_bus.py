@@ -33,7 +33,19 @@ class EventTypes:
     REMOTE_CALL_THROTTLED = "remote_call.throttled"
     RUST_ORCHESTRATOR_CALLED = "rust_orchestrator.called"
     RUST_ORCHESTRATOR_RETURNED = "rust_orchestrator.returned"
+    ORDER_WAVE_STARTED = "order_wave.started"
     ORDER_WAVE_COMPLETED = "order_wave.completed"
+    EXECUTION_CREATE_SENT = "execution.create_sent"
+    EXECUTION_CREATE_SUCCEEDED = "execution.create_succeeded"
+    EXECUTION_CREATE_FAILED = "execution.create_failed"
+    EXECUTION_CREATE_REJECTED = "execution.create_rejected"
+    EXECUTION_CANCEL_SENT = "execution.cancel_sent"
+    EXECUTION_CANCEL_SUCCEEDED = "execution.cancel_succeeded"
+    EXECUTION_CANCEL_FAILED = "execution.cancel_failed"
+    EXECUTION_CANCEL_AMBIGUOUS_TERMINAL = "execution.cancel_ambiguous_terminal"
+    EXECUTION_AMBIGUOUS = "execution.ambiguous"
+    EXECUTION_CONFIRMATION_REQUESTED = "execution.confirmation_requested"
+    EXECUTION_CONFIRMATION_SATISFIED = "execution.confirmation_satisfied"
     SINK_DEGRADED = "sink.degraded"
 
 
@@ -54,7 +66,19 @@ PHASE1_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_THROTTLED,
     EventTypes.RUST_ORCHESTRATOR_CALLED,
     EventTypes.RUST_ORCHESTRATOR_RETURNED,
+    EventTypes.ORDER_WAVE_STARTED,
     EventTypes.ORDER_WAVE_COMPLETED,
+    EventTypes.EXECUTION_CREATE_SENT,
+    EventTypes.EXECUTION_CREATE_SUCCEEDED,
+    EventTypes.EXECUTION_CREATE_FAILED,
+    EventTypes.EXECUTION_CREATE_REJECTED,
+    EventTypes.EXECUTION_CANCEL_SENT,
+    EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+    EventTypes.EXECUTION_CANCEL_FAILED,
+    EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+    EventTypes.EXECUTION_AMBIGUOUS,
+    EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+    EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
     EventTypes.SINK_DEGRADED,
 }
 
@@ -300,7 +324,19 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.RUST_ORCHESTRATOR_RETURNED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),
+    EventTypes.ORDER_WAVE_STARTED: EventRoute(console=False),
     EventTypes.ORDER_WAVE_COMPLETED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CREATE_SENT: EventRoute(console=False),
+    EventTypes.EXECUTION_CREATE_SUCCEEDED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CREATE_FAILED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
+    EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CANCEL_FAILED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_AMBIGUOUS: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CONFIRMATION_REQUESTED: EventRoute(console=False),
+    EventTypes.EXECUTION_CONFIRMATION_SATISFIED: EventRoute(console=True, text=True),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 
