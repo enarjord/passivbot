@@ -400,8 +400,14 @@ def test_monitor_sink_preserves_current_monitor_record_event_contract():
     event = LiveEvent(
         EventTypes.PLANNING_UNAVAILABLE,
         tags=("planning", "gate"),
+        exchange="binance",
+        user="binance_01",
+        bot_id="bot_1",
         symbol="BTC/USDT:USDT",
         pside="long",
+        side="buy",
+        order_id="order-1",
+        client_order_id="client-1",
         data={"reason": "stale_ema"},
         ts_ms=12345,
     )
@@ -414,8 +420,17 @@ def test_monitor_sink_preserves_current_monitor_record_event_contract():
     assert result["pside"] == "long"
     assert result["ts"] == 12345
     assert result["payload"]["reason"] == "stale_ema"
-    assert result["payload"]["_live_event"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
-    assert result["payload"]["_live_event"]["data"] == {"reason": "stale_ema"}
+    live_event = result["payload"]["_live_event"]
+    assert live_event["event_type"] == EventTypes.PLANNING_UNAVAILABLE
+    assert live_event["exchange"] == "binance"
+    assert live_event["user"] == "binance_01"
+    assert live_event["bot_id"] == "bot_1"
+    assert live_event["symbol"] == "BTC/USDT:USDT"
+    assert live_event["pside"] == "long"
+    assert live_event["side"] == "buy"
+    assert live_event["order_id"] == "order-1"
+    assert live_event["client_order_id"] == "client-1"
+    assert live_event["data"] == {"reason": "stale_ema"}
 
 
 def test_diagnostic_event_uses_pipeline_when_available_and_legacy_when_absent():
@@ -598,6 +613,10 @@ def test_monitor_event_sink_writes_real_monitor_event_stream(tmp_path):
     assert rows[0]["payload"]["age_ms"] == 300_000
     assert rows[0]["payload"]["apiKey"] == REDACTED
     assert rows[0]["payload"]["_live_event"]["event_type"] == EventTypes.PLANNING_UNAVAILABLE
+    assert rows[0]["payload"]["_live_event"]["exchange"] == "bybit"
+    assert rows[0]["payload"]["_live_event"]["user"] == "user01"
+    assert rows[0]["payload"]["_live_event"]["symbol"] == "ETH/USDT:USDT"
+    assert rows[0]["payload"]["_live_event"]["pside"] == "long"
     assert rows[0]["payload"]["_live_event"]["ids"]["cycle_id"] == "cy_1"
     assert rows[0]["payload"]["_live_event"]["reason_code"] == "stale_ema"
     assert rows[0]["payload"]["_live_event"]["data"]["apiKey"] == REDACTED

@@ -636,10 +636,23 @@ def test_monitor_emit_stop_records_startup_terminal_structured_stopped():
 async def test_handle_balance_update_records_monitor_balance_event():
     import passivbot as pb_mod
 
+    sink = ListEventSink()
+
     class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_balance_changed_event = pb_mod.Passivbot._emit_balance_changed_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
         _monitor_record_event = pb_mod.Passivbot._monitor_record_event
 
         def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_20"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
             self.monitor_publisher = RecorderPublisher()
             self._previous_balance_raw = 90.0
             self._previous_balance_snapped = 88.0
@@ -664,6 +677,81 @@ async def test_handle_balance_update_records_monitor_balance_event():
     assert bot._monitor_last_equity == pytest.approx(107.5)
     assert bot.monitor_publisher.events[-1]["kind"] == "account.balance"
     assert bot.monitor_publisher.events[-1]["payload"]["equity"] == pytest.approx(107.5)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.BALANCE_CHANGED
+    assert event.cycle_id == "cy_20"
+    assert event.status == "succeeded"
+    assert event.reason_code == "balance_changed"
+    assert event.data["balance_raw_delta"] == pytest.approx(10.0)
+    assert event.data["balance_snapped_delta"] == pytest.approx(7.0)
+    assert event.data["equity"] == pytest.approx(107.5)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_new_fill_events_emits_fill_ingested_event():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _log_fill_event = pb_mod.Passivbot._log_fill_event
+        _log_new_fill_events = pb_mod.Passivbot._log_new_fill_events
+        _monitor_fill_payload = pb_mod.Passivbot._monitor_fill_payload
+        _monitor_record_event = pb_mod.Passivbot._monitor_record_event
+        _monitor_record_fill_history = pb_mod.Passivbot._monitor_record_fill_history
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_21"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+            self.monitor_publisher = RecorderPublisher()
+            self._health_fills = 0
+            self._health_pnl = 0.0
+
+    event = SimpleNamespace(
+        id="fill-1234567890abcdef",
+        timestamp=1_782_271_234_000,
+        symbol="ETH/USDT:USDT",
+        side="sell",
+        position_side="long",
+        qty=0.5,
+        price=2500.0,
+        pnl=12.0,
+        fee=-0.5,
+        fee_paid=-0.5,
+        pb_order_type="close_grid_normal_long",
+        client_order_id="client-abcdef123456",
+        source_ids=["trade-a", "trade-b"],
+        pnl_status="complete",
+    )
+    bot = FakeBot()
+
+    bot._log_new_fill_events([event])
+
+    assert bot._health_fills == 1
+    assert bot._health_pnl == pytest.approx(11.5)
+    assert bot.monitor_publisher.events[-1]["kind"] == "order.filled"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    live_event = sink.events[-1]
+    assert live_event.event_type == EventTypes.FILL_INGESTED
+    assert live_event.cycle_id == "cy_21"
+    assert live_event.symbol == "ETH/USDT:USDT"
+    assert live_event.pside == "long"
+    assert live_event.side == "sell"
+    assert live_event.data["qty"] == pytest.approx(0.5)
+    assert live_event.data["pnl"] == pytest.approx(12.0)
+    assert live_event.data["source_ids_count"] == 2
+    assert "source_ids" not in live_event.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

@@ -610,8 +610,11 @@ class Passivbot:
         live_event_emitters.emit_execution_confirmation_satisfied_event
     )
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
+    _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
+    _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
+    _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
@@ -9223,6 +9226,18 @@ class Passivbot:
                         "source": str(source),
                     },
                 )
+                emit_balance_changed = getattr(
+                    self, "_emit_balance_changed_event", None
+                )
+                if callable(emit_balance_changed):
+                    emit_balance_changed(
+                        previous_balance_raw=float(self._previous_balance_raw),
+                        balance_raw=float(balance_raw),
+                        previous_balance_snapped=float(self._previous_balance_snapped),
+                        balance_snapped=float(balance_snapped),
+                        equity=float(equity),
+                        source=str(source),
+                    )
             except Exception as e:
                 if self._log_noncritical_market_snapshot_error(
                     "balance equity diagnostics", e
@@ -9795,14 +9810,18 @@ class Passivbot:
                 logging.info(self._log_fill_event(event))
         for event in sorted(new_events, key=lambda e: e.timestamp):
             self._monitor_record_fill_history(event)
+            fill_payload = self._monitor_fill_payload(event)
             self._monitor_record_event(
                 "order.filled",
                 ("order", "fill"),
-                self._monitor_fill_payload(event),
+                fill_payload,
                 symbol=getattr(event, "symbol", None),
                 pside=str(getattr(event, "position_side", "") or "").lower() or None,
                 ts=int(getattr(event, "timestamp", 0) or 0) or None,
             )
+            emit_fill_ingested = getattr(self, "_emit_fill_ingested_event", None)
+            if callable(emit_fill_ingested):
+                emit_fill_ingested(event, payload=fill_payload)
 
     def _log_enriched_fill_events(self, events: list) -> None:
         """Log realized-PnL enrichment for already seen close fills."""
@@ -11202,6 +11221,23 @@ class Passivbot:
                 )
             except:
                 upnl = 0.0
+
+            emit_position_changed = getattr(self, "_emit_position_changed_event", None)
+            if callable(emit_position_changed):
+                emit_position_changed(
+                    symbol=symbol,
+                    pside=pside,
+                    action=action.strip(),
+                    old=old,
+                    new=new,
+                    wallet_exposure=wallet_exposure,
+                    wel_ratio=WEL_ratio,
+                    wele_ratio=WELe_ratio,
+                    twel_ratio=total_we_by_pside[pside] / twel if twel > 0.0 else 0.0,
+                    price_action_distance=pprice_diff,
+                    upnl=upnl,
+                    last_price=last_price,
+                )
 
             coin = symbol_to_coin(symbol, verbose=False) or symbol
             # Format WEL percentages with padding for alignment

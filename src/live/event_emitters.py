@@ -757,3 +757,130 @@ def emit_execution_confirmation_satisfied_event(
         )
     except Exception as exc:
         logging.debug("[event] failed to emit confirmation satisfied event: %s", exc)
+
+
+def emit_balance_changed_event(
+    bot: Any,
+    *,
+    previous_balance_raw: float,
+    balance_raw: float,
+    previous_balance_snapped: float,
+    balance_snapped: float,
+    equity: float,
+    source: str,
+) -> None:
+    try:
+        raw_delta = float(balance_raw) - float(previous_balance_raw)
+        snapped_delta = float(balance_snapped) - float(previous_balance_snapped)
+        bot._emit_live_event(
+            EventTypes.BALANCE_CHANGED,
+            level="info",
+            component="account.balance",
+            tags=("account", "balance"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            status="succeeded",
+            reason_code="balance_changed",
+            data={
+                "previous_balance_raw": float(previous_balance_raw),
+                "balance_raw": float(balance_raw),
+                "balance_raw_delta": raw_delta,
+                "previous_balance_snapped": float(previous_balance_snapped),
+                "balance_snapped": float(balance_snapped),
+                "balance_snapped_delta": snapped_delta,
+                "equity": float(equity),
+                "source": str(source),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit balance changed event: %s", exc)
+
+
+def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = None) -> None:
+    try:
+        fill_payload = dict(payload or {})
+        fill_id = getattr(event, "id", None)
+        client_order_id = getattr(event, "client_order_id", None)
+        source_ids = list(getattr(event, "source_ids", []) or [])
+        data = {
+            "id_short": _short_order_id(fill_id),
+            "client_order_id_short": _short_order_id(client_order_id),
+            "timestamp": int(getattr(event, "timestamp", 0) or 0),
+            "qty": _safe_float(getattr(event, "qty", None)),
+            "price": _safe_float(getattr(event, "price", None)),
+            "pnl": _safe_float(getattr(event, "pnl", None)),
+            "fee": _safe_float(getattr(event, "fee", None)),
+            "pb_order_type": str(getattr(event, "pb_order_type", "") or "").lower(),
+            "source_ids_count": len(source_ids),
+        }
+        for key in ("qty", "price", "pnl", "fee", "pb_order_type", "timestamp"):
+            if key in fill_payload and data.get(key) is None:
+                data[key] = fill_payload.get(key)
+        bot._emit_live_event(
+            EventTypes.FILL_INGESTED,
+            level="info",
+            component="fills.ingest",
+            tags=("fill", "order"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=getattr(event, "symbol", None),
+            pside=str(getattr(event, "position_side", "") or "").lower() or None,
+            side=str(getattr(event, "side", "") or "").lower() or None,
+            client_order_id=str(client_order_id) if client_order_id else None,
+            status="succeeded",
+            reason_code="new_fill",
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit fill ingested event: %s", exc)
+
+
+def emit_position_changed_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    action: str,
+    old: dict,
+    new: dict,
+    wallet_exposure: float,
+    wel_ratio: float,
+    wele_ratio: float,
+    twel_ratio: float,
+    price_action_distance: float,
+    upnl: float,
+    last_price: float | None,
+) -> None:
+    try:
+        old_size = _safe_float(old.get("size")) or 0.0
+        new_size = _safe_float(new.get("size")) or 0.0
+        old_price = _safe_float(old.get("price")) or 0.0
+        new_price = _safe_float(new.get("price")) or 0.0
+        status = "succeeded"
+        reason_code = str(action).strip().replace(" ", "_") or "position_changed"
+        bot._emit_live_event(
+            EventTypes.POSITION_CHANGED,
+            level="info",
+            component="account.position",
+            tags=("account", "position"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=symbol,
+            pside=pside,
+            status=status,
+            reason_code=reason_code,
+            data={
+                "action": str(action).strip(),
+                "old_size": old_size,
+                "new_size": new_size,
+                "size_delta": new_size - old_size,
+                "old_price": old_price,
+                "new_price": new_price,
+                "last_price": _safe_float(last_price),
+                "wallet_exposure": float(wallet_exposure),
+                "wel_ratio": float(wel_ratio),
+                "wele_ratio": float(wele_ratio),
+                "twel_ratio": float(twel_ratio),
+                "price_action_distance": float(price_action_distance),
+                "upnl": float(upnl),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit position changed event: %s", exc)

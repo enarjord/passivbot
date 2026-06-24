@@ -46,6 +46,9 @@ class EventTypes:
     EXECUTION_AMBIGUOUS = "execution.ambiguous"
     EXECUTION_CONFIRMATION_REQUESTED = "execution.confirmation_requested"
     EXECUTION_CONFIRMATION_SATISFIED = "execution.confirmation_satisfied"
+    FILL_INGESTED = "fill.ingested"
+    POSITION_CHANGED = "position.changed"
+    BALANCE_CHANGED = "balance.changed"
     SINK_DEGRADED = "sink.degraded"
 
 
@@ -79,6 +82,9 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_AMBIGUOUS,
     EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+    EventTypes.FILL_INGESTED,
+    EventTypes.POSITION_CHANGED,
+    EventTypes.BALANCE_CHANGED,
     EventTypes.SINK_DEGRADED,
 }
 
@@ -240,6 +246,14 @@ class LiveEvent:
             "level": self.level,
             "source": self.source,
             "component": self.component,
+            "exchange": self.exchange,
+            "user": self.user,
+            "bot_id": self.bot_id,
+            "symbol": self.symbol,
+            "pside": self.pside,
+            "side": self.side,
+            "order_id": self.order_id,
+            "client_order_id": self.client_order_id,
             "status": self.status,
             "reason_code": self.reason_code,
             "message": self.message,
@@ -337,6 +351,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_AMBIGUOUS: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CONFIRMATION_REQUESTED: EventRoute(console=False),
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: EventRoute(console=True, text=True),
+    EventTypes.FILL_INGESTED: EventRoute(console=False, text=False),
+    EventTypes.POSITION_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 

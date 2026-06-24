@@ -14,6 +14,7 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 from passivbot_exceptions import FatalBotException
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 # Stub passivbot_rust before importing passivbot to avoid native dependency during unit test.
 sys.modules.setdefault(
@@ -508,6 +509,22 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     bot.get_raw_balance = lambda: 1_000.0
     bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
     bot.bot_value = lambda pside, key: 10.0
+    sink = ListEventSink()
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_pos"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._current_live_event_cycle_id = Passivbot._current_live_event_cycle_id.__get__(
+        bot, Passivbot
+    )
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot._emit_position_changed_event = (
+        Passivbot._emit_position_changed_event.__get__(bot, Passivbot)
+    )
 
     async def _get_live_last_prices(symbols, **kwargs):
         return {symbol: 0.0 for symbol in symbols}
@@ -545,6 +562,17 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
     pos_logs = [record.getMessage() for record in caplog.records if "[pos]" in record.getMessage()]
     assert len(pos_logs) == 1
     assert " ".join(pos_logs[0].split()).startswith(f"[pos] {expected_action} ")
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.POSITION_CHANGED
+    assert event.cycle_id == "cy_pos"
+    assert event.symbol == "XMR/USDT:USDT"
+    assert event.pside == pside
+    assert event.reason_code == expected_action
+    assert event.data["old_size"] == pytest.approx(old_size)
+    assert event.data["new_size"] == pytest.approx(new_size)
+    assert event.data["size_delta"] == pytest.approx(new_size - old_size)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
