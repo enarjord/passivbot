@@ -535,6 +535,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         _emit_candle_tail_projected_event = (
             pb_mod.Passivbot._emit_candle_tail_projected_event
         )
+        _emit_candle_coverage_checked_event = (
+            pb_mod.Passivbot._emit_candle_coverage_checked_event
+        )
         _emit_cache_load_completed_event = (
             pb_mod.Passivbot._emit_cache_load_completed_event
         )
@@ -630,6 +633,21 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         },
         reason_code="late_open_tail_projection",
     )
+    bot._emit_candle_coverage_checked_event(
+        symbol="ETH/USDT:USDT",
+        timeframe="1m",
+        start_ts=120_000,
+        end_ts=240_000,
+        report={
+            "ok": False,
+            "timeframe": "1m",
+            "missing_spans": [(180_000, 240_000)],
+            "missing_candles": 2,
+            "loaded_rows": 1,
+        },
+        context="required_disk_audit",
+        required=True,
+    )
     bot._emit_cache_load_completed_event(
         {
             "symbol": "ETH/USDT:USDT",
@@ -683,6 +701,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_TAIL_PROJECTED,
+        EventTypes.CANDLE_COVERAGE_CHECKED,
         EventTypes.CACHE_LOAD_COMPLETED,
         EventTypes.CACHE_FLUSH_COMPLETED,
         EventTypes.CACHE_WARMUP_DECISION,
@@ -707,10 +726,20 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[6].reason_code == "late_open_tail_projection"
     assert events[6].data["latest_expected_ts"] == 180_000
     assert events[6].data["tail_gap_age_ms"] == 60_000
-    assert events[7].component == "cache.candles"
+    assert events[7].component == "candle.coverage"
     assert events[7].symbol == "ETH/USDT:USDT"
-    assert events[7].reason_code == "candle_disk_load_completed"
-    assert events[7].data == {
+    assert events[7].status == "degraded"
+    assert events[7].level == "warning"
+    assert events[7].reason_code == "required_candle_disk_coverage"
+    assert events[7].data["coverage_ok"] is False
+    assert events[7].data["missing_span_count"] == 1
+    assert events[7].data["missing_spans_preview"] == [
+        {"start_ts": 180_000, "end_ts": 240_000, "candles": 2}
+    ]
+    assert events[8].component == "cache.candles"
+    assert events[8].symbol == "ETH/USDT:USDT"
+    assert events[8].reason_code == "candle_disk_load_completed"
+    assert events[8].data == {
         "timeframe": "1m",
         "start_ts": 120_000,
         "end_ts": 240_000,
@@ -725,10 +754,10 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "suppressed_count": 2,
         "source_days": {"legacy": 0, "merged": 0, "primary": 1},
     }
-    assert events[8].component == "cache.candles"
-    assert events[8].symbol == "ETH/USDT:USDT"
-    assert events[8].reason_code == "candle_disk_flush_completed"
-    assert events[8].data == {
+    assert events[9].component == "cache.candles"
+    assert events[9].symbol == "ETH/USDT:USDT"
+    assert events[9].reason_code == "candle_disk_flush_completed"
+    assert events[9].data == {
         "timeframe": "1m",
         "persisted_rows": 4,
         "persisted_start_ts": 300_000,
@@ -736,19 +765,136 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "suppressed_count": 2,
         "suppressed_rows": 8,
     }
-    assert events[9].component == "cache.warmup"
-    assert events[9].reason_code == "warmup_cache_decision"
-    assert events[9].data["context"] == "trading-ready warmup"
-    assert events[9].data["symbol_count"] == 3
-    assert events[9].data["reused_count"] == 1
-    assert events[9].data["cold_count"] == 2
-    assert events[9].data["cold_path_required"] is True
-    assert events[9].data["reason_counts"] == {
+    assert events[10].component == "cache.warmup"
+    assert events[10].reason_code == "warmup_cache_decision"
+    assert events[10].data["context"] == "trading-ready warmup"
+    assert events[10].data["symbol_count"] == 3
+    assert events[10].data["reused_count"] == 1
+    assert events[10].data["cold_count"] == 2
+    assert events[10].data["cold_path_required"] is True
+    assert events[10].data["reason_counts"] == {
         "missing_coverage": 2,
         "warm_cache_accepted": 1,
     }
-    assert events[9].data["window_max_candles"] == 260
+    assert events[10].data["window_max_candles"] == 260
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_candle_disk_coverage_audit_emits_structured_events(monkeypatch):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeCandleManager:
+        def __init__(self):
+            self.calls = []
+
+        def check_disk_coverage(
+            self,
+            symbol,
+            start_ts,
+            end_ts,
+            *,
+            timeframe,
+            log_level,
+        ):
+            self.calls.append(
+                {
+                    "symbol": symbol,
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                    "timeframe": timeframe,
+                    "log_level": log_level,
+                }
+            )
+            if timeframe == "1m":
+                return {
+                    "ok": False,
+                    "timeframe": "1m",
+                    "missing_spans": [(180_000, 240_000)],
+                    "missing_candles": 2,
+                    "loaded_rows": 1,
+                }
+            return {
+                "ok": True,
+                "timeframe": "1h",
+                "missing_spans": [],
+                "missing_candles": 0,
+                "loaded_rows": 4,
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.exchange = "okx"
+    bot.user = "okx_01"
+    bot.bot_id = "bot_1"
+    bot.cm = FakeCandleManager()
+    bot.config = {"live": {}}
+    bot.active_symbols = ["BTC/USDT:USDT"]
+    bot.open_orders = {}
+    bot.positions = {}
+    bot._live_event_current_cycle_id = "cy_12"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.get_max_n_positions = lambda pside: 1
+    bot.get_current_n_positions = lambda pside: 1 if pside == "long" else 0
+    bot.get_symbols_with_pos = (
+        lambda pside: {"BTC/USDT:USDT"} if pside == "long" else set()
+    )
+    bot.get_symbols_approved_or_has_pos = lambda pside: {"BTC/USDT:USDT"}
+    bot.is_forager_mode = lambda pside=None: False
+    bot.has_position = lambda symbol: symbol == "BTC/USDT:USDT"
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 7_500_000)
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: (
+            {"BTC/USDT:USDT": 2},
+            {"BTC/USDT:USDT": 1},
+            {},
+        ),
+    )
+
+    await bot.audit_required_candle_disk_coverage()
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    assert bot.cm.calls == [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "start_ts": 7_320_000,
+            "end_ts": 7_440_000,
+            "timeframe": "1m",
+            "log_level": "debug",
+        },
+        {
+            "symbol": "BTC/USDT:USDT",
+            "start_ts": 0,
+            "end_ts": 3_600_000,
+            "timeframe": "1h",
+            "log_level": "debug",
+        },
+    ]
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.CANDLE_COVERAGE_CHECKED
+    ]
+    assert [event.status for event in events] == ["degraded", "succeeded"]
+    assert [event.level for event in events] == ["warning", "debug"]
+    assert {event.cycle_id for event in events} == {"cy_12"}
+    assert events[0].symbol == "BTC/USDT:USDT"
+    assert events[0].data["timeframe"] == "1m"
+    assert events[0].data["coverage_ok"] is False
+    assert events[0].data["missing_candles"] == 2
+    assert events[0].data["missing_spans_preview"] == [
+        {"start_ts": 180_000, "end_ts": 240_000, "candles": 2}
+    ]
+    assert events[1].data["timeframe"] == "1h"
+    assert events[1].data["coverage_ok"] is True
 
 
 def test_candle_disk_load_handler_throttles_repeated_symbol_timeframe_events():

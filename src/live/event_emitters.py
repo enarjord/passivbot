@@ -1074,6 +1074,120 @@ def emit_candle_tail_projected_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         )
 
 
+def _missing_span_preview(
+    spans: Any,
+    *,
+    timeframe_ms: int,
+    limit: int = 3,
+) -> list[dict[str, int]]:
+    preview: list[dict[str, int]] = []
+    try:
+        iterable = list(spans or [])
+    except TypeError:
+        iterable = []
+    step_ms = max(1, int(timeframe_ms or 1))
+    for item in iterable[: max(0, int(limit))]:
+        try:
+            start_ts, end_ts = item
+        except Exception:
+            continue
+        start_int = _safe_int(start_ts)
+        end_int = _safe_int(end_ts)
+        if start_int is None or end_int is None:
+            continue
+        preview.append(
+            {
+                "start_ts": int(start_int),
+                "end_ts": int(end_int),
+                "candles": int(max(0, (int(end_int) - int(start_int)) // step_ms) + 1),
+            }
+        )
+    return preview
+
+
+def _timeframe_ms(timeframe: str) -> int:
+    text = str(timeframe or "1m").strip().lower()
+    try:
+        unit = text[-1]
+        value = int(float(text[:-1] or "1"))
+    except Exception:
+        return 60_000
+    if unit == "s":
+        return max(1, value * 1_000)
+    if unit == "m":
+        return max(1, value * 60_000)
+    if unit == "h":
+        return max(1, value * 3_600_000)
+    if unit == "d":
+        return max(1, value * 86_400_000)
+    return 60_000
+
+
+def _emit_candle_coverage_checked_event_unchecked(
+    bot: Any,
+    *,
+    symbol: str,
+    timeframe: str,
+    start_ts: int,
+    end_ts: int,
+    report: dict[str, Any] | None,
+    context: str = "required_disk_audit",
+    required: bool = True,
+) -> None:
+    report_in = dict(report or {})
+    tf = str(report_in.get("timeframe") or timeframe or "1m")
+    ok = bool(report_in.get("ok", False))
+    missing_spans = report_in.get("missing_spans") or []
+    try:
+        missing_span_count = len(missing_spans)
+    except Exception:
+        missing_span_count = 0
+    tf_ms = _timeframe_ms(tf)
+    data: dict[str, Any] = {
+        "context": str(context),
+        "timeframe": tf,
+        "required": bool(required),
+        "coverage_ok": ok,
+        "missing_span_count": int(missing_span_count),
+        "missing_spans_preview": _missing_span_preview(
+            missing_spans,
+            timeframe_ms=tf_ms,
+        ),
+    }
+    for key, value in (
+        ("start_ts", start_ts),
+        ("end_ts", end_ts),
+        ("missing_candles", report_in.get("missing_candles")),
+        ("loaded_rows", report_in.get("loaded_rows")),
+    ):
+        safe = _safe_int(value)
+        if safe is not None:
+            data[key] = int(safe)
+    _safe_emit(
+        bot,
+        EventTypes.CANDLE_COVERAGE_CHECKED,
+        level="debug" if ok or not required else "warning",
+        component="candle.coverage",
+        tags=("candle", "coverage", "cache"),
+        cycle_id=current_live_event_cycle_id(bot),
+        symbol=str(symbol),
+        status="succeeded" if ok else ("degraded" if required else "skipped"),
+        reason_code="required_candle_disk_coverage",
+        data=data,
+    )
+
+
+def emit_candle_coverage_checked_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_candle_coverage_checked_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CANDLE_COVERAGE_CHECKED,
+            exc,
+        )
+
+
 def _reason_counts(data: Any) -> dict[str, int]:
     out: dict[str, int] = {}
     for key, value in dict(data or {}).items():
