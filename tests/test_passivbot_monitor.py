@@ -150,6 +150,57 @@ def test_live_event_cycle_helpers_emit_structured_events():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+    clock_values = iter([1_000, 3_500, 8_000])
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: next(clock_values))
+
+    class FakeBot:
+        _startup_timing_begin = pb_mod.Passivbot._startup_timing_begin
+        _startup_timing_mark = pb_mod.Passivbot._startup_timing_mark
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._startup_timing_begin()
+    with caplog.at_level(logging.INFO):
+        bot._startup_timing_mark("account")
+        bot._startup_timing_mark("hsl", details="mode=coin")
+
+    assert any("account-ready=2.50s" in record.message for record in caplog.records)
+    assert any("hsl-ready=7.00s" in record.message for record in caplog.records)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = sink.events
+    assert [event.event_type for event in events] == [
+        EventTypes.BOT_STARTUP_TIMING,
+        EventTypes.BOT_STARTUP_TIMING,
+    ]
+    assert events[0].component == "bot.startup"
+    assert events[0].reason_code == "startup_phase_ready"
+    assert events[0].data == {
+        "phase": "account",
+        "elapsed_ms": 2500,
+        "since_previous_ms": 2500,
+    }
+    assert events[1].data == {
+        "phase": "hsl",
+        "elapsed_ms": 7000,
+        "since_previous_ms": 4500,
+        "details": "mode=coin",
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
     import passivbot as pb_mod
 
@@ -704,6 +755,12 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             cold_count=object(),
             reason_counts=object(),
         )
+        pb_mod.Passivbot._emit_startup_timing_event(
+            bot,
+            phase=object(),
+            elapsed_ms=object(),
+            since_previous_ms=object(),
+        )
 
     messages = [record.message for record in caplog.records]
     assert any(EventTypes.FORAGER_FEATURE_UNAVAILABLE in msg for msg in messages)
@@ -715,6 +772,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)
     assert any(EventTypes.CANDLE_TAIL_PROJECTED in msg for msg in messages)
     assert any(EventTypes.CACHE_WARMUP_DECISION in msg for msg in messages)
+    assert any(EventTypes.BOT_STARTUP_TIMING in msg for msg in messages)
 
 
 def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):

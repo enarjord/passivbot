@@ -690,6 +690,49 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _emit_startup_timing_event_unchecked(
+    bot: Any,
+    *,
+    phase: str,
+    elapsed_ms: int,
+    since_previous_ms: int,
+    details: str = "",
+) -> None:
+    elapsed = _safe_int(elapsed_ms)
+    since_previous = _safe_int(since_previous_ms)
+    data: dict[str, Any] = {
+        "phase": str(phase),
+        "elapsed_ms": max(0, int(elapsed)) if elapsed is not None else 0,
+        "since_previous_ms": (
+            max(0, int(since_previous)) if since_previous is not None else 0
+        ),
+    }
+    if details:
+        data["details"] = str(details)
+    _safe_emit(
+        bot,
+        EventTypes.BOT_STARTUP_TIMING,
+        level="debug",
+        component="bot.startup",
+        tags=("bot", "startup", "timing"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code="startup_phase_ready",
+        data=data,
+    )
+
+
+def emit_startup_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_startup_timing_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.BOT_STARTUP_TIMING,
+            exc,
+        )
+
+
 def _symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
     if symbols is None:
         values = []

@@ -30,6 +30,7 @@ LIVE_EVENT_ID_KEYS = (
 class EventTypes:
     BOT_STARTED = "bot.started"
     BOT_READY = "bot.ready"
+    BOT_STARTUP_TIMING = "bot.startup_timing"
     BOT_STOPPING = "bot.stopping"
     BOT_SHUTDOWN_STAGE = "bot.shutdown.stage"
     BOT_STOPPED = "bot.stopped"
@@ -87,6 +88,7 @@ class EventTypes:
 PHASE1_EVENT_TYPES = {
     EventTypes.BOT_STARTED,
     EventTypes.BOT_READY,
+    EventTypes.BOT_STARTUP_TIMING,
     EventTypes.BOT_STOPPING,
     EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
@@ -360,6 +362,7 @@ DEFAULT_ROUTE = EventRoute(structured=True, monitor=True, console=False, text=Fa
 DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
     EventTypes.BOT_READY: EventRoute(console=True, text=True),
+    EventTypes.BOT_STARTUP_TIMING: EventRoute(console=False, text=False),
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),

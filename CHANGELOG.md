@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `bot.startup_timing` live events for startup phase timing
+  diagnostics.
 - Added structured `cache.warmup_decision` live events for candle warmup cache
   reuse/cold-path summaries.
 - Added `passivbot tool live-event-query --event-type`/`--kind` filters for

@@ -603,6 +603,7 @@ class Passivbot:
     _emit_live_cycle_completed = live_event_emitters.emit_live_cycle_completed
     _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
     _emit_live_event = live_event_emitters.emit_live_event
+    _emit_startup_timing_event = live_event_emitters.emit_startup_timing_event
     _emit_execution_confirmation_requested_event = (
         live_event_emitters.emit_execution_confirmation_requested_event
     )
@@ -3485,6 +3486,13 @@ class Passivbot:
             elapsed_s,
             since_previous_s,
             suffix,
+        )
+        Passivbot._emit_startup_timing_event(
+            self,
+            phase=label,
+            elapsed_ms=max(0, int(now_ms - started_ms)),
+            since_previous_ms=max(0, int(now_ms - previous_ms)),
+            details=str(details or ""),
         )
 
     def _force_cold_startup(self) -> bool:
