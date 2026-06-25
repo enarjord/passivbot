@@ -383,6 +383,7 @@ def get_template_config():
                 "filter_by_min_effective_cost": True,
                 "fills_confirmation_overlap_minutes": 60.0,
                 "fills_recent_overlap_minutes": 10.0,
+                "force_cold_startup": False,
                 "forced_mode_long": "",
                 "forced_mode_short": "",
                 "hedge_mode": False,

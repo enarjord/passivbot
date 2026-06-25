@@ -1847,11 +1847,13 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
 def test_prepare_config_preserves_live_candle_budget_controls():
     source = get_template_config()
     source["live"]["defer_broad_candle_warmup"] = False
+    source["live"]["force_cold_startup"] = True
     source["live"]["max_forager_candle_staleness_minutes"] = 7.5
 
     prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
 
     assert prepared["live"]["defer_broad_candle_warmup"] is False
+    assert prepared["live"]["force_cold_startup"] is True
     assert prepared["live"]["max_forager_candle_staleness_minutes"] == 7.5
 
 

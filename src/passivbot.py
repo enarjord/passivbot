@@ -3328,11 +3328,13 @@ class Passivbot:
                 return
             if self._equity_hard_stop_enabled():
                 boot_stage = "equity_hard_stop_initialize_from_history"
-                if self._equity_hard_stop_signal_mode() == "coin":
+                hsl_mode = self._equity_hard_stop_signal_mode()
+                if hsl_mode == "coin":
                     boot_stage = "equity_hard_stop_initialize_coin_from_history"
                     await self._equity_hard_stop_initialize_coin_from_history()
                 else:
                     await self._equity_hard_stop_initialize_from_history()
+                Passivbot._startup_timing_mark(self, "hsl", details=f"mode={hsl_mode}")
                 if self.stop_signal_received:
                     self._monitor_emit_stop(
                         "startup_aborted",
@@ -3478,6 +3480,142 @@ class Passivbot:
             since_previous_s,
             suffix,
         )
+
+    def _force_cold_startup(self) -> bool:
+        """Return True when startup should bypass warm-cache short cuts."""
+        raw = get_optional_live_value(
+            getattr(self, "config", {}), "force_cold_startup", False
+        )
+        if isinstance(raw, bool):
+            return bool(raw)
+        if raw is None:
+            return False
+        if isinstance(raw, (int, float)):
+            return bool(raw)
+        return str(raw).strip().lower() in {"1", "true", "yes", "on"}
+
+    def _warmup_candle_cache_decision(
+        self,
+        symbol: str,
+        *,
+        timeframe: str = "1m",
+        required_candles: int,
+        ttl_ms: Optional[int],
+        now_ms: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Decide whether startup warmup can reuse completed local candles."""
+        tf_norm = str(timeframe or "1m").strip().lower()
+        try:
+            required = max(1, int(required_candles))
+        except Exception:
+            required = 1
+        now = utc_ms() if now_ms is None else int(now_ms)
+        decision: Dict[str, Any] = {
+            "accepted": False,
+            "reason_code": "unknown",
+            "timeframe": tf_norm,
+            "required_candles": int(required),
+            "latest_required_ms": None,
+            "covered_end_ms": None,
+            "last_refresh_ms": 0,
+            "refresh_age_ms": None,
+            "missing_candles": None,
+            "source_fingerprint": (
+                f"{getattr(self, 'exchange', '')}:"
+                f"{getattr(self, 'user', '')}:{symbol}:{tf_norm}:{required}"
+            ),
+            "cold_path_required": True,
+        }
+        if self._force_cold_startup():
+            decision["reason_code"] = "force_cold_startup"
+            return decision
+        cm = getattr(self, "cm", None)
+        if cm is None or not hasattr(cm, "get_completed_candle_health"):
+            decision["reason_code"] = "no_candlestick_manager"
+            return decision
+        try:
+            health = cm.get_completed_candle_health(
+                symbol,
+                {tf_norm: {"candles": required, "required": True}},
+                now_ms=now,
+            )
+        except Exception as exc:
+            decision["reason_code"] = "cache_probe_failed"
+            decision["error_type"] = type(exc).__name__
+            return decision
+        if not isinstance(health, dict):
+            decision["reason_code"] = "invalid_health_report"
+            return decision
+        report = (health.get("timeframes", {}) or {}).get(tf_norm)
+        if not isinstance(report, dict):
+            decision["reason_code"] = "missing_timeframe_report"
+            return decision
+
+        latest_required = report.get("latest_expected_ts")
+        covered_end = report.get("last_cached_ts")
+        try:
+            last_refresh = int(report.get("last_refresh_ms") or 0)
+        except Exception:
+            last_refresh = 0
+        refresh_age = report.get("refresh_age_ms")
+        try:
+            missing_candles = int(report.get("missing_candles") or 0)
+        except Exception:
+            missing_candles = 0
+        decision.update(
+            {
+                "latest_required_ms": latest_required,
+                "covered_end_ms": covered_end,
+                "last_refresh_ms": last_refresh,
+                "refresh_age_ms": refresh_age,
+                "missing_candles": missing_candles,
+            }
+        )
+
+        if not bool(report.get("coverage_ok")):
+            decision["reason_code"] = "missing_coverage"
+            return decision
+        if latest_required is not None and covered_end is None:
+            decision["reason_code"] = "missing_cached_end"
+            return decision
+        if latest_required is not None and covered_end is not None:
+            try:
+                if int(covered_end) < int(latest_required):
+                    decision["reason_code"] = "covered_tail_before_required"
+                    return decision
+            except Exception:
+                decision["reason_code"] = "invalid_coverage_metadata"
+                return decision
+
+        # A live 1m manager refreshes latest-tail data based on last_refresh_ms.
+        # Reuse the warm cache only when that same TTL proof is already fresh.
+        if tf_norm == "1m" and getattr(cm, "exchange", None) is not None:
+            try:
+                ttl = int(ttl_ms) if ttl_ms is not None else None
+            except Exception:
+                ttl = None
+            if ttl is not None and ttl <= 0:
+                decision["reason_code"] = "ttl_forces_refresh"
+                return decision
+            if ttl is not None and ttl > 0:
+                if last_refresh <= 0:
+                    decision["reason_code"] = "missing_refresh_metadata"
+                    return decision
+                if refresh_age is None:
+                    refresh_age = max(0, now - int(last_refresh))
+                    decision["refresh_age_ms"] = int(refresh_age)
+                try:
+                    if int(refresh_age) > ttl:
+                        decision["reason_code"] = "stale_refresh"
+                        return decision
+                except Exception:
+                    decision["reason_code"] = "invalid_refresh_metadata"
+                    return decision
+
+        decision["accepted"] = True
+        decision["reason_code"] = "warm_cache_accepted"
+        decision["cold_path_required"] = False
+        return decision
 
     async def init_markets(self, verbose=True):
         """Load exchange market metadata and refresh approval lists."""
@@ -4461,13 +4599,37 @@ class Passivbot:
             # Pace it even on exchanges whose per-request delay normally defaults to zero.
             fetch_delay_s = max(fetch_delay_s, 0.5)
 
+        cache_reused_1m = 0
+        cache_cold_1m = 0
+        cache_reason_counts: Dict[str, int] = {}
+
+        def bump_cache_reason(reason: str) -> None:
+            key = str(reason or "unknown")
+            cache_reason_counts[key] = int(cache_reason_counts.get(key, 0)) + 1
+
         async def one(sym: str):
-            nonlocal completed, last_log_ms
+            nonlocal cache_cold_1m, cache_reused_1m, completed, last_log_ms
+            did_fetch = False
             async with sem:
                 try:
                     win = int(per_symbol_win.get(sym, default_win))
                     skip_hist = bool(per_symbol_skip_historical.get(sym, True))
                     start_ts = int(end_final - ONE_MIN_MS * max(1, win))
+                    decision = Passivbot._warmup_candle_cache_decision(
+                        self,
+                        sym,
+                        timeframe="1m",
+                        required_candles=win,
+                        ttl_ms=ttl_ms,
+                        now_ms=now,
+                    )
+                    if bool(decision.get("accepted")):
+                        cache_reused_1m += 1
+                        bump_cache_reason(decision.get("reason_code", "accepted"))
+                        return
+                    cache_cold_1m += 1
+                    bump_cache_reason(decision.get("reason_code", "cold_path"))
+                    did_fetch = True
                     await self.cm.get_candles(
                         sym,
                         start_ts=start_ts,
@@ -4480,7 +4642,7 @@ class Passivbot:
                 except Exception:
                     pass
                 finally:
-                    if fetch_delay_s > 0:
+                    if did_fetch and fetch_delay_s > 0:
                         await self._sleep_unless_shutdown(
                             fetch_delay_s, stage="warmup_candles"
                         )
@@ -4504,6 +4666,22 @@ class Passivbot:
                             last_log_ms = now_ms
 
         await asyncio.gather(*(one(s) for s in symbols))
+
+        reasons = (
+            ",".join(
+                f"{reason}:{count}"
+                for reason, count in sorted(cache_reason_counts.items())
+            )
+            or "none"
+        )
+        logging.info(
+            "[warmup] cache decision | context=%s timeframe=1m reused=%d cold=%d reasons=%s elapsed=%.2fs",
+            context,
+            cache_reused_1m,
+            cache_cold_1m,
+            reasons,
+            max(0.0, (utc_ms() - started_ms) / 1000.0),
+        )
 
         # Warm 1h candles for grid log-range EMAs
         hour_sem = asyncio.Semaphore(max(1, int(concurrency)))
