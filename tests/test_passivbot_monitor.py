@@ -642,6 +642,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
             "merged_days": 0,
             "source_days": {"primary": 1, "legacy": 0, "merged": 0},
             "elapsed_ms": 7,
+            "suppressed_count": 2,
         }
     )
     bot._emit_cache_warmup_decision_event(
@@ -706,6 +707,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "legacy_days": 0,
         "merged_days": 0,
         "elapsed_ms": 7,
+        "suppressed_count": 2,
         "source_days": {"legacy": 0, "merged": 0, "primary": 1},
     }
     assert events[8].component == "cache.warmup"
@@ -721,6 +723,52 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     }
     assert events[8].data["window_max_candles"] == 260
     assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_candle_disk_load_handler_throttles_repeated_symbol_timeframe_events():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _handle_candle_disk_load_event = (
+            pb_mod.Passivbot._handle_candle_disk_load_event
+        )
+
+        def __init__(self):
+            self._cache_load_event_throttle_seconds = 60.0
+            self.emitted = []
+
+        def _emit_cache_load_completed_event(self, payload):
+            self.emitted.append(dict(payload))
+
+    bot = FakeBot()
+    payload = {
+        "symbol": "ETH/USDT:USDT",
+        "timeframe": "1m",
+        "start_ts": 120_000,
+        "end_ts": 240_000,
+        "loaded_rows": 3,
+    }
+
+    bot._handle_candle_disk_load_event(payload)
+    bot._handle_candle_disk_load_event({**payload, "start_ts": 180_000})
+
+    assert len(bot.emitted) == 1
+    assert "suppressed_count" not in bot.emitted[0]
+    key = ("ETH/USDT:USDT", "1m")
+    assert bot._cache_load_event_suppressed[key] == 1
+
+    bot._cache_load_event_last_emit[key] -= 61.0
+    bot._handle_candle_disk_load_event({**payload, "start_ts": 240_000})
+
+    assert len(bot.emitted) == 2
+    assert bot.emitted[1]["start_ts"] == 240_000
+    assert bot.emitted[1]["suppressed_count"] == 1
+    assert key not in bot._cache_load_event_suppressed
+
+    bot._handle_candle_disk_load_event({**payload, "timeframe": "1h"})
+
+    assert len(bot.emitted) == 3
+    assert bot.emitted[2]["timeframe"] == "1h"
 
 
 def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(caplog):

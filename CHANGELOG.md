@@ -6,6 +6,8 @@ All notable user-facing changes will be documented in this file.
 
 - Added structured `cache.load.completed` live events for candle disk-cache load
   summaries.
+- Throttled repeated `cache.load.completed` live events per symbol/timeframe and
+  added `suppressed_count` so warmup/HSL replay does not flood monitor storage.
 - Added structured `bot.startup_timing` live events for startup phase timing
   diagnostics.
 - Added structured `cache.warmup_decision` live events for candle warmup cache

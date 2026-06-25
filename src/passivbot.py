@@ -644,7 +644,6 @@ class Passivbot:
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
-    _handle_candle_disk_load_event = live_event_emitters.emit_cache_load_completed_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
 
@@ -6300,6 +6299,41 @@ class Passivbot:
                         traceback.format_exception(type(exc), exc, exc.__traceback__)
                     )
                 )
+
+    def _handle_candle_disk_load_event(self, payload: dict[str, Any]) -> None:
+        """Emit summarized candle disk-load events without flooding monitor storage."""
+        try:
+            data = dict(payload or {})
+            symbol = str(data.get("symbol") or "")
+            timeframe = str(data.get("timeframe") or data.get("tf") or "1m")
+            key = (symbol, timeframe)
+            now = time.monotonic()
+            try:
+                interval_s = float(
+                    getattr(self, "_cache_load_event_throttle_seconds", 60.0)
+                )
+            except Exception:
+                interval_s = 60.0
+            interval_s = max(0.0, interval_s)
+            last_by_key = getattr(self, "_cache_load_event_last_emit", None)
+            if not isinstance(last_by_key, dict):
+                last_by_key = {}
+                self._cache_load_event_last_emit = last_by_key
+            suppressed_by_key = getattr(self, "_cache_load_event_suppressed", None)
+            if not isinstance(suppressed_by_key, dict):
+                suppressed_by_key = {}
+                self._cache_load_event_suppressed = suppressed_by_key
+            last_emit = last_by_key.get(key)
+            if last_emit is not None and now - float(last_emit) < interval_s:
+                suppressed_by_key[key] = int(suppressed_by_key.get(key, 0) or 0) + 1
+                return
+            suppressed_count = int(suppressed_by_key.pop(key, 0) or 0)
+            if suppressed_count > 0:
+                data["suppressed_count"] = suppressed_count
+            last_by_key[key] = now
+            self._emit_cache_load_completed_event(data)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache load event: %s", exc)
 
     def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
         publisher = getattr(self, "monitor_publisher", None)
