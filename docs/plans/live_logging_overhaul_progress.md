@@ -19,13 +19,17 @@ Last updated: 2026-06-25.
 
 Current `origin/v8` logging-overhaul head:
 
-- `e65597c3` merge of PR #656, `Add local cache integrity doctor`.
+- `27931c81` merge of PR #659, `Add incident bundle trace reports`.
 
 VPS5 deployment status:
 
-- Deployed through PR #642 at `ad36d8ea`.
-- PRs #643-#656 are merged to `v8`; VPS5 pull/restart and live smoke are next
-  when explicitly authorized.
+- Repository pulled through PR #659 at `27931c81`.
+- Bots were left running after the pull; PR #659 was a read-only tooling slice
+  and did not require bot restart.
+- VPS5 incident-bundle smoke created a bundle with `trace_summary`,
+  `order_trace`, and `cycle_trace` in `event_report.json`. The command returned
+  attention because existing live monitor state still includes GateIO HSL RED
+  and non-hard EMA readiness degradation, not because bundle generation failed.
 
 ## Phase Checklist
 
@@ -38,7 +42,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, incident bundle, ID filters | Incident-bundle integration and cross-bot workflow |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, incident bundle trace reports, ID filters | Cross-bot incident workflow and richer supervisor/process capture |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -307,16 +311,31 @@ VPS5 deployment status:
   slice; it does not yet prove warm-cache coverage or HSL/fill metadata
   compatibility.
 
+### PR #658: Cache Doctor Progress Update
+
+- Branch: `codex/v8-progress-after-cache-doctor`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #656 merged.
+
+### PR #659: Incident Bundle Trace Reports
+
+- Branch: `codex/v8-incident-bundle-traces`.
+- Scope: incident tooling.
+- Result: `passivbot tool live-incident-bundle` now embeds existing
+  `live-event-query` trace-summary and order-trace reports in `event_report.json`
+  by default, includes cycle-trace reconstruction when scoped to `--cycle-id`,
+  and supports `--no-trace-report` for compact bundles.
+- VPS5 evidence: deployed to VPS5 at `27931c81`; a read-only bundle smoke on
+  monitor data produced a tarball containing `trace_summary`, `order_trace`, and
+  `cycle_trace` sections. The tool returned attention because the embedded
+  smoke report saw existing GateIO HSL RED and EMA readiness degradation.
+
 ## Current Next Steps
 
-1. Pull merged `v8` on VPS5 and restart bots, if explicitly authorized, so PRs
-   #643-#656 are exercised by live processes.
-2. Verify `health.summary` includes resource pressure and event-pipeline fields,
-   verify event-projected console summaries stay readable, and verify
-   `live-smoke-report` shows startup timing baselines and `live-event-query
-   --order-trace`/`--cycle-trace` reconstruct recent order waves and cycles.
-   Also run `cache-integrity-doctor` on local cache roots as a read-only smoke
-   when live/VPS access is explicitly authorized.
-3. Continue Phase 5 by migrating one high-value stdlib text log family to
-   structured-event projection, or add incident-bundle integration if live smoke
-   shows that query tooling is still the sharper need.
+1. Continue Phase 5 by migrating one high-value stdlib text log family to
+   structured-event projection without increasing default console noise.
+2. Start the live restart/smoke automation slice if operational workflow speed
+   becomes the higher leverage next step.
+3. Continue cache-doctor refinements in separate adjacent PRs: cache-family
+   metadata, coverage windows, suspicious gaps, and warm-cache readiness.

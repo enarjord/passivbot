@@ -30,10 +30,11 @@ Related detailed plans:
 ## High-Value Follow-Ups
 
 1. [x] Incident bundle generator.
-   Status: initial implementation merged. `passivbot tool live-incident-bundle`
-   collects local monitor event reports, smoke summaries, redacted log excerpts,
-   monitor snapshots, config hashes, runtime metadata, and bounded event
-   segments into a tarball.
+   Status: initial implementation plus trace-report integration merged.
+   `passivbot tool live-incident-bundle` collects local monitor event reports,
+   live-event trace reports, smoke summaries, redacted log excerpts, monitor
+   snapshots, config hashes, runtime metadata, and bounded event segments into a
+   tarball.
 
    Remaining refinements: add supervisor/process status and richer remote smoke
    integration when the restart/smoke automation exists.
@@ -46,10 +47,11 @@ Related detailed plans:
    action id, symbol, pside, reason code, and status. It also supports
    aggregate trace summaries over matched events and order waves, plus a
    dedicated order-trace reconstruction view for order waves/actions and a
-   cycle-trace reconstruction view with nested order traces.
+   cycle-trace reconstruction view with nested order traces. Incident bundles
+   now embed the existing trace-summary/order-trace reports and cycle traces
+   when scoped to `--cycle-id`.
 
-   Remaining refinements: incident-bundle integration and cross-bot incident
-   workflow.
+   Remaining refinements: cross-bot incident workflow.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists, but the safe
@@ -153,9 +155,11 @@ Related detailed plans:
     - 2026-06-25: Added `live-event-query --cycle-trace`, grouping matched
       events by `cycle_id` with bounded timeline samples, aggregate trace
       summaries, and nested order traces.
+    - 2026-06-25: Added incident-bundle integration for trace-summary,
+      order-trace, and cycle-trace reports.
 
-    Remaining refinements: add incident bundle integration and keep tightening
-    producer coverage as nearby event surfaces are touched.
+    Remaining refinements: keep tightening producer coverage as nearby event
+    surfaces are touched.
 
 12. [ ] Debug profile toggles.
     Status: open.
@@ -208,6 +212,7 @@ Related detailed plans:
 | 2026-06-25 | #2/#11 Event query and order trace summaries | PR #648 / `774bcf74` | Added `live-event-query --trace-summary` aggregate counts across matched events, ID scopes, symbols, sides, and order waves | Full create/cancel/missing-order reconstruction view |
 | 2026-06-25 | #2/#11 Event query and order trace completeness | PR #651 / `b9f42ebd` | Added `live-event-query --order-trace` reconstruction grouped by order wave and action, with confirmation events and bounded samples | Richer cycle reconstruction and incident-bundle integration |
 | 2026-06-25 | #2/#11 Event query and cycle trace completeness | PR #654 / `ff493541` | Added `live-event-query --cycle-trace` reconstruction grouped by cycle id, with bounded timelines, aggregate summaries, and nested order traces | Incident-bundle integration and cross-bot workflow |
+| 2026-06-25 | #1/#2/#11 Incident bundle trace integration | PR #659 / `27931c81` | Embedded trace-summary and order-trace reports into incident bundles by default, plus cycle-trace when scoped to `--cycle-id`; VPS5 bundle smoke verified trace sections | Cross-bot incident workflow and supervisor/process context |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
@@ -222,11 +227,11 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Incident-bundle integration with `live-event-query` trace outputs.
-2. Live restart/smoke automation.
+1. Live restart/smoke automation.
+2. Operator console redesign from events.
 3. Startup phase budget tracking.
-4. Operator console redesign from events.
-5. HSL dry-run preview.
+4. HSL dry-run preview.
+5. Cache integrity doctor coverage/readiness refinements.
 
 These make every later live debugging session cheaper and provide direct
 feedback on whether the event stream is actually answering operator questions.
