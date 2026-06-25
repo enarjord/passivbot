@@ -2,6 +2,8 @@ import logging
 
 import pytest
 
+from live.event_bus import EventTypes
+
 
 def _forager_score_weights(volume=0.0, ema_readiness=0.0, volatility=0.0):
     return {
@@ -1011,6 +1013,14 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
 
     bot = FakeBot()
+    events = []
+    bot._live_event_current_cycle_id = "cy_tail"
+
+    def emit_live_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    bot._emit_live_event = emit_live_event
     with caplog.at_level(logging.INFO):
         (
             m1_close_emas,
@@ -1034,6 +1044,18 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
         and record.levelno >= logging.INFO
         for record in caplog.records
     )
+    tail_events = [
+        kwargs
+        for event_type, kwargs in events
+        if event_type == EventTypes.CANDLE_TAIL_PROJECTED
+    ]
+    assert len(tail_events) == 1
+    assert tail_events[0]["cycle_id"] == "cy_tail"
+    assert tail_events[0]["symbol"] == symbol
+    assert tail_events[0]["reason_code"] == "late_open_tail_projection"
+    assert tail_events[0]["data"]["latest_expected_ts"] == 1_920_000
+    assert tail_events[0]["data"]["last_cached_ts"] == 1_860_000
+    assert tail_events[0]["data"]["tail_gap_age_ms"] == 60_000
 
 
 @pytest.mark.asyncio

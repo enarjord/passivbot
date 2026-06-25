@@ -983,6 +983,54 @@ def emit_forager_selection_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         )
 
 
+def _emit_candle_tail_projected_event_unchecked(
+    bot: Any,
+    *,
+    symbol: str,
+    context: dict[str, Any] | None,
+    reason_code: str = "open_tail_projection",
+) -> None:
+    ctx = dict(context or {})
+    data: dict[str, Any] = {"timeframe": str(ctx.get("timeframe") or "1m")}
+    for key in (
+        "latest_expected_ts",
+        "last_cached_ts",
+        "tail_gap_age_ms",
+        "tail_gap_candles",
+        "missing_candles",
+        "max_tail_gap_ms",
+    ):
+        value = _safe_int(ctx.get(key))
+        if value is not None:
+            data[key] = value
+    reason = ctx.get("reason")
+    if reason is not None:
+        data["projection_reason"] = str(reason)
+    _safe_emit(
+        bot,
+        EventTypes.CANDLE_TAIL_PROJECTED,
+        level="debug",
+        component="candle.tail_projection",
+        tags=("candle", "tail", "ema"),
+        cycle_id=current_live_event_cycle_id(bot),
+        symbol=str(symbol),
+        status="recovered",
+        reason_code=str(reason_code),
+        data=data,
+    )
+
+
+def emit_candle_tail_projected_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_candle_tail_projected_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CANDLE_TAIL_PROJECTED,
+            exc,
+        )
+
+
 def _mode_counts(modes: dict[str, dict[str, str]] | None) -> dict[str, int]:
     counts: dict[str, int] = {}
     for symbol_modes in (modes or {}).values():

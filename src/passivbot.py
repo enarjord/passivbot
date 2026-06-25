@@ -624,6 +624,9 @@ class Passivbot:
     _emit_ema_bundle_completed_event = live_event_emitters.emit_ema_bundle_completed_event
     _emit_ema_fallback_used_event = live_event_emitters.emit_ema_fallback_used_event
     _emit_ema_unavailable_event = live_event_emitters.emit_ema_unavailable_event
+    _emit_candle_tail_projected_event = (
+        live_event_emitters.emit_candle_tail_projected_event
+    )
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _emit_planning_defer_summary_event = (
@@ -14305,6 +14308,12 @@ class Passivbot:
                 return None
             if ctx is not None:
                 projection_contexts[sym] = ctx
+                Passivbot._emit_candle_tail_projected_event(
+                    self,
+                    symbol=sym,
+                    context=ctx,
+                    reason_code="late_open_tail_projection",
+                )
                 log_ema_issue(
                     ("late_open_tail_projection", sym),
                     logging.DEBUG,
