@@ -1880,11 +1880,12 @@ async def test_shutdown_gracefully_closes_event_pipeline_before_monitor_publishe
     await bot.shutdown_gracefully()
 
     assert order[-4:] == [
-        ("snapshot", True),
         ("event", EventTypes.BOT_STOPPED),
+        ("event", EventTypes.BOT_SHUTDOWN_STAGE),
         ("pipeline", 2.0),
         ("publisher", None),
     ]
+    assert ("snapshot", True) in order
     assert bot._live_event_pipeline is None
 
 

@@ -6122,11 +6122,72 @@ class Passivbot:
         finally:
             self._live_event_pipeline = None
 
+    def _shutdown_elapsed_seconds(self) -> float:
+        started = getattr(self, "_shutdown_started_monotonic", None)
+        if started is None:
+            return 0.0
+        try:
+            return max(0.0, time.monotonic() - float(started))
+        except Exception:
+            return 0.0
+
+    def _emit_shutdown_stage(
+        self,
+        stage: str,
+        *,
+        status: str = "succeeded",
+        level: str = "info",
+        message: str | None = None,
+        data: dict[str, Any] | None = None,
+    ) -> None:
+        elapsed_s = self._shutdown_elapsed_seconds()
+        payload = dict(data or {})
+        payload["stage"] = stage
+        payload["elapsed_s"] = round(elapsed_s, 3)
+        detail_parts = []
+        for key in (
+            "task_count",
+            "timeout_s",
+            "cancel_timeout_s",
+            "threshold_s",
+            "closed",
+        ):
+            if key in payload:
+                detail_parts.append(f"{key}={payload[key]}")
+        detail = f" {' '.join(detail_parts)}" if detail_parts else ""
+        text = f"{message or stage.replace('_', ' ')}{detail} elapsed={elapsed_s:.2f}s"
+        emitted = None
+        try:
+            emitted = self._emit_live_event(
+                EventTypes.BOT_SHUTDOWN_STAGE,
+                level=level,
+                component="shutdown",
+                tags=("bot", "lifecycle", "shutdown"),
+                status=status,
+                reason_code=stage,
+                message=text,
+                data=payload,
+            )
+        except Exception as exc:
+            logging.debug("[shutdown] failed emitting shutdown stage %s: %s", stage, exc)
+        if emitted is None:
+            log_level = logging.INFO
+            if level == "warning":
+                log_level = logging.WARNING
+            elif level == "error":
+                log_level = logging.ERROR
+            elif level == "critical":
+                log_level = logging.CRITICAL
+            elif level == "debug":
+                log_level = logging.DEBUG
+            logging.log(log_level, "[shutdown] %s | status=%s", text, status)
+
     async def shutdown_gracefully(self):
         if getattr(self, "_shutdown_in_progress", False):
             return
         self._shutdown_in_progress = True
         self.stop_signal_received = True
+        self._shutdown_started_monotonic = time.monotonic()
         stop_ts = utc_ms()
         self._emit_live_event(
             EventTypes.BOT_STOPPING,
@@ -6138,8 +6199,10 @@ class Passivbot:
             data={"reason": "shutdown_gracefully"},
         )
         self._monitor_emit_stop("shutdown_gracefully", ts=stop_ts)
-        logging.info(
-            "[shutdown] shutdown requested; closing background tasks and sessions"
+        self._emit_shutdown_stage(
+            "requested",
+            status="started",
+            message="shutdown requested; closing background tasks and sessions",
         )
         maintainer_tasks = []
         try:
@@ -6153,6 +6216,13 @@ class Passivbot:
                         maintainer_tasks.append(task)
         except Exception as e:
             logging.error("[shutdown] error stopping maintainers: %s", e)
+            self._emit_shutdown_stage(
+                "maintainers_stop_failed",
+                status="failed",
+                level="error",
+                message="error stopping maintainer tasks",
+                data={"error": str(e)},
+            )
         if maintainer_tasks:
             try:
                 try:
@@ -6165,14 +6235,38 @@ class Passivbot:
                 maintainer_gather = asyncio.gather(
                     *maintainer_tasks, return_exceptions=True
                 )
+                self._emit_shutdown_stage(
+                    "maintainers_stopping",
+                    status="started",
+                    message="waiting for maintainer tasks to stop",
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "timeout_s": maintainer_grace,
+                    },
+                )
                 await asyncio.wait_for(
                     asyncio.shield(maintainer_gather),
                     timeout=maintainer_grace,
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_stopped",
+                    message="maintainer tasks stopped",
+                    data={"task_count": len(maintainer_tasks)},
                 )
             except asyncio.TimeoutError:
                 logging.warning(
                     "[shutdown] timed out after %.1fs waiting for maintainers; closing sessions",
                     maintainer_grace,
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_timeout",
+                    status="degraded",
+                    level="warning",
+                    message="maintainer tasks still running; cancelling",
+                    data={
+                        "task_count": len(maintainer_tasks),
+                        "timeout_s": maintainer_grace,
+                    },
                 )
                 for task in maintainer_tasks:
                     if task is not None and not task.done():
@@ -6180,10 +6274,27 @@ class Passivbot:
                 try:
                     await asyncio.wait_for(maintainer_gather, timeout=1.0)
                 except (asyncio.CancelledError, asyncio.TimeoutError):
+                    self._emit_shutdown_stage(
+                        "maintainers_cancel_timeout",
+                        status="degraded",
+                        level="warning",
+                        message="maintainer tasks did not finish after cancellation",
+                        data={
+                            "task_count": len(maintainer_tasks),
+                            "cancel_timeout_s": 1.0,
+                        },
+                    )
                     pass
             except Exception as e:
                 logging.error(
                     "[shutdown] error awaiting maintainer cancellation: %s", e
+                )
+                self._emit_shutdown_stage(
+                    "maintainers_await_failed",
+                    status="failed",
+                    level="error",
+                    message="error awaiting maintainer tasks",
+                    data={"task_count": len(maintainer_tasks), "error": str(e)},
                 )
         execution_loop_stopped = getattr(self, "_execution_loop_stopped", None)
         execution_loop_task = getattr(self, "_execution_loop_task", None)
@@ -6196,6 +6307,12 @@ class Passivbot:
                 grace_seconds = 5.0
             grace_seconds = max(0.0, grace_seconds)
             try:
+                self._emit_shutdown_stage(
+                    "execution_loop_waiting",
+                    status="started",
+                    message="waiting for execution loop to stop",
+                    data={"timeout_s": grace_seconds},
+                )
                 if execution_loop_stopped is not None:
                     await asyncio.wait_for(
                         execution_loop_stopped.wait(), timeout=grace_seconds
@@ -6204,28 +6321,79 @@ class Passivbot:
                     await asyncio.wait_for(
                         asyncio.shield(execution_loop_task), timeout=grace_seconds
                     )
+                self._emit_shutdown_stage(
+                    "execution_loop_stopped",
+                    message="execution loop stopped",
+                )
             except asyncio.TimeoutError:
                 logging.debug(
                     "[shutdown] execution loop still active after %.1fs",
                     grace_seconds,
                 )
-                if not bool(getattr(self, "_execution_loop_task_is_inline", False)):
+                inline_execution_loop = bool(
+                    getattr(self, "_execution_loop_task_is_inline", False)
+                )
+                self._emit_shutdown_stage(
+                    "execution_loop_timeout",
+                    status="degraded",
+                    level="warning",
+                    message=(
+                        "execution loop still active; continuing without cancellation"
+                        if inline_execution_loop
+                        else "execution loop still active; cancelling background task"
+                    ),
+                    data={"timeout_s": grace_seconds, "inline": inline_execution_loop},
+                )
+                if not inline_execution_loop:
                     logging.debug(
                         "[shutdown] cancelling background execution loop task"
                     )
                     execution_loop_task.cancel()
                     try:
-                        await asyncio.wait_for(execution_loop_task, timeout=5.0)
+                        try:
+                            cancel_grace = float(
+                                getattr(
+                                    self,
+                                    "_shutdown_execution_cancel_grace_seconds",
+                                    1.0,
+                                )
+                            )
+                        except Exception:
+                            cancel_grace = 1.0
+                        cancel_grace = max(0.0, cancel_grace)
+                        await asyncio.wait_for(
+                            execution_loop_task, timeout=cancel_grace
+                        )
                     except asyncio.CancelledError:
                         pass
                     except asyncio.TimeoutError:
                         logging.debug(
                             "[shutdown] timed out waiting for cancelled execution loop before closing sessions"
                         )
+                        self._emit_shutdown_stage(
+                            "execution_loop_cancel_timeout",
+                            status="degraded",
+                            level="warning",
+                            message="execution loop did not finish after cancellation",
+                            data={"cancel_timeout_s": cancel_grace},
+                        )
             except asyncio.CancelledError:
                 logging.debug("[shutdown] execution loop cancelled during shutdown")
+                self._emit_shutdown_stage(
+                    "execution_loop_cancelled",
+                    status="degraded",
+                    level="warning",
+                    message="execution loop cancelled during shutdown",
+                )
             except Exception as e:
                 logging.debug("[shutdown] error waiting for execution loop: %s", e)
+                self._emit_shutdown_stage(
+                    "execution_loop_wait_failed",
+                    status="failed",
+                    level="error",
+                    message="error waiting for execution loop",
+                    data={"error": str(e)},
+                )
             finally:
                 try:
                     execution_loop_stopped.set()
@@ -6236,15 +6404,55 @@ class Passivbot:
             if getattr(self, "ccp", None) is not None:
                 await self.ccp.close()
                 self.ccp = None
+                self._emit_shutdown_stage(
+                    "private_session_closed",
+                    message="private ccxt session closed",
+                )
         except Exception as e:
             logging.error("[shutdown] error closing private ccxt session: %s", e)
+            self._emit_shutdown_stage(
+                "private_session_close_failed",
+                status="failed",
+                level="error",
+                message="error closing private ccxt session",
+                data={"error": str(e)},
+            )
         try:
             if getattr(self, "cca", None) is not None:
                 await self.cca.close()
                 self.cca = None
+                self._emit_shutdown_stage(
+                    "public_session_closed",
+                    message="public ccxt session closed",
+                )
         except Exception as e:
             logging.error("[shutdown] error closing public ccxt session: %s", e)
+            self._emit_shutdown_stage(
+                "public_session_close_failed",
+                status="failed",
+                level="error",
+                message="error closing public ccxt session",
+                data={"error": str(e)},
+            )
         await self._monitor_flush_snapshot(force=True, ts=utc_ms())
+        self._emit_shutdown_stage(
+            "monitor_snapshot_flushed",
+            message="monitor snapshot flushed",
+        )
+        try:
+            degraded_after = float(
+                getattr(self, "_shutdown_degraded_after_seconds", 15.0)
+            )
+        except Exception:
+            degraded_after = 15.0
+        if degraded_after >= 0.0 and self._shutdown_elapsed_seconds() >= degraded_after:
+            self._emit_shutdown_stage(
+                "shutdown_slow",
+                status="degraded",
+                level="warning",
+                message="shutdown exceeded degraded threshold",
+                data={"threshold_s": degraded_after},
+            )
         if not getattr(self, "_live_event_bot_stopped_emitted", False):
             self._emit_live_event(
                 EventTypes.BOT_STOPPED,
@@ -6256,10 +6464,29 @@ class Passivbot:
                 data={"reason": "shutdown_gracefully"},
             )
             self._live_event_bot_stopped_emitted = True
-        self._close_live_event_pipeline(timeout=2.0)
+        self._emit_shutdown_stage(
+            "event_pipeline_closing",
+            status="started",
+            message="closing live event pipeline",
+            data={"timeout_s": 2.0},
+        )
+        pipeline_closed = self._close_live_event_pipeline(timeout=2.0)
+        if not pipeline_closed:
+            logging.warning(
+                "[shutdown] live event pipeline did not close cleanly | elapsed=%.2fs",
+                self._shutdown_elapsed_seconds(),
+            )
         publisher = getattr(self, "monitor_publisher", None)
         if publisher is not None:
             publisher.close()
+            logging.info(
+                "[shutdown] monitor publisher closed | elapsed=%.2fs",
+                self._shutdown_elapsed_seconds(),
+            )
+        logging.info(
+            "[shutdown] shutdown complete | elapsed=%.2fs",
+            self._shutdown_elapsed_seconds(),
+        )
 
     async def update_pos_oos_pnls_ohlcvs(self) -> bool:
         """Refresh positions, open orders, realised PnL, and 1m candles."""

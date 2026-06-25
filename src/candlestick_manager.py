@@ -1817,6 +1817,7 @@ class CandlestickManager:
 
         while True:
             attempt += 1
+            self._raise_if_shutdown_requested("fetch_lock_wait")
             lock_obj = portalocker.Lock(lock_path, timeout=0, fail_when_locked=True)
             try:
                 await asyncio.to_thread(lock_obj.acquire)
@@ -1882,7 +1883,7 @@ class CandlestickManager:
                     attempt=attempt,
                     error=str(exc),
                 )
-                await asyncio.sleep(backoff)
+                await self._sleep_interruptible(backoff, stage="fetch_lock_wait")
                 backoff = min(backoff * 2.0, self._lock_backoff_max)
 
     @staticmethod
