@@ -446,6 +446,46 @@ async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_coin_hsl_runtime_forced_mode_changes_emit_risk_events():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    symbol = "A"
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_risk_mode"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._current_live_event_cycle_id = MethodType(Passivbot._current_live_event_cycle_id, bot)
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    bot._emit_risk_mode_changed_event = MethodType(
+        Passivbot._emit_risk_mode_changed_event,
+        bot,
+    )
+
+    bot._equity_hard_stop_set_coin_runtime_forced_mode("long", symbol, "panic")
+    bot._equity_hard_stop_set_coin_runtime_forced_mode("long", symbol, "panic")
+    bot._equity_hard_stop_clear_coin_runtime_forced_mode("long", symbol)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.RISK_MODE_CHANGED]
+    assert len(events) == 2
+    assert events[0].cycle_id == "cy_risk_mode"
+    assert events[0].pside == "long"
+    assert events[0].symbol == symbol
+    assert events[0].reason_code == "hsl_runtime_forced_mode_set"
+    assert events[0].data["action"] == "set"
+    assert events[0].data["mode"] == "panic"
+    assert "previous_mode" not in events[0].data
+    assert events[1].reason_code == "hsl_runtime_forced_mode_clear"
+    assert events[1].data["action"] == "clear"
+    assert events[1].data["previous_mode"] == "panic"
+    assert "mode" not in events[1].data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_skips_enabled_side_with_zero_budget():
     bot = make_coin_bot()

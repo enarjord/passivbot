@@ -10,6 +10,8 @@ All notable user-facing changes will be documented in this file.
   added `suppressed_count` so warmup/HSL replay does not flood monitor storage.
 - Added throttled structured `cache.flush.completed` live events for candle
   disk-cache write summaries.
+- Added structured `risk.mode_changed` live events for HSL runtime forced-mode
+  changes such as panic, graceful-stop, tp-only, and clear transitions.
 - Added structured `hsl.red_triggered` live events for HSL stop finalization
   paths that reconstruct or finalize RED state without a fresh threshold-crossing
   sample.

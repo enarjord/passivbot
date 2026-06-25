@@ -1484,6 +1484,54 @@ async def test_handle_balance_update_records_monitor_balance_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_risk_mode_changed_event_emits_structured_summary():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_risk_mode_changed_event = pb_mod.Passivbot._emit_risk_mode_changed_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_risk_mode"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_risk_mode_changed_event(
+        pside="long",
+        source="hsl",
+        action="replace",
+        symbols=["ETH/USDT:USDT", "BTC/USDT:USDT"],
+        previous_modes={"BTC/USDT:USDT": "normal"},
+        modes={"BTC/USDT:USDT": "panic", "ETH/USDT:USDT": "panic"},
+        reason_code="hsl_red_runtime_forced_modes",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.RISK_MODE_CHANGED
+    assert event.cycle_id == "cy_risk_mode"
+    assert event.pside == "long"
+    assert event.reason_code == "hsl_red_runtime_forced_modes"
+    assert event.component == "risk.hsl.mode"
+    assert event.tags == ("risk", "mode", "hsl")
+    assert event.data["action"] == "replace"
+    assert event.data["previous_mode_counts"] == {"normal": 1}
+    assert event.data["mode_counts"] == {"panic": 2}
+    assert event.data["symbols"]["count"] == 2
+    assert event.data["symbols"]["sample"] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_log_new_fill_events_emits_fill_ingested_event():
     import passivbot as pb_mod
 

@@ -1811,6 +1811,62 @@ def emit_execution_confirmation_timeout_event(
         logging.debug("[event] failed to emit confirmation timeout event: %s", exc)
 
 
+def emit_risk_mode_changed_event(
+    bot: Any,
+    *,
+    pside: str,
+    source: str,
+    action: str,
+    previous_mode: str | None = None,
+    mode: str | None = None,
+    symbol: str | None = None,
+    symbols: Any = None,
+    previous_modes: dict[str, str] | None = None,
+    modes: dict[str, str] | None = None,
+    reason_code: str | None = None,
+) -> None:
+    try:
+        source_name = str(source or "risk").strip().lower() or "risk"
+        action_name = str(action or "changed").strip().lower() or "changed"
+        data: dict[str, Any] = {
+            "source": source_name,
+            "action": action_name,
+        }
+        if previous_mode is not None:
+            data["previous_mode"] = str(previous_mode)
+        if mode is not None:
+            data["mode"] = str(mode)
+        if symbols is not None:
+            data["symbols"] = _symbol_sample(symbols)
+        if previous_modes is not None:
+            data["previous_mode_counts"] = dict(
+                sorted(Counter(str(value) for value in previous_modes.values()).items())
+            )
+        if modes is not None:
+            data["mode_counts"] = dict(
+                sorted(Counter(str(value) for value in modes.values()).items())
+            )
+        bot._emit_live_event(
+            EventTypes.RISK_MODE_CHANGED,
+            level="info",
+            component=f"risk.{source_name}.mode",
+            tags=("risk", "mode", source_name),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=symbol,
+            pside=pside,
+            status="succeeded",
+            reason_code=reason_code or f"{source_name}_{action_name}",
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit risk mode changed event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def emit_balance_changed_event(
     bot: Any,
     *,

@@ -1350,6 +1350,44 @@ async def test_active_red_runtime_keeps_panic_mode_in_rust_payload(monkeypatch):
     assert snapshot["orchestrator_input"]["symbols"][0]["long"]["mode"] == "panic"
 
 
+def test_halted_hsl_runtime_forced_mode_refresh_emits_risk_event():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+    _hsl_cfg(bot, "long")["enabled"] = True
+    _hsl_cfg(bot, "short")["enabled"] = False
+    state = _hsl_state(bot, "long")
+    state["halted"] = True
+    state["cooldown_until_ms"] = 200_000
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "panic"
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_halted_mode"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+    bot.config["live"]["hsl_position_during_cooldown_policy"] = "manual"
+    bot._equity_hard_stop_refresh_halted_runtime_forced_modes()
+
+    assert bot._runtime_forced_modes["long"][symbol] == "manual"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.RISK_MODE_CHANGED]
+    assert len(events) == 2
+    assert events[0].reason_code == "hsl_halted_runtime_forced_modes"
+    assert events[0].pside == "long"
+    assert events[0].data["action"] == "replace"
+    assert events[0].data["mode_counts"] == {"panic": 1}
+    assert events[0].data["symbols"]["sample"] == [symbol]
+    assert events[1].data["previous_mode_counts"] == {"panic": 1}
+    assert events[1].data["mode_counts"] == {"manual": 1}
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_staged_orchestrator_precondition_blocks_before_market_snapshot():
     cfg = _dummy_config()

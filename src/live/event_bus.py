@@ -76,6 +76,7 @@ class EventTypes:
     FILL_INGESTED = "fill.ingested"
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
+    RISK_MODE_CHANGED = "risk.mode_changed"
     HSL_TRANSITION = "hsl.transition"
     HSL_STATUS = "hsl.status"
     HSL_REPLAY_STARTED = "hsl.replay.started"
@@ -136,6 +137,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.FILL_INGESTED,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
+    EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
     EventTypes.HSL_REPLAY_STARTED,
@@ -420,6 +422,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.FILL_INGESTED: EventRoute(console=False, text=False),
     EventTypes.POSITION_CHANGED: EventRoute(console=False, text=False),
     EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.RISK_MODE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
     EventTypes.HSL_STATUS: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
