@@ -19,12 +19,12 @@ Last updated: 2026-06-25.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b9f42ebd` merge of PR #651, `Add live event order trace view`.
+- `ff493541` merge of PR #654, `Add live event cycle trace view`.
 
 VPS5 deployment status:
 
 - Deployed through PR #642 at `ad36d8ea`.
-- PRs #643-#651 are merged to `v8`; VPS5 pull/restart and live smoke are next
+- PRs #643-#654 are merged to `v8`; VPS5 pull/restart and live smoke are next
   when explicitly authorized.
 
 ## Phase Checklist
@@ -38,7 +38,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, `live-smoke-report` startup baselines, incident bundle, ID filters | Richer cycle replay and cross-bot incident workflow |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, incident bundle, ID filters | Incident-bundle integration and cross-bot workflow |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup | Continue separate reviewed PRs for shutdown/warmup improvements |
 
 ## Merged Slices
@@ -266,14 +266,38 @@ VPS5 deployment status:
   counts, confirmation events, symbol/pside/side sets, and bounded event
   samples with shortened order/client-order references.
 
+### PR #652: Order Trace Progress Update
+
+- Branch: `codex/v8-progress-after-order-trace`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #651 merged.
+
+### PR #653: Live Event Registry Documentation
+
+- Branch: `codex/v8-reason-code-registry-docs`.
+- Scope: event taxonomy documentation and drift prevention.
+- Result: added `docs/ai/live_event_registry.md` for stable event tags and
+  reason codes, linked it from the AI docs router/logging guide, and added a
+  doc drift test that compares documented values to `EventTags`/`ReasonCodes`.
+
+### PR #654: Live Event Cycle Trace View
+
+- Branch: `codex/v8-live-event-cycle-trace`.
+- Scope: operator query tooling.
+- Result: added `passivbot tool live-event-query --cycle-trace` to reconstruct
+  matched events by `cycle_id`. Each cycle contains bounded timeline samples,
+  aggregate trace summaries, and nested order traces using the existing order
+  lifecycle reconstruction.
+
 ## Current Next Steps
 
 1. Pull merged `v8` on VPS5 and restart bots, if explicitly authorized, so PRs
-   #643-#651 are exercised by live processes.
+   #643-#654 are exercised by live processes.
 2. Verify `health.summary` includes resource pressure and event-pipeline fields,
    verify event-projected console summaries stay readable, and verify
    `live-smoke-report` shows startup timing baselines and `live-event-query
-   --order-trace` reconstructs recent order waves.
+   --order-trace`/`--cycle-trace` reconstruct recent order waves and cycles.
 3. Continue Phase 5 by migrating one high-value stdlib text log family to
-   structured-event projection, or add richer cycle reconstruction if live smoke
+   structured-event projection, or add incident-bundle integration if live smoke
    shows that query tooling is still the sharper need.

@@ -45,10 +45,11 @@ Related detailed plans:
    id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
    action id, symbol, pside, reason code, and status. It also supports
    aggregate trace summaries over matched events and order waves, plus a
-   dedicated order-trace reconstruction view for order waves/actions.
+   dedicated order-trace reconstruction view for order waves/actions and a
+   cycle-trace reconstruction view with nested order traces.
 
-   Remaining refinements: richer cycle reconstruction and incident-bundle
-   integration.
+   Remaining refinements: incident-bundle integration and cross-bot incident
+   workflow.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists, but the safe
@@ -148,8 +149,13 @@ Related detailed plans:
     refresh, confirmation, and fill. The target is that any create/cancel/missing
     order can be reconstructed from one id without reading code.
 
-    Remaining refinements: add richer cycle-level reconstruction and incident
-    bundle integration as the event stream gains more producer coverage.
+    Work log:
+    - 2026-06-25: Added `live-event-query --cycle-trace`, grouping matched
+      events by `cycle_id` with bounded timeline samples, aggregate trace
+      summaries, and nested order traces.
+
+    Remaining refinements: add incident bundle integration and keep tightening
+    producer coverage as nearby event surfaces are touched.
 
 12. [ ] Debug profile toggles.
     Status: open.
@@ -192,10 +198,12 @@ Related detailed plans:
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
 | 2026-06-25 | #2/#11 Event query and order trace summaries | PR #648 / `774bcf74` | Added `live-event-query --trace-summary` aggregate counts across matched events, ID scopes, symbols, sides, and order waves | Full create/cancel/missing-order reconstruction view |
 | 2026-06-25 | #2/#11 Event query and order trace completeness | PR #651 / `b9f42ebd` | Added `live-event-query --order-trace` reconstruction grouped by order wave and action, with confirmation events and bounded samples | Richer cycle reconstruction and incident-bundle integration |
+| 2026-06-25 | #2/#11 Event query and cycle trace completeness | PR #654 / `ff493541` | Added `live-event-query --cycle-trace` reconstruction grouped by cycle id, with bounded timelines, aggregate summaries, and nested order traces | Incident-bundle integration and cross-bot workflow |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
 | 2026-06-25 | #9 Reason-code registry | PR #645 / `31263bb9` | Added shared `EventTags` and `ReasonCodes` registries and migrated representative live event emitters without changing emitted strings | Continue migrating stable literals as nearby event surfaces are touched |
+| 2026-06-25 | #9 Reason-code registry | PR #653 / `f0a0f744` | Added focused AI docs for live event tags/reason codes and a doc drift test against the code registry | Continue migrating stable literals as nearby event surfaces are touched |
 | 2026-06-25 | #10 Operator console redesign from events | PR #646 / `521832cc` | Improved event-projected console/text summaries for already-routed execution events without changing routes or console event volume | Migrate high-value stdlib text logs to structured-event projections |
 | 2026-06-24 | Operational restart goals | PR #619 / `e71c4f6c` | Improved shutdown progress and bounded shutdown cancel grace coverage | Broader interruptible shutdown contract remains separate work |
 | 2026-06-24 | Operational restart goals | PR #622 / `29eba387` | Improved live startup warm-cache reuse | Deeper cache doctor and budget tracking remain open |
@@ -204,7 +212,7 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Richer cycle reconstruction on top of `live-event-query`.
+1. Incident-bundle integration with `live-event-query` trace outputs.
 2. Live restart/smoke automation.
 3. Startup phase budget tracking.
 4. Operator console redesign from events.
