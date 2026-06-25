@@ -134,6 +134,7 @@ stable names:
 
 - `bot.started`
 - `bot.ready`
+- `bot.startup_timing`
 - `bot.stopping`
 - `bot.stopped`
 - `cycle.started`
