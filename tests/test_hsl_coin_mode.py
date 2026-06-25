@@ -639,9 +639,19 @@ async def test_coin_hsl_check_defers_stop_event_until_flat_confirmation():
 
 @pytest.mark.asyncio
 async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     bot = make_coin_bot()
     symbol = "A"
     bot.get_exchange_time = lambda: 180_000
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_finalize"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
     state = bot._hsl_coin_state("long", symbol)
     state["pending_red_since_ms"] = 120_000
     bot._pnls_manager = make_fake_pnls_manager(
@@ -662,6 +672,49 @@ async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
     assert state["last_stop_event"]["stop_event_timestamp_ms"] == 170_000
     assert state["pnl_reset_timestamp_ms"] == 170_001
     assert state["cooldown_until_ms"] == 470_000
+    assert state["red_trigger_event_emitted"] is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED]
+    assert len(events) == 1
+    assert events[0].cycle_id == "cy_coin_finalize"
+    assert events[0].pside == "long"
+    assert events[0].symbol == symbol
+    assert events[0].reason_code == "coin_red_stop_finalized"
+    assert events[0].data["stop_event_timestamp_ms"] == 170_000
+    assert events[0].data["cooldown_until_ms"] == 470_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_finalize_does_not_duplicate_prior_red_trigger_event():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.get_exchange_time = lambda: 180_000
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_finalize_duplicate"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    state["red_trigger_event_emitted"] = True
+
+    await bot._equity_hard_stop_finalize_coin_red_stop("long", symbol)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    red_events = [event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED]
+    cooldown_events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_COOLDOWN_STARTED
+    ]
+    assert red_events == []
+    assert len(cooldown_events) == 1
+    assert cooldown_events[0].reason_code == "coin_red_stop_finalized"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

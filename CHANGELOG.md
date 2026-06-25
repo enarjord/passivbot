@@ -12,6 +12,9 @@ All notable user-facing changes will be documented in this file.
   disk-cache write summaries.
 - Added structured `risk.mode_changed` live events for HSL runtime forced-mode
   changes such as panic, graceful-stop, tp-only, and clear transitions.
+- Added structured `hsl.red_triggered` live events for HSL stop finalization
+  paths that reconstruct or finalize RED state without a fresh threshold-crossing
+  sample.
 - Added structured `bot.startup_timing` live events for startup phase timing
   diagnostics.
 - Added structured `cache.warmup_decision` live events for candle warmup cache
