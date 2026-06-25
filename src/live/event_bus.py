@@ -50,6 +50,7 @@ class EventTypes:
     EMA_UNAVAILABLE = "ema.unavailable"
     CANDLE_TAIL_PROJECTED = "candle.tail_projected"
     CACHE_LOAD_COMPLETED = "cache.load.completed"
+    CACHE_FLUSH_COMPLETED = "cache.flush.completed"
     CACHE_WARMUP_DECISION = "cache.warmup_decision"
     REMOTE_CALL_STARTED = "remote_call.started"
     REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
@@ -109,6 +110,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EMA_UNAVAILABLE,
     EventTypes.CANDLE_TAIL_PROJECTED,
     EventTypes.CACHE_LOAD_COMPLETED,
+    EventTypes.CACHE_FLUSH_COMPLETED,
     EventTypes.CACHE_WARMUP_DECISION,
     EventTypes.REMOTE_CALL_STARTED,
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -390,6 +392,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
+    EventTypes.CACHE_FLUSH_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_WARMUP_DECISION: EventRoute(console=False, text=False),
     EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),

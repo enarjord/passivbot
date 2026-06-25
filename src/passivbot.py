@@ -634,6 +634,9 @@ class Passivbot:
     _emit_cache_load_completed_event = (
         live_event_emitters.emit_cache_load_completed_event
     )
+    _emit_cache_flush_completed_event = (
+        live_event_emitters.emit_cache_flush_completed_event
+    )
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _emit_planning_defer_summary_event = (
@@ -956,8 +959,8 @@ class Passivbot:
             fetch_tickers_for_symbols=getattr(self, "fetch_tickers_for_symbols", None),
             ticker_strategy=self._market_snapshot_ticker_strategy(),
         )
-        if self.monitor_publisher is not None:
-            self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
+        if self.monitor_publisher is not None or self._live_event_pipeline is not None:
+            self.cm.set_persist_batch_observer(self._handle_candle_persist_event)
         if self._live_event_pipeline is not None:
             self.cm.set_disk_load_observer(self._handle_candle_disk_load_event)
         # TTL (minutes) for EMA candles on non-traded symbols
@@ -6334,6 +6337,92 @@ class Passivbot:
             self._emit_cache_load_completed_event(data)
         except Exception as exc:
             logging.debug("[event] failed handling cache load event: %s", exc)
+
+    def _handle_candle_persist_event(
+        self,
+        symbol: str,
+        timeframe: str,
+        batch: np.ndarray,
+    ) -> None:
+        try:
+            self._monitor_handle_candlestick_persist(symbol, timeframe, batch)
+        except Exception as exc:
+            logging.debug("[monitor] failed handling candlestick persist: %s", exc)
+        try:
+            self._handle_candle_cache_flush_event(symbol, timeframe, batch)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache flush event: %s", exc)
+
+    def _handle_candle_cache_flush_event(
+        self,
+        symbol: str,
+        timeframe: str,
+        batch: np.ndarray,
+    ) -> None:
+        """Emit summarized candle disk-flush events without flooding monitor storage."""
+        try:
+            if not isinstance(batch, np.ndarray) or batch.size == 0:
+                return
+            tf_norm = str(timeframe or "1m")
+            sym = str(symbol or "")
+            rows = int(batch.shape[0])
+            start_ts = None
+            end_ts = None
+            try:
+                start_ts = int(batch["ts"][0])
+                end_ts = int(batch["ts"][-1])
+            except Exception:
+                start_ts = None
+                end_ts = None
+            key = (sym, tf_norm)
+            now = time.monotonic()
+            try:
+                interval_s = float(
+                    getattr(self, "_cache_flush_event_throttle_seconds", 60.0)
+                )
+            except Exception:
+                interval_s = 60.0
+            interval_s = max(0.0, interval_s)
+            last_by_key = getattr(self, "_cache_flush_event_last_emit", None)
+            if not isinstance(last_by_key, dict):
+                last_by_key = {}
+                self._cache_flush_event_last_emit = last_by_key
+            suppressed_by_key = getattr(self, "_cache_flush_event_suppressed", None)
+            if not isinstance(suppressed_by_key, dict):
+                suppressed_by_key = {}
+                self._cache_flush_event_suppressed = suppressed_by_key
+            last_emit = last_by_key.get(key)
+            if last_emit is not None and now - float(last_emit) < interval_s:
+                state = suppressed_by_key.setdefault(
+                    key, {"count": 0, "rows": 0}
+                )
+                try:
+                    state["count"] = int(state.get("count", 0) or 0) + 1
+                    state["rows"] = int(state.get("rows", 0) or 0) + rows
+                except Exception:
+                    suppressed_by_key[key] = {"count": 1, "rows": rows}
+                return
+            data: dict[str, Any] = {
+                "symbol": sym,
+                "timeframe": tf_norm,
+                "persisted_rows": rows,
+            }
+            if start_ts is not None:
+                data["persisted_start_ts"] = start_ts
+            if end_ts is not None:
+                data["persisted_end_ts"] = end_ts
+            suppressed = suppressed_by_key.pop(key, None)
+            if isinstance(suppressed, dict):
+                suppressed_count = int(suppressed.get("count", 0) or 0)
+                suppressed_rows = int(suppressed.get("rows", 0) or 0)
+                if suppressed_count > 0:
+                    data["suppressed_count"] = suppressed_count
+                if suppressed_rows > 0:
+                    data["suppressed_rows"] = suppressed_rows
+            last_by_key[key] = now
+            self._emit_cache_flush_completed_event(data)
+        except Exception as exc:
+            logging.debug("[event] failed handling cache flush event: %s", exc)
 
     def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
         publisher = getattr(self, "monitor_publisher", None)
