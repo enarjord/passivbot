@@ -91,6 +91,87 @@ class EventTypes:
     SINK_DEGRADED = "sink.degraded"
 
 
+class EventTags:
+    ACCOUNT = "account"
+    ACTION = "action"
+    AUTHORITATIVE = "authoritative"
+    AVAILABILITY = "availability"
+    BALANCE = "balance"
+    BUNDLE = "bundle"
+    CACHE = "cache"
+    CANDLE = "candle"
+    CONFIRMATION = "confirmation"
+    COVERAGE = "coverage"
+    CYCLE = "cycle"
+    DEFER = "defer"
+    DEGRADED = "degraded"
+    EMA = "ema"
+    EXECUTION = "execution"
+    FALLBACK = "fallback"
+    FILL = "fill"
+    FILLS = "fills"
+    FLUSH = "flush"
+    FORAGER = "forager"
+    GATE = "gate"
+    HEALTH = "health"
+    LOAD = "load"
+    LOGGING = "logging"
+    MODE = "mode"
+    ORDER = "order"
+    PLANNING = "planning"
+    POSITION = "position"
+    REFRESH = "refresh"
+    REMOTE_CALL = "remote_call"
+    RESOURCE = "resource"
+    RISK = "risk"
+    RUST = "rust"
+    SELECTION = "selection"
+    SINK = "sink"
+    SNAPSHOT = "snapshot"
+    STATE = "state"
+    SUMMARY = "summary"
+    TAIL = "tail"
+    TIMEOUT = "timeout"
+    UNAVAILABLE = "unavailable"
+    WARMUP = "warmup"
+    WAVE = "wave"
+
+
+class ReasonCodes:
+    AUTHORITATIVE_CONFIRMATION = "authoritative_confirmation"
+    AUTHORITATIVE_CONFIRMATION_TIMEOUT = "authoritative_confirmation_timeout"
+    BALANCE_CHANGED = "balance_changed"
+    CANDLE_DISK_FLUSH_COMPLETED = "candle_disk_flush_completed"
+    CANDLE_DISK_LOAD_COMPLETED = "candle_disk_load_completed"
+    EMA_FALLBACK_USED = "ema_fallback_used"
+    EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
+    EXCHANGE_EXCEPTION = "exchange_exception"
+    LENGTH_MISMATCH = "length_mismatch"
+    NEW_FILL = "new_fill"
+    OPEN_TAIL_PROJECTION = "open_tail_projection"
+    OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
+    PERIODIC_HEALTH_SUMMARY = "periodic_health_summary"
+    QUEUE_FULL = "queue_full"
+    RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
+    REMOTE_FETCH = "remote_fetch"
+    REQUIRED_CANDLE_DISK_COVERAGE = "required_candle_disk_coverage"
+    REQUIRED_EMA_UNAVAILABLE = "required_ema_unavailable"
+    RUST_OUTPUT_ACTIONS = "rust_output_actions"
+    SINK_PIPELINE_CLOSING = "pipeline_closing"
+    SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
+    STARTUP_PHASE_READY = "startup_phase_ready"
+    SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
+    WARMUP_CACHE_DECISION = "warmup_cache_decision"
+
+
+def authoritative_reason_code(surface: object) -> str:
+    return f"authoritative_{surface}"
+
+
+def sink_failed_reason_code(name: object) -> str:
+    return f"{name}_sink_failed"
+
+
 PHASE1_EVENT_TYPES = {
     EventTypes.BOT_STARTED,
     EventTypes.BOT_READY,
@@ -642,7 +723,7 @@ class LiveEventPipeline:
                     with self._state_lock:
                         self.drop_counters[live_event.event_type] += 1
                     self._record_degraded(
-                        reason_code="pipeline_closing",
+                        reason_code=ReasonCodes.SINK_PIPELINE_CLOSING,
                         message=f"live event pipeline closing; dropped {live_event.event_type}",
                         data={"dropped_event_type": live_event.event_type},
                     )
@@ -654,7 +735,7 @@ class LiveEventPipeline:
                         with self._state_lock:
                             self.drop_counters[live_event.event_type] += 1
                         self._record_degraded(
-                            reason_code="queue_full",
+                            reason_code=ReasonCodes.QUEUE_FULL,
                             message=f"live event queue full; dropped {live_event.event_type}",
                             data={"dropped_event_type": live_event.event_type},
                         )
@@ -737,7 +818,7 @@ class LiveEventPipeline:
             with self._state_lock:
                 self.sink_error_counters[name] += 1
             self._record_degraded(
-                reason_code=f"{name}_sink_failed",
+                reason_code=sink_failed_reason_code(name),
                 message=f"{name} sink failed: {type(exc).__name__}",
                 data={"sink": name, "error_type": type(exc).__name__, "error": str(exc)},
             )
@@ -755,7 +836,7 @@ class LiveEventPipeline:
             level="warning",
             source="live",
             component="event_bus",
-            tags=("logging", "sink"),
+            tags=(EventTags.LOGGING, EventTags.SINK),
             status="degraded",
             reason_code=reason_code,
             message=message,

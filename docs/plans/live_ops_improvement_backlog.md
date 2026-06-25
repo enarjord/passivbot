@@ -105,12 +105,20 @@ Related detailed plans:
    with changed HSL configs easier to reason about before live execution.
 
 9. [ ] Reason-code registry.
-   Status: open.
+   Status: initial registry slice in progress in PR #645.
 
    Centralize reason codes and event tags enough to prevent drift. The stream is
    much easier to search when `stale_ema`, `missing_canonical_candles`,
    `exchange_time_resync`, and similar codes are stable, documented, and tested.
    This pairs directly with reason-code filtering in the event query tool.
+
+   Work log:
+   - 2026-06-25: Added shared `EventTags` and `ReasonCodes` registries for
+     common live-event tags/reason codes, migrated representative emitters
+     without changing emitted strings, and added registry contract tests.
+
+   Remaining refinements: migrate additional stable literals as nearby event
+   surfaces are touched.
 
 10. [ ] Operator console redesign from events.
     Status: open.

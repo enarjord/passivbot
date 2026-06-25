@@ -7,7 +7,15 @@ from collections import Counter
 from urllib.parse import urlsplit, urlunsplit
 from typing import Any
 
-from live.event_bus import EventTypes, LiveEvent, emit_event, utc_ms
+from live.event_bus import (
+    EventTags,
+    EventTypes,
+    LiveEvent,
+    ReasonCodes,
+    authoritative_reason_code,
+    emit_event,
+    utc_ms,
+)
 
 
 def current_live_event_cycle_id(bot: Any) -> str | None:
@@ -193,13 +201,13 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
         event_type,
         level=level,
         component="candles.remote_fetch",
-        tags=("remote_call", "candle"),
+        tags=(EventTags.REMOTE_CALL, EventTags.CANDLE),
         cycle_id=cycle_id,
         remote_call_id=remote_call_id,
         remote_call_group_id=remote_call_group_id,
         symbol=str(payload.get("symbol")) if payload.get("symbol") is not None else None,
         status=status,
-        reason_code=str(payload.get("kind") or "remote_fetch"),
+        reason_code=str(payload.get("kind") or ReasonCodes.REMOTE_FETCH),
         data=data,
     )
 
@@ -288,12 +296,12 @@ def _emit_authoritative_remote_call_event_unchecked(
         event_type,
         level=level,
         component="state.authoritative_fetch",
-        tags=("remote_call", "state", "authoritative", surface),
+        tags=(EventTags.REMOTE_CALL, EventTags.STATE, EventTags.AUTHORITATIVE, surface),
         cycle_id=cycle_id,
         remote_call_id=remote_call_id,
         remote_call_group_id=remote_call_group_id,
         status=status,
-        reason_code=f"authoritative_{surface}",
+        reason_code=authoritative_reason_code(surface),
         data=data,
     )
     return remote_call_id
@@ -345,7 +353,7 @@ def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
         EventTypes.CYCLE_STARTED,
         level="debug",
         component="execution_loop",
-        tags=("cycle", "execution"),
+        tags=(EventTags.CYCLE, EventTags.EXECUTION),
         cycle_id=cycle_id,
         status="started",
         data={
@@ -372,7 +380,7 @@ def emit_live_cycle_completed(
         EventTypes.CYCLE_COMPLETED,
         level="debug",
         component="execution_loop",
-        tags=("cycle", "execution"),
+        tags=(EventTags.CYCLE, EventTags.EXECUTION),
         cycle_id=cycle_id,
         status="succeeded",
         data={
@@ -407,7 +415,7 @@ def emit_live_cycle_degraded(
         EventTypes.CYCLE_DEGRADED,
         level=level,
         component="execution_loop",
-        tags=("cycle", "execution", "degraded"),
+        tags=(EventTags.CYCLE, EventTags.EXECUTION, EventTags.DEGRADED),
         cycle_id=cycle_id,
         status="degraded",
         reason_code=reason_code,
@@ -496,7 +504,12 @@ def emit_planning_defer_summary_event(
             EventTypes.PLANNING_DEFER_SUMMARY,
             level="info",
             component="planning_gates",
-            tags=("planning", "gate", "defer", "summary"),
+            tags=(
+                EventTags.PLANNING,
+                EventTags.GATE,
+                EventTags.DEFER,
+                EventTags.SUMMARY,
+            ),
             cycle_id=bot._current_live_event_cycle_id(),
             status="deferred",
             reason_code=str(reason_code),
@@ -579,11 +592,11 @@ def emit_planning_symbol_state_event(
             EventTypes.PLANNING_SYMBOL_STATE,
             level="debug",
             component="planning_availability",
-            tags=("planning", "snapshot", "availability"),
+            tags=(EventTags.PLANNING, EventTags.SNAPSHOT, EventTags.AVAILABILITY),
             cycle_id=current_live_event_cycle_id(bot),
             snapshot_id=str(getattr(availability, "snapshot_id", "") or ""),
             status="succeeded",
-            reason_code="snapshot_symbol_state",
+            reason_code=ReasonCodes.SNAPSHOT_SYMBOL_STATE,
             data={
                 "context": str(context),
                 "summary": summary,
@@ -627,7 +640,7 @@ def emit_order_wave_completed_event(
         EventTypes.ORDER_WAVE_COMPLETED,
         level=str(level).lower(),
         component="order_wave",
-        tags=("order", "wave", "execution"),
+        tags=(EventTags.ORDER, EventTags.WAVE, EventTags.EXECUTION),
         cycle_id=bot._current_live_event_cycle_id(),
         order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
         status=status,
@@ -660,7 +673,7 @@ def emit_order_wave_started_event(bot: Any, wave: dict | None) -> None:
             EventTypes.ORDER_WAVE_STARTED,
             level="debug",
             component="order_wave",
-            tags=("order", "wave", "execution"),
+            tags=(EventTags.ORDER, EventTags.WAVE, EventTags.EXECUTION),
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="started",
@@ -717,7 +730,7 @@ def _emit_startup_timing_event_unchecked(
         tags=("bot", "startup", "timing"),
         cycle_id=current_live_event_cycle_id(bot),
         status="succeeded",
-        reason_code="startup_phase_ready",
+        reason_code=ReasonCodes.STARTUP_PHASE_READY,
         data=data,
     )
 
@@ -743,10 +756,10 @@ def _emit_health_summary_event_unchecked(
         EventTypes.HEALTH_SUMMARY,
         level="debug",
         component="bot.health",
-        tags=("health", "resource"),
+        tags=(EventTags.HEALTH, EventTags.RESOURCE),
         cycle_id=current_live_event_cycle_id(bot),
         status="succeeded",
-        reason_code="periodic_health_summary",
+        reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
         data=data,
     )
 
@@ -1055,11 +1068,11 @@ def _emit_forager_feature_unavailable_event_unchecked(
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         level="debug",
         component="forager.selection",
-        tags=("forager", "selection", "ema"),
+        tags=(EventTags.FORAGER, EventTags.SELECTION, EventTags.EMA),
         cycle_id=current_live_event_cycle_id(bot),
         pside=str(pside),
         status="skipped",
-        reason_code="ranking_features_unavailable",
+        reason_code=ReasonCodes.RANKING_FEATURES_UNAVAILABLE,
         data={
             "candidate_count": int(candidate_count),
             "unavailable": _symbol_sample(symbols),
@@ -1113,7 +1126,7 @@ def _emit_forager_selection_event_unchecked(
         EventTypes.FORAGER_SELECTION,
         level="debug",
         component="forager.selection",
-        tags=("forager", "selection"),
+        tags=(EventTags.FORAGER, EventTags.SELECTION),
         cycle_id=current_live_event_cycle_id(bot),
         pside=str(pside),
         status=status,
@@ -1166,7 +1179,7 @@ def _emit_candle_tail_projected_event_unchecked(
     *,
     symbol: str,
     context: dict[str, Any] | None,
-    reason_code: str = "open_tail_projection",
+    reason_code: str = ReasonCodes.OPEN_TAIL_PROJECTION,
 ) -> None:
     ctx = dict(context or {})
     data: dict[str, Any] = {"timeframe": str(ctx.get("timeframe") or "1m")}
@@ -1189,7 +1202,7 @@ def _emit_candle_tail_projected_event_unchecked(
         EventTypes.CANDLE_TAIL_PROJECTED,
         level="debug",
         component="candle.tail_projection",
-        tags=("candle", "tail", "ema"),
+        tags=(EventTags.CANDLE, EventTags.TAIL, EventTags.EMA),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol),
         status="recovered",
@@ -1303,11 +1316,11 @@ def _emit_candle_coverage_checked_event_unchecked(
         EventTypes.CANDLE_COVERAGE_CHECKED,
         level="debug" if ok or not required else "warning",
         component="candle.coverage",
-        tags=("candle", "coverage", "cache"),
+        tags=(EventTags.CANDLE, EventTags.COVERAGE, EventTags.CACHE),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol),
         status="succeeded" if ok else ("degraded" if required else "skipped"),
-        reason_code="required_candle_disk_coverage",
+        reason_code=ReasonCodes.REQUIRED_CANDLE_DISK_COVERAGE,
         data=data,
     )
 
@@ -1370,11 +1383,11 @@ def _emit_cache_load_completed_event_unchecked(
         EventTypes.CACHE_LOAD_COMPLETED,
         level="debug",
         component="cache.candles",
-        tags=("cache", "candle", "load"),
+        tags=(EventTags.CACHE, EventTags.CANDLE, EventTags.LOAD),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol) if symbol is not None else None,
         status="succeeded",
-        reason_code="candle_disk_load_completed",
+        reason_code=ReasonCodes.CANDLE_DISK_LOAD_COMPLETED,
         data=data,
     )
 
@@ -1413,11 +1426,11 @@ def _emit_cache_flush_completed_event_unchecked(
         EventTypes.CACHE_FLUSH_COMPLETED,
         level="debug",
         component="cache.candles",
-        tags=("cache", "candle", "flush"),
+        tags=(EventTags.CACHE, EventTags.CANDLE, EventTags.FLUSH),
         cycle_id=current_live_event_cycle_id(bot),
         symbol=str(symbol) if symbol is not None else None,
         status="succeeded",
-        reason_code="candle_disk_flush_completed",
+        reason_code=ReasonCodes.CANDLE_DISK_FLUSH_COMPLETED,
         data=data,
     )
 
@@ -1474,10 +1487,10 @@ def _emit_cache_warmup_decision_event_unchecked(
         EventTypes.CACHE_WARMUP_DECISION,
         level="debug",
         component="cache.warmup",
-        tags=("cache", "warmup", "candle"),
+        tags=(EventTags.CACHE, EventTags.WARMUP, EventTags.CANDLE),
         cycle_id=current_live_event_cycle_id(bot),
         status="succeeded",
-        reason_code="warmup_cache_decision",
+        reason_code=ReasonCodes.WARMUP_CACHE_DECISION,
         data=data,
     )
 
@@ -1517,7 +1530,7 @@ def _emit_ema_bundle_started_event_unchecked(
         EventTypes.EMA_BUNDLE_STARTED,
         level="debug",
         component="ema.bundle",
-        tags=("ema", "bundle"),
+        tags=(EventTags.EMA, EventTags.BUNDLE),
         cycle_id=current_live_event_cycle_id(bot),
         status="started",
         reason_code="orchestrator_ema_bundle",
@@ -1556,7 +1569,7 @@ def _emit_ema_bundle_completed_event_unchecked(
         EventTypes.EMA_BUNDLE_COMPLETED,
         level="debug",
         component="ema.bundle",
-        tags=("ema", "bundle"),
+        tags=(EventTags.EMA, EventTags.BUNDLE),
         cycle_id=current_live_event_cycle_id(bot),
         status="succeeded",
         data={
@@ -1600,10 +1613,10 @@ def _emit_ema_fallback_used_event_unchecked(
         EventTypes.EMA_FALLBACK_USED,
         level=level,
         component="ema.bundle",
-        tags=("ema", "fallback"),
+        tags=(EventTags.EMA, EventTags.FALLBACK),
         cycle_id=current_live_event_cycle_id(bot),
         status="recovered",
-        reason_code="ema_fallback_used",
+        reason_code=ReasonCodes.EMA_FALLBACK_USED,
         data={
             "close_recovered_count": int(recovered_count),
             "close_recovered_symbols": _symbol_sample((close_ema_recoveries or {}).keys()),
@@ -1656,9 +1669,9 @@ def _emit_ema_unavailable_event_unchecked(
     level = "warning" if candidate_symbols else "debug"
     status = "degraded" if candidate_symbols or unavailable_symbols else "skipped"
     reason_code = (
-        "required_ema_unavailable"
+        ReasonCodes.REQUIRED_EMA_UNAVAILABLE
         if candidate_symbols or unavailable_symbols
-        else "optional_ema_dropped"
+        else ReasonCodes.OPTIONAL_EMA_DROPPED
     )
     optional_summary = []
     for (ema_type, reason), items in sorted((optional_ema_drops or {}).items())[:8]:
@@ -1675,7 +1688,7 @@ def _emit_ema_unavailable_event_unchecked(
         EventTypes.EMA_UNAVAILABLE,
         level=level,
         component="ema.bundle",
-        tags=("ema", "unavailable"),
+        tags=(EventTags.EMA, EventTags.UNAVAILABLE),
         cycle_id=current_live_event_cycle_id(bot),
         status=status,
         reason_code=reason_code,
@@ -1803,11 +1816,11 @@ def emit_action_planned_event(
             EventTypes.ACTION_PLANNED,
             level="debug",
             component="action_planner",
-            tags=("planning", "action", "rust"),
+            tags=(EventTags.PLANNING, EventTags.ACTION, EventTags.RUST),
             cycle_id=current_live_event_cycle_id(bot),
             remote_call_id=remote_call_id,
             status="succeeded",
-            reason_code="rust_output_actions",
+            reason_code=ReasonCodes.RUST_OUTPUT_ACTIONS,
             raw_hash=output_hash,
             data=data,
         )
@@ -1910,7 +1923,7 @@ def emit_execution_order_event(
             event_type,
             level=level,
             component="execution.order_write",
-            tags=("execution", "order", action),
+            tags=(EventTags.EXECUTION, EventTags.ORDER, action),
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=order_wave_id,
             action_id=action_id,
@@ -1951,11 +1964,11 @@ def emit_execution_confirmation_requested_event(
             EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
             level="debug",
             component="execution.confirmation",
-            tags=("execution", "confirmation"),
+            tags=(EventTags.EXECUTION, EventTags.CONFIRMATION),
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=order_wave_id,
             status="started",
-            reason_code="authoritative_confirmation",
+            reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION,
             data={
                 "surfaces": sorted(str(surface) for surface in surfaces),
                 "target_epoch": int(target_epoch),
@@ -1984,11 +1997,11 @@ def emit_execution_confirmation_satisfied_event(
             EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
             level=str(level).lower(),
             component="execution.confirmation",
-            tags=("execution", "confirmation"),
+            tags=(EventTags.EXECUTION, EventTags.CONFIRMATION),
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="succeeded",
-            reason_code="authoritative_confirmation",
+            reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION,
             data={
                 "id": int(wave.get("id", 0) or 0),
                 "elapsed_ms": int(elapsed_ms),
@@ -2028,11 +2041,11 @@ def emit_execution_confirmation_timeout_event(
             EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
             level=str(level).lower(),
             component="execution.confirmation",
-            tags=("execution", "confirmation", "timeout"),
+            tags=(EventTags.EXECUTION, EventTags.CONFIRMATION, EventTags.TIMEOUT),
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="degraded",
-            reason_code="authoritative_confirmation_timeout",
+            reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION_TIMEOUT,
             data={
                 "id": int(wave.get("id", 0) or 0),
                 "elapsed_ms": int(elapsed_ms),
@@ -2099,7 +2112,7 @@ def emit_risk_mode_changed_event(
             EventTypes.RISK_MODE_CHANGED,
             level="info",
             component=f"risk.{source_name}.mode",
-            tags=("risk", "mode", source_name),
+            tags=(EventTags.RISK, EventTags.MODE, source_name),
             cycle_id=bot._current_live_event_cycle_id(),
             symbol=symbol,
             pside=pside,
@@ -2133,10 +2146,10 @@ def emit_balance_changed_event(
             EventTypes.BALANCE_CHANGED,
             level="info",
             component="account.balance",
-            tags=("account", "balance"),
+            tags=(EventTags.ACCOUNT, EventTags.BALANCE),
             cycle_id=bot._current_live_event_cycle_id(),
             status="succeeded",
-            reason_code="balance_changed",
+            reason_code=ReasonCodes.BALANCE_CHANGED,
             data={
                 "previous_balance_raw": float(previous_balance_raw),
                 "balance_raw": float(balance_raw),
@@ -2235,7 +2248,7 @@ def _emit_fills_refresh_summary_event_unchecked(
         EventTypes.FILLS_REFRESH_SUMMARY,
         level=str(level).lower(),
         component="fills.refresh",
-        tags=("fills", "refresh", "coverage"),
+        tags=(EventTags.FILLS, EventTags.REFRESH, EventTags.COVERAGE),
         cycle_id=current_live_event_cycle_id(bot),
         status=str(status),
         reason_code=str(reason_code),
@@ -2274,14 +2287,14 @@ def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = Non
             EventTypes.FILL_INGESTED,
             level="info",
             component="fills.ingest",
-            tags=("fill", "order"),
+            tags=(EventTags.FILL, EventTags.ORDER),
             cycle_id=bot._current_live_event_cycle_id(),
             symbol=getattr(event, "symbol", None),
             pside=str(getattr(event, "position_side", "") or "").lower() or None,
             side=str(getattr(event, "side", "") or "").lower() or None,
             client_order_id=str(client_order_id) if client_order_id else None,
             status="succeeded",
-            reason_code="new_fill",
+            reason_code=ReasonCodes.NEW_FILL,
             data={key: value for key, value in data.items() if value is not None},
         )
     except Exception as exc:
@@ -2315,7 +2328,7 @@ def emit_position_changed_event(
             EventTypes.POSITION_CHANGED,
             level="info",
             component="account.position",
-            tags=("account", "position"),
+            tags=(EventTags.ACCOUNT, EventTags.POSITION),
             cycle_id=bot._current_live_event_cycle_id(),
             symbol=symbol,
             pside=pside,
