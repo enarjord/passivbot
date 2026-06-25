@@ -11,6 +11,11 @@ slice before implementation.
 The logging overhaul remains the foundation: a centralized event stream should
 make the items below easier to prove, test, and operate.
 
+Related detailed plans:
+
+- `docs/plans/live_logging_overhaul_plan.md`
+- `docs/plans/live_restart_shutdown_and_warm_cache_handoff.md`
+
 ## High-Value Follow-Ups
 
 1. Incident bundle generator.
@@ -20,12 +25,15 @@ make the items below easier to prove, test, and operate.
    rotated event segments. The goal is to make "send me the evidence" a single
    command instead of a manual SSH/log-grep session.
 
-2. Event query and timeline CLI.
-   Add a first-class CLI for querying the event stream by `cycle_id`,
-   `order_wave_id`, `remote_call_id`, symbol, pside, reason code, and status.
-   It should print a terse timeline and optionally emit JSON. This is the
-   natural companion to structured events; without it, operators still need to
-   know file locations and NDJSON details.
+2. Event query and timeline CLI extensions.
+   Extend the existing `passivbot tool live-event-query` tool rather than
+   building a parallel CLI. It already supports event discovery, compact JSON
+   output, `--cycle-id`, `--event-type`/`--kind`, `--limit`, and current-vs-
+   rotated segment selection. Add missing operator filters for `order_wave_id`,
+   `remote_call_id`, symbol, pside, reason code, and status, plus a terse
+   timeline rendering and non-cycle scopes. This is the natural companion to
+   structured events; without richer query axes, operators still need to know
+   file locations and NDJSON details.
 
 3. Live restart/smoke automation.
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
@@ -72,6 +80,7 @@ make the items below easier to prove, test, and operate.
    Centralize reason codes and event tags enough to prevent drift. The stream is
    much easier to search when `stale_ema`, `missing_canonical_candles`,
    `exchange_time_resync`, and similar codes are stable, documented, and tested.
+   This pairs directly with reason-code filtering in the event query tool.
 
 10. Operator console redesign from events.
     Continue moving console output to be a projection of structured events.
