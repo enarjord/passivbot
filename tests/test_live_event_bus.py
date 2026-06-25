@@ -148,6 +148,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.BOT_STARTUP_TIMING,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
+        EventTypes.RISK_MODE_CHANGED,
         EventTypes.HSL_TRANSITION,
         EventTypes.HSL_STATUS,
         EventTypes.HSL_RED_TRIGGERED,

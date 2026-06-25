@@ -167,6 +167,7 @@ stable names:
 - `hsl.replay.progress`
 - `hsl.replay.completed`
 - `hsl.transition`
+- `risk.mode_changed`
 - `rust_orchestrator.called`
 - `rust_orchestrator.returned`
 - `action.planned`

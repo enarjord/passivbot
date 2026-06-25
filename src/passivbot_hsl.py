@@ -87,6 +87,43 @@ def _emit_hsl_event(
         )
 
 
+def _emit_runtime_forced_mode_changed_event(
+    self,
+    *,
+    pside: str,
+    action: str,
+    previous_mode: str | None = None,
+    mode: str | None = None,
+    symbol: str | None = None,
+    symbols: Any = None,
+    previous_modes: dict[str, str] | None = None,
+    modes: dict[str, str] | None = None,
+    reason_code: str | None = None,
+) -> None:
+    try:
+        emit = getattr(self, "_emit_risk_mode_changed_event", None)
+        if callable(emit):
+            emit(
+                pside=pside,
+                source="hsl",
+                action=action,
+                previous_mode=previous_mode,
+                mode=mode,
+                symbol=symbol,
+                symbols=symbols,
+                previous_modes=previous_modes,
+                modes=modes,
+                reason_code=reason_code,
+            )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit HSL runtime forced mode event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def _emit_hsl_replay_event(
     self,
     event_type: str,
@@ -3172,28 +3209,88 @@ def _equity_hard_stop_coin_red_active(self) -> bool:
 
 
 def _equity_hard_stop_set_red_runtime_forced_modes(self, pside: str) -> None:
+    previous = dict(getattr(self, "_runtime_forced_modes", {}).get(pside, {}) or {})
     forced = {}
     symbols = set(self.positions.keys()) | set(self.open_orders.keys()) | set(self.active_symbols)
     for symbol in symbols:
         forced[symbol] = "panic"
     self._runtime_forced_modes[pside] = forced
+    if previous != forced:
+        _emit_runtime_forced_mode_changed_event(
+            self,
+            pside=pside,
+            action="replace",
+            symbols=forced.keys(),
+            previous_modes=previous,
+            modes=forced,
+            reason_code="hsl_red_runtime_forced_modes",
+        )
 
 
 def _equity_hard_stop_set_coin_runtime_forced_mode(
     self, pside: str, symbol: str, mode: str
 ) -> None:
-    self._runtime_forced_modes.setdefault(pside, {})[symbol] = mode
+    forced_modes = self._runtime_forced_modes.setdefault(pside, {})
+    previous = forced_modes.get(symbol)
+    forced_modes[symbol] = mode
+    if previous != mode:
+        _emit_runtime_forced_mode_changed_event(
+            self,
+            pside=pside,
+            symbol=symbol,
+            action="set",
+            previous_mode=previous,
+            mode=mode,
+            reason_code="hsl_runtime_forced_mode_set",
+        )
 
 
 def _equity_hard_stop_clear_coin_runtime_forced_mode(self, pside: str, symbol: str) -> None:
-    self._runtime_forced_modes.setdefault(pside, {}).pop(symbol, None)
+    forced_modes = self._runtime_forced_modes.setdefault(pside, {})
+    previous = forced_modes.pop(symbol, None)
+    if previous is not None:
+        _emit_runtime_forced_mode_changed_event(
+            self,
+            pside=pside,
+            symbol=symbol,
+            action="clear",
+            previous_mode=previous,
+            reason_code="hsl_runtime_forced_mode_clear",
+        )
 
 
 def _equity_hard_stop_clear_runtime_forced_modes(self, pside: Optional[str] = None) -> None:
     if pside is None:
+        previous_by_pside = {
+            side: dict(modes or {})
+            for side, modes in (getattr(self, "_runtime_forced_modes", {}) or {}).items()
+        }
         self._runtime_forced_modes = {"long": {}, "short": {}}
+        for side in self._hsl_psides():
+            previous = previous_by_pside.get(side, {})
+            if previous:
+                _emit_runtime_forced_mode_changed_event(
+                    self,
+                    pside=side,
+                    action="clear_all",
+                    symbols=previous.keys(),
+                    previous_modes=previous,
+                    modes={},
+                    reason_code="hsl_runtime_forced_modes_clear_all",
+                )
         return
+    previous = dict(getattr(self, "_runtime_forced_modes", {}).get(pside, {}) or {})
     self._runtime_forced_modes[pside] = {}
+    if previous:
+        _emit_runtime_forced_mode_changed_event(
+            self,
+            pside=pside,
+            action="clear_all",
+            symbols=previous.keys(),
+            previous_modes=previous,
+            modes={},
+            reason_code="hsl_runtime_forced_modes_clear_all",
+        )
 
 
 def _equity_hard_stop_count_open_positions(self, pside: str) -> int:

@@ -617,6 +617,7 @@ class Passivbot:
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
+    _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
     _emit_forager_feature_unavailable_event = (
         live_event_emitters.emit_forager_feature_unavailable_event
     )
