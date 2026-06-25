@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool cache-integrity-doctor` for read-only local cache smoke
+  reports covering root presence, file counts/sizes, and empty or corrupt
+  JSON/NDJSON/NPY artifacts.
 - Added `passivbot tool live-event-query --cycle-trace` for offline cycle
   reconstruction grouped by cycle id, including bounded timeline samples,
   aggregate event summaries, and nested order traces.
