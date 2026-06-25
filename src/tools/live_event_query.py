@@ -14,7 +14,10 @@ from live.event_query import build_event_report  # noqa: E402
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Validate monitor event NDJSON and reconstruct a live cycle by cycle_id."
+        description=(
+            "Validate monitor event NDJSON and query structured live events by "
+            "cycle_id, event type, and operator scopes."
+        )
     )
     parser.add_argument(
         "path",
@@ -34,10 +37,52 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--order-wave-id",
+        action="append",
+        help=(
+            "Return compact records matching one order_wave_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--remote-call-id",
+        action="append",
+        help=(
+            "Return compact records matching one remote_call_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--symbol",
+        action="append",
+        help="Return compact records matching one symbol. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--pside",
+        action="append",
+        help="Return compact records matching one position side. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--reason-code",
+        action="append",
+        help=(
+            "Return compact records matching one reason_code. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--status",
+        action="append",
+        help=(
+            "Return compact records matching one event status. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=200,
-        help="Maximum cycle records to include in output.",
+        help="Maximum matched records or timeline rows to include in output.",
     )
     parser.add_argument(
         "--include-data",
@@ -57,6 +102,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit compact single-line JSON.",
     )
+    parser.add_argument(
+        "--timeline",
+        action="store_true",
+        help="Include terse timeline strings for matched records.",
+    )
     return parser
 
 
@@ -67,9 +117,16 @@ def main(argv: list[str] | None = None) -> int:
         args.path,
         cycle_id=args.cycle_id,
         event_type=args.event_types,
+        order_wave_id=args.order_wave_id,
+        remote_call_id=args.remote_call_id,
+        symbol=args.symbol,
+        pside=args.pside,
+        reason_code=args.reason_code,
+        status=args.status,
         limit=args.limit,
         include_data=bool(args.include_data),
         include_rotated=bool(args.include_rotated),
+        timeline=bool(args.timeline),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1

@@ -14,8 +14,15 @@ def _monitor_row(
     seq: int,
     ts: int,
     symbol: str | None = None,
+    pside: str | None = None,
+    side: str | None = None,
+    status: str = "succeeded",
+    reason_code: str = "test",
+    ids: dict | None = None,
 ) -> dict:
-    ids = {"cycle_id": cycle_id} if cycle_id is not None else {}
+    event_ids = dict(ids or {})
+    if cycle_id is not None:
+        event_ids["cycle_id"] = cycle_id
     live_event = {
         "schema_version": 1,
         "event_id": f"evt_{seq}",
@@ -26,10 +33,12 @@ def _monitor_row(
         "exchange": "binance",
         "user": "binance_01",
         "symbol": symbol,
-        "status": "succeeded",
-        "reason_code": "test",
+        "pside": pside,
+        "side": side,
+        "status": status,
+        "reason_code": reason_code,
         "data": {"seq": seq},
-        "ids": ids,
+        "ids": event_ids,
     }
     payload = {"_live_event": live_event}
     payload.update(live_event["data"])
@@ -44,6 +53,8 @@ def _monitor_row(
     }
     if symbol:
         row["symbol"] = symbol
+    if pside:
+        row["pside"] = pside
     return row
 
 
@@ -267,6 +278,10 @@ def test_event_query_combines_cycle_and_event_type_filters(tmp_path):
     }
     assert report["query"]["matched_events"] == 2
     assert report["cycle"]["cycle_id"] == "cy_7"
+    assert report["cycle"]["filters"] == {
+        "cycle_id": "cy_7",
+        "event_types": ["candle.tail_projected", "remote_call.failed"],
+    }
     assert report["cycle"]["event_types"] == [
         "candle.tail_projected",
         "remote_call.failed",
@@ -275,6 +290,150 @@ def test_event_query_combines_cycle_and_event_type_filters(tmp_path):
     assert [event["event_type"] for event in report["cycle"]["events"]] == [
         "candle.tail_projected",
         "remote_call.failed",
+    ]
+
+
+def test_event_query_filters_by_ids_symbol_pside_reason_and_status(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                status="started",
+                reason_code="submitted_to_exchange",
+                ids={"order_wave_id": "ow_1"},
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                status="failed",
+                reason_code="exchange_exception",
+                ids={"order_wave_id": "ow_1"},
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+                symbol="ETH/USDT:USDT",
+                pside="short",
+                status="failed",
+                reason_code="request_timeout",
+                ids={"remote_call_id": "rc_9"},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        order_wave_id="ow_1",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code="exchange_exception",
+        status="failed",
+    )
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {
+        "order_wave_ids": ["ow_1"],
+        "psides": ["long"],
+        "reason_codes": ["exchange_exception"],
+        "statuses": ["failed"],
+        "symbols": ["BTC/USDT:USDT"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "execution.create_failed"
+    assert report["query"]["events"][0]["ids"]["order_wave_id"] == "ow_1"
+
+    remote_report = build_event_report(
+        tmp_path / "monitor",
+        remote_call_id="rc_9",
+        status="failed",
+    )
+
+    assert remote_report["query"]["filters"] == {
+        "remote_call_ids": ["rc_9"],
+        "statuses": ["failed"],
+    }
+    assert remote_report["query"]["matched_events"] == 1
+    assert remote_report["query"]["events"][0]["event_type"] == "remote_call.failed"
+
+
+def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                status="started",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                symbol="ZEC/USDT:USDT",
+                status="failed",
+                reason_code="request_timeout",
+                ids={"remote_call_id": "rc_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_1",
+        status="failed",
+        timeline=True,
+    )
+
+    assert report["query"]["matched_events"] == 1
+    assert report["cycle"]["filters"] == {
+        "cycle_id": "cy_1",
+        "statuses": ["failed"],
+    }
+    assert report["query"]["timeline"] == [
+        (
+            "1100 seq=2 remote_call.failed status=failed "
+            "reason_code=request_timeout symbol=ZEC/USDT:USDT "
+            "ids=cycle_id=cy_1,remote_call_id=rc_1"
+        )
+    ]
+    assert report["cycle"]["matched_events"] == 1
+    assert report["cycle"]["timeline"] == report["query"]["timeline"]
+
+    all_report = build_event_report(tmp_path / "monitor", limit=2, timeline=True)
+
+    assert all_report["query"]["filters"] == {}
+    assert all_report["query"]["matched_events"] == 3
+    assert all_report["query"]["events_truncated"] is True
+    assert all_report["query"]["timeline"] == [
+        "1000 seq=1 cycle.started status=started reason_code=test ids=cycle_id=cy_1",
+        (
+            "1100 seq=2 remote_call.failed status=failed "
+            "reason_code=request_timeout symbol=ZEC/USDT:USDT "
+            "ids=cycle_id=cy_1,remote_call_id=rc_1"
+        ),
     ]
 
 
@@ -292,7 +451,10 @@ def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
         ],
     )
 
-    assert live_event_query.main([str(tmp_path / "monitor"), "--cycle-id", "cy_7"]) == 0
+    assert (
+        live_event_query.main([str(tmp_path / "monitor"), "--cycle-id", "cy_7"])
+        == 0
+    )
 
     report = json.loads(capsys.readouterr().out)
     assert report["cycle"]["cycle_id"] == "cy_7"
@@ -342,6 +504,74 @@ def test_live_event_query_cli_accepts_event_type_and_kind_alias(tmp_path, capsys
     assert report["query"]["matched_events"] == 2
     assert report["query"]["events_truncated"] is True
     assert len(report["query"]["events"]) == 1
+
+
+def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.cancel_failed",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                symbol="SOL/USDT:USDT",
+                pside="short",
+                status="failed",
+                reason_code="exchange_exception",
+                ids={"order_wave_id": "ow_9"},
+            ),
+            _monitor_row(
+                event_type="execution.cancel_succeeded",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1100,
+                symbol="SOL/USDT:USDT",
+                pside="short",
+                status="succeeded",
+                reason_code="exchange_acknowledged",
+                ids={"order_wave_id": "ow_9"},
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--order-wave-id",
+                "ow_9",
+                "--symbol",
+                "SOL/USDT:USDT",
+                "--pside",
+                "short",
+                "--status",
+                "failed",
+                "--reason-code",
+                "exchange_exception",
+                "--timeline",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {
+        "order_wave_ids": ["ow_9"],
+        "psides": ["short"],
+        "reason_codes": ["exchange_exception"],
+        "statuses": ["failed"],
+        "symbols": ["SOL/USDT:USDT"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["timeline"] == [
+        (
+            "1000 seq=1 execution.cancel_failed status=failed "
+            "reason_code=exchange_exception symbol=SOL/USDT:USDT pside=short "
+            "ids=cycle_id=cy_9,order_wave_id=ow_9"
+        )
+    ]
 
 
 def test_live_event_query_cli_defaults_to_current_only_for_directory_scans(
