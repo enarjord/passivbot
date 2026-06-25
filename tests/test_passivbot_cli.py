@@ -316,6 +316,35 @@ def test_live_smoke_report_tool_dispatch_forwards_module_and_prog(monkeypatch):
     assert captured["prog_env"] == "passivbot tool live-smoke-report"
 
 
+def test_live_incident_bundle_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert (
+        cli_main.main(
+            ["tool", "live-incident-bundle", "monitor", "--cycle-id", "cy_1"]
+        )
+        == 0
+    )
+
+    assert captured["module_name"] == "tools.live_incident_bundle"
+    assert captured["argv"] == [
+        "passivbot tool live-incident-bundle",
+        "monitor",
+        "--cycle-id",
+        "cy_1",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-incident-bundle"
+
+
 def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):
     captured = {}
 

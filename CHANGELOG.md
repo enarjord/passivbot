@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Added structured `health.summary` live events for periodic health and
   resource summaries without adding console noise.
+- Added `passivbot tool live-incident-bundle` for collecting local monitor
+  events, smoke summaries, redacted log excerpts, monitor snapshots, config
+  hashes, runtime metadata, and bounded event segments into a tarball.
 - Added `passivbot tool live-smoke-report` for local smoke-test summaries from
   monitor event NDJSON and recent text logs.
 - Added `passivbot tool live-event-query` filters for order wave id, remote

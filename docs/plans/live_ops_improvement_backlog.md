@@ -19,6 +19,12 @@ Related detailed plans:
 ## High-Value Follow-Ups
 
 1. Incident bundle generator.
+   Initial implementation: `passivbot tool live-incident-bundle` collects local
+   monitor event reports, smoke summaries, redacted log excerpts, monitor
+   snapshots, config hashes, runtime metadata, and bounded event segments into a
+   tarball. Future refinements may add supervisor/process status and richer
+   remote smoke integration.
+
    Add a local tool that collects one time window or `cycle_id` into a compact
    bundle: structured events, selected text log excerpts, monitor snapshots,
    bot config hash, git head, process uptime, resource samples, and relevant
