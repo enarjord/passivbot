@@ -471,6 +471,45 @@ def _matched_segment_paths(*reports: dict[str, Any]) -> set[str]:
     return paths
 
 
+def _event_report_result_summary(event_report: dict[str, Any]) -> dict[str, Any]:
+    cycle = event_report.get("cycle")
+    query = event_report.get("query")
+    cycle_section = cycle if isinstance(cycle, dict) else None
+    query_section = query if isinstance(query, dict) else None
+    trace_section = cycle_section or query_section or {}
+
+    trace_summary = trace_section.get("trace_summary")
+    order_trace = trace_section.get("order_trace")
+    cycle_trace = trace_section.get("cycle_trace")
+    return {
+        "files_scanned": event_report.get("files_scanned"),
+        "live_events": event_report.get("live_events"),
+        "error_count": event_report.get("error_count"),
+        "warning_count": event_report.get("warning_count"),
+        "cycle_matched_events": (
+            cycle_section.get("matched_events") if cycle_section is not None else None
+        ),
+        "query_matched_events": (
+            query_section.get("matched_events") if query_section is not None else None
+        ),
+        "trace_summary_matched_events": (
+            trace_summary.get("matched_events")
+            if isinstance(trace_summary, dict)
+            else None
+        ),
+        "order_trace_matched_events": (
+            order_trace.get("matched_order_events")
+            if isinstance(order_trace, dict)
+            else None
+        ),
+        "cycle_trace_matched_events": (
+            cycle_trace.get("matched_cycle_events")
+            if isinstance(cycle_trace, dict)
+            else None
+        ),
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -561,6 +600,7 @@ def build_live_incident_bundle(
     since_ms: int | None = None,
     until_ms: int | None = None,
     include_data: bool = False,
+    include_trace_report: bool = True,
     include_rotated: bool = False,
     include_event_segments: bool = True,
     max_events: int = 500,
@@ -598,6 +638,9 @@ def build_live_incident_bundle(
         include_data=include_data,
         include_rotated=include_rotated,
         timeline=True,
+        trace_summary=include_trace_report,
+        order_trace=include_trace_report,
+        cycle_trace=include_trace_report and cycle_id is not None,
     )
     window_report = _build_time_window_report(
         monitor_path,
@@ -655,6 +698,7 @@ def build_live_incident_bundle(
                     "until_ms": until_ms,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
+                    "include_trace_report": include_trace_report,
                 }.items()
                 if value not in (None, [], "")
             },
@@ -696,22 +740,7 @@ def build_live_incident_bundle(
         "bundle_path": str(out_path),
         "bundle_version": BUNDLE_VERSION,
         "hard_failures": hard_failures,
-        "event_report": {
-            "files_scanned": event_report.get("files_scanned"),
-            "live_events": event_report.get("live_events"),
-            "error_count": event_report.get("error_count"),
-            "warning_count": event_report.get("warning_count"),
-            "cycle_matched_events": (
-                event_report.get("cycle", {}).get("matched_events")
-                if isinstance(event_report.get("cycle"), dict)
-                else None
-            ),
-            "query_matched_events": (
-                event_report.get("query", {}).get("matched_events")
-                if isinstance(event_report.get("query"), dict)
-                else None
-            ),
-        },
+        "event_report": _event_report_result_summary(event_report),
         "time_window": {
             "enabled": window_report.get("enabled"),
             "matched_events": window_report.get("matched_events"),

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added live-event trace summary and order-trace sections to
+  `passivbot tool live-incident-bundle` event reports, with
+  `--no-trace-report` for compact bundles.
 - Added `passivbot tool cache-integrity-doctor` for read-only local cache smoke
   reports covering root presence, file counts/sizes, and empty or corrupt
   JSON/NDJSON/NPY artifacts.
