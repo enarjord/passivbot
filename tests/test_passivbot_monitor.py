@@ -517,6 +517,146 @@ def test_action_planned_emitter_records_bounded_summary():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_rust_orchestrator_emitters_record_bounded_summaries():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_rust_orchestrator_called_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_called_event
+        )
+        _emit_rust_orchestrator_returned_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_returned_event
+        )
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_rust"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_rust_orchestrator_called_event(
+        rust_call_id="rust_7",
+        input_hash="input_hash",
+        symbol_count=4,
+        tradable_count=3,
+        ema_unavailable_count=1,
+        trailing_unavailable_count=2,
+        hedge_mode=True,
+        strategy_kind="recursive_grid",
+    )
+    bot._emit_rust_orchestrator_returned_event(
+        rust_call_id="rust_7",
+        status="succeeded",
+        input_hash="input_hash",
+        output_hash="output_hash",
+        elapsed_ms=12,
+        order_count=5,
+        diagnostics={"min_cost": {}, "forager": {}},
+    )
+    bot._emit_rust_orchestrator_returned_event(
+        rust_call_id="rust_8",
+        status="failed",
+        input_hash="failed_input_hash",
+        elapsed_ms=9,
+        error=ValueError("MissingEma { symbol_idx: 0 }"),
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    called, returned, failed = sink.events
+    assert called.event_type == EventTypes.RUST_ORCHESTRATOR_CALLED
+    assert called.cycle_id == "cy_rust"
+    assert called.remote_call_id == "rust_7"
+    assert called.raw_hash == "input_hash"
+    assert called.data == {
+        "symbol_count": 4,
+        "tradable_count": 3,
+        "ema_unavailable_count": 1,
+        "trailing_unavailable_count": 2,
+        "hedge_mode": True,
+        "strategy_kind": "recursive_grid",
+        "input_hash": "input_hash",
+    }
+    assert returned.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
+    assert returned.status == "succeeded"
+    assert returned.raw_hash == "output_hash"
+    assert returned.data["elapsed_ms"] == 12
+    assert returned.data["input_hash"] == "input_hash"
+    assert returned.data["output_hash"] == "output_hash"
+    assert returned.data["order_count"] == 5
+    assert returned.data["diagnostic_keys"] == ["forager", "min_cost"]
+    assert failed.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
+    assert failed.level == "error"
+    assert failed.status == "failed"
+    assert failed.reason_code == "ValueError"
+    assert failed.raw_hash == "failed_input_hash"
+    assert failed.data["error_type"] == "ValueError"
+    assert "MissingEma" in failed.data["error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_rust_orchestrator_emitters_are_best_effort(caplog):
+    import passivbot as pb_mod
+
+    class FailingBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_rust_orchestrator_called_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_called_event
+        )
+        _emit_rust_orchestrator_returned_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_returned_event
+        )
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_rust"
+
+        def _emit_live_event(self, *args, **kwargs):
+            raise RuntimeError("event sink failed")
+
+    bot = FailingBot()
+
+    with caplog.at_level(logging.DEBUG):
+        bot._emit_rust_orchestrator_called_event(
+            rust_call_id="rust_1",
+            input_hash="input_hash",
+            symbol_count=1,
+            tradable_count=1,
+            ema_unavailable_count=0,
+            trailing_unavailable_count=0,
+            hedge_mode=False,
+            strategy_kind="recursive_grid",
+        )
+        bot._emit_rust_orchestrator_returned_event(
+            rust_call_id="rust_1",
+            status="succeeded",
+            input_hash="input_hash",
+            output_hash="output_hash",
+            elapsed_ms=1,
+            order_count=0,
+            diagnostics={},
+        )
+        bot._emit_rust_orchestrator_returned_event(
+            rust_call_id="rust_2",
+            status="failed",
+            input_hash="failed_input_hash",
+            elapsed_ms=1,
+            error=RuntimeError("rust failed"),
+        )
+
+    messages = [record.message for record in caplog.records]
+    assert any(EventTypes.RUST_ORCHESTRATOR_CALLED in msg for msg in messages)
+    assert sum(EventTypes.RUST_ORCHESTRATOR_RETURNED in msg for msg in messages) == 2
+
+
 def test_forager_and_ema_summary_emitters_emit_structured_events():
     import passivbot as pb_mod
 

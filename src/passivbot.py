@@ -615,6 +615,12 @@ class Passivbot:
     )
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
+    _emit_rust_orchestrator_called_event = (
+        live_event_emitters.emit_rust_orchestrator_called_event
+    )
+    _emit_rust_orchestrator_returned_event = (
+        live_event_emitters.emit_rust_orchestrator_returned_event
+    )
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
     _emit_fills_refresh_summary_event = (
         live_event_emitters.emit_fills_refresh_summary_event
@@ -15249,33 +15255,19 @@ class Passivbot:
         rust_call_id = self._next_live_event_remote_call_id("rust")
         orchestrator_started_ms = int(utc_ms())
         input_hash = payload_hash_raw(input_json)
-        try:
-            tradable_count = sum(
-                1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
-            )
-            self._emit_live_event(
-                EventTypes.RUST_ORCHESTRATOR_CALLED,
-                level="debug",
-                component="rust_orchestrator",
-                tags=("planning", "rust", "orchestrator"),
-                cycle_id=self._current_live_event_cycle_id(),
-                remote_call_id=rust_call_id,
-                status="started",
-                raw_hash=input_hash,
-                data={
-                    "symbol_count": len(input_dict["symbols"]),
-                    "tradable_count": int(tradable_count),
-                    "ema_unavailable_count": len(ema_unavailable_symbols),
-                    "trailing_unavailable_count": len(trailing_unavailable_symbols),
-                    "hedge_mode": bool(effective_hedge_mode),
-                    "strategy_kind": strategy_kind,
-                    "input_hash": input_hash,
-                },
-            )
-        except Exception as event_exc:
-            logging.debug(
-                "[event] failed preparing rust_orchestrator.called: %s", event_exc
-            )
+        tradable_count = sum(
+            1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
+        )
+        self._emit_rust_orchestrator_called_event(
+            rust_call_id=rust_call_id,
+            input_hash=input_hash,
+            symbol_count=len(input_dict["symbols"]),
+            tradable_count=int(tradable_count),
+            ema_unavailable_count=len(ema_unavailable_symbols),
+            trailing_unavailable_count=len(trailing_unavailable_symbols),
+            hedge_mode=bool(effective_hedge_mode),
+            strategy_kind=strategy_kind,
+        )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
         except Exception as e:
@@ -15292,22 +15284,12 @@ class Passivbot:
                             Passivbot._log_symbol(symbol),
                             idx,
                         )
-            self._emit_live_event(
-                EventTypes.RUST_ORCHESTRATOR_RETURNED,
-                level="error",
-                component="rust_orchestrator",
-                tags=("planning", "rust", "orchestrator", "error"),
-                cycle_id=self._current_live_event_cycle_id(),
-                remote_call_id=rust_call_id,
+            self._emit_rust_orchestrator_returned_event(
+                rust_call_id=rust_call_id,
                 status="failed",
-                reason_code=type(e).__name__,
-                raw_hash=input_hash,
-                data={
-                    "elapsed_ms": int(elapsed_ms),
-                    "input_hash": input_hash,
-                    "error_type": type(e).__name__,
-                    "error": str(e)[:500],
-                },
+                input_hash=input_hash,
+                elapsed_ms=int(elapsed_ms),
+                error=e,
             )
             raise
         out = json.loads(out_json)
@@ -15315,24 +15297,14 @@ class Passivbot:
         output_hash = payload_hash_raw(out_json)
         orders = out.get("orders", [])
         diagnostics = out.get("diagnostics", {})
-        self._emit_live_event(
-            EventTypes.RUST_ORCHESTRATOR_RETURNED,
-            level="debug",
-            component="rust_orchestrator",
-            tags=("planning", "rust", "orchestrator"),
-            cycle_id=self._current_live_event_cycle_id(),
-            remote_call_id=rust_call_id,
+        self._emit_rust_orchestrator_returned_event(
+            rust_call_id=rust_call_id,
             status="succeeded",
-            raw_hash=output_hash,
-            data={
-                "elapsed_ms": int(elapsed_ms),
-                "input_hash": input_hash,
-                "output_hash": output_hash,
-                "order_count": len(orders),
-                "diagnostic_keys": (
-                    sorted(diagnostics) if isinstance(diagnostics, dict) else []
-                ),
-            },
+            input_hash=input_hash,
+            output_hash=output_hash,
+            elapsed_ms=int(elapsed_ms),
+            order_count=len(orders),
+            diagnostics=diagnostics,
         )
         Passivbot._emit_action_planned_event(
             self,
