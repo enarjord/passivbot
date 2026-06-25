@@ -102,14 +102,20 @@ def test_event_query_discovers_rotated_current_and_reconstructs_cycle(tmp_path):
         ],
     )
 
-    assert discover_event_files(tmp_path / "monitor" / "binance" / "binance_01") == [
-        rotated,
-        current,
-    ]
+    assert discover_event_files(
+        tmp_path / "monitor" / "binance" / "binance_01",
+        include_rotated=True,
+    ) == [rotated, current]
 
-    report = build_event_report(tmp_path / "monitor", cycle_id="cy_1", include_data=True)
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_1",
+        include_data=True,
+        include_rotated=True,
+    )
 
     assert report["ok"] is True
+    assert report["include_rotated"] is True
     assert report["files_scanned"] == 2
     assert report["records_total"] == 4
     assert report["live_events"] == 3

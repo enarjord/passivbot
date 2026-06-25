@@ -32,7 +32,7 @@ def _event_path_sort_key(path: Path) -> tuple[str, int, str]:
     return (str(path.parent), 1 if path.name == "current.ndjson" else 0, path.name)
 
 
-def discover_event_files(root: str | Path, *, include_rotated: bool = True) -> list[Path]:
+def discover_event_files(root: str | Path, *, include_rotated: bool = False) -> list[Path]:
     """Find monitor event NDJSON segments below a monitor root, bot root, or events dir."""
     path = Path(root).expanduser()
     if path.is_file():
@@ -110,7 +110,7 @@ def build_event_report(
     cycle_id: str | None = None,
     limit: int = 200,
     include_data: bool = False,
-    include_rotated: bool = True,
+    include_rotated: bool = False,
 ) -> dict[str, Any]:
     issues: list[EventIssue] = []
     try:
