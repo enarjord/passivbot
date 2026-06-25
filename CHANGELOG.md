@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-event-query` filters for order wave id, remote
+  call id, symbol, position side, reason code, and status, plus optional
+  timeline rows for matched structured live events.
 - Added structured `cache.load.completed` live events for candle disk-cache load
   summaries.
 - Throttled repeated `cache.load.completed` live events per symbol/timeframe and
