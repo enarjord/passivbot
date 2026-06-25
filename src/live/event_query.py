@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -195,6 +195,150 @@ def _timeline_line(record: dict[str, Any]) -> str:
     return " ".join(parts)
 
 
+def _sorted_counter(counter: Counter[str]) -> dict[str, int]:
+    return {str(key): int(counter[key]) for key in sorted(counter)}
+
+
+def _sorted_counter_items(
+    counter: Counter[str], *, limit: int = 20
+) -> list[dict[str, Any]]:
+    return [
+        {"id": str(key), "events": int(value)}
+        for key, value in sorted(counter.items(), key=lambda item: (-item[1], item[0]))[
+            : max(0, int(limit))
+        ]
+    ]
+
+
+def _sorted_values(values: set[str], *, limit: int = 20) -> list[str]:
+    return sorted(values)[: max(0, int(limit))]
+
+
+class _TraceSummaryBuilder:
+    def __init__(self) -> None:
+        self.events = 0
+        self.first_ts: Any = None
+        self.last_ts: Any = None
+        self.event_types: Counter[str] = Counter()
+        self.levels: Counter[str] = Counter()
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.symbols: set[str] = set()
+        self.psides: set[str] = set()
+        self.sides: set[str] = set()
+        self.ids: dict[str, Counter[str]] = {
+            key: Counter() for key in EVENT_ID_KEYS
+        }
+        self.order_waves: dict[str, dict[str, Any]] = defaultdict(
+            lambda: {
+                "events": 0,
+                "event_types": Counter(),
+                "statuses": Counter(),
+                "reason_codes": Counter(),
+                "symbols": set(),
+                "psides": set(),
+                "action_ids": set(),
+            }
+        )
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        event_type: str | None,
+    ) -> None:
+        self.events += 1
+        ts = row.get("ts")
+        if self.first_ts is None:
+            self.first_ts = ts
+        self.last_ts = ts
+        if event_type:
+            self.event_types[str(event_type)] += 1
+        for key, counter in (
+            ("level", self.levels),
+            ("status", self.statuses),
+            ("reason_code", self.reason_codes),
+        ):
+            value = live_event.get(key)
+            if value is not None:
+                counter[str(value)] += 1
+        symbol = live_event.get("symbol") or row.get("symbol")
+        if symbol is not None:
+            self.symbols.add(str(symbol))
+        pside = live_event.get("pside") or row.get("pside")
+        if pside is not None:
+            self.psides.add(str(pside))
+        side = live_event.get("side")
+        if side is not None:
+            self.sides.add(str(side))
+
+        ids = _event_ids(live_event)
+        for key in EVENT_ID_KEYS:
+            value = ids.get(key)
+            if value is not None:
+                self.ids[key][str(value)] += 1
+
+        order_wave_id = ids.get("order_wave_id")
+        if order_wave_id is None:
+            return
+        wave = self.order_waves[str(order_wave_id)]
+        wave["events"] += 1
+        if event_type:
+            wave["event_types"][str(event_type)] += 1
+        status = live_event.get("status")
+        if status is not None:
+            wave["statuses"][str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            wave["reason_codes"][str(reason_code)] += 1
+        if symbol is not None:
+            wave["symbols"].add(str(symbol))
+        if pside is not None:
+            wave["psides"].add(str(pside))
+        action_id = ids.get("action_id")
+        if action_id is not None:
+            wave["action_ids"].add(str(action_id))
+
+    def to_dict(self) -> dict[str, Any]:
+        ids = {
+            key: _sorted_counter_items(counter)
+            for key, counter in self.ids.items()
+            if counter
+        }
+        order_waves = {
+            wave_id: {
+                "events": int(summary["events"]),
+                "event_types": _sorted_counter(summary["event_types"]),
+                "statuses": _sorted_counter(summary["statuses"]),
+                "reason_codes": _sorted_counter(summary["reason_codes"]),
+                "symbols": _sorted_values(summary["symbols"]),
+                "psides": _sorted_values(summary["psides"]),
+                "action_ids": _sorted_values(summary["action_ids"]),
+            }
+            for wave_id, summary in sorted(self.order_waves.items())
+        }
+        out: dict[str, Any] = {
+            "matched_events": int(self.events),
+            "event_types": _sorted_counter(self.event_types),
+            "levels": _sorted_counter(self.levels),
+            "statuses": _sorted_counter(self.statuses),
+            "reason_codes": _sorted_counter(self.reason_codes),
+            "symbols": _sorted_values(self.symbols),
+            "psides": _sorted_values(self.psides),
+            "sides": _sorted_values(self.sides),
+        }
+        if self.first_ts is not None:
+            out["first_ts"] = self.first_ts
+        if self.last_ts is not None:
+            out["last_ts"] = self.last_ts
+        if ids:
+            out["ids"] = ids
+        if order_waves:
+            out["order_waves"] = order_waves
+        return out
+
+
 def build_event_report(
     root: str | Path,
     *,
@@ -215,6 +359,7 @@ def build_event_report(
     include_data: bool = False,
     include_rotated: bool = False,
     timeline: bool = False,
+    trace_summary: bool = False,
 ) -> dict[str, Any]:
     issues: list[EventIssue] = []
     try:
@@ -245,6 +390,8 @@ def build_event_report(
     cycle_match_count = 0
     query_events: list[dict[str, Any]] = []
     query_match_count = 0
+    query_trace = _TraceSummaryBuilder()
+    cycle_trace = _TraceSummaryBuilder()
     max_events = max(0, int(limit))
     event_type_filter = _normalize_filter_values(event_type)
     bot_filter = _normalize_filter_values(bot_id)
@@ -274,7 +421,9 @@ def build_event_report(
             status_filter,
         )
     )
-    has_query_filter = has_non_cycle_filter or bool(timeline and cycle_id is None)
+    has_query_filter = has_non_cycle_filter or bool(
+        (timeline or trace_summary) and cycle_id is None
+    )
 
     for path in files:
         try:
@@ -409,6 +558,12 @@ def build_event_report(
 
                     if has_query_filter and query_matches:
                         query_match_count += 1
+                        if trace_summary:
+                            query_trace.add(
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                            )
                         if len(query_events) < max_events:
                             query_events.append(
                                 _compact_record(
@@ -421,6 +576,12 @@ def build_event_report(
                             )
                     if cycle_id is not None and query_matches:
                         cycle_match_count += 1
+                        if trace_summary:
+                            cycle_trace.add(
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                            )
                         if len(cycle_events) < max_events:
                             cycle_events.append(
                                 _compact_record(
@@ -483,6 +644,8 @@ def build_event_report(
             report["query"]["timeline"] = [
                 _timeline_line(event) for event in query_events
             ]
+        if trace_summary:
+            report["query"]["trace_summary"] = query_trace.to_dict()
     if cycle_id is not None:
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
@@ -511,6 +674,8 @@ def build_event_report(
             report["cycle"]["timeline"] = [
                 _timeline_line(event) for event in cycle_events
             ]
+        if trace_summary:
+            report["cycle"]["trace_summary"] = cycle_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
     return report

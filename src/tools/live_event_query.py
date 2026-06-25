@@ -147,6 +147,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Include terse timeline strings for matched records.",
     )
+    parser.add_argument(
+        "--trace-summary",
+        action="store_true",
+        help=(
+            "Include aggregate counts for matched events, ids, symbols, statuses, "
+            "reason codes, and order waves. Counts cover all matches, not only "
+            "the limited event sample."
+        ),
+    )
     return parser
 
 
@@ -172,6 +181,7 @@ def main(argv: list[str] | None = None) -> int:
         include_data=bool(args.include_data),
         include_rotated=bool(args.include_rotated),
         timeline=bool(args.timeline),
+        trace_summary=bool(args.trace_summary),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1

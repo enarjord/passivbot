@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-event-query --trace-summary` for compact aggregate
+  summaries of matched live event traces, including event types, statuses,
+  reason codes, ids, symbols, and order-wave coverage.
 - Improved event-projected live console summaries for cycle/order execution
   events, including compact wave, order, confirmation, and Rust planning
   details without increasing console event volume.
