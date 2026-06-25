@@ -821,7 +821,10 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
         quote = "USDT"
         stop_signal_received = False
         state_change_detected_by_symbol = set()
-        config = {"live": {}, "_raw_effective": {"live": {}}}
+        config = {
+            "live": {"limit_order_create_max_market_dist_pct": 0.0},
+            "_raw_effective": {"live": {"limit_order_create_max_market_dist_pct": 0.0}},
+        }
 
         def __init__(self):
             self.cancelled_orders = None
@@ -875,6 +878,7 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
 
         _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+        _emit_order_wave_completed_event = lambda self, *args, **kwargs: None
 
     symbol = "BTC/USDT:USDT"
     to_cancel = [

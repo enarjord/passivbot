@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `live.limit_order_create_max_market_dist_pct` with a default of `0.8`
+  so live skips limit-order creations far outside fresh market price bands
+  instead of repeatedly submitting exchange-invalid deep orders.
 - Fixed Rust extension freshness detection for Python abi3 builds so
   `passivbot_rust.abi3.so` artifacts are discovered, source-stamped, and reused
   instead of triggering repeated rebuilds followed by stale-extension failures.
