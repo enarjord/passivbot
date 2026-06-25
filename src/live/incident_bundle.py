@@ -589,6 +589,9 @@ def build_live_incident_bundle(
     output_path: str | Path | None = None,
     logs_root: str | Path | None = None,
     config_paths: list[str | Path] | None = None,
+    include_processes: bool = False,
+    supervisor_config: str | Path | None = None,
+    process_command_match: str = "passivbot live",
     cycle_id: str | None = None,
     event_type: str | list[str] | None = None,
     order_wave_id: str | list[str] | None = None,
@@ -653,6 +656,9 @@ def build_live_incident_bundle(
     smoke_report = build_live_smoke_report(
         monitor_path,
         logs_root=logs_path,
+        include_processes=include_processes,
+        supervisor_config=supervisor_config,
+        process_command_match=process_command_match,
         include_rotated=include_rotated,
         max_problem_events=max_problem_events,
         max_log_files=max_log_files,
@@ -699,6 +705,10 @@ def build_live_incident_bundle(
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
+                    "include_processes": include_processes,
+                    "supervisor_config": str(supervisor_config)
+                    if supervisor_config is not None
+                    else None,
                 }.items()
                 if value not in (None, [], "")
             },
@@ -751,6 +761,19 @@ def build_live_incident_bundle(
             "attention": smoke_report.get("attention"),
             "hard_failures": smoke_report.get("hard_failures"),
             "attention_count": smoke_report.get("attention_count"),
+            "processes": {
+                "enabled": smoke_report.get("processes", {}).get("enabled"),
+                "ok": smoke_report.get("processes", {}).get("ok"),
+                "expected_total": smoke_report.get("processes", {}).get(
+                    "expected_total"
+                ),
+                "running_live_total": smoke_report.get("processes", {}).get(
+                    "running_live_total"
+                ),
+                "missing_expected": len(
+                    smoke_report.get("processes", {}).get("missing_expected", [])
+                ),
+            },
         },
         "config_hashes": len(config_hashes),
         "monitor_snapshots": len(metadata["monitor_snapshots"]),

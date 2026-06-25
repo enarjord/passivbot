@@ -34,6 +34,23 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--processes",
+        action="store_true",
+        help="Include read-only passivbot live process liveness details.",
+    )
+    parser.add_argument(
+        "--supervisor-config",
+        help=(
+            "Optional tmuxp-style config listing expected passivbot live panes. "
+            "Implies --processes and reports missing expected bots as hard failures."
+        ),
+    )
+    parser.add_argument(
+        "--process-match",
+        default="passivbot live",
+        help="Substring used before canonicalizing passivbot live process rows.",
+    )
+    parser.add_argument(
         "--include-rotated",
         action="store_true",
         help="Also scan rotated/compressed monitor event segments.",
@@ -80,6 +97,9 @@ def main(argv: list[str] | None = None) -> int:
     report = build_live_smoke_report(
         args.monitor_root,
         logs_root=logs_root,
+        include_processes=bool(args.processes),
+        supervisor_config=args.supervisor_config,
+        process_command_match=str(args.process_match),
         include_rotated=bool(args.include_rotated),
         max_problem_events=int(args.max_problem_events),
         max_log_files=int(args.max_log_files),

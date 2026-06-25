@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import live.smoke_report as smoke_report_module
 from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor
 from tools import live_smoke_report
 
@@ -433,3 +434,124 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
     assert report["logs"]["files_scanned"] == 0
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
+
+
+def test_live_smoke_report_process_status_matches_supervisor_config(
+    tmp_path,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u binance_01",
+                "  - window_name: gateio_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u gateio_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 3.5 7.0 "
+                    "/root/passivbot/venv/bin/python3 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        supervisor_config=supervisor_config,
+    )
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert report["processes"]["enabled"] is True
+    assert report["processes"]["ok"] is False
+    assert report["processes"]["expected_total"] == 2
+    assert report["processes"]["matched_expected"] == 1
+    assert report["processes"]["running_live_total"] == 1
+    assert report["processes"]["missing_expected"] == [
+        {
+            "name": "gateio_01",
+            "command": "passivbot live configs/forager.json -u gateio_01",
+            "command_key": "passivbot live configs/forager.json -u gateio_01",
+        }
+    ]
+    assert report["processes"]["running"][0]["pid"] == 123
+    assert report["processes"]["running"][0]["age_s"] == 42
+
+
+def test_live_smoke_report_process_scan_without_config_is_observational(
+    tmp_path,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "321 1 S 0.5 2.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/v8.json -u okx_faisal"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_processes=True,
+    )
+
+    assert report["ok"] is True
+    assert report["processes"]["enabled"] is True
+    assert report["processes"]["expected_total"] == 0
+    assert report["processes"]["running_live_total"] == 1
+    assert report["processes"]["unexpected_running"] == []
+    assert report["processes"]["running"][0]["command_key"] == (
+        "passivbot live configs/v8.json -u okx_faisal"
+    )
