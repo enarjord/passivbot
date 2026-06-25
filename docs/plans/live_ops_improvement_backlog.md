@@ -166,12 +166,21 @@ Related detailed plans:
     issue.
 
 13. [ ] Cache integrity doctor.
-    Status: open.
+    Status: partial. Initial read-only local cache smoke doctor merged.
 
     Add a read-only doctor for candle/fill/HSL caches that reports coverage,
     metadata compatibility, corrupted shards, suspicious gaps, synthetic/no-trade
     assumptions, and whether a short restart can safely use a warm-cache path.
     This supports the separate warm-cache restart work.
+
+    Work log:
+    - 2026-06-25: Added `passivbot tool cache-integrity-doctor`, which reports
+      local cache root presence, aggregate file/size counts, and empty/corrupt
+      JSON, NDJSON, and NPY artifacts without writing or touching live behavior.
+
+    Remaining refinements: add cache-family awareness, candle/fill/HSL metadata
+    compatibility checks, coverage windows, suspicious gap summaries, and
+    warm-cache reuse readiness without making trading decisions.
 
 14. [ ] Supervisor/process model.
     Status: open.
@@ -205,6 +214,7 @@ Related detailed plans:
 | 2026-06-25 | #9 Reason-code registry | PR #645 / `31263bb9` | Added shared `EventTags` and `ReasonCodes` registries and migrated representative live event emitters without changing emitted strings | Continue migrating stable literals as nearby event surfaces are touched |
 | 2026-06-25 | #9 Reason-code registry | PR #653 / `f0a0f744` | Added focused AI docs for live event tags/reason codes and a doc drift test against the code registry | Continue migrating stable literals as nearby event surfaces are touched |
 | 2026-06-25 | #10 Operator console redesign from events | PR #646 / `521832cc` | Improved event-projected console/text summaries for already-routed execution events without changing routes or console event volume | Migrate high-value stdlib text logs to structured-event projections |
+| 2026-06-25 | #13 Cache integrity doctor | PR #656 / `e65597c3` | Added read-only `cache-integrity-doctor` for local cache root presence, file counts/sizes, and corrupt JSON/NDJSON/NPY artifacts | Cache-family metadata, coverage windows, suspicious gaps, and warm-cache readiness |
 | 2026-06-24 | Operational restart goals | PR #619 / `e71c4f6c` | Improved shutdown progress and bounded shutdown cancel grace coverage | Broader interruptible shutdown contract remains separate work |
 | 2026-06-24 | Operational restart goals | PR #622 / `29eba387` | Improved live startup warm-cache reuse | Deeper cache doctor and budget tracking remain open |
 
