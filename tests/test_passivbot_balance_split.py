@@ -3102,6 +3102,78 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
 
 
 @pytest.mark.asyncio
+async def test_update_pnls_emits_summary_when_exchange_time_resync_handles_error():
+    bot = Passivbot.__new__(Passivbot)
+    cached_events = [
+        SimpleNamespace(timestamp=1_700_000_000_000, id="fill-1", source_ids=["fill-1"])
+    ]
+
+    class _Manager:
+        def __init__(self, events, *, history_scope="unknown"):
+            self._events = list(events)
+            self.refresh = AsyncMock()
+            self.refresh_latest = AsyncMock(
+                side_effect=RuntimeError("timestamp outside recvWindow")
+            )
+            self.history_scope = history_scope
+
+        def get_events(self):
+            return list(self._events)
+
+        def get_history_scope(self):
+            return self.history_scope
+
+        def set_history_scope(self, scope):
+            self.history_scope = scope
+
+    bot.stop_signal_received = False
+    bot.config = {
+        "live": {
+            "fills_recent_overlap_minutes": 10.0,
+            "pnls_max_lookback_days": "all",
+        }
+    }
+    sink = ListEventSink()
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_fills_resync"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._pnls_manager = _Manager(cached_events, history_scope="all")
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
+    bot.get_exchange_time = lambda: 1_700_000_060_000
+    bot._log_new_fill_events = lambda new_events: None
+    bot._monitor_record_event = lambda *args, **kwargs: None
+    bot._monitor_record_error = lambda *args, **kwargs: None
+    bot._maybe_recover_exchange_time_sync = AsyncMock(return_value=True)
+    bot.logging_level = 0
+    bot._health_rate_limits = 0
+
+    result = await bot.update_pnls()
+
+    assert result is False
+    bot._maybe_recover_exchange_time_sync.assert_awaited_once()
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "deferred"
+    assert event.reason_code == "exchange_time_resync"
+    assert event.data["refresh_mode"] == "incremental_recent"
+    assert event.data["error_type"] == "RuntimeError"
+    assert event.data["coverage_ready_before"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_update_pnls_suppresses_inflight_shutdown_refresh_error(caplog):
     bot = Passivbot.__new__(Passivbot)
     cached_events = [

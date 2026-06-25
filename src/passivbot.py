@@ -10469,6 +10469,19 @@ class Passivbot:
                 )
                 return False
             if await self._maybe_recover_exchange_time_sync(e, source="update_pnls"):
+                self._emit_fills_refresh_summary_event(
+                    source=source,
+                    refresh_mode=refresh_mode,
+                    status="deferred",
+                    reason_code="exchange_time_resync",
+                    elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                    lookback=lookback_config_value,
+                    event_count_before=before_events_count,
+                    coverage_before=coverage_status,
+                    coverage_after=post_refresh_coverage_status,
+                    error=e,
+                    level="warning",
+                )
                 return False
             self._monitor_record_error(
                 "error.exchange",
