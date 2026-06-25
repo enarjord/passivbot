@@ -34,10 +34,11 @@ Related detailed plans:
    `passivbot tool live-incident-bundle` collects local monitor event reports,
    live-event trace reports, smoke summaries, redacted log excerpts, monitor
    snapshots, config hashes, runtime metadata, and bounded event segments into a
-   tarball.
+   tarball. Bundles can also include trace reports and optional smoke-report
+   process status.
 
-   Remaining refinements: add supervisor/process status and richer remote smoke
-   integration when the restart/smoke automation exists.
+   Remaining refinements: richer remote smoke integration when the
+   restart/smoke automation exists.
 
 2. [x] Event query and timeline CLI extensions.
    Status: core filter/timeline work merged. `passivbot tool live-event-query`
@@ -54,8 +55,9 @@ Related detailed plans:
    Remaining refinements: cross-bot incident workflow.
 
 3. [ ] Live restart/smoke automation.
-   Status: partial. The read-only `live-smoke-report` tool exists, but the safe
-   restart orchestration contract is not implemented.
+   Status: partial. The read-only `live-smoke-report` tool exists and can now
+   compare running `passivbot live` processes against a tmuxp-style supervisor
+   config, but the safe restart orchestration contract is not implemented.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
@@ -86,7 +88,9 @@ Related detailed plans:
    this off console unless thresholds are crossed.
 
 6. [ ] Exchange health and contract probes.
-   Status: open.
+   Status: open. VPS5 smoke on 2026-06-25 surfaced Kucoin authoritative
+   balance/positions/open-orders `RequestTimeout` events, which reinforces the
+   value of explicit exchange endpoint health probes.
 
    Add explicit read-only probes for each configured exchange/account before or
    during smoke: balance/positions/open-orders fetch, clock skew, rate-limit
@@ -187,7 +191,9 @@ Related detailed plans:
     warm-cache reuse readiness without making trading decisions.
 
 14. [ ] Supervisor/process model.
-    Status: open.
+    Status: partial. `live-smoke-report --supervisor-config` now reports
+    expected/matched/missing `passivbot live` processes from a tmuxp-style
+    config, and incident bundles can include that smoke snapshot.
 
     The tmux/tmuxp setup is workable, but repeated live smoke showed room for a
     stricter supervisor contract: clear per-bot status, bounded stop/restart,
@@ -213,6 +219,7 @@ Related detailed plans:
 | 2026-06-25 | #2/#11 Event query and order trace completeness | PR #651 / `b9f42ebd` | Added `live-event-query --order-trace` reconstruction grouped by order wave and action, with confirmation events and bounded samples | Richer cycle reconstruction and incident-bundle integration |
 | 2026-06-25 | #2/#11 Event query and cycle trace completeness | PR #654 / `ff493541` | Added `live-event-query --cycle-trace` reconstruction grouped by cycle id, with bounded timelines, aggregate summaries, and nested order traces | Incident-bundle integration and cross-bot workflow |
 | 2026-06-25 | #1/#2/#11 Incident bundle trace integration | PR #659 / `27931c81` | Embedded trace-summary and order-trace reports into incident bundles by default, plus cycle-trace when scoped to `--cycle-id`; VPS5 bundle smoke verified trace sections | Cross-bot incident workflow and supervisor/process context |
+| 2026-06-25 | #1/#3/#14 Smoke process status | PR #661 / `72b3d931` | Added optional read-only process liveness to `live-smoke-report` and incident bundles; VPS5 smoke matched all five `/root/bots_vps5.yaml` bots | Safe restart orchestration and richer supervisor model remain open |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
@@ -227,11 +234,12 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Live restart/smoke automation.
-2. Operator console redesign from events.
-3. Startup phase budget tracking.
-4. HSL dry-run preview.
-5. Cache integrity doctor coverage/readiness refinements.
+1. Exchange health and contract probes.
+2. Live restart/smoke automation.
+3. Operator console redesign from events.
+4. Startup phase budget tracking.
+5. HSL dry-run preview.
+6. Cache integrity doctor coverage/readiness refinements.
 
 These make every later live debugging session cheaper and provide direct
 feedback on whether the event stream is actually answering operator questions.

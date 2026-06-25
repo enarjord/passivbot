@@ -19,17 +19,19 @@ Last updated: 2026-06-25.
 
 Current `origin/v8` logging-overhaul head:
 
-- `27931c81` merge of PR #659, `Add incident bundle trace reports`.
+- `72b3d931` merge of PR #661, `Add live smoke process status`.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #659 at `27931c81`.
-- Bots were left running after the pull; PR #659 was a read-only tooling slice
+- Repository pulled through PR #661 at `72b3d931`.
+- Bots were left running after the pull; PR #661 was a read-only tooling slice
   and did not require bot restart.
-- VPS5 incident-bundle smoke created a bundle with `trace_summary`,
-  `order_trace`, and `cycle_trace` in `event_report.json`. The command returned
-  attention because existing live monitor state still includes GateIO HSL RED
-  and non-hard EMA readiness degradation, not because bundle generation failed.
+- VPS5 process-status smoke with `/root/bots_vps5.yaml` reported
+  `expected_total=5`, `matched_expected=5`, `missing_expected=[]`,
+  and `scan_error=null`.
+- Overall smoke still returned attention/hard failure because current monitor
+  events include Kucoin authoritative balance/positions/open-orders
+  `RequestTimeout` failures. The process-status check itself was green.
 
 ## Phase Checklist
 
@@ -42,7 +44,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, incident bundle trace reports, ID filters | Cross-bot incident workflow and richer supervisor/process capture |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines and process liveness, incident bundle trace/process reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -331,11 +333,30 @@ VPS5 deployment status:
   `cycle_trace` sections. The tool returned attention because the embedded
   smoke report saw existing GateIO HSL RED and EMA readiness degradation.
 
+### PR #661: Live Smoke Process Status
+
+- Branch: `codex/v8-smoke-process-status`.
+- Scope: operator tooling.
+- Result: `passivbot tool live-smoke-report` can now include an optional
+  read-only `processes` section. With `--supervisor-config`, tmuxp-style
+  expected `passivbot live` commands are compared against running live
+  processes and missing expected bots become smoke hard failures. Incident
+  bundles pass the same process snapshot through `smoke_report.json` when
+  requested.
+- VPS5 evidence: deployed to VPS5 at `72b3d931`; read-only smoke using
+  `/root/bots_vps5.yaml` matched all five expected bots and left them running.
+  The overall smoke exit remained nonzero because Kucoin authoritative state
+  fetches had recent `RequestTimeout` events, not because process liveness
+  failed.
+
 ## Current Next Steps
 
 1. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
-2. Start the live restart/smoke automation slice if operational workflow speed
+2. Add read-only exchange health probes or smoke summaries for account-critical
+   endpoint timeouts, especially after the latest Kucoin authoritative-fetch
+   timeouts on VPS5.
+3. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-3. Continue cache-doctor refinements in separate adjacent PRs: cache-family
+4. Continue cache-doctor refinements in separate adjacent PRs: cache-family
    metadata, coverage windows, suspicious gaps, and warm-cache readiness.
