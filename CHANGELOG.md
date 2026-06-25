@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Improved event-projected live console summaries for cycle/order execution
+  events, including compact wave, order, confirmation, and Rust planning
+  details without increasing console event volume.
 - Added structured `health.summary` live events for periodic health and
   resource summaries without adding console noise.
 - Added process/system/event-pipeline resource-pressure fields to structured
