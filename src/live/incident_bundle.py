@@ -17,10 +17,27 @@ from urllib.parse import urlsplit, urlunsplit
 
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import build_event_report, discover_event_files
-from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor
+from live.smoke_report import (
+    _redact_log_text,
+    build_live_smoke_report,
+    default_logs_root_for_monitor,
+)
 
 
 BUNDLE_VERSION = 1
+MONITOR_SNAPSHOT_FILE_NAMES = frozenset({"state.latest.json", "manifest.json"})
+SNAPSHOT_SENSITIVE_KEY_FRAGMENTS = (
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "passphrase",
+    "password",
+    "private_key",
+    "secret",
+    "signature",
+    "token",
+)
 
 
 def _utc_stamp() -> str:
@@ -328,6 +345,40 @@ def _config_hashes(paths: list[str | Path]) -> list[dict[str, Any]]:
     return out
 
 
+def _is_sensitive_snapshot_key(key: Any) -> bool:
+    normalized = str(key).lower().replace("-", "_")
+    return any(fragment in normalized for fragment in SNAPSHOT_SENSITIVE_KEY_FRAGMENTS)
+
+
+def _redact_snapshot_value(value: Any, *, sensitive_key: bool = False) -> Any:
+    if sensitive_key and value is not None:
+        return "[redacted]"
+    if isinstance(value, str):
+        redacted = _redact_log_text(value, max_len=1_000_000)
+        return _redact_url_userinfo(redacted) or redacted
+    if isinstance(value, list):
+        return [_redact_snapshot_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_snapshot_value(
+                item,
+                sensitive_key=_is_sensitive_snapshot_key(key),
+            )
+            for key, item in value.items()
+        }
+    return value
+
+
+def _redacted_snapshot_bytes(path: Path) -> bytes:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        return (_redact_log_text(text, max_len=10_000_000) + "\n").encode("utf-8")
+    redacted = _redact_snapshot_value(parsed)
+    return (json.dumps(redacted, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def _snapshot_files(
     monitor_root: str | Path,
     *,
@@ -342,6 +393,8 @@ def _snapshot_files(
     candidates: list[tuple[float, Path]] = []
     for path in root.rglob("*.json"):
         if any(part == "events" for part in path.parts):
+            continue
+        if path.name not in MONITOR_SNAPSHOT_FILE_NAMES:
             continue
         try:
             stat = path.stat()
@@ -381,7 +434,7 @@ def _copy_snapshot_files(
         dest = bundle_root / "monitor_snapshots" / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            data = path.read_bytes()
+            data = _redacted_snapshot_bytes(path)
             dest.write_bytes(data)
             copied.append(
                 {
@@ -389,6 +442,7 @@ def _copy_snapshot_files(
                     "bundle_path": str(dest.relative_to(bundle_root)),
                     "size_bytes": len(data),
                     "sha256": hashlib.sha256(data).hexdigest(),
+                    "redacted": True,
                 }
             )
         except OSError as exc:

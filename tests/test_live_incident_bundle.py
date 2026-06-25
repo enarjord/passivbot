@@ -82,7 +82,24 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         ],
     )
     snapshot = tmp_path / "monitor" / "binance" / "binance_01" / "state.latest.json"
-    snapshot.write_text('{"ok": true}\n', encoding="utf-8")
+    snapshot.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "api_key": "SNAPSHOT_KEY",
+                "nested": {
+                    "authorization": "Bearer SNAPSHOT_TOKEN",
+                    "url": "https://user:pass@example.com/path",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    unexpected_snapshot = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "debug_dump.json"
+    )
+    unexpected_snapshot.write_text('{"secret": "do-not-copy-snapshot"}\n', encoding="utf-8")
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "bot.log").write_text(
@@ -126,16 +143,30 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         assert "config_hashes.json" in names
         assert "binance/binance_01/state.latest.json" not in names
         assert "monitor_snapshots/binance/binance_01/state.latest.json" in names
+        assert "monitor_snapshots/binance/binance_01/debug_dump.json" not in names
         assert any(name.startswith("event_segments/") for name in names)
 
         manifest = _read_tar_json(tar, "manifest.json")
         event_report = _read_tar_json(tar, "event_report.json")
         window_report = _read_tar_json(tar, "time_window_report.json")
         config_hashes = _read_tar_json(tar, "config_hashes.json")
+        redacted_snapshot = _read_tar_json(
+            tar,
+            "monitor_snapshots/binance/binance_01/state.latest.json",
+        )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["monitor_snapshots"][0]["redacted"] is True
     assert "do-not-copy" not in json.dumps(manifest)
     assert "do-not-copy" not in json.dumps(config_hashes)
+    snapshot_dump = json.dumps(redacted_snapshot)
+    assert "SNAPSHOT_KEY" not in snapshot_dump
+    assert "SNAPSHOT_TOKEN" not in snapshot_dump
+    assert "user:pass" not in snapshot_dump
+    assert "do-not-copy-snapshot" not in snapshot_dump
+    assert redacted_snapshot["api_key"] == "[redacted]"
+    assert redacted_snapshot["nested"]["authorization"] == "[redacted]"
+    assert redacted_snapshot["nested"]["url"] == "https://[redacted]@example.com/path"
     assert event_report["cycle"]["events"][0]["seq"] == 1
     assert "data" not in event_report["cycle"]["events"][0]
     assert window_report["events"][0]["seq"] == 2
