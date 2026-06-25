@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-smoke-report` for local smoke-test summaries from
+  monitor event NDJSON and recent text logs.
 - Added `passivbot tool live-event-query` filters for order wave id, remote
   call id, symbol, position side, reason code, and status, plus optional
   timeline rows for matched structured live events.

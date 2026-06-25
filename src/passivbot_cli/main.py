@@ -95,7 +95,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
     ),
     "live-event-query": CommandSpec(
         "tools.live_event_query",
-        "validate monitor event NDJSON and reconstruct a live cycle",
+        "query structured live event NDJSON",
+    ),
+    "live-smoke-report": CommandSpec(
+        "tools.live_smoke_report",
+        "summarize local live monitor events and text logs",
     ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
