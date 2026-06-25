@@ -609,6 +609,9 @@ class Passivbot:
     _emit_execution_confirmation_satisfied_event = (
         live_event_emitters.emit_execution_confirmation_satisfied_event
     )
+    _emit_execution_confirmation_timeout_event = (
+        live_event_emitters.emit_execution_confirmation_timeout_event
+    )
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
@@ -3934,6 +3937,7 @@ class Passivbot:
                 "confirmations": {
                     str(surface): int(epoch) for surface, epoch in confirmations.items()
                 },
+                "timeout_emitted": False,
             }
         )
         self._pending_order_waves = pending[-8:]
@@ -3950,6 +3954,13 @@ class Passivbot:
         if not pending:
             return
         now_ms = int(utc_ms())
+        try:
+            timeout_ms = max(
+                0,
+                int(getattr(self, "_order_wave_confirmation_timeout_ms", 60_000) or 0),
+            )
+        except Exception:
+            timeout_ms = 60_000
         remaining = []
         for wave in pending:
             confirmations = dict(wave.get("confirmations") or {})
@@ -3958,6 +3969,29 @@ class Passivbot:
                 for surface, epoch in confirmations.items()
             )
             if not settled:
+                confirm_ms = max(
+                    0, now_ms - int(wave.get("posted_ms", now_ms) or now_ms)
+                )
+                if timeout_ms and confirm_ms >= timeout_ms and not wave.get(
+                    "timeout_emitted"
+                ):
+                    elapsed_ms = max(
+                        0, now_ms - int(wave.get("started_ms", now_ms) or now_ms)
+                    )
+                    emit_confirmation_timeout = getattr(
+                        self, "_emit_execution_confirmation_timeout_event", None
+                    )
+                    if callable(emit_confirmation_timeout):
+                        emit_confirmation_timeout(
+                            wave=wave,
+                            confirmations=confirmations,
+                            current_epoch=current_epoch,
+                            fresh_surfaces=fresh_surfaces,
+                            elapsed_ms=elapsed_ms,
+                            confirm_ms=confirm_ms,
+                            timeout_ms=timeout_ms,
+                        )
+                    wave["timeout_emitted"] = True
                 remaining.append(wave)
                 continue
             elapsed_ms = max(0, now_ms - int(wave.get("started_ms", now_ms) or now_ms))

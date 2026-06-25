@@ -1469,6 +1469,90 @@ def test_order_wave_settlement_emits_confirmation_satisfied_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_order_wave_settlement_emits_confirmation_timeout_once():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_confirmation_satisfied_event = (
+            pb_mod.Passivbot._emit_execution_confirmation_satisfied_event
+        )
+        _emit_execution_confirmation_timeout_event = (
+            pb_mod.Passivbot._emit_execution_confirmation_timeout_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _log_settled_order_waves = pb_mod.Passivbot._log_settled_order_waves
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_14"
+            self._order_wave_confirmation_timeout_ms = 1
+            self._pending_order_waves = [
+                {
+                    "id": 4,
+                    "event_id": "ow_4",
+                    "started_ms": 1_000,
+                    "posted_ms": 2_000,
+                    "planned_cancel": 0,
+                    "planned_create": 1,
+                    "cancel_posted": 0,
+                    "create_posted": 1,
+                    "symbols": ["ETH/USDT:USDT"],
+                    "confirmations": {"open_orders": 9},
+                }
+            ]
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._log_settled_order_waves(
+        current_epoch=8,
+        fresh_surfaces=set(),
+        changed_surfaces=[],
+    )
+    bot._log_settled_order_waves(
+        current_epoch=8,
+        fresh_surfaces=set(),
+        changed_surfaces=[],
+    )
+
+    assert len(bot._pending_order_waves) == 1
+    assert bot._pending_order_waves[0]["timeout_emitted"] is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    timeout_events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CONFIRMATION_TIMEOUT
+    ]
+    assert len(timeout_events) == 1
+    timeout_event = timeout_events[0]
+    assert timeout_event.cycle_id == "cy_14"
+    assert timeout_event.order_wave_id == "ow_4"
+    assert timeout_event.status == "degraded"
+    assert timeout_event.reason_code == "authoritative_confirmation_timeout"
+    assert timeout_event.data["pending_surfaces"] == ["open_orders"]
+    assert timeout_event.data["confirmations"] == {"open_orders": 9}
+
+    bot._log_settled_order_waves(
+        current_epoch=9,
+        fresh_surfaces={"open_orders"},
+        changed_surfaces=["open_orders"],
+    )
+
+    assert bot._pending_order_waves == []
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].event_type == EventTypes.EXECUTION_CONFIRMATION_SATISFIED
+    assert sink.events[-1].order_wave_id == "ow_4"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_start_bot_records_startup_error_stop_and_early_snapshot(monkeypatch):
     import passivbot as pb_mod
