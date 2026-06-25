@@ -46,6 +46,11 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "audit candle caches (requires full install)",
         requires_full=True,
     ),
+    "cache-integrity-doctor": CommandSpec(
+        "tools.cache_integrity_doctor",
+        "read-only local cache integrity smoke report (requires full install)",
+        requires_full=True,
+    ),
     "crash-finder": CommandSpec(
         "tools.crash_finder",
         "scan local OHLCV cache for crash-window suite scenarios (requires full install)",
