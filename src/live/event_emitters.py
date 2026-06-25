@@ -1141,6 +1141,49 @@ def emit_cache_load_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None
         )
 
 
+def _emit_cache_flush_completed_event_unchecked(
+    bot: Any,
+    payload: dict[str, Any],
+) -> None:
+    data_in = dict(payload or {})
+    symbol = data_in.get("symbol")
+    timeframe = str(data_in.get("timeframe") or data_in.get("tf") or "1m")
+    data: dict[str, Any] = {"timeframe": timeframe}
+    for key in (
+        "persisted_rows",
+        "persisted_start_ts",
+        "persisted_end_ts",
+        "suppressed_count",
+        "suppressed_rows",
+    ):
+        value = _safe_int(data_in.get(key))
+        if value is not None:
+            data[key] = value
+    _safe_emit(
+        bot,
+        EventTypes.CACHE_FLUSH_COMPLETED,
+        level="debug",
+        component="cache.candles",
+        tags=("cache", "candle", "flush"),
+        cycle_id=current_live_event_cycle_id(bot),
+        symbol=str(symbol) if symbol is not None else None,
+        status="succeeded",
+        reason_code="candle_disk_flush_completed",
+        data=data,
+    )
+
+
+def emit_cache_flush_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_cache_flush_completed_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CACHE_FLUSH_COMPLETED,
+            exc,
+        )
+
+
 def _emit_cache_warmup_decision_event_unchecked(
     bot: Any,
     *,

@@ -538,6 +538,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         _emit_cache_load_completed_event = (
             pb_mod.Passivbot._emit_cache_load_completed_event
         )
+        _emit_cache_flush_completed_event = (
+            pb_mod.Passivbot._emit_cache_flush_completed_event
+        )
         _emit_cache_warmup_decision_event = (
             pb_mod.Passivbot._emit_cache_warmup_decision_event
         )
@@ -645,6 +648,17 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
             "suppressed_count": 2,
         }
     )
+    bot._emit_cache_flush_completed_event(
+        {
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "1m",
+            "persisted_rows": 4,
+            "persisted_start_ts": 300_000,
+            "persisted_end_ts": 480_000,
+            "suppressed_count": 2,
+            "suppressed_rows": 8,
+        }
+    )
     bot._emit_cache_warmup_decision_event(
         context="trading-ready warmup",
         timeframe="1m",
@@ -670,6 +684,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_TAIL_PROJECTED,
         EventTypes.CACHE_LOAD_COMPLETED,
+        EventTypes.CACHE_FLUSH_COMPLETED,
         EventTypes.CACHE_WARMUP_DECISION,
     ]
     assert {event.cycle_id for event in events} == {"cy_11"}
@@ -710,18 +725,29 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "suppressed_count": 2,
         "source_days": {"legacy": 0, "merged": 0, "primary": 1},
     }
-    assert events[8].component == "cache.warmup"
-    assert events[8].reason_code == "warmup_cache_decision"
-    assert events[8].data["context"] == "trading-ready warmup"
-    assert events[8].data["symbol_count"] == 3
-    assert events[8].data["reused_count"] == 1
-    assert events[8].data["cold_count"] == 2
-    assert events[8].data["cold_path_required"] is True
-    assert events[8].data["reason_counts"] == {
+    assert events[8].component == "cache.candles"
+    assert events[8].symbol == "ETH/USDT:USDT"
+    assert events[8].reason_code == "candle_disk_flush_completed"
+    assert events[8].data == {
+        "timeframe": "1m",
+        "persisted_rows": 4,
+        "persisted_start_ts": 300_000,
+        "persisted_end_ts": 480_000,
+        "suppressed_count": 2,
+        "suppressed_rows": 8,
+    }
+    assert events[9].component == "cache.warmup"
+    assert events[9].reason_code == "warmup_cache_decision"
+    assert events[9].data["context"] == "trading-ready warmup"
+    assert events[9].data["symbol_count"] == 3
+    assert events[9].data["reused_count"] == 1
+    assert events[9].data["cold_count"] == 2
+    assert events[9].data["cold_path_required"] is True
+    assert events[9].data["reason_counts"] == {
         "missing_coverage": 2,
         "warm_cache_accepted": 1,
     }
-    assert events[8].data["window_max_candles"] == 260
+    assert events[9].data["window_max_candles"] == 260
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -769,6 +795,103 @@ def test_candle_disk_load_handler_throttles_repeated_symbol_timeframe_events():
 
     assert len(bot.emitted) == 3
     assert bot.emitted[2]["timeframe"] == "1h"
+
+
+def test_candle_cache_flush_handler_throttles_repeated_symbol_timeframe_events():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _handle_candle_cache_flush_event = (
+            pb_mod.Passivbot._handle_candle_cache_flush_event
+        )
+
+        def __init__(self):
+            self._cache_flush_event_throttle_seconds = 60.0
+            self.emitted = []
+
+        def _emit_cache_flush_completed_event(self, payload):
+            self.emitted.append(dict(payload))
+
+    bot = FakeBot()
+    batch = np.array(
+        [
+            (60_000, 1.0, 2.0, 0.5, 1.5, 10.0),
+            (120_000, 1.5, 2.5, 1.0, 2.0, 11.0),
+        ],
+        dtype=pb_mod.CANDLE_DTYPE,
+    )
+
+    bot._handle_candle_cache_flush_event("BTC/USDT:USDT", "1m", batch)
+    bot._handle_candle_cache_flush_event("BTC/USDT:USDT", "1m", batch)
+
+    assert len(bot.emitted) == 1
+    assert bot.emitted[0] == {
+        "symbol": "BTC/USDT:USDT",
+        "timeframe": "1m",
+        "persisted_rows": 2,
+        "persisted_start_ts": 60_000,
+        "persisted_end_ts": 120_000,
+    }
+    key = ("BTC/USDT:USDT", "1m")
+    assert bot._cache_flush_event_suppressed[key] == {"count": 1, "rows": 2}
+
+    bot._cache_flush_event_last_emit[key] -= 61.0
+    bot._handle_candle_cache_flush_event("BTC/USDT:USDT", "1m", batch)
+
+    assert len(bot.emitted) == 2
+    assert bot.emitted[1]["suppressed_count"] == 1
+    assert bot.emitted[1]["suppressed_rows"] == 2
+    assert key not in bot._cache_flush_event_suppressed
+
+    bot._handle_candle_cache_flush_event("BTC/USDT:USDT", "1h", batch)
+
+    assert len(bot.emitted) == 3
+    assert bot.emitted[2]["timeframe"] == "1h"
+
+
+def test_candle_persist_handler_preserves_monitor_and_emits_flush_summary():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _monitor_handle_candlestick_persist = (
+            pb_mod.Passivbot._monitor_handle_candlestick_persist
+        )
+        _handle_candle_cache_flush_event = (
+            pb_mod.Passivbot._handle_candle_cache_flush_event
+        )
+        _handle_candle_persist_event = pb_mod.Passivbot._handle_candle_persist_event
+
+        def __init__(self):
+            self.monitor_publisher = RecorderPublisher()
+            self._bot_ready = True
+            self._cache_flush_event_throttle_seconds = 60.0
+            self.flush_events = []
+
+        def _emit_cache_flush_completed_event(self, payload):
+            self.flush_events.append(dict(payload))
+
+    bot = FakeBot()
+    batch = np.array(
+        [
+            (60_000, 1.0, 2.0, 0.5, 1.5, 10.0),
+            (120_000, 1.5, 2.5, 1.0, 2.0, 11.0),
+        ],
+        dtype=pb_mod.CANDLE_DTYPE,
+    )
+
+    bot._handle_candle_persist_event("BTC/USDT:USDT", "1m", batch)
+
+    assert len(bot.monitor_publisher.completed_candles) == 1
+    assert bot.monitor_publisher.completed_candles[0]["symbol"] == "BTC/USDT:USDT"
+    assert bot.flush_events == [
+        {
+            "symbol": "BTC/USDT:USDT",
+            "timeframe": "1m",
+            "persisted_rows": 2,
+            "persisted_start_ts": 60_000,
+            "persisted_end_ts": 120_000,
+        }
+    ]
 
 
 def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(caplog):
@@ -837,6 +960,10 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             bot,
             payload=object(),
         )
+        pb_mod.Passivbot._emit_cache_flush_completed_event(
+            bot,
+            payload=object(),
+        )
         pb_mod.Passivbot._emit_cache_warmup_decision_event(
             bot,
             context=object(),
@@ -862,6 +989,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)
     assert any(EventTypes.CANDLE_TAIL_PROJECTED in msg for msg in messages)
     assert any(EventTypes.CACHE_LOAD_COMPLETED in msg for msg in messages)
+    assert any(EventTypes.CACHE_FLUSH_COMPLETED in msg for msg in messages)
     assert any(EventTypes.CACHE_WARMUP_DECISION in msg for msg in messages)
     assert any(EventTypes.BOT_STARTUP_TIMING in msg for msg in messages)
 
