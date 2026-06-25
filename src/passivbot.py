@@ -629,6 +629,9 @@ class Passivbot:
     _emit_candle_tail_projected_event = (
         live_event_emitters.emit_candle_tail_projected_event
     )
+    _emit_candle_coverage_checked_event = (
+        live_event_emitters.emit_candle_coverage_checked_event
+    )
     _emit_cache_warmup_decision_event = (
         live_event_emitters.emit_cache_warmup_decision_event
     )
@@ -5078,23 +5081,41 @@ class Passivbot:
             if win > 0 and end_final > 0:
                 start_ts = max(0, int(end_final - win * ONE_MIN_MS))
                 log_level = "debug"
-                self.cm.check_disk_coverage(
+                report = self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final),
                     timeframe="1m",
                     log_level=log_level,
                 )
+                self._emit_candle_coverage_checked_event(
+                    symbol=sym,
+                    timeframe="1m",
+                    start_ts=start_ts,
+                    end_ts=int(end_final),
+                    report=report,
+                    context="required_disk_audit",
+                    required=True,
+                )
             warm_hours = int(per_symbol_h1_hours.get(sym, 0) or 0)
             if warm_hours > 0 and end_final_hour > 0:
                 start_ts = max(0, int(end_final_hour - warm_hours * 60 * ONE_MIN_MS))
                 log_level = "debug"
-                self.cm.check_disk_coverage(
+                report = self.cm.check_disk_coverage(
                     sym,
                     start_ts,
                     int(end_final_hour),
                     timeframe="1h",
                     log_level=log_level,
+                )
+                self._emit_candle_coverage_checked_event(
+                    symbol=sym,
+                    timeframe="1h",
+                    start_ts=start_ts,
+                    end_ts=int(end_final_hour),
+                    report=report,
+                    context="required_disk_audit",
+                    required=True,
                 )
 
     def _required_candle_windows_by_symbol(

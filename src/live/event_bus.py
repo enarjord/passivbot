@@ -48,6 +48,7 @@ class EventTypes:
     EMA_BUNDLE_COMPLETED = "ema.bundle.completed"
     EMA_FALLBACK_USED = "ema.fallback_used"
     EMA_UNAVAILABLE = "ema.unavailable"
+    CANDLE_COVERAGE_CHECKED = "candle.coverage_checked"
     CANDLE_TAIL_PROJECTED = "candle.tail_projected"
     CACHE_LOAD_COMPLETED = "cache.load.completed"
     CACHE_FLUSH_COMPLETED = "cache.flush.completed"
@@ -109,6 +110,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EMA_BUNDLE_COMPLETED,
     EventTypes.EMA_FALLBACK_USED,
     EventTypes.EMA_UNAVAILABLE,
+    EventTypes.CANDLE_COVERAGE_CHECKED,
     EventTypes.CANDLE_TAIL_PROJECTED,
     EventTypes.CACHE_LOAD_COMPLETED,
     EventTypes.CACHE_FLUSH_COMPLETED,
@@ -392,6 +394,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.EMA_FALLBACK_USED: EventRoute(console=False, text=False),
     EventTypes.EMA_UNAVAILABLE: EventRoute(console=False, text=False),
+    EventTypes.CANDLE_COVERAGE_CHECKED: EventRoute(console=False, text=False),
     EventTypes.CANDLE_TAIL_PROJECTED: EventRoute(console=False, text=False),
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_FLUSH_COMPLETED: EventRoute(console=False, text=False),
