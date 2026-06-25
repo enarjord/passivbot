@@ -550,6 +550,51 @@ def test_persist_batch_observer_receives_saved_batch(tmp_path):
     assert np.array_equal(batch, arr)
 
 
+def test_disk_load_observer_receives_summary_and_is_best_effort(tmp_path):
+    cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
+    symbol = "LOAD/USDT"
+    ts0 = _floor_minute(int(time.time() * 1000)) - 5 * ONE_MIN_MS
+    ts1 = ts0 + ONE_MIN_MS
+    arr = np.array(
+        [
+            (ts0, 1.0, 2.0, 0.5, 1.5, 0.3),
+            (ts1, 1.5, 2.5, 1.0, 2.0, 0.4),
+        ],
+        dtype=CANDLE_DTYPE,
+    )
+    observed = []
+
+    def observer(payload):
+        observed.append(dict(payload))
+
+    cm._persist_batch(symbol, arr, timeframe="1m")
+    cm.set_disk_load_observer(observer)
+    loaded = cm._load_from_disk(symbol, ts0, ts1, timeframe="1m")
+
+    assert loaded is not None
+    assert loaded.shape[0] == 2
+    assert len(observed) == 1
+    payload = observed[0]
+    assert payload["symbol"] == symbol
+    assert payload["timeframe"] == "1m"
+    assert payload["start_ts"] == ts0
+    assert payload["end_ts"] == ts1
+    assert payload["loaded_rows"] == 2
+    assert payload["loaded_start_ts"] == ts0
+    assert payload["loaded_end_ts"] == ts1
+    assert payload["days"] == 1
+    assert payload["source_days"] == {"primary": 1, "legacy": 0, "merged": 0}
+    assert payload["elapsed_ms"] >= 0
+
+    def failing_observer(_payload):
+        raise RuntimeError("observer failed")
+
+    cm.set_disk_load_observer(failing_observer)
+    loaded_again = cm._load_from_disk(symbol, ts0, ts1, timeframe="1m")
+    assert loaded_again is not None
+    assert loaded_again.shape[0] == 2
+
+
 def test_rebuild_index_for_range_updates_and_prunes(tmp_path):
     cm = CandlestickManager(exchange=None, exchange_name="ex", cache_dir=str(tmp_path / "caches"))
     symbol = "REBUILD/USDT"

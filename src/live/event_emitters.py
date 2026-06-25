@@ -1083,6 +1083,63 @@ def _reason_counts(data: Any) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
+def _emit_cache_load_completed_event_unchecked(
+    bot: Any,
+    payload: dict[str, Any],
+) -> None:
+    data_in = dict(payload or {})
+    symbol = data_in.get("symbol")
+    timeframe = str(data_in.get("timeframe") or data_in.get("tf") or "1m")
+    data: dict[str, Any] = {"timeframe": timeframe}
+    for key in (
+        "start_ts",
+        "end_ts",
+        "loaded_rows",
+        "loaded_start_ts",
+        "loaded_end_ts",
+        "days",
+        "primary_days",
+        "legacy_days",
+        "merged_days",
+        "elapsed_ms",
+    ):
+        value = _safe_int(data_in.get(key))
+        if value is not None:
+            data[key] = value
+    source_days = data_in.get("source_days")
+    if isinstance(source_days, dict):
+        clean_source_days: dict[str, int] = {}
+        for key, value in source_days.items():
+            count = _safe_int(value)
+            if count is not None:
+                clean_source_days[str(key)] = int(count)
+        if clean_source_days:
+            data["source_days"] = dict(sorted(clean_source_days.items()))
+    _safe_emit(
+        bot,
+        EventTypes.CACHE_LOAD_COMPLETED,
+        level="debug",
+        component="cache.candles",
+        tags=("cache", "candle", "load"),
+        cycle_id=current_live_event_cycle_id(bot),
+        symbol=str(symbol) if symbol is not None else None,
+        status="succeeded",
+        reason_code="candle_disk_load_completed",
+        data=data,
+    )
+
+
+def emit_cache_load_completed_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_cache_load_completed_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CACHE_LOAD_COMPLETED,
+            exc,
+        )
+
+
 def _emit_cache_warmup_decision_event_unchecked(
     bot: Any,
     *,
