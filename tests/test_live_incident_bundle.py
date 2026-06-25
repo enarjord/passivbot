@@ -1,0 +1,237 @@
+from __future__ import annotations
+
+import json
+import tarfile
+
+from live.incident_bundle import _redact_url_userinfo, build_live_incident_bundle
+from tools import live_incident_bundle
+
+
+def _monitor_row(
+    *,
+    event_type: str,
+    seq: int,
+    ts: int,
+    status: str = "succeeded",
+    level: str = "info",
+    reason_code: str = "test",
+    symbol: str | None = None,
+    ids: dict | None = None,
+) -> dict:
+    live_event = {
+        "schema_version": 1,
+        "event_id": f"evt_{seq}",
+        "event_type": event_type,
+        "level": level,
+        "source": "live",
+        "component": "test",
+        "exchange": "binance",
+        "user": "binance_01",
+        "symbol": symbol,
+        "status": status,
+        "reason_code": reason_code,
+        "data": {"seq": seq, "detail": "kept only when include_data is enabled"},
+        "ids": dict(ids or {}),
+    }
+    return {
+        "exchange": "binance",
+        "user": "binance_01",
+        "kind": event_type,
+        "tags": ["test"],
+        "payload": {"_live_event": live_event},
+        "seq": seq,
+        "ts": ts,
+    }
+
+
+def _write_ndjson(path, rows):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+
+
+def _read_tar_json(tar, name: str):
+    member = tar.extractfile(name)
+    assert member is not None
+    return json.loads(member.read().decode())
+
+
+def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="warning",
+                reason_code="request_timeout",
+                symbol="BTC/USDT:USDT",
+                ids={"cycle_id": "cy_2", "remote_call_id": "rc_1"},
+            ),
+        ],
+    )
+    snapshot = tmp_path / "monitor" / "binance" / "binance_01" / "state.latest.json"
+    snapshot.write_text(
+        json.dumps(
+            {
+                "ok": True,
+                "api_key": "SNAPSHOT_KEY",
+                "nested": {
+                    "authorization": "Bearer SNAPSHOT_TOKEN",
+                    "url": "https://user:pass@example.com/path",
+                },
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    unexpected_snapshot = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "debug_dump.json"
+    )
+    unexpected_snapshot.write_text('{"secret": "do-not-copy-snapshot"}\n', encoding="utf-8")
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "bot.log").write_text(
+        "2026-06-25T00:00:00Z ERROR request timeout\n",
+        encoding="utf-8",
+    )
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"api_key": "do-not-copy"}\n', encoding="utf-8")
+    output = tmp_path / "incident.tar.gz"
+
+    report = build_live_incident_bundle(
+        tmp_path / "monitor",
+        output_path=output,
+        logs_root=logs_dir,
+        config_paths=[config_path],
+        cycle_id="cy_1",
+        since_ms=1500,
+        until_ms=2500,
+        include_data=False,
+        max_event_segment_bytes=100_000,
+        cwd=tmp_path,
+    )
+
+    assert report["ok"] is True
+    assert report["bundle_path"] == str(output)
+    assert report["event_report"]["cycle_matched_events"] == 1
+    assert report["time_window"]["matched_events"] == 1
+    assert report["config_hashes"] == 1
+    assert report["monitor_snapshots"] == 1
+    assert report["event_segments"]["included"] == 1
+
+    with tarfile.open(output, "r:gz") as tar:
+        tar_names = tar.getnames()
+        names = set(tar_names)
+        assert len(tar_names) == len(names)
+        assert "manifest.json" in names
+        assert "event_report.json" in names
+        assert "time_window_report.json" in names
+        assert "smoke_report.json" in names
+        assert "timeline.txt" in names
+        assert "config_hashes.json" in names
+        assert "binance/binance_01/state.latest.json" not in names
+        assert "monitor_snapshots/binance/binance_01/state.latest.json" in names
+        assert "monitor_snapshots/binance/binance_01/debug_dump.json" not in names
+        assert any(name.startswith("event_segments/") for name in names)
+
+        manifest = _read_tar_json(tar, "manifest.json")
+        event_report = _read_tar_json(tar, "event_report.json")
+        window_report = _read_tar_json(tar, "time_window_report.json")
+        config_hashes = _read_tar_json(tar, "config_hashes.json")
+        redacted_snapshot = _read_tar_json(
+            tar,
+            "monitor_snapshots/binance/binance_01/state.latest.json",
+        )
+
+    assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["monitor_snapshots"][0]["redacted"] is True
+    assert "do-not-copy" not in json.dumps(manifest)
+    assert "do-not-copy" not in json.dumps(config_hashes)
+    snapshot_dump = json.dumps(redacted_snapshot)
+    assert "SNAPSHOT_KEY" not in snapshot_dump
+    assert "SNAPSHOT_TOKEN" not in snapshot_dump
+    assert "user:pass" not in snapshot_dump
+    assert "do-not-copy-snapshot" not in snapshot_dump
+    assert redacted_snapshot["api_key"] == "[redacted]"
+    assert redacted_snapshot["nested"]["authorization"] == "[redacted]"
+    assert redacted_snapshot["nested"]["url"] == "https://[redacted]@example.com/path"
+    assert event_report["cycle"]["events"][0]["seq"] == 1
+    assert "data" not in event_report["cycle"]["events"][0]
+    assert window_report["events"][0]["seq"] == 2
+    assert "remote_call.failed" in window_report["timeline"][0]
+
+
+def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "bot.log").write_text(
+        "2026-06-25T00:00:00Z CRITICAL skipped log\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--no-event-segments",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["bundle_path"] == str(output)
+    assert report["event_segments"]["included"] == 0
+    assert output.exists()
+
+    with tarfile.open(output, "r:gz") as tar:
+        tar_names = tar.getnames()
+        names = set(tar_names)
+        assert len(tar_names) == len(names)
+        assert "event_segments_manifest.json" in names
+        assert not any(name.startswith("event_segments/") for name in names)
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert smoke_report["logs"]["root"] is None
+    assert smoke_report["logs"]["hard_matches"] == 0
+
+
+def test_live_incident_bundle_redacts_git_remote_url_userinfo():
+    assert (
+        _redact_url_userinfo("https://token:secret@example.com/org/repo.git")
+        == "https://[redacted]@example.com/org/repo.git"
+    )
+    assert (
+        _redact_url_userinfo("git@github.com:enarjord/passivbot.git")
+        == "git@github.com:enarjord/passivbot.git"
+    )
