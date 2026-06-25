@@ -241,6 +241,40 @@ def test_pipeline_queue_overflow_is_observable_without_raising():
     assert pipeline.degraded_events[-1].reason_code == "queue_full"
 
 
+def test_pipeline_health_snapshot_reports_queue_and_degraded_counters():
+    pipeline = LiveEventPipeline(
+        queue_maxsize=1,
+        start=False,
+        routes={
+            EventTypes.DATA_PACKET_UPDATED: EventRoute(
+                structured=True, monitor=False, console=False
+            )
+        },
+    )
+
+    assert pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED)) is not None
+    assert (
+        pipeline.emit(LiveEvent(EventTypes.DATA_PACKET_UPDATED), require_enqueue=True)
+        is None
+    )
+
+    snapshot = pipeline.health_snapshot()
+
+    assert snapshot["event_queue_depth"] == 1
+    assert snapshot["event_queue_maxsize"] == 1
+    assert snapshot["event_queue_unfinished_tasks"] == 1
+    assert snapshot["event_dropped_total"] == 1
+    assert snapshot["event_drop_counts"] == {EventTypes.DATA_PACKET_UPDATED: 1}
+    assert snapshot["event_sink_error_total"] == 0
+    assert snapshot["event_sink_error_counts"] == {}
+    assert snapshot["event_degraded_count"] == 1
+    assert snapshot["event_pipeline_stopping"] is False
+    assert snapshot["event_pipeline_worker_alive"] is False
+
+    pipeline._queue.get_nowait()
+    pipeline._queue.task_done()
+
+
 def test_pipeline_queue_overflow_is_logged_and_monitor_visible(caplog):
     monitor = ListEventSink()
     pipeline = LiveEventPipeline(

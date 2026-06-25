@@ -573,6 +573,40 @@ class LiveEventPipeline:
         self.context = self.context.with_ids(**kwargs)
         return self.context
 
+    def health_snapshot(self) -> dict[str, Any]:
+        """Return best-effort operational counters for periodic health events."""
+        try:
+            queue_depth = int(self._queue.qsize())
+        except (AttributeError, NotImplementedError, TypeError, ValueError):
+            queue_depth = None
+        try:
+            unfinished_tasks = int(self._queue.unfinished_tasks)
+        except (AttributeError, TypeError, ValueError):
+            unfinished_tasks = None
+        try:
+            queue_maxsize = int(getattr(self._queue, "maxsize", 0) or 0)
+        except (TypeError, ValueError):
+            queue_maxsize = None
+        with self._state_lock:
+            drop_counts = dict(self.drop_counters)
+            sink_error_counts = dict(self.sink_error_counters)
+            degraded_count = len(self.degraded_events)
+        snapshot: dict[str, Any] = {
+            "event_queue_depth": queue_depth,
+            "event_queue_maxsize": queue_maxsize,
+            "event_queue_unfinished_tasks": unfinished_tasks,
+            "event_dropped_total": int(sum(drop_counts.values())),
+            "event_drop_counts": drop_counts,
+            "event_sink_error_total": int(sum(sink_error_counts.values())),
+            "event_sink_error_counts": sink_error_counts,
+            "event_degraded_count": int(degraded_count),
+            "event_pipeline_stopping": bool(self._stop.is_set()),
+            "event_pipeline_worker_alive": bool(
+                self._worker is not None and self._worker.is_alive()
+            ),
+        }
+        return {key: value for key, value in snapshot.items() if value is not None}
+
     def emit(
         self,
         event: LiveEvent | Mapping[str, Any],

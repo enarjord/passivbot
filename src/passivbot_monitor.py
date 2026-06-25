@@ -53,6 +53,55 @@ def _get_process_rss_bytes() -> Optional[int]:
     return None
 
 
+def _get_process_memory_percent() -> Optional[float]:
+    """Return current process memory percentage when psutil is available."""
+    try:
+        if psutil is not None:
+            return float(psutil.Process(os.getpid()).memory_percent())
+    except Exception as exc:
+        logging.debug("[monitor] memory percent probe unavailable: %s", exc)
+    return None
+
+
+def _get_open_fd_count() -> Optional[int]:
+    """Return current open file descriptor count when the platform exposes it."""
+    try:
+        if psutil is not None:
+            process = psutil.Process(os.getpid())
+            num_fds = getattr(process, "num_fds", None)
+            if callable(num_fds):
+                return int(num_fds())
+    except Exception as exc:
+        logging.debug("[monitor] psutil fd-count probe unavailable: %s", exc)
+    proc_fd = "/proc/self/fd"
+    try:
+        if os.path.isdir(proc_fd):
+            return int(len(os.listdir(proc_fd)))
+    except Exception as exc:
+        logging.debug("[monitor] proc fd-count probe unavailable: %s", exc)
+    return None
+
+
+def _get_loadavg_payload() -> dict[str, Any]:
+    """Return system load averages and CPU count when available."""
+    payload: dict[str, Any] = {}
+    try:
+        one, five, fifteen = os.getloadavg()
+        payload.update(
+            {
+                "loadavg_1m": float(one),
+                "loadavg_5m": float(five),
+                "loadavg_15m": float(fifteen),
+            }
+        )
+    except (AttributeError, OSError):
+        pass
+    cpu_count = os.cpu_count()
+    if cpu_count is not None:
+        payload["cpu_count"] = int(cpu_count)
+    return payload
+
+
 def _calc_monitor_pnl(position_side, entry_price, close_price, qty, c_mult):
     """Calculate trade PnL using the same Rust helpers as the live bot."""
     try:
@@ -335,6 +384,23 @@ def _build_health_summary_payload(self, *, now_ms: Optional[int] = None) -> dict
     rss = _get_process_rss_bytes()
     if rss is not None:
         payload["rss_bytes"] = int(rss)
+    mem_pct = _get_process_memory_percent()
+    if mem_pct is not None and math.isfinite(mem_pct):
+        payload["memory_percent"] = float(mem_pct)
+    open_fds = _get_open_fd_count()
+    if open_fds is not None:
+        payload["open_fds"] = int(open_fds)
+    payload.update(_get_loadavg_payload())
+    pipeline = getattr(self, "_live_event_pipeline", None)
+    health_snapshot = getattr(pipeline, "health_snapshot", None)
+    if callable(health_snapshot):
+        try:
+            pipeline_payload = health_snapshot()
+        except Exception as exc:
+            logging.debug("[monitor] event pipeline health snapshot unavailable: %s", exc)
+            pipeline_payload = {}
+        if isinstance(pipeline_payload, dict):
+            payload.update(pipeline_payload)
     return payload
 
 

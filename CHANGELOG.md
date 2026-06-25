@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Added structured `health.summary` live events for periodic health and
   resource summaries without adding console noise.
+- Added process/system/event-pipeline resource-pressure fields to structured
+  `health.summary` events, including load average, open file count, queue depth,
+  event drops, and sink error counters when available.
 - Added `passivbot tool live-incident-bundle` for collecting local monitor
   events, smoke summaries, redacted log excerpts, monitor snapshots, config
   hashes, runtime metadata, and bounded event segments into a tarball.
