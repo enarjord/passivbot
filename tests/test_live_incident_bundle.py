@@ -70,6 +70,22 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                 ids={"cycle_id": "cy_1"},
             ),
             _monitor_row(
+                event_type="order_wave.started",
+                seq=3,
+                ts=1100,
+                ids={"cycle_id": "cy_1", "order_wave_id": "wave_1"},
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=4,
+                ts=1200,
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "wave_1",
+                    "action_id": "wave_1:create:0",
+                },
+            ),
+            _monitor_row(
                 event_type="remote_call.failed",
                 seq=2,
                 ts=2000,
@@ -125,7 +141,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
 
     assert report["ok"] is True
     assert report["bundle_path"] == str(output)
-    assert report["event_report"]["cycle_matched_events"] == 1
+    assert report["event_report"]["cycle_matched_events"] == 3
+    assert report["event_report"]["trace_summary_matched_events"] == 3
+    assert report["event_report"]["order_trace_matched_events"] == 2
+    assert report["event_report"]["cycle_trace_matched_events"] == 3
     assert report["time_window"]["matched_events"] == 1
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
@@ -169,6 +188,15 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert redacted_snapshot["nested"]["url"] == "https://[redacted]@example.com/path"
     assert event_report["cycle"]["events"][0]["seq"] == 1
     assert "data" not in event_report["cycle"]["events"][0]
+    assert event_report["cycle"]["trace_summary"]["matched_events"] == 3
+    assert event_report["cycle"]["order_trace"]["matched_order_events"] == 2
+    assert event_report["cycle"]["cycle_trace"]["matched_cycle_events"] == 3
+    assert (
+        event_report["cycle"]["cycle_trace"]["cycles"][0]["order_trace"][
+            "matched_order_events"
+        ]
+        == 2
+    )
     assert window_report["events"][0]["seq"] == 2
     assert "remote_call.failed" in window_report["timeline"][0]
 
@@ -201,6 +229,7 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
                 "--logs-root",
                 "",
                 "--no-event-segments",
+                "--no-trace-report",
                 "--output",
                 str(output),
                 "--compact",
@@ -221,7 +250,10 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
         assert len(tar_names) == len(names)
         assert "event_segments_manifest.json" in names
         assert not any(name.startswith("event_segments/") for name in names)
+        event_report = _read_tar_json(tar, "event_report.json")
         smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert "trace_summary" not in event_report["query"]
+    assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
     assert smoke_report["logs"]["hard_matches"] == 0
 

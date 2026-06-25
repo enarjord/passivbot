@@ -103,6 +103,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include each matched event's bounded data payload in compact event reports.",
     )
     parser.add_argument(
+        "--no-trace-report",
+        action="store_true",
+        help=(
+            "Do not include live-event-query trace summary/order-trace outputs "
+            "in the bundled event report."
+        ),
+    )
+    parser.add_argument(
         "--include-rotated",
         action="store_true",
         help="Also scan rotated/compressed monitor event segments.",
@@ -171,6 +179,7 @@ def main(argv: list[str] | None = None) -> int:
         since_ms=_parse_ms(args.since_ms),
         until_ms=_parse_ms(args.until_ms),
         include_data=bool(args.include_data),
+        include_trace_report=not bool(args.no_trace_report),
         include_rotated=bool(args.include_rotated),
         include_event_segments=not bool(args.no_event_segments),
         max_events=int(args.limit),
