@@ -11,6 +11,17 @@ slice before implementation.
 The logging overhaul remains the foundation: a centralized event stream should
 make the items below easier to prove, test, and operate.
 
+Update policy:
+
+- Keep open work in `High-Value Follow-Ups` with checkboxes and short status
+  notes.
+- When a PR completes all or a meaningful first slice of an item, update the
+  item status and add an entry to `Merged Work Log`.
+- Leave follow-up refinements attached to the item instead of hiding them in the
+  completed log.
+- Add newly discovered operations gaps here before spawning or accepting a PR for
+  them.
+
 Related detailed plans:
 
 - `docs/plans/live_logging_overhaul_plan.md`
@@ -18,118 +29,150 @@ Related detailed plans:
 
 ## High-Value Follow-Ups
 
-1. Incident bundle generator.
-   Initial implementation: `passivbot tool live-incident-bundle` collects local
-   monitor event reports, smoke summaries, redacted log excerpts, monitor
-   snapshots, config hashes, runtime metadata, and bounded event segments into a
-   tarball. Future refinements may add supervisor/process status and richer
-   remote smoke integration.
+1. [x] Incident bundle generator.
+   Status: initial implementation merged. `passivbot tool live-incident-bundle`
+   collects local monitor event reports, smoke summaries, redacted log excerpts,
+   monitor snapshots, config hashes, runtime metadata, and bounded event
+   segments into a tarball.
 
-   Add a local tool that collects one time window or `cycle_id` into a compact
-   bundle: structured events, selected text log excerpts, monitor snapshots,
-   bot config hash, git head, process uptime, resource samples, and relevant
-   rotated event segments. The goal is to make "send me the evidence" a single
-   command instead of a manual SSH/log-grep session.
+   Remaining refinements: add supervisor/process status and richer remote smoke
+   integration when the restart/smoke automation exists.
 
-2. Event query and timeline CLI extensions.
-   Extend the existing `passivbot tool live-event-query` tool rather than
-   building a parallel CLI. It already supports event discovery, compact JSON
-   output, `--cycle-id`, `--event-type`/`--kind`, `--limit`, and current-vs-
-   rotated segment selection. Add missing operator filters for `order_wave_id`,
-   `remote_call_id`, symbol, pside, reason code, and status, plus a terse
-   timeline rendering and non-cycle scopes. This is the natural companion to
-   structured events; without richer query axes, operators still need to know
-   file locations and NDJSON details.
+2. [x] Event query and timeline CLI extensions.
+   Status: core filter/timeline work merged. `passivbot tool live-event-query`
+   now supports event discovery, compact JSON output, current-vs-rotated segment
+   selection, terse timeline rendering, and filters for event type/kind, cycle
+   id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
+   action id, symbol, pside, reason code, and status.
 
-3. Live restart/smoke automation.
+   Remaining refinements: richer cycle/order reconstruction and incident-bundle
+   integration.
+
+3. [ ] Live restart/smoke automation.
+   Status: partial. The read-only `live-smoke-report` tool exists, but the safe
+   restart orchestration contract is not implemented.
+
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
    wait, then summarize process liveness, git head, recent hard errors, monitor
    event counts, startup timings, and resource usage. This should be safe,
    explicit, and produce a reviewable smoke report.
 
-4. Startup phase budget tracking.
+4. [ ] Startup phase budget tracking.
+   Status: partial. Startup timing and warmup cache decision events exist, but
+   durable phase budgets and rolling baselines do not.
+
    Startup currently has timing events, but the next step is durable budget
    accounting by phase: account-critical fetches, fill/PnL refresh, active
    candle readiness, forager warmup, HSL replay, Rust planning, and READY.
    Store both current timings and rolling baselines so regressions stand out
    after short-downtime restarts.
 
-5. Resource pressure telemetry.
-   Initial implementation: `health.summary` events now include process RSS,
-   memory percent when available, open file descriptor count, system load
-   averages, CPU count, and live-event pipeline queue/drop/sink error counters.
-   Remaining refinements include exchange-call counts, candle-fetch concurrency,
-   loop lag, thresholded console warnings, and richer system memory/swap fields.
+5. [x] Resource pressure telemetry.
+   Status: initial implementation merged. `health.summary` events now include
+   process RSS, memory percent when available, open file descriptor count,
+   system load averages, CPU count, and live-event pipeline queue/drop/sink
+   error counters.
 
-   VPS5 repeatedly showed tight memory, swap usage, and high load during
-   restarts. Add low-frequency process/system resource events: RSS, open file
-   count, event queue depth, event drops, exchange-call counts, candle-fetch
-   concurrency, and loop lag. Keep this off console unless thresholds are
-   crossed.
+   Remaining refinements: exchange-call counts, candle-fetch concurrency, loop
+   lag, thresholded console warnings, and richer system memory/swap fields. Keep
+   this off console unless thresholds are crossed.
 
-6. Exchange health and contract probes.
+6. [ ] Exchange health and contract probes.
+   Status: open.
+
    Add explicit read-only probes for each configured exchange/account before or
    during smoke: balance/positions/open-orders fetch, clock skew, rate-limit
    behavior, fill pagination coverage, candle freshness, and basic endpoint
    latency. These should detect exchange/API drift before it appears as an
    opaque live failure.
 
-7. Live config preflight/linter.
+7. [ ] Live config preflight/linter.
+   Status: open.
+
    Add a preflight that explains risk-relevant config changes before startup:
    HSL enabled/disabled changes, HSL signal-mode changes, new approved/ignored
    universe size, forager staleness policy, max slots, exchange/user mismatch,
    and cache compatibility. The output should be structured and should not make
    trading decisions.
 
-8. HSL dry-run preview for startup.
+8. [ ] HSL dry-run preview for startup.
+   Status: open.
+
    Add a non-trading preview that reconstructs current HSL state and reports
    which symbols are green/yellow/red, cooldown status, current drawdown to red,
    and whether startup would emit panic orders. This would make risky restarts
    with changed HSL configs easier to reason about before live execution.
 
-9. Reason-code registry.
+9. [ ] Reason-code registry.
+   Status: open.
+
    Centralize reason codes and event tags enough to prevent drift. The stream is
    much easier to search when `stale_ema`, `missing_canonical_candles`,
    `exchange_time_resync`, and similar codes are stable, documented, and tested.
    This pairs directly with reason-code filtering in the event query tool.
 
-10. Operator console redesign from events.
+10. [ ] Operator console redesign from events.
+    Status: open.
+
     Continue moving console output to be a projection of structured events.
     Default console should focus on fills, positions, balance, order writes,
     meaningful risk/HSL/unstuck transitions, and compact "waiting because"
     summaries. EMA/candle/cache internals should stay structured DEBUG unless
     they directly explain a blocked trading action.
 
-11. Order lifecycle trace completeness.
+11. [ ] Order lifecycle trace completeness.
+    Status: partial. The order-wave/execution event chain exists, but there is
+    no single reconstruction view for every create/cancel/missing-order case.
+
     Keep tightening the end-to-end chain from Rust ideal order to executable
     order, gate decision, exchange payload, exchange response, local open-order
     refresh, confirmation, and fill. The target is that any create/cancel/missing
     order can be reconstructed from one id without reading code.
 
-12. Debug profile toggles.
+12. [ ] Debug profile toggles.
+    Status: open.
+
     Add narrow runtime/debug profiles that increase event detail for one domain:
     candles, fills, HSL, Rust payloads, order execution, or exchange calls. This
     avoids code patches or globally noisy DEBUG logs when diagnosing a live
     issue.
 
-13. Cache integrity doctor.
+13. [ ] Cache integrity doctor.
+    Status: open.
+
     Add a read-only doctor for candle/fill/HSL caches that reports coverage,
     metadata compatibility, corrupted shards, suspicious gaps, synthetic/no-trade
     assumptions, and whether a short restart can safely use a warm-cache path.
     This supports the separate warm-cache restart work.
 
-14. Supervisor/process model.
+14. [ ] Supervisor/process model.
+    Status: open.
+
     The tmux/tmuxp setup is workable, but repeated live smoke showed room for a
     stricter supervisor contract: clear per-bot status, bounded stop/restart,
     captured exit reason, backoff policy, and health heartbeat. This could stay
     outside the trading core but should consume the same event stream.
 
-15. Fake-live regression scenarios.
+15. [ ] Fake-live regression scenarios.
+    Status: open.
+
     Build more fake-exchange/fake-live scenarios for failures repeatedly seen in
     real work: stale candles, missing EMA inputs, fill pagination gaps, timestamp
     resync, queue overflow, slow shutdown, and exchange-call ambiguity. These
     should prove observability behavior without risking live accounts.
+
+## Merged Work Log
+
+| Date | Item | PR / Commit | Result | Remaining |
+|------|------|-------------|--------|-----------|
+| 2026-06-25 | #1 Incident bundle generator | PR #641 / `e1f99002` | Added `passivbot tool live-incident-bundle`; bundle smoke on VPS5 created an archive with redacted monitor/config evidence | Supervisor/process status and tighter remote smoke integration |
+| 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |
+| 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
+| 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
+| 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
+| 2026-06-24 | Operational restart goals | PR #619 / `e71c4f6c` | Improved shutdown progress and bounded shutdown cancel grace coverage | Broader interruptible shutdown contract remains separate work |
+| 2026-06-24 | Operational restart goals | PR #622 / `29eba387` | Improved live startup warm-cache reuse | Deeper cache doctor and budget tracking remain open |
 
 ## Suggested Priority
 
