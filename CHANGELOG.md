@@ -26,6 +26,8 @@ All notable user-facing changes will be documented in this file.
   default console noise.
 - Added structured `candle.coverage_checked` live events for required candle
   disk-coverage audits, including bounded missing-span summaries.
+- Added structured `fills.refresh_summary` live events for fill/PnL refresh
+  timing, coverage, retry, and failure summaries without exposing raw fill ids.
 - Reduced default console/file noise for candidate-only forager EMA and
   open-tail projection diagnostics; detailed per-symbol internals remain in
   structured/debug events while active-symbol failures still fail loudly.

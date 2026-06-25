@@ -74,6 +74,7 @@ class EventTypes:
     EXECUTION_CONFIRMATION_REQUESTED = "execution.confirmation_requested"
     EXECUTION_CONFIRMATION_SATISFIED = "execution.confirmation_satisfied"
     EXECUTION_CONFIRMATION_TIMEOUT = "execution.confirmation_timeout"
+    FILLS_REFRESH_SUMMARY = "fills.refresh_summary"
     FILL_INGESTED = "fill.ingested"
     POSITION_CHANGED = "position.changed"
     BALANCE_CHANGED = "balance.changed"
@@ -136,6 +137,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+    EventTypes.FILLS_REFRESH_SUMMARY,
     EventTypes.FILL_INGESTED,
     EventTypes.POSITION_CHANGED,
     EventTypes.BALANCE_CHANGED,
@@ -422,6 +424,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CONFIRMATION_REQUESTED: EventRoute(console=False),
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: EventRoute(console=True, text=True),
+    EventTypes.FILLS_REFRESH_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.FILL_INGESTED: EventRoute(console=False, text=False),
     EventTypes.POSITION_CHANGED: EventRoute(console=False, text=False),
     EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
