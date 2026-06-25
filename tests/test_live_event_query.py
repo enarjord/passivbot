@@ -765,6 +765,162 @@ def test_live_event_query_cli_accepts_additional_id_scopes(tmp_path, capsys):
     ]
 
 
+def test_event_query_trace_summary_counts_all_matches_beyond_limit(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.cancel_sent",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                symbol="SOL/USDT:USDT",
+                pside="short",
+                side="sell",
+                status="started",
+                reason_code="test_cancel",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:cancel:0"},
+            ),
+            _monitor_row(
+                event_type="execution.cancel_succeeded",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1100,
+                symbol="SOL/USDT:USDT",
+                pside="short",
+                side="sell",
+                status="succeeded",
+                reason_code="exchange_acknowledged",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:cancel:0"},
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                cycle_id="cy_9",
+                seq=3,
+                ts=1200,
+                symbol="ETH/USDT:USDT",
+                pside="long",
+                side="buy",
+                status="failed",
+                reason_code="exchange_exception",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:create:0"},
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                cycle_id="cy_9",
+                seq=4,
+                ts=1300,
+                status="succeeded",
+                reason_code="authoritative_refresh",
+                ids={"remote_call_group_id": "cy_9:auth"},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_9",
+        limit=1,
+        trace_summary=True,
+    )
+
+    assert report["cycle"]["matched_events"] == 4
+    assert report["cycle"]["events_truncated"] is True
+    assert len(report["cycle"]["events"]) == 1
+    summary = report["cycle"]["trace_summary"]
+    assert summary["matched_events"] == 4
+    assert summary["first_ts"] == 1000
+    assert summary["last_ts"] == 1300
+    assert summary["event_types"] == {
+        "execution.cancel_sent": 1,
+        "execution.cancel_succeeded": 1,
+        "execution.create_failed": 1,
+        "remote_call.succeeded": 1,
+    }
+    assert summary["statuses"] == {
+        "failed": 1,
+        "started": 1,
+        "succeeded": 2,
+    }
+    assert summary["reason_codes"] == {
+        "authoritative_refresh": 1,
+        "exchange_acknowledged": 1,
+        "exchange_exception": 1,
+        "test_cancel": 1,
+    }
+    assert summary["symbols"] == ["ETH/USDT:USDT", "SOL/USDT:USDT"]
+    assert summary["psides"] == ["long", "short"]
+    assert summary["sides"] == ["buy", "sell"]
+    assert summary["ids"]["cycle_id"] == [{"id": "cy_9", "events": 4}]
+    assert summary["ids"]["order_wave_id"] == [{"id": "ow_9", "events": 3}]
+    assert summary["ids"]["remote_call_group_id"] == [
+        {"id": "cy_9:auth", "events": 1}
+    ]
+    assert summary["order_waves"]["ow_9"] == {
+        "events": 3,
+        "event_types": {
+            "execution.cancel_sent": 1,
+            "execution.cancel_succeeded": 1,
+            "execution.create_failed": 1,
+        },
+        "statuses": {"failed": 1, "started": 1, "succeeded": 1},
+        "reason_codes": {
+            "exchange_acknowledged": 1,
+            "exchange_exception": 1,
+            "test_cancel": 1,
+        },
+        "symbols": ["ETH/USDT:USDT", "SOL/USDT:USDT"],
+        "psides": ["long", "short"],
+        "action_ids": ["ow_9:cancel:0", "ow_9:create:0"],
+    }
+
+
+def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="order_wave.started",
+                cycle_id="cy_7",
+                seq=1,
+                ts=1000,
+                status="started",
+                ids={"order_wave_id": "ow_7"},
+            ),
+            _monitor_row(
+                event_type="order_wave.completed",
+                cycle_id="cy_7",
+                seq=2,
+                ts=1100,
+                status="succeeded",
+                ids={"order_wave_id": "ow_7"},
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--cycle-id",
+                "cy_7",
+                "--trace-summary",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    summary = report["cycle"]["trace_summary"]
+    assert summary["matched_events"] == 2
+    assert summary["order_waves"]["ow_7"]["event_types"] == {
+        "order_wave.completed": 1,
+        "order_wave.started": 1,
+    }
+
+
 def test_live_event_query_cli_defaults_to_current_only_for_directory_scans(
     tmp_path, capsys
 ):
