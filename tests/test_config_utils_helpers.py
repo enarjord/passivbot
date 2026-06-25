@@ -64,6 +64,23 @@ def test_validate_config_rejects_fractional_fee_conversion_max_age_ms():
             validate_config(config, verbose=False)
 
 
+def test_limit_order_create_market_distance_default_and_validation():
+    config = get_template_config()
+
+    assert config["live"]["limit_order_create_max_market_dist_pct"] == pytest.approx(0.8)
+    validate_config(config, verbose=False)
+
+    for value in (-0.01, 1.0, float("inf"), "invalid"):
+        invalid = get_template_config()
+        invalid["live"]["limit_order_create_max_market_dist_pct"] = value
+
+        with pytest.raises(
+            (TypeError, ValueError),
+            match="limit_order_create_max_market_dist_pct",
+        ):
+            validate_config(invalid, verbose=False)
+
+
 def test_prepare_config_strips_deprecated_price_distance_threshold():
     source = get_template_config()
     source["live"]["price_distance_threshold"] = 0.002
