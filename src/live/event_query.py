@@ -562,6 +562,103 @@ class _OrderTraceBuilder:
         }
 
 
+class _CycleTraceBuilder:
+    def __init__(self, *, event_limit: int, include_data: bool) -> None:
+        self.event_limit = max(0, int(event_limit))
+        self.include_data = bool(include_data)
+        self.matched_cycle_events = 0
+        self.missing_cycle_id_event_count = 0
+        self.missing_cycle_id_events: list[dict[str, Any]] = []
+        self.missing_cycle_id_events_truncated = False
+        self.cycles: dict[str, dict[str, Any]] = {}
+
+    def add(
+        self,
+        *,
+        path: Path,
+        line_no: int,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        event_type: str | None,
+        ids: dict[str, Any],
+    ) -> None:
+        item = _compact_record(
+            path=path,
+            line_no=line_no,
+            row=row,
+            live_event=live_event,
+            include_data=self.include_data,
+        )
+        cycle_id = ids.get("cycle_id")
+        if cycle_id is None:
+            self.missing_cycle_id_event_count += 1
+            if len(self.missing_cycle_id_events) < self.event_limit:
+                self.missing_cycle_id_events.append(item)
+            else:
+                self.missing_cycle_id_events_truncated = True
+            return
+        self.matched_cycle_events += 1
+        cycle_key = str(cycle_id)
+        cycle = self.cycles.setdefault(
+            cycle_key,
+            {
+                "cycle_id": cycle_key,
+                "event_count": 0,
+                "events_truncated": False,
+                "timeline": [],
+                "trace_summary": _TraceSummaryBuilder(),
+                "order_trace": _OrderTraceBuilder(event_limit=self.event_limit),
+            },
+        )
+        cycle["event_count"] += 1
+        if len(cycle["timeline"]) < self.event_limit:
+            cycle["timeline"].append(item)
+        else:
+            cycle["events_truncated"] = True
+        cycle["trace_summary"].add(
+            row=row,
+            live_event=live_event,
+            event_type=event_type,
+        )
+        cycle["order_trace"].add(
+            path=path,
+            line_no=line_no,
+            row=row,
+            live_event=live_event,
+            event_type=event_type,
+            ids=ids,
+        )
+
+    def to_dict(self) -> dict[str, Any]:
+        cycles = []
+        for cycle_id, summary in sorted(self.cycles.items()):
+            trace_summary = summary["trace_summary"].to_dict()
+            cycles.append(
+                {
+                    "cycle_id": cycle_id,
+                    "event_count": int(summary["event_count"]),
+                    "events_truncated": bool(summary["events_truncated"]),
+                    "first_ts": trace_summary.get("first_ts"),
+                    "last_ts": trace_summary.get("last_ts"),
+                    "trace_summary": trace_summary,
+                    "order_trace": summary["order_trace"].to_dict(),
+                    "timeline": summary["timeline"],
+                }
+            )
+        out: dict[str, Any] = {
+            "matched_cycle_events": int(self.matched_cycle_events),
+            "cycle_count": len(self.cycles),
+            "cycles": cycles,
+            "missing_cycle_id_event_count": int(self.missing_cycle_id_event_count),
+        }
+        if self.missing_cycle_id_events or self.missing_cycle_id_events_truncated:
+            out["missing_cycle_id_events"] = self.missing_cycle_id_events
+            out["missing_cycle_id_events_truncated"] = bool(
+                self.missing_cycle_id_events_truncated
+            )
+        return out
+
+
 class _TraceSummaryBuilder:
     def __init__(self) -> None:
         self.events = 0
@@ -709,6 +806,7 @@ def build_event_report(
     timeline: bool = False,
     trace_summary: bool = False,
     order_trace: bool = False,
+    cycle_trace: bool = False,
 ) -> dict[str, Any]:
     issues: list[EventIssue] = []
     try:
@@ -740,10 +838,18 @@ def build_event_report(
     query_events: list[dict[str, Any]] = []
     query_match_count = 0
     query_trace = _TraceSummaryBuilder()
-    cycle_trace = _TraceSummaryBuilder()
+    cycle_trace_summary = _TraceSummaryBuilder()
     max_events = max(0, int(limit))
     query_order_trace = _OrderTraceBuilder(event_limit=max_events)
     cycle_order_trace = _OrderTraceBuilder(event_limit=max_events)
+    query_cycle_trace = _CycleTraceBuilder(
+        event_limit=max_events,
+        include_data=include_data,
+    )
+    cycle_cycle_trace = _CycleTraceBuilder(
+        event_limit=max_events,
+        include_data=include_data,
+    )
     event_type_filter = _normalize_filter_values(event_type)
     bot_filter = _normalize_filter_values(bot_id)
     snapshot_filter = _normalize_filter_values(snapshot_id)
@@ -773,7 +879,7 @@ def build_event_report(
         )
     )
     has_query_filter = has_non_cycle_filter or bool(
-        (timeline or trace_summary or order_trace) and cycle_id is None
+        (timeline or trace_summary or order_trace or cycle_trace) and cycle_id is None
     )
 
     for path in files:
@@ -924,6 +1030,15 @@ def build_event_report(
                                 event_type=record_event_type,
                                 ids=ids,
                             )
+                        if cycle_trace:
+                            query_cycle_trace.add(
+                                path=path,
+                                line_no=line_no,
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                                ids=ids,
+                            )
                         if len(query_events) < max_events:
                             query_events.append(
                                 _compact_record(
@@ -937,13 +1052,22 @@ def build_event_report(
                     if cycle_id is not None and query_matches:
                         cycle_match_count += 1
                         if trace_summary:
-                            cycle_trace.add(
+                            cycle_trace_summary.add(
                                 row=row,
                                 live_event=live_event,
                                 event_type=record_event_type,
                             )
                         if order_trace:
                             cycle_order_trace.add(
+                                path=path,
+                                line_no=line_no,
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                                ids=ids,
+                            )
+                        if cycle_trace:
+                            cycle_cycle_trace.add(
                                 path=path,
                                 line_no=line_no,
                                 row=row,
@@ -1017,6 +1141,8 @@ def build_event_report(
             report["query"]["trace_summary"] = query_trace.to_dict()
         if order_trace:
             report["query"]["order_trace"] = query_order_trace.to_dict()
+        if cycle_trace:
+            report["query"]["cycle_trace"] = query_cycle_trace.to_dict()
     if cycle_id is not None:
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
@@ -1046,9 +1172,11 @@ def build_event_report(
                 _timeline_line(event) for event in cycle_events
             ]
         if trace_summary:
-            report["cycle"]["trace_summary"] = cycle_trace.to_dict()
+            report["cycle"]["trace_summary"] = cycle_trace_summary.to_dict()
         if order_trace:
             report["cycle"]["order_trace"] = cycle_order_trace.to_dict()
+        if cycle_trace:
+            report["cycle"]["cycle_trace"] = cycle_cycle_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
     return report

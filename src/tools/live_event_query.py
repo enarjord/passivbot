@@ -164,6 +164,15 @@ def build_parser() -> argparse.ArgumentParser:
             "wave and action ids. Event samples are bounded by --limit."
         ),
     )
+    parser.add_argument(
+        "--cycle-trace",
+        action="store_true",
+        help=(
+            "Include a cycle reconstruction view grouped by cycle_id, with "
+            "bounded timeline samples, aggregate summaries, and nested order "
+            "trace details. Event samples are bounded by --limit."
+        ),
+    )
     return parser
 
 
@@ -191,6 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         timeline=bool(args.timeline),
         trace_summary=bool(args.trace_summary),
         order_trace=bool(args.order_trace),
+        cycle_trace=bool(args.cycle_trace),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
