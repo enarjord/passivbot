@@ -32,6 +32,7 @@ SENSITIVE_LOG_VALUE_PATTERN = re.compile(
 AUTH_SCHEME_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
 STARTUP_TIMING_BASELINE_WINDOW = 20
 DEFAULT_PROCESS_MATCH = "passivbot live"
+REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 PROCESS_REPORT_FIELDS = {
     "pid",
     "age_s",
@@ -103,6 +104,128 @@ def _compact_problem_event(
             },
         }.items()
         if value not in (None, {}, [])
+    }
+
+
+def _sort_event_position_key(
+    *,
+    ts: Any,
+    seq: Any,
+    path: Path | str,
+    line_no: int,
+) -> tuple[int, int, str, int]:
+    ts_value = _non_negative_int(ts)
+    seq_value = _non_negative_int(seq)
+    return (
+        -1 if ts_value is None else ts_value,
+        -1 if seq_value is None else seq_value,
+        str(path),
+        int(line_no),
+    )
+
+
+def _remote_call_failure_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    latest_error = payload.get("error_repr") or payload.get("error")
+    return {
+        "bot": bot_key,
+        "reason_code": live_event.get("reason_code"),
+        "surface": payload.get("surface"),
+        "error_type": payload.get("error_type"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_elapsed_ms": _non_negative_int(payload.get("elapsed_ms")),
+        "latest_error": _redact_log_text(str(latest_error))
+        if latest_error not in (None, "")
+        else None,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "remote_call_id", "remote_call_group_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_remote_call_failure_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("reason_code"),
+        group.get("surface"),
+        group.get("error_type"),
+        group.get("component"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_elapsed_ms",
+            "latest_error",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_remote_call_failures(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(item.get("count", 0)),
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("reason_code") or ""),
+            str(item.get("surface") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:REMOTE_CALL_FAILURE_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > REMOTE_CALL_FAILURE_GROUP_LIMIT,
+        "groups": compact_groups,
     }
 
 
@@ -554,6 +677,7 @@ def _scan_events(
     problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
     invalid_rows = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     for path in files:
         try:
@@ -585,6 +709,17 @@ def _scan_events(
                     event_type = live_event.get("event_type") or row.get("kind")
                     if event_type:
                         bot["event_types"][str(event_type)] += 1
+                    if event_type == EventTypes.REMOTE_CALL_FAILED:
+                        _merge_remote_call_failure_group(
+                            remote_call_failure_groups,
+                            _remote_call_failure_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     level = live_event.get("level")
                     if level:
                         bot["levels"][str(level).lower()] += 1
@@ -639,6 +774,9 @@ def _scan_events(
             int(value["hard_problem_events"]) for value in bots.values()
         ),
         "startup_timings": _summarize_startup_timings(startup_timing_records),
+        "remote_call_failures": _summarize_remote_call_failures(
+            remote_call_failure_groups
+        ),
     }
 
 
@@ -765,6 +903,11 @@ def build_live_smoke_report(
             "problem_event_count": 0,
             "hard_problem_event_count": 0,
             "startup_timings": [],
+            "remote_call_failures": {
+                "total": 0,
+                "groups_truncated": False,
+                "groups": [],
+            },
         }
     log_scan = _scan_logs(
         logs_root,
@@ -807,6 +950,7 @@ def build_live_smoke_report(
         },
         "bots": event_scan["bots"],
         "startup_timings": event_scan["startup_timings"],
+        "remote_call_failures": event_scan["remote_call_failures"],
         "problem_events": event_scan["problem_events"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
