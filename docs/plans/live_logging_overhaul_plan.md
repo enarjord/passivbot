@@ -145,6 +145,7 @@ stable names:
 - `remote_call.throttled`
 - `cache.load.started`
 - `cache.load.completed`
+- `cache.warmup_decision`
 - `cache.flush.started`
 - `cache.flush.completed`
 - `cache.flush.degraded`

@@ -142,6 +142,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_TAIL_PROJECTED,
+        EventTypes.CACHE_WARMUP_DECISION,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.HSL_TRANSITION,

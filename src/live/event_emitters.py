@@ -1031,6 +1031,75 @@ def emit_candle_tail_projected_event(bot: Any, *args: Any, **kwargs: Any) -> Non
         )
 
 
+def _reason_counts(data: Any) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for key, value in dict(data or {}).items():
+        count = _safe_int(value)
+        if count is not None:
+            out[str(key)] = int(count)
+    return dict(sorted(out.items()))
+
+
+def _emit_cache_warmup_decision_event_unchecked(
+    bot: Any,
+    *,
+    context: str,
+    timeframe: str = "1m",
+    symbol_count: int,
+    reused_count: int,
+    cold_count: int,
+    reason_counts: dict[str, int] | None = None,
+    elapsed_ms: int | None = None,
+    concurrency: int | None = None,
+    ttl_ms: int | None = None,
+    window_min_candles: int | None = None,
+    window_max_candles: int | None = None,
+) -> None:
+    reused = max(0, int(reused_count))
+    cold = max(0, int(cold_count))
+    data: dict[str, Any] = {
+        "context": str(context),
+        "timeframe": str(timeframe or "1m"),
+        "symbol_count": max(0, int(symbol_count)),
+        "reused_count": reused,
+        "cold_count": cold,
+        "cold_path_required": cold > 0,
+        "reason_counts": _reason_counts(reason_counts),
+    }
+    for key, value in (
+        ("elapsed_ms", elapsed_ms),
+        ("concurrency", concurrency),
+        ("ttl_ms", ttl_ms),
+        ("window_min_candles", window_min_candles),
+        ("window_max_candles", window_max_candles),
+    ):
+        safe = _safe_int(value)
+        if safe is not None:
+            data[key] = safe
+    _safe_emit(
+        bot,
+        EventTypes.CACHE_WARMUP_DECISION,
+        level="debug",
+        component="cache.warmup",
+        tags=("cache", "warmup", "candle"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code="warmup_cache_decision",
+        data=data,
+    )
+
+
+def emit_cache_warmup_decision_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_cache_warmup_decision_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.CACHE_WARMUP_DECISION,
+            exc,
+        )
+
+
 def _mode_counts(modes: dict[str, dict[str, str]] | None) -> dict[str, int]:
     counts: dict[str, int] = {}
     for symbol_modes in (modes or {}).values():

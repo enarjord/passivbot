@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `cache.warmup_decision` live events for candle warmup cache
+  reuse/cold-path summaries.
 - Added `passivbot tool live-event-query --event-type`/`--kind` filters for
   inspecting specific structured live events without grepping monitor files.
 - Added structured `candle.tail_projected` live events for open-tail EMA
