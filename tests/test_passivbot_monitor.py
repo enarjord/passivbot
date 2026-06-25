@@ -535,6 +535,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         _emit_candle_tail_projected_event = (
             pb_mod.Passivbot._emit_candle_tail_projected_event
         )
+        _emit_cache_load_completed_event = (
+            pb_mod.Passivbot._emit_cache_load_completed_event
+        )
         _emit_cache_warmup_decision_event = (
             pb_mod.Passivbot._emit_cache_warmup_decision_event
         )
@@ -624,6 +627,23 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         },
         reason_code="late_open_tail_projection",
     )
+    bot._emit_cache_load_completed_event(
+        {
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "1m",
+            "start_ts": 120_000,
+            "end_ts": 240_000,
+            "loaded_rows": 3,
+            "loaded_start_ts": 120_000,
+            "loaded_end_ts": 240_000,
+            "days": 1,
+            "primary_days": 1,
+            "legacy_days": 0,
+            "merged_days": 0,
+            "source_days": {"primary": 1, "legacy": 0, "merged": 0},
+            "elapsed_ms": 7,
+        }
+    )
     bot._emit_cache_warmup_decision_event(
         context="trading-ready warmup",
         timeframe="1m",
@@ -648,6 +668,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
         EventTypes.CANDLE_TAIL_PROJECTED,
+        EventTypes.CACHE_LOAD_COMPLETED,
         EventTypes.CACHE_WARMUP_DECISION,
     ]
     assert {event.cycle_id for event in events} == {"cy_11"}
@@ -670,18 +691,35 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[6].reason_code == "late_open_tail_projection"
     assert events[6].data["latest_expected_ts"] == 180_000
     assert events[6].data["tail_gap_age_ms"] == 60_000
-    assert events[7].component == "cache.warmup"
-    assert events[7].reason_code == "warmup_cache_decision"
-    assert events[7].data["context"] == "trading-ready warmup"
-    assert events[7].data["symbol_count"] == 3
-    assert events[7].data["reused_count"] == 1
-    assert events[7].data["cold_count"] == 2
-    assert events[7].data["cold_path_required"] is True
-    assert events[7].data["reason_counts"] == {
+    assert events[7].component == "cache.candles"
+    assert events[7].symbol == "ETH/USDT:USDT"
+    assert events[7].reason_code == "candle_disk_load_completed"
+    assert events[7].data == {
+        "timeframe": "1m",
+        "start_ts": 120_000,
+        "end_ts": 240_000,
+        "loaded_rows": 3,
+        "loaded_start_ts": 120_000,
+        "loaded_end_ts": 240_000,
+        "days": 1,
+        "primary_days": 1,
+        "legacy_days": 0,
+        "merged_days": 0,
+        "elapsed_ms": 7,
+        "source_days": {"legacy": 0, "merged": 0, "primary": 1},
+    }
+    assert events[8].component == "cache.warmup"
+    assert events[8].reason_code == "warmup_cache_decision"
+    assert events[8].data["context"] == "trading-ready warmup"
+    assert events[8].data["symbol_count"] == 3
+    assert events[8].data["reused_count"] == 1
+    assert events[8].data["cold_count"] == 2
+    assert events[8].data["cold_path_required"] is True
+    assert events[8].data["reason_counts"] == {
         "missing_coverage": 2,
         "warm_cache_accepted": 1,
     }
-    assert events[7].data["window_max_candles"] == 260
+    assert events[8].data["window_max_candles"] == 260
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -747,6 +785,10 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             symbol=object(),
             context=object(),
         )
+        pb_mod.Passivbot._emit_cache_load_completed_event(
+            bot,
+            payload=object(),
+        )
         pb_mod.Passivbot._emit_cache_warmup_decision_event(
             bot,
             context=object(),
@@ -771,6 +813,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     assert any(EventTypes.EMA_FALLBACK_USED in msg for msg in messages)
     assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)
     assert any(EventTypes.CANDLE_TAIL_PROJECTED in msg for msg in messages)
+    assert any(EventTypes.CACHE_LOAD_COMPLETED in msg for msg in messages)
     assert any(EventTypes.CACHE_WARMUP_DECISION in msg for msg in messages)
     assert any(EventTypes.BOT_STARTUP_TIMING in msg for msg in messages)
 

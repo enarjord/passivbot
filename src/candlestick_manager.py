@@ -674,6 +674,7 @@ class CandlestickManager:
         self._persist_batch_observer: Optional[
             Callable[[str, str, np.ndarray], None]
         ] = None
+        self._disk_load_observer: Optional[Callable[[Dict[str, Any]], None]] = None
         # Summary tracking for strict gap warnings (logged once per 15 min instead of per-event)
         self._strict_gaps_summary: Dict[str, int] = {}  # symbol -> missing count
         self._strict_gaps_summary_last_log: float = 0.0
@@ -1522,6 +1523,22 @@ class CandlestickManager:
     ) -> None:
         self._persist_batch_observer = observer
 
+    def set_disk_load_observer(
+        self,
+        observer: Optional[Callable[[Dict[str, Any]], None]],
+    ) -> None:
+        self._disk_load_observer = observer
+
+    def _emit_disk_load_observer(self, payload: Dict[str, Any]) -> None:
+        observer = self._disk_load_observer
+        if observer is None:
+            return
+        try:
+            observer(payload)
+        except Exception:
+            # Observability hooks must never break cache loading or trading.
+            return
+
     # ----- Paths and index -----
 
     def _symbol_dir(
@@ -2304,6 +2321,42 @@ class CandlestickManager:
                 start_ts=start_ts,
                 end_ts=end_ts,
             )
+            loaded_start_ts = None
+            loaded_end_ts = None
+            if merged_disk.size:
+                try:
+                    loaded_start_ts = int(merged_disk["ts"][0])
+                    loaded_end_ts = int(merged_disk["ts"][-1])
+                except Exception:
+                    loaded_start_ts = None
+                    loaded_end_ts = None
+            try:
+                self._emit_disk_load_observer(
+                    {
+                        "symbol": symbol,
+                        "timeframe": tf_norm,
+                        "start_ts": int(start_ts),
+                        "end_ts": int(end_ts),
+                        "loaded_rows": int(merged_disk.shape[0]),
+                        "loaded_start_ts": loaded_start_ts,
+                        "loaded_end_ts": loaded_end_ts,
+                        "days": int(len(load_keys)),
+                        "primary_days": int(primary_hits),
+                        "legacy_days": int(legacy_hits),
+                        "merged_days": int(merged_hits),
+                        "source_days": {
+                            "primary": int(primary_hits),
+                            "legacy": int(legacy_hits),
+                            "merged": int(merged_hits),
+                        },
+                        "elapsed_ms": int(
+                            max(0.0, (time.monotonic() - t0) * 1000.0)
+                        ),
+                    }
+                )
+            except Exception:
+                # Disk-load telemetry must never break cache loading.
+                pass
             if tf_norm == "1m":
                 existing = self._ensure_symbol_cache(symbol)
                 merged = self._merge_overwrite(existing, merged_disk)

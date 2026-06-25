@@ -631,6 +631,9 @@ class Passivbot:
     _emit_cache_warmup_decision_event = (
         live_event_emitters.emit_cache_warmup_decision_event
     )
+    _emit_cache_load_completed_event = (
+        live_event_emitters.emit_cache_load_completed_event
+    )
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _emit_planning_defer_summary_event = (
@@ -641,6 +644,7 @@ class Passivbot:
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
+    _handle_candle_disk_load_event = live_event_emitters.emit_cache_load_completed_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
 
@@ -955,6 +959,8 @@ class Passivbot:
         )
         if self.monitor_publisher is not None:
             self.cm.set_persist_batch_observer(self._monitor_handle_candlestick_persist)
+        if self._live_event_pipeline is not None:
+            self.cm.set_disk_load_observer(self._handle_candle_disk_load_event)
         # TTL (minutes) for EMA candles on non-traded symbols
         ttl_min = require_live_value(config, "inactive_coin_candle_ttl_minutes")
         self.inactive_coin_candle_ttl_ms = int(float(ttl_min) * 60_000)
