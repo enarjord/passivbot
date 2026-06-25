@@ -634,10 +634,97 @@ def test_console_format_is_compact_and_operator_facing():
     )
 
     expected = (
-        "[planning.unavailable] deferred cycle=cy_1 symbol=BTC/USDT:USDT "
+        "[gate] deferred cycle=cy_1 symbol=BTC/USDT:USDT "
         "pside=long reason=stale_ema entries deferred"
     )
     assert format_console_event(event) == expected
+
+
+def test_console_format_summarizes_order_wave_payload():
+    event = LiveEvent(
+        EventTypes.ORDER_WAVE_COMPLETED,
+        status="deferred",
+        cycle_id="cy_9",
+        order_wave_id="ow_7",
+        reason_code="create_deferred",
+        data={
+            "planned_cancel": 1,
+            "cancel_posted": 1,
+            "planned_create": 3,
+            "create_posted": 2,
+            "deferred_create": 1,
+            "elapsed_ms": 642,
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[execute] deferred cycle=cy_9 wave=ow_7 cancel=1/1 create=2/3 "
+        "deferred_create=1 elapsed=642ms "
+        "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
+        "reason=create_deferred"
+    )
+
+
+def test_console_format_summarizes_order_write_without_raw_payload():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SUCCEEDED,
+        status="succeeded",
+        cycle_id="cy_3",
+        order_wave_id="ow_2",
+        symbol="AAVE/USDT:USDT",
+        pside="long",
+        side="buy",
+        data={
+            "order_type": "limit",
+            "qty": 1.23456789,
+            "price": 88.7654321,
+            "reduce_only": False,
+            "result_status": "open",
+            "result_order_id_short": "abc123",
+            "result_client_order_id_short": "pbot_456",
+            "apiKey": "must_not_leak",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[order] succeeded cycle=cy_3 wave=ow_2 side=buy type=limit "
+        "qty=1.23456789 price=88.7654321 exchange_status=open "
+        "order_id=abc123 client_id=pbot_456 symbol=AAVE/USDT:USDT pside=long"
+    )
+
+
+def test_console_format_summarizes_confirmation_timeout():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+        status="degraded",
+        cycle_id="cy_5",
+        order_wave_id="ow_3",
+        reason_code="authoritative_confirmation_timeout",
+        data={
+            "fresh_surfaces": ["balance", "positions"],
+            "pending_surfaces": ["open_orders"],
+            "elapsed_ms": 2200,
+            "timeout_ms": 2000,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[execute] degraded cycle=cy_5 wave=ow_3 fresh=balance,positions "
+        "pending=open_orders elapsed=2200ms timeout=2000ms "
+        "reason=authoritative_confirmation_timeout"
+    )
+
+
+def test_console_format_summarizes_rust_return():
+    event = LiveEvent(
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        status="succeeded",
+        cycle_id="cy_6",
+        data={"order_count": 4, "elapsed_ms": 17},
+    )
+
+    assert format_console_event(event) == "[rust] succeeded cycle=cy_6 orders=4 elapsed=17ms"
 
 
 def test_shutdown_stage_console_format_uses_shutdown_tag():

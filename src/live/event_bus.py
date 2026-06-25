@@ -558,16 +558,211 @@ class ListEventSink:
         return event
 
 
-def format_console_event(event: LiveEvent) -> str:
-    base = (
-        "[shutdown]"
-        if event.event_type == EventTypes.BOT_SHUTDOWN_STAGE
-        else f"[{event.event_type}]"
+_CONSOLE_EVENT_TAGS = {
+    EventTypes.BOT_STARTED: "bot",
+    EventTypes.BOT_READY: "bot",
+    EventTypes.BOT_STOPPING: "bot",
+    EventTypes.BOT_SHUTDOWN_STAGE: "shutdown",
+    EventTypes.BOT_STOPPED: "bot",
+    EventTypes.CYCLE_STARTED: "cycle",
+    EventTypes.CYCLE_COMPLETED: "cycle",
+    EventTypes.CYCLE_DEGRADED: "cycle",
+    EventTypes.PLANNING_UNAVAILABLE: "gate",
+    EventTypes.RUST_ORCHESTRATOR_RETURNED: "rust",
+    EventTypes.ORDER_WAVE_COMPLETED: "execute",
+    EventTypes.EXECUTION_CREATE_SUCCEEDED: "order",
+    EventTypes.EXECUTION_CREATE_FAILED: "order",
+    EventTypes.EXECUTION_CREATE_REJECTED: "order",
+    EventTypes.EXECUTION_CANCEL_SUCCEEDED: "order",
+    EventTypes.EXECUTION_CANCEL_FAILED: "order",
+    EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL: "order",
+    EventTypes.EXECUTION_AMBIGUOUS: "order",
+    EventTypes.EXECUTION_CONFIRMATION_SATISFIED: "execute",
+    EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: "execute",
+    EventTypes.SINK_DEGRADED: "logging",
+}
+
+
+def _console_tag(event: LiveEvent) -> str:
+    return _CONSOLE_EVENT_TAGS.get(event.event_type, event.event_type)
+
+
+def _data_int(data: Mapping[str, Any], key: str) -> int | None:
+    try:
+        value = data.get(key)
+        if value is None:
+            return None
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _data_str(data: Mapping[str, Any], key: str) -> str | None:
+    value = data.get(key)
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _data_float(data: Mapping[str, Any], key: str) -> str | None:
+    try:
+        value = data.get(key)
+        if value is None:
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return f"{number:.10g}"
+
+
+def _compact_csv(values: Any, *, limit: int = 4) -> str | None:
+    if not isinstance(values, (list, tuple, set)):
+        return None
+    items = [str(item) for item in values if item is not None and str(item) != ""]
+    if not items:
+        return None
+    shown = items[:limit]
+    suffix = f",+{len(items) - len(shown)}" if len(items) > len(shown) else ""
+    return ",".join(shown) + suffix
+
+
+def _count_pair(data: Mapping[str, Any], done_key: str, planned_key: str) -> str | None:
+    done = _data_int(data, done_key)
+    planned = _data_int(data, planned_key)
+    if done is None and planned is None:
+        return None
+    if planned is None:
+        return str(done or 0)
+    return f"{done or 0}/{planned}"
+
+
+def _console_order_wave_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.order_wave_id:
+        parts.append(f"wave={event.order_wave_id}")
+    cancel = _count_pair(data, "cancel_posted", "planned_cancel")
+    create = _count_pair(data, "create_posted", "planned_create")
+    if cancel is not None:
+        parts.append(f"cancel={cancel}")
+    if create is not None:
+        parts.append(f"create={create}")
+    for key in ("deferred_create", "skipped_create", "skipped_cancel"):
+        value = _data_int(data, key)
+        if value:
+            parts.append(f"{key}={value}")
+    elapsed = _data_int(data, "elapsed_ms")
+    if elapsed is not None:
+        parts.append(f"elapsed={elapsed}ms")
+    symbols = _compact_csv(data.get("symbols"), limit=4)
+    if symbols:
+        parts.append(f"symbols={symbols}")
+    return parts
+
+
+def _console_order_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.order_wave_id:
+        parts.append(f"wave={event.order_wave_id}")
+    if event.side:
+        parts.append(f"side={event.side}")
+    order_type = _data_str(data, "order_type")
+    if order_type:
+        parts.append(f"type={order_type}")
+    qty = _data_float(data, "qty")
+    price = _data_float(data, "price")
+    if qty:
+        parts.append(f"qty={qty}")
+    if price:
+        parts.append(f"price={price}")
+    if data.get("reduce_only") is True:
+        parts.append("reduce_only=true")
+    result_status = _data_str(data, "result_status")
+    if result_status:
+        parts.append(f"exchange_status={result_status}")
+    order_id = _data_str(data, "result_order_id_short") or _data_str(data, "order_id_short")
+    if order_id:
+        parts.append(f"order_id={order_id}")
+    client_id = _data_str(data, "result_client_order_id_short") or _data_str(
+        data, "client_order_id_short"
     )
+    if client_id:
+        parts.append(f"client_id={client_id}")
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(f"error_type={error_type}")
+    return parts
+
+
+def _console_confirmation_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.order_wave_id:
+        parts.append(f"wave={event.order_wave_id}")
+    surfaces = _compact_csv(data.get("fresh_surfaces"), limit=4)
+    if surfaces:
+        parts.append(f"fresh={surfaces}")
+    pending = _compact_csv(data.get("pending_surfaces"), limit=4)
+    if pending:
+        parts.append(f"pending={pending}")
+    elapsed = _data_int(data, "elapsed_ms")
+    timeout = _data_int(data, "timeout_ms")
+    if elapsed is not None:
+        parts.append(f"elapsed={elapsed}ms")
+    if timeout is not None:
+        parts.append(f"timeout={timeout}ms")
+    return parts
+
+
+def _console_rust_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    elapsed = _data_int(data, "elapsed_ms")
+    order_count = _data_int(data, "order_count")
+    if order_count is not None:
+        parts.append(f"orders={order_count}")
+    if elapsed is not None:
+        parts.append(f"elapsed={elapsed}ms")
+    error_type = _data_str(data, "error_type")
+    if error_type:
+        parts.append(f"error_type={error_type}")
+    return parts
+
+
+def _console_data_summary(event: LiveEvent) -> list[str]:
+    if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
+        return _console_order_wave_summary(event)
+    if event.event_type in {
+        EventTypes.EXECUTION_CREATE_SUCCEEDED,
+        EventTypes.EXECUTION_CREATE_FAILED,
+        EventTypes.EXECUTION_CREATE_REJECTED,
+        EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+        EventTypes.EXECUTION_CANCEL_FAILED,
+        EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+        EventTypes.EXECUTION_AMBIGUOUS,
+    }:
+        return _console_order_summary(event)
+    if event.event_type in {
+        EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+        EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+    }:
+        return _console_confirmation_summary(event)
+    if event.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED:
+        return _console_rust_summary(event)
+    return []
+
+
+def format_console_event(event: LiveEvent) -> str:
+    base = f"[{_console_tag(event)}]"
     if event.status:
         base += f" {event.status}"
     if event.cycle_id:
         base += f" cycle={event.cycle_id}"
+    for part in _console_data_summary(event):
+        base += f" {part}"
     if event.symbol:
         base += f" symbol={event.symbol}"
     if event.pside:
