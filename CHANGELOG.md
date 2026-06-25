@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `candle.tail_projected` live events for open-tail EMA
+  projection decisions, preserving per-symbol candle-tail context without
+  default console noise.
 - Reduced default console/file noise for candidate-only forager EMA and
   open-tail projection diagnostics; detailed per-symbol internals remain in
   structured/debug events while active-symbol failures still fail loudly.

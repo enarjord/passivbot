@@ -481,6 +481,9 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         )
         _emit_ema_fallback_used_event = pb_mod.Passivbot._emit_ema_fallback_used_event
         _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_candle_tail_projected_event = (
+            pb_mod.Passivbot._emit_candle_tail_projected_event
+        )
         _emit_forager_feature_unavailable_event = (
             pb_mod.Passivbot._emit_forager_feature_unavailable_event
         )
@@ -554,6 +557,19 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         },
         ema_unavailable_reasons={"cache_only_never_fetched": ["ADA/USDT:USDT"]},
     )
+    bot._emit_candle_tail_projected_event(
+        symbol="ETH/USDT:USDT",
+        context={
+            "timeframe": "1m",
+            "latest_expected_ts": 180_000,
+            "last_cached_ts": 120_000,
+            "tail_gap_age_ms": 60_000,
+            "tail_gap_candles": 1,
+            "missing_candles": 1,
+            "reason": "open_tail_gap_projection",
+        },
+        reason_code="late_open_tail_projection",
+    )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = sink.events
@@ -564,6 +580,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         EventTypes.EMA_BUNDLE_COMPLETED,
         EventTypes.EMA_FALLBACK_USED,
         EventTypes.EMA_UNAVAILABLE,
+        EventTypes.CANDLE_TAIL_PROJECTED,
     ]
     assert {event.cycle_id for event in events} == {"cy_11"}
     assert events[0].data["unavailable"]["count"] == 2
@@ -580,6 +597,11 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[4].data["close_fallback_count"] == 1
     assert events[5].status == "degraded"
     assert events[5].data["candidate_unavailable"]["sample"] == ["XRP/USDT:USDT"]
+    assert events[6].symbol == "ETH/USDT:USDT"
+    assert events[6].status == "recovered"
+    assert events[6].reason_code == "late_open_tail_projection"
+    assert events[6].data["latest_expected_ts"] == 180_000
+    assert events[6].data["tail_gap_age_ms"] == 60_000
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -640,6 +662,11 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
                 "required_missing": [("BTC/USDT:USDT", "ValueError")]
             },
         )
+        pb_mod.Passivbot._emit_candle_tail_projected_event(
+            bot,
+            symbol=object(),
+            context=object(),
+        )
 
     messages = [record.message for record in caplog.records]
     assert any(EventTypes.FORAGER_FEATURE_UNAVAILABLE in msg for msg in messages)
@@ -649,6 +676,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     assert any(EventTypes.EMA_BUNDLE_COMPLETED in msg for msg in messages)
     assert any(EventTypes.EMA_FALLBACK_USED in msg for msg in messages)
     assert any(EventTypes.EMA_UNAVAILABLE in msg for msg in messages)
+    assert any(EventTypes.CANDLE_TAIL_PROJECTED in msg for msg in messages)
 
 
 def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):
