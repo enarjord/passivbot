@@ -87,6 +87,33 @@ def _emit_hsl_event(
         )
 
 
+def _emit_hsl_red_triggered_once(
+    self,
+    state: dict,
+    data: dict,
+    *,
+    pside: str,
+    symbol: str | None = None,
+    ts: int | None = None,
+    reason_code: str = "red_threshold_crossed",
+) -> None:
+    if state.get("red_trigger_event_emitted"):
+        return
+    _emit_hsl_event(
+        self,
+        "hsl.red_triggered",
+        ("hsl", "risk", "red"),
+        data,
+        pside=pside,
+        symbol=symbol,
+        ts=ts,
+        level="critical",
+        status="degraded",
+        reason_code=reason_code,
+    )
+    state["red_trigger_event_emitted"] = True
+
+
 def _emit_hsl_replay_event(
     self,
     event_type: str,
@@ -141,6 +168,7 @@ def _equity_hard_stop_make_state(self) -> dict[str, Any]:
         "cooldown_until_ms": None,
         "pending_stop_event": None,
         "last_stop_event": None,
+        "red_trigger_event_emitted": False,
         "last_status_log_ms": 0,
         "last_cooldown_log_ms": 0,
         "cooldown_intervention_active": False,
@@ -519,6 +547,7 @@ def _equity_hard_stop_reset_state(self) -> None:
         state["cooldown_until_ms"] = None
         state["pending_stop_event"] = None
         state["last_stop_event"] = None
+        state["red_trigger_event_emitted"] = False
         state["last_status_log_ms"] = 0
         state["last_cooldown_log_ms"] = 0
         state["cooldown_intervention_active"] = False
@@ -1752,6 +1781,7 @@ def _equity_hard_stop_reset_after_restart(self, pside: str) -> None:
     state["pending_red_since_ms"] = None
     state["cooldown_until_ms"] = None
     state["pending_stop_event"] = None
+    state["red_trigger_event_emitted"] = False
     state["last_status_log_ms"] = 0
     state["last_cooldown_log_ms"] = 0
     state["cooldown_intervention_active"] = False
@@ -2910,19 +2940,16 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
                 metrics["drawdown_score"],
                 metrics["red_threshold"],
             )
-            _emit_hsl_event(
+            _emit_hsl_red_triggered_once(
                 self,
-                "hsl.red_triggered",
-                ("hsl", "risk", "red"),
+                state,
                 _hsl_event_data(metrics),
                 pside=pside,
                 ts=int(metrics["timestamp_ms"]),
-                level="critical",
-                status="degraded",
-                reason_code="red_threshold_crossed",
             )
         elif metrics["tier"] != "red":
             state["pending_red_since_ms"] = None
+            state["red_trigger_event_emitted"] = False
         self._equity_hard_stop_log_status(pside, metrics)
         out[pside] = metrics
     self._equity_hard_stop_refresh_halted_runtime_forced_modes()
@@ -3121,20 +3148,17 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     metrics["peak_realized_pnl"],
                     metrics["unrealized_pnl"],
                 )
-                _emit_hsl_event(
+                _emit_hsl_red_triggered_once(
                     self,
-                    "hsl.red_triggered",
-                    ("hsl", "risk", "red"),
+                    state,
                     _hsl_event_data(metrics),
                     pside=pside,
                     symbol=symbol,
                     ts=int(metrics["timestamp_ms"]),
-                    level="critical",
-                    status="degraded",
-                    reason_code="red_threshold_crossed",
                 )
             elif metrics["tier"] != "red":
                 state["pending_red_since_ms"] = None
+                state["red_trigger_event_emitted"] = False
                 if not state["halted"]:
                     self._equity_hard_stop_clear_coin_runtime_forced_mode(pside, symbol)
             if metrics["tier"] == "orange":
@@ -3318,6 +3342,22 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
     state["red_flat_confirmations"] = 0
     state["pending_red_since_ms"] = None
     latch_path = self._equity_hard_stop_write_latch(pside, payload)
+    _emit_hsl_red_triggered_once(
+        self,
+        state,
+        _hsl_event_data(
+            stop_event,
+            {
+                "reason": "red_stop_finalized",
+                "cooldown_until_ms": cooldown_until_ms,
+                "no_restart_latched": bool(no_restart_latched),
+                "no_restart_drawdown_raw": float(no_restart_drawdown_raw),
+            },
+        ),
+        pside=pside,
+        ts=stop_ts_ms,
+        reason_code="red_stop_finalized",
+    )
     self._equity_hard_stop_refresh_halted_runtime_forced_modes()
     if cooldown_until_ms is not None:
         _emit_hsl_event(
@@ -3412,6 +3452,22 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     state["pending_red_since_ms"] = None
     state["pnl_reset_timestamp_ms"] = int(stop_ts_ms) + 1
     latch_path = self._equity_hard_stop_write_latch(pside, payload, symbol=symbol)
+    _emit_hsl_red_triggered_once(
+        self,
+        state,
+        _hsl_event_data(
+            stop_event,
+            {
+                "reason": "coin_red_stop_finalized",
+                "cooldown_until_ms": cooldown_until_ms,
+                "no_restart_latched": bool(no_restart_latched),
+            },
+        ),
+        pside=pside,
+        symbol=symbol,
+        ts=stop_ts_ms,
+        reason_code="coin_red_stop_finalized",
+    )
     self._equity_hard_stop_clear_coin_runtime_forced_mode(pside, symbol)
     if cooldown_until_ms is not None:
         self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "graceful_stop")
