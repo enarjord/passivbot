@@ -369,6 +369,123 @@ def test_event_query_filters_by_ids_symbol_pside_reason_and_status(tmp_path):
     assert remote_report["query"]["events"][0]["event_type"] == "remote_call.failed"
 
 
+def test_event_query_filters_by_remaining_event_ids(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                ids={
+                    "bot_id": "bot_1",
+                    "snapshot_id": "snap_1",
+                    "plan_id": "plan_1",
+                },
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                symbol="BTC/USDT:USDT",
+                ids={
+                    "bot_id": "bot_1",
+                    "plan_id": "plan_1",
+                    "action_id": "ow_1:create:0",
+                    "order_wave_id": "ow_1",
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_1",
+                seq=3,
+                ts=1200,
+                status="failed",
+                ids={
+                    "bot_id": "bot_1",
+                    "remote_call_id": "rc_1",
+                    "remote_call_group_id": "cy_1:candles",
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                cycle_id="cy_2",
+                seq=4,
+                ts=1300,
+                ids={
+                    "bot_id": "bot_2",
+                    "snapshot_id": "snap_2",
+                    "remote_call_id": "rc_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+            ),
+        ],
+    )
+
+    bot_report = build_event_report(tmp_path / "monitor", bot_id="bot_1", timeline=True)
+
+    assert bot_report["query"]["filters"] == {"bot_ids": ["bot_1"]}
+    assert bot_report["query"]["matched_events"] == 3
+    assert [event["event_type"] for event in bot_report["query"]["events"]] == [
+        "rust_orchestrator.called",
+        "execution.create_sent",
+        "remote_call.failed",
+    ]
+    assert bot_report["query"]["timeline"][0] == (
+        "1000 seq=1 rust_orchestrator.called status=succeeded "
+        "reason_code=test ids=bot_id=bot_1,cycle_id=cy_1,"
+        "snapshot_id=snap_1,plan_id=plan_1"
+    )
+
+    snapshot_report = build_event_report(
+        tmp_path / "monitor",
+        snapshot_id="snap_1",
+    )
+
+    assert snapshot_report["query"]["filters"] == {"snapshot_ids": ["snap_1"]}
+    assert snapshot_report["query"]["matched_events"] == 1
+    assert snapshot_report["query"]["events"][0]["ids"]["snapshot_id"] == "snap_1"
+
+    plan_report = build_event_report(tmp_path / "monitor", plan_id="plan_1")
+
+    assert plan_report["query"]["filters"] == {"plan_ids": ["plan_1"]}
+    assert plan_report["query"]["matched_events"] == 2
+    assert [event["event_type"] for event in plan_report["query"]["events"]] == [
+        "rust_orchestrator.called",
+        "execution.create_sent",
+    ]
+
+    action_report = build_event_report(
+        tmp_path / "monitor",
+        action_id="ow_1:create:0",
+    )
+
+    assert action_report["query"]["filters"] == {"action_ids": ["ow_1:create:0"]}
+    assert action_report["query"]["matched_events"] == 1
+    assert action_report["query"]["events"][0]["ids"]["action_id"] == "ow_1:create:0"
+
+    remote_group_report = build_event_report(
+        tmp_path / "monitor",
+        remote_call_group_id="cy_1:candles",
+        status="failed",
+    )
+
+    assert remote_group_report["query"]["filters"] == {
+        "remote_call_group_ids": ["cy_1:candles"],
+        "statuses": ["failed"],
+    }
+    assert remote_group_report["query"]["matched_events"] == 1
+    assert remote_group_report["query"]["events"][0]["ids"] == {
+        "bot_id": "bot_1",
+        "cycle_id": "cy_1",
+        "remote_call_id": "rc_1",
+        "remote_call_group_id": "cy_1:candles",
+    }
+
+
 def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(
@@ -570,6 +687,80 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
             "1000 seq=1 execution.cancel_failed status=failed "
             "reason_code=exchange_exception symbol=SOL/USDT:USDT pside=short "
             "ids=cycle_id=cy_9,order_wave_id=ow_9"
+        )
+    ]
+
+
+def test_live_event_query_cli_accepts_additional_id_scopes(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                ids={
+                    "bot_id": "bot_9",
+                    "snapshot_id": "snap_9",
+                    "plan_id": "plan_9",
+                    "action_id": "ow_9:create:0",
+                    "remote_call_group_id": "cy_9:orders",
+                },
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1100,
+                ids={
+                    "bot_id": "bot_9",
+                    "snapshot_id": "snap_10",
+                    "plan_id": "plan_9",
+                    "action_id": "ow_9:create:1",
+                    "remote_call_group_id": "cy_9:orders",
+                },
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--bot-id",
+                "bot_9",
+                "--snapshot-id",
+                "snap_9",
+                "--plan-id",
+                "plan_9",
+                "--action-id",
+                "ow_9:create:0",
+                "--remote-call-group-id",
+                "cy_9:orders",
+                "--timeline",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {
+        "action_ids": ["ow_9:create:0"],
+        "bot_ids": ["bot_9"],
+        "plan_ids": ["plan_9"],
+        "remote_call_group_ids": ["cy_9:orders"],
+        "snapshot_ids": ["snap_9"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["ids"]["action_id"] == "ow_9:create:0"
+    assert report["query"]["timeline"] == [
+        (
+            "1000 seq=1 execution.create_sent status=succeeded "
+            "reason_code=test ids=bot_id=bot_9,cycle_id=cy_9,"
+            "snapshot_id=snap_9,plan_id=plan_9,action_id=ow_9:create:0,"
+            "remote_call_group_id=cy_9:orders"
         )
     ]
 

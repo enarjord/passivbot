@@ -37,6 +37,38 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--bot-id",
+        action="append",
+        help=(
+            "Return compact records matching one bot_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--snapshot-id",
+        action="append",
+        help=(
+            "Return compact records matching one snapshot_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--plan-id",
+        action="append",
+        help=(
+            "Return compact records matching one plan_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--action-id",
+        action="append",
+        help=(
+            "Return compact records matching one action_id. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--order-wave-id",
         action="append",
         help=(
@@ -50,6 +82,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Return compact records matching one remote_call_id. May be repeated "
             "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--remote-call-group-id",
+        action="append",
+        help=(
+            "Return compact records matching one remote_call_group_id. May be "
+            "repeated or comma-separated."
         ),
     )
     parser.add_argument(
@@ -117,8 +157,13 @@ def main(argv: list[str] | None = None) -> int:
         args.path,
         cycle_id=args.cycle_id,
         event_type=args.event_types,
+        bot_id=args.bot_id,
+        snapshot_id=args.snapshot_id,
+        plan_id=args.plan_id,
+        action_id=args.action_id,
         order_wave_id=args.order_wave_id,
         remote_call_id=args.remote_call_id,
+        remote_call_group_id=args.remote_call_group_id,
         symbol=args.symbol,
         pside=args.pside,
         reason_code=args.reason_code,

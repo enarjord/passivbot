@@ -97,8 +97,13 @@ def _filter_report(
     *,
     cycle_id: str | None,
     event_types: set[str],
+    bot_ids: set[str],
+    snapshot_ids: set[str],
+    plan_ids: set[str],
+    action_ids: set[str],
     order_wave_ids: set[str],
     remote_call_ids: set[str],
+    remote_call_group_ids: set[str],
     symbols: set[str],
     psides: set[str],
     reason_codes: set[str],
@@ -109,10 +114,20 @@ def _filter_report(
         filters["cycle_id"] = str(cycle_id)
     if event_types:
         filters["event_types"] = sorted(event_types)
+    if bot_ids:
+        filters["bot_ids"] = sorted(bot_ids)
+    if snapshot_ids:
+        filters["snapshot_ids"] = sorted(snapshot_ids)
+    if plan_ids:
+        filters["plan_ids"] = sorted(plan_ids)
+    if action_ids:
+        filters["action_ids"] = sorted(action_ids)
     if order_wave_ids:
         filters["order_wave_ids"] = sorted(order_wave_ids)
     if remote_call_ids:
         filters["remote_call_ids"] = sorted(remote_call_ids)
+    if remote_call_group_ids:
+        filters["remote_call_group_ids"] = sorted(remote_call_group_ids)
     if symbols:
         filters["symbols"] = sorted(symbols)
     if psides:
@@ -172,16 +187,8 @@ def _timeline_line(record: dict[str, Any]) -> str:
     if isinstance(ids, dict) and ids:
         id_parts = [
             f"{key}={value}"
-            for key, value in ids.items()
-            if value is not None
-            and key
-            in {
-                "cycle_id",
-                "action_id",
-                "order_wave_id",
-                "remote_call_id",
-                "remote_call_group_id",
-            }
+            for key in EVENT_ID_KEYS
+            if (value := ids.get(key)) is not None
         ]
         if id_parts:
             parts.append("ids=" + ",".join(id_parts))
@@ -193,8 +200,13 @@ def build_event_report(
     *,
     cycle_id: str | None = None,
     event_type: str | Iterable[str] | None = None,
+    bot_id: str | Iterable[str] | None = None,
+    snapshot_id: str | Iterable[str] | None = None,
+    plan_id: str | Iterable[str] | None = None,
+    action_id: str | Iterable[str] | None = None,
     order_wave_id: str | Iterable[str] | None = None,
     remote_call_id: str | Iterable[str] | None = None,
+    remote_call_group_id: str | Iterable[str] | None = None,
     symbol: str | Iterable[str] | None = None,
     pside: str | Iterable[str] | None = None,
     reason_code: str | Iterable[str] | None = None,
@@ -235,8 +247,13 @@ def build_event_report(
     query_match_count = 0
     max_events = max(0, int(limit))
     event_type_filter = _normalize_filter_values(event_type)
+    bot_filter = _normalize_filter_values(bot_id)
+    snapshot_filter = _normalize_filter_values(snapshot_id)
+    plan_filter = _normalize_filter_values(plan_id)
+    action_filter = _normalize_filter_values(action_id)
     order_wave_filter = _normalize_filter_values(order_wave_id)
     remote_call_filter = _normalize_filter_values(remote_call_id)
+    remote_call_group_filter = _normalize_filter_values(remote_call_group_id)
     symbol_filter = _normalize_filter_values(symbol)
     pside_filter = _normalize_filter_values(pside)
     reason_code_filter = _normalize_filter_values(reason_code)
@@ -244,8 +261,13 @@ def build_event_report(
     has_non_cycle_filter = any(
         (
             event_type_filter,
+            bot_filter,
+            snapshot_filter,
+            plan_filter,
+            action_filter,
             order_wave_filter,
             remote_call_filter,
+            remote_call_group_filter,
             symbol_filter,
             pside_filter,
             reason_code_filter,
@@ -346,11 +368,22 @@ def build_event_report(
                         record_event_type, event_type_filter
                     )
                     cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
+                    bot_matches = _filter_matches(ids.get("bot_id"), bot_filter)
+                    snapshot_matches = _filter_matches(
+                        ids.get("snapshot_id"), snapshot_filter
+                    )
+                    plan_matches = _filter_matches(ids.get("plan_id"), plan_filter)
+                    action_matches = _filter_matches(
+                        ids.get("action_id"), action_filter
+                    )
                     order_wave_matches = _filter_matches(
                         ids.get("order_wave_id"), order_wave_filter
                     )
                     remote_call_matches = _filter_matches(
                         ids.get("remote_call_id"), remote_call_filter
+                    )
+                    remote_call_group_matches = _filter_matches(
+                        ids.get("remote_call_group_id"), remote_call_group_filter
                     )
                     symbol_matches = _filter_matches(record_symbol, symbol_filter)
                     pside_matches = _filter_matches(record_pside, pside_filter)
@@ -361,8 +394,13 @@ def build_event_report(
                     query_matches = (
                         event_type_matches
                         and cycle_matches
+                        and bot_matches
+                        and snapshot_matches
+                        and plan_matches
+                        and action_matches
                         and order_wave_matches
                         and remote_call_matches
+                        and remote_call_group_matches
                         and symbol_matches
                         and pside_matches
                         and reason_code_matches
@@ -423,8 +461,13 @@ def build_event_report(
         query_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            bot_ids=bot_filter,
+            snapshot_ids=snapshot_filter,
+            plan_ids=plan_filter,
+            action_ids=action_filter,
             order_wave_ids=order_wave_filter,
             remote_call_ids=remote_call_filter,
+            remote_call_group_ids=remote_call_group_filter,
             symbols=symbol_filter,
             psides=pside_filter,
             reason_codes=reason_code_filter,
@@ -444,8 +487,13 @@ def build_event_report(
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            bot_ids=bot_filter,
+            snapshot_ids=snapshot_filter,
+            plan_ids=plan_filter,
+            action_ids=action_filter,
             order_wave_ids=order_wave_filter,
             remote_call_ids=remote_call_filter,
+            remote_call_group_ids=remote_call_group_filter,
             symbols=symbol_filter,
             psides=pside_filter,
             reason_codes=reason_code_filter,
