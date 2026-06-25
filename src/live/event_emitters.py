@@ -1209,6 +1209,106 @@ def _event_fingerprint(value: Any) -> str | None:
     return hashlib.sha256(str(value).encode("utf-8")).hexdigest()
 
 
+def _planned_order_pside(order_type: str) -> str | None:
+    text = str(order_type or "")
+    if text.endswith("_long") or "_long_" in text:
+        return "long"
+    if text.endswith("_short") or "_short_" in text:
+        return "short"
+    return None
+
+
+def _planned_action_summary(
+    orders: Any,
+    idx_to_symbol: dict[int, str] | None,
+    *,
+    limit: int = 16,
+) -> dict[str, Any]:
+    rows = list(orders or []) if isinstance(orders, (list, tuple)) else []
+    symbols_by_idx = idx_to_symbol or {}
+    by_order_type: Counter[str] = Counter()
+    by_pside: Counter[str] = Counter()
+    by_execution_type: Counter[str] = Counter()
+    symbols: set[str] = set()
+    sample: list[dict[str, Any]] = []
+    for index, order in enumerate(rows):
+        if not isinstance(order, dict):
+            by_order_type[type(order).__name__] += 1
+            continue
+        order_type = str(order.get("order_type") or "unknown")
+        execution_type = str(order.get("execution_type") or "limit")
+        pside = _planned_order_pside(order_type)
+        by_order_type[order_type] += 1
+        by_execution_type[execution_type] += 1
+        if pside:
+            by_pside[pside] += 1
+        symbol = None
+        symbol_idx = _safe_int(order.get("symbol_idx"))
+        if symbol_idx is not None:
+            symbol = symbols_by_idx.get(symbol_idx)
+        if symbol:
+            symbols.add(str(symbol))
+        if len(sample) >= max(0, int(limit)):
+            continue
+        item: dict[str, Any] = {
+            "index": int(index),
+            "symbol": str(symbol) if symbol else None,
+            "symbol_idx": symbol_idx,
+            "pside": pside,
+            "order_type": order_type,
+            "execution_type": execution_type,
+        }
+        qty = _safe_float(order.get("qty"))
+        price = _safe_float(order.get("price"))
+        if qty is not None:
+            item["qty"] = qty
+        if price is not None:
+            item["price"] = price
+        sample.append({key: value for key, value in item.items() if value is not None})
+    return {
+        "order_count": len(rows),
+        "by_order_type": dict(sorted(by_order_type.items())),
+        "by_pside": dict(sorted(by_pside.items())),
+        "by_execution_type": dict(sorted(by_execution_type.items())),
+        "symbols": _symbol_sample(symbols),
+        "orders_sample": sample,
+        "orders_sample_count": len(sample),
+        "orders_truncated": len(rows) > len(sample),
+    }
+
+
+def emit_action_planned_event(
+    bot: Any,
+    *,
+    orders: Any,
+    idx_to_symbol: dict[int, str] | None = None,
+    output_hash: str | None = None,
+    remote_call_id: str | None = None,
+) -> None:
+    try:
+        data = _planned_action_summary(orders, idx_to_symbol)
+        if output_hash:
+            data["output_hash"] = str(output_hash)
+        bot._emit_live_event(
+            EventTypes.ACTION_PLANNED,
+            level="debug",
+            component="action_planner",
+            tags=("planning", "action", "rust"),
+            cycle_id=current_live_event_cycle_id(bot),
+            remote_call_id=remote_call_id,
+            status="succeeded",
+            reason_code="rust_output_actions",
+            raw_hash=output_hash,
+            data=data,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.ACTION_PLANNED,
+            exc,
+        )
+
+
 def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
     if not isinstance(order, dict):
         return {"order_type": type(order).__name__}

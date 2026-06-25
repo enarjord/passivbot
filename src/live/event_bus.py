@@ -41,6 +41,7 @@ class EventTypes:
     REMOTE_CALL_THROTTLED = "remote_call.throttled"
     RUST_ORCHESTRATOR_CALLED = "rust_orchestrator.called"
     RUST_ORCHESTRATOR_RETURNED = "rust_orchestrator.returned"
+    ACTION_PLANNED = "action.planned"
     ORDER_WAVE_STARTED = "order_wave.started"
     ORDER_WAVE_COMPLETED = "order_wave.completed"
     EXECUTION_CREATE_SENT = "execution.create_sent"
@@ -93,6 +94,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_THROTTLED,
     EventTypes.RUST_ORCHESTRATOR_CALLED,
     EventTypes.RUST_ORCHESTRATOR_RETURNED,
+    EventTypes.ACTION_PLANNED,
     EventTypes.ORDER_WAVE_STARTED,
     EventTypes.ORDER_WAVE_COMPLETED,
     EventTypes.EXECUTION_CREATE_SENT,
@@ -378,6 +380,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.RUST_ORCHESTRATOR_RETURNED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),
+    EventTypes.ACTION_PLANNED: EventRoute(console=False, text=False),
     EventTypes.ORDER_WAVE_STARTED: EventRoute(console=False),
     EventTypes.ORDER_WAVE_COMPLETED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_SENT: EventRoute(console=False),
