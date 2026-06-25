@@ -547,6 +547,7 @@ def _equity_hard_stop_reset_state(self) -> None:
         state["cooldown_until_ms"] = None
         state["pending_stop_event"] = None
         state["last_stop_event"] = None
+        state["red_trigger_event_emitted"] = False
         state["last_status_log_ms"] = 0
         state["last_cooldown_log_ms"] = 0
         state["cooldown_intervention_active"] = False
@@ -1780,6 +1781,7 @@ def _equity_hard_stop_reset_after_restart(self, pside: str) -> None:
     state["pending_red_since_ms"] = None
     state["cooldown_until_ms"] = None
     state["pending_stop_event"] = None
+    state["red_trigger_event_emitted"] = False
     state["last_status_log_ms"] = 0
     state["last_cooldown_log_ms"] = 0
     state["cooldown_intervention_active"] = False
@@ -2947,6 +2949,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
             )
         elif metrics["tier"] != "red":
             state["pending_red_since_ms"] = None
+            state["red_trigger_event_emitted"] = False
         self._equity_hard_stop_log_status(pside, metrics)
         out[pside] = metrics
     self._equity_hard_stop_refresh_halted_runtime_forced_modes()
@@ -3155,6 +3158,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                 )
             elif metrics["tier"] != "red":
                 state["pending_red_since_ms"] = None
+                state["red_trigger_event_emitted"] = False
                 if not state["halted"]:
                     self._equity_hard_stop_clear_coin_runtime_forced_mode(pside, symbol)
             if metrics["tier"] == "orange":

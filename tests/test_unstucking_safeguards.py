@@ -2880,10 +2880,18 @@ async def test_hard_stop_finalize_red_stop_uses_latest_panic_fill_timestamp(monk
 
 @pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monkeypatch):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_hsl_repeat_red"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
 
     stop_events = [
         {
@@ -2927,8 +2935,10 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
     assert captured[0][1]["no_restart_drawdown_raw"] == pytest.approx(
         1.0 - 104.0 / 110.0
     )
+    assert _hsl_state(bot)["red_trigger_event_emitted"] is True
 
     bot._equity_hard_stop_reset_after_restart("long")
+    assert _hsl_state(bot)["red_trigger_event_emitted"] is False
     await bot._equity_hard_stop_finalize_red_stop("long")
 
     assert _hsl_state(bot)["halted"] is True
@@ -2942,6 +2952,19 @@ async def test_hard_stop_finalize_red_stop_uses_persistent_no_restart_peak(monke
         1.0 - 86.0 / 110.0
     )
     assert captured[1][1]["no_restart_peak_strategy_equity"] == pytest.approx(110.0)
+    assert _hsl_state(bot)["red_trigger_event_emitted"] is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    red_events = [event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED]
+    assert len(red_events) == 2
+    assert [event.reason_code for event in red_events] == [
+        "red_stop_finalized",
+        "red_stop_finalized",
+    ]
+    assert [event.data["stop_event_timestamp_ms"] for event in red_events] == [
+        1_700_000_000_000,
+        1_700_000_120_000,
+    ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
