@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import sys
 from collections import Counter
 from typing import Iterable
@@ -17,6 +18,13 @@ def _utc_ms() -> int:
     if callable(time_fn):
         return int(time_fn())
     return int(utc_ms())
+
+
+def _passivbot_module():
+    module = sys.modules.get("passivbot")
+    if module is None:
+        import passivbot as module  # type: ignore
+    return module
 
 
 def market_snapshot_ticker_strategy(bot) -> str:
@@ -101,7 +109,136 @@ async def filter_fresh_market_snapshot_creations(
             bot._log_compact_symbol_payload(invalid[:8]),
         )
         return []
+    orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)
     return orders
+
+
+def _limit_order_create_max_market_dist_pct(bot) -> float:
+    raw = get_optional_live_value(
+        bot.config, "limit_order_create_max_market_dist_pct", 0.8
+    )
+    try:
+        threshold = float(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "live.limit_order_create_max_market_dist_pct must be numeric"
+        ) from exc
+    if not math.isfinite(threshold) or threshold < 0.0 or threshold >= 1.0:
+        raise ValueError(
+            "live.limit_order_create_max_market_dist_pct must be finite and "
+            ">= 0.0 and < 1.0"
+        )
+    return threshold
+
+
+def _filter_limit_order_creations_by_market_distance(
+    bot, orders: list[dict], snapshots: dict[str, MarketSnapshot]
+) -> list[dict]:
+    threshold = _limit_order_create_max_market_dist_pct(bot)
+    if threshold <= 0.0:
+        return orders
+    order_market_diff = getattr(_passivbot_module(), "order_market_diff")
+    kept: list[dict] = []
+    skipped: list[dict] = []
+    skipped_symbols: set[str] = set()
+    min_mult = 1.0 - threshold
+    max_mult = 1.0 + threshold
+    for order in orders:
+        if str(order.get("type", "limit")).lower() == "market":
+            kept.append(order)
+            continue
+        symbol = str(order.get("symbol") or "")
+        snapshot = snapshots.get(symbol)
+        if snapshot is None or not snapshot.is_valid():
+            kept.append(order)
+            continue
+        side = str(order.get("side") or "").lower()
+        price = float(order["price"])
+        market_price = float(snapshot.last)
+        dist = float(order_market_diff(side, price, market_price))
+        if dist > threshold:
+            skipped.append(
+                {
+                    "order": order,
+                    "market_price": market_price,
+                    "dist": dist,
+                }
+            )
+            skipped_symbols.add(symbol)
+            continue
+        kept.append(order)
+    if skipped:
+        _log_limit_order_distance_skips(
+            bot,
+            skipped,
+            skipped_symbols=skipped_symbols,
+            threshold=threshold,
+            min_mult=min_mult,
+            max_mult=max_mult,
+        )
+    return kept
+
+
+def _log_limit_order_distance_skips(
+    bot,
+    skipped: list[dict],
+    *,
+    skipped_symbols: set[str],
+    threshold: float,
+    min_mult: float,
+    max_mult: float,
+) -> None:
+    grouped: Counter[tuple[str, str, str, str]] = Counter()
+    for item in skipped:
+        order = item["order"]
+        grouped[
+            (
+                str(order.get("symbol") or ""),
+                str(order.get("position_side") or ""),
+                str(order.get("side") or ""),
+                str(order.get("pb_order_type") or ""),
+            )
+        ] += 1
+    if not hasattr(bot, "_limit_order_distance_guard_log_state"):
+        bot._limit_order_distance_guard_log_state = {}
+    now_ms = _utc_ms()
+    should_info = False
+    for key in grouped:
+        last_info_ms = int(
+            bot._limit_order_distance_guard_log_state.get(key, 0) or 0
+        )
+        if now_ms - last_info_ms >= 60 * 60 * 1000:
+            should_info = True
+            bot._limit_order_distance_guard_log_state[key] = now_ms
+    samples: list[str] = []
+    for item in skipped[:8]:
+        order = item["order"]
+        samples.append(
+            (
+                f"{bot._log_symbol(order.get('symbol'))}:{order.get('side')}:"
+                f"{float(order.get('price')):.10g}/market={item['market_price']:.10g}"
+            )
+        )
+    summary = ", ".join(
+        (
+            f"{bot._log_symbol(symbol)} {side} {pside} {pb_type or 'unknown'}={count}"
+        )
+        for (symbol, pside, side, pb_type), count in grouped.items()
+    )
+    log_fn = logging.info if should_info else logging.debug
+    log_fn(
+        "[order] skipped far-from-market limit order creates | "
+        "skipped=%d symbols=%s threshold=%.4f min_multiplier=%.4f "
+        "max_multiplier=%.4f groups=%s samples=%s "
+        "reason=limit_order_create_market_distance",
+        len(skipped),
+        bot._log_symbols(sorted(skipped_symbols), limit=12),
+        threshold,
+        min_mult,
+        max_mult,
+        summary,
+        samples,
+    )
 
 
 async def get_live_market_snapshots(

@@ -41,6 +41,22 @@ def make_dummy_exchange_class(markets):
     return DummyCCXT
 
 
+def test_load_ccxt_instance_defaults_okx_to_swap_only_markets(monkeypatch):
+    class DummyOKX:
+        def __init__(self, config=None):
+            self.config = config or {}
+            self.options = {}
+
+    monkeypatch.setattr(utils.ccxt, "exchanges", ["okx"], raising=False)
+    monkeypatch.setattr(utils.ccxt, "okx", DummyOKX, raising=False)
+    monkeypatch.setattr(utils, "resolve_custom_endpoint_override", lambda _exchange: None)
+
+    cc = utils.load_ccxt_instance("okx")
+
+    assert cc.options["defaultType"] == "swap"
+    assert cc.options["fetchMarkets"] == {"types": ["swap"]}
+
+
 @pytest.mark.asyncio
 async def test_load_markets_fetch_and_cache_creates_maps(tmp_path, monkeypatch):
     # Work inside an isolated temp directory

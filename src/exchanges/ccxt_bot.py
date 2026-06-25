@@ -243,6 +243,7 @@ class CCXTBot(Passivbot):
         exchange_class = getattr(ccxt_async, ccxt_id)
         self.cca = exchange_class(ccxt_config)
         self.cca.options.update(self._build_ccxt_options())
+        self._apply_exchange_market_options(self.cca, ccxt_id)
         self.cca.options.update(user_options)
         self.cca.options["defaultType"] = "swap"
         self._apply_endpoint_override(self.cca)
@@ -252,12 +253,18 @@ class CCXTBot(Passivbot):
             ws_class = getattr(ccxt_pro, ccxt_id)
             self.ccp = ws_class(ccxt_config)
             self.ccp.options.update(self._build_ccxt_options())
+            self._apply_exchange_market_options(self.ccp, ccxt_id)
             self.ccp.options.update(user_options)
             self.ccp.options["defaultType"] = "swap"
             self._apply_endpoint_override(self.ccp)
         else:
             self.ccp = None
             logging.info(f"{self.exchange}: WebSocket disabled, using REST polling")
+
+    def _apply_exchange_market_options(self, client, ccxt_id: str) -> None:
+        """Apply Passivbot's default market universe for CCXT market loading."""
+        if ccxt_id == "okx":
+            client.options["fetchMarkets"] = {"types": ["swap"]}
 
     async def validate_websocket_support(self):
         """Check WebSocket capabilities (informational, non-fatal).
