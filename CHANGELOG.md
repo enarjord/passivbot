@@ -7,6 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Added `live.limit_order_create_max_market_dist_pct` with a default of `0.8`
   so live skips limit-order creations far outside fresh market price bands
   instead of repeatedly submitting exchange-invalid deep orders.
+- Added `passivbot tool live-event-query` to validate monitor event NDJSON and
+  reconstruct one live event chain by `cycle_id`.
 - Added staged live shutdown progress events/logs, made candle fetch-lock waits
   abort promptly once shutdown is requested, and shortened the post-cancel
   background execution-loop grace from 5s to 1s.

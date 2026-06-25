@@ -93,6 +93,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "plot iterative history files (requires full install)",
         requires_full=True,
     ),
+    "live-event-query": CommandSpec(
+        "tools.live_event_query",
+        "validate monitor event NDJSON and reconstruct a live cycle",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",

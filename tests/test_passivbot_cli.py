@@ -135,6 +135,7 @@ def test_tool_help_lists_supported_tools(capsys):
     assert "hyperliquid-order-margin-probe" in out
     assert "hyperliquid-position-probe" in out
     assert "inspect-ohlcvs" in out
+    assert "live-event-query" in out
     assert "merge-paretos" in out
     assert "monitor-dev" in out
     assert "monitor-relay" in out
@@ -266,6 +267,30 @@ def test_tool_dispatch_forwards_module_and_prog(monkeypatch):
         "optimize_results",
     ]
     assert captured["prog_env"] == "passivbot tool pareto-dash"
+
+
+def test_live_event_query_tool_dispatch_forwards_module_and_prog(monkeypatch):
+    captured = {}
+
+    def fake_invoke_module_main(module_name):
+        captured["module_name"] = module_name
+        captured["argv"] = sys.argv[:]
+        captured["prog_env"] = os.environ.get("PASSIVBOT_CLI_PROG")
+        return True, 0
+
+    monkeypatch.setattr(cli_main, "_invoke_module_main", fake_invoke_module_main)
+    monkeypatch.setattr(cli_main, "_missing_full_install_markers", lambda: [])
+
+    assert cli_main.main(["tool", "live-event-query", "monitor", "--cycle-id", "cy_1"]) == 0
+
+    assert captured["module_name"] == "tools.live_event_query"
+    assert captured["argv"] == [
+        "passivbot tool live-event-query",
+        "monitor",
+        "--cycle-id",
+        "cy_1",
+    ]
+    assert captured["prog_env"] == "passivbot tool live-event-query"
 
 
 def test_pareto_tool_dispatch_forwards_module_and_prog(monkeypatch):
