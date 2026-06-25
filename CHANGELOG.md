@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `live.limit_order_create_max_market_dist_pct` with a default of `0.8`
+  so live skips limit-order creations far outside fresh market price bands
+  instead of repeatedly submitting exchange-invalid deep orders.
 - Fixed Bitget UTA / Elite close-order placement by omitting the one-way-only
   `reduceOnly` flag from hedge-mode v3 orders that already send `posSide`.
 - Fixed Bitget UTA / Elite open-order normalization so hedge-mode close orders

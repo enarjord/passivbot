@@ -42,6 +42,23 @@ def validate_config(
             "config.live.forager_score_hysteresis_pct must be finite and >= 0.0"
         )
     try:
+        limit_order_market_dist = float(
+            config["live"]["limit_order_create_max_market_dist_pct"]
+        )
+    except (TypeError, ValueError) as exc:
+        raise TypeError(
+            "config.live.limit_order_create_max_market_dist_pct must be numeric"
+        ) from exc
+    if (
+        not math.isfinite(limit_order_market_dist)
+        or limit_order_market_dist < 0.0
+        or limit_order_market_dist >= 1.0
+    ):
+        raise ValueError(
+            "config.live.limit_order_create_max_market_dist_pct must be "
+            "finite and >= 0.0 and < 1.0"
+        )
+    try:
         active_tail_gap_minutes = float(
             config["live"]["max_active_candle_tail_gap_minutes"]
         )

@@ -3912,6 +3912,170 @@ async def test_pre_create_snapshot_filter_refreshes_stale_planning_market_snapsh
     assert await bot._filter_fresh_market_snapshot_creations(orders) == orders
 
 
+def _make_pre_create_distance_guard_bot(
+    symbol: str,
+    *,
+    threshold: float = 0.8,
+    market_price: float = 100.0,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"limit_order_create_max_market_dist_pct": threshold}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_refresh_epoch = 1
+    now_ms = passivbot_module.utc_ms()
+    bot._current_planning_snapshot = PlanningSnapshot(
+        ts_ms=now_ms,
+        exchange="bybit",
+        user="tester",
+        epoch=1,
+        symbols=(symbol,),
+        required_surfaces=tuple(),
+        surfaces=tuple(),
+        market_snapshots=(
+            PlanningMarketSnapshot(
+                symbol=symbol,
+                bid=market_price,
+                ask=market_price,
+                last=market_price,
+                fetched_ms=now_ms,
+                source="test",
+            ),
+        ),
+        market_snapshot_max_age_ms=10_000,
+        completed_candle_signature=tuple(),
+    )
+
+    async def fake_get_snapshots(symbols, max_age_ms=None):
+        return {
+            s: MarketSnapshot(
+                symbol=s,
+                bid=market_price,
+                ask=market_price,
+                last=market_price,
+                fetched_ms=passivbot_module.utc_ms(),
+                source="test",
+            )
+            for s in symbols
+        }
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fake_get_snapshots)
+    return bot
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_filter_skips_far_limit_order_creations(
+    monkeypatch, caplog
+):
+    def fake_order_market_diff(side, price, market_price):
+        side = str(side).lower()
+        if side == "buy":
+            return 1.0 - float(price) / float(market_price)
+        if side == "sell":
+            return float(price) / float(market_price) - 1.0
+        raise ValueError("invalid side")
+
+    monkeypatch.setattr(passivbot_module, "order_market_diff", fake_order_market_diff)
+
+    symbol = "POPCAT/USDT:USDT"
+    bot = _make_pre_create_distance_guard_bot(symbol)
+    kept_buy = {
+        "symbol": symbol,
+        "side": "buy",
+        "position_side": "long",
+        "qty": 1.0,
+        "price": 20.0,
+        "pb_order_type": "entry_grid_normal_long",
+    }
+    skipped_buy = {
+        "symbol": symbol,
+        "side": "buy",
+        "position_side": "long",
+        "qty": 1.0,
+        "price": 19.99,
+        "pb_order_type": "entry_grid_cropped_long",
+    }
+    kept_sell = {
+        "symbol": symbol,
+        "side": "sell",
+        "position_side": "short",
+        "qty": 1.0,
+        "price": 180.0,
+        "pb_order_type": "entry_grid_normal_short",
+    }
+    skipped_sell = {
+        "symbol": symbol,
+        "side": "sell",
+        "position_side": "short",
+        "qty": 1.0,
+        "price": 180.01,
+        "pb_order_type": "entry_grid_cropped_short",
+    }
+    skipped_close = {
+        "symbol": symbol,
+        "side": "sell",
+        "position_side": "long",
+        "qty": 1.0,
+        "price": 180.02,
+        "reduce_only": True,
+        "pb_order_type": "close_grid_long",
+    }
+    market_order = {
+        "symbol": symbol,
+        "side": "buy",
+        "position_side": "long",
+        "qty": 1.0,
+        "price": 1.0,
+        "type": "market",
+        "pb_order_type": "close_panic_long",
+    }
+
+    with caplog.at_level(logging.INFO):
+        filtered = await bot._filter_fresh_market_snapshot_creations(
+            [
+                kept_buy,
+                skipped_buy,
+                kept_sell,
+                skipped_sell,
+                skipped_close,
+                market_order,
+            ]
+        )
+
+    assert filtered == [kept_buy, kept_sell, market_order]
+    assert any(
+        "reason=limit_order_create_market_distance" in rec.message
+        and "skipped=3" in rec.message
+        for rec in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_filter_disables_limit_order_distance_guard(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        passivbot_module,
+        "order_market_diff",
+        lambda side, price, market_price: 999.0,
+    )
+
+    symbol = "POPCAT/USDT:USDT"
+    bot = _make_pre_create_distance_guard_bot(symbol, threshold=0.0)
+    orders = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 1.0,
+            "pb_order_type": "entry_grid_normal_long",
+        }
+    ]
+
+    assert await bot._filter_fresh_market_snapshot_creations(orders) == orders
+
+
 @pytest.mark.asyncio
 async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidation():
     bot = Passivbot.__new__(Passivbot)
