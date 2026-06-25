@@ -568,7 +568,7 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
         status="failed",
         input_hash="failed_input_hash",
         elapsed_ms=9,
-        error=ValueError("MissingEma { symbol_idx: 0 }"),
+        error=ValueError("MissingEma { symbol_idx: 0 } apiKey=SECRET token SECRET"),
     )
 
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
@@ -601,6 +601,8 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
     assert failed.raw_hash == "failed_input_hash"
     assert failed.data["error_type"] == "ValueError"
     assert "MissingEma" in failed.data["error"]
+    assert "SECRET" not in failed.data["error"]
+    assert "[redacted]" in failed.data["error"]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

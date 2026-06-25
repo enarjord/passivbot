@@ -975,7 +975,7 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         data.update(
             {
                 "error_type": type(err).__name__,
-                "error": str(err)[:500],
+                "error": _sanitize_remote_text(err, max_len=500),
             }
         )
     else:
