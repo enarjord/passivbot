@@ -88,9 +88,11 @@ Related detailed plans:
    this off console unless thresholds are crossed.
 
 6. [ ] Exchange health and contract probes.
-   Status: open. VPS5 smoke on 2026-06-25 surfaced Kucoin authoritative
-   balance/positions/open-orders `RequestTimeout` events, which reinforces the
-   value of explicit exchange endpoint health probes.
+   Status: partial. VPS5 smoke on 2026-06-25 surfaced Kucoin authoritative
+   balance/positions/open-orders `RequestTimeout` events. `live-smoke-report`
+   now passively summarizes existing `remote_call.failed` events by
+   bot/reason/surface/error type, but explicit read-only exchange endpoint
+   probes are not implemented.
 
    Add explicit read-only probes for each configured exchange/account before or
    during smoke: balance/positions/open-orders fetch, clock skew, rate-limit
@@ -220,6 +222,7 @@ Related detailed plans:
 | 2026-06-25 | #2/#11 Event query and cycle trace completeness | PR #654 / `ff493541` | Added `live-event-query --cycle-trace` reconstruction grouped by cycle id, with bounded timelines, aggregate summaries, and nested order traces | Incident-bundle integration and cross-bot workflow |
 | 2026-06-25 | #1/#2/#11 Incident bundle trace integration | PR #659 / `27931c81` | Embedded trace-summary and order-trace reports into incident bundles by default, plus cycle-trace when scoped to `--cycle-id`; VPS5 bundle smoke verified trace sections | Cross-bot incident workflow and supervisor/process context |
 | 2026-06-25 | #1/#3/#14 Smoke process status | PR #661 / `72b3d931` | Added optional read-only process liveness to `live-smoke-report` and incident bundles; VPS5 smoke matched all five `/root/bots_vps5.yaml` bots | Safe restart orchestration and richer supervisor model remain open |
+| 2026-06-25 | #6 Exchange health and contract probes | PR #663 / `45b0cf9e` | Added passive `remote_call.failed` summaries to `live-smoke-report`; VPS5 smoke grouped Kucoin timeouts by balance/positions/open_orders | Active read-only exchange endpoint probes remain open |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
