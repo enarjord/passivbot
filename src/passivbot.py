@@ -616,6 +616,9 @@ class Passivbot:
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
+    _emit_fills_refresh_summary_event = (
+        live_event_emitters.emit_fills_refresh_summary_event
+    )
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
     _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
     _emit_forager_feature_unavailable_event = (
@@ -10147,6 +10150,10 @@ class Passivbot:
         refresh_started_ms = utc_ms()
         refresh_mode = "unknown"
         overlap_minutes: Optional[float] = None
+        before_events_count = 0
+        coverage_status: dict[str, Any] = {}
+        post_refresh_coverage_status: dict[str, Any] = {}
+        lookback_config_value = None
         await self.init_pnls()  # will do nothing if already initiated
 
         if self._pnls_manager is None:
@@ -10154,8 +10161,9 @@ class Passivbot:
 
         try:
             # Use the same lookback window
+            lookback_config_value = self.live_value("pnls_max_lookback_days")
             lookback = parse_pnls_max_lookback_days(
-                self.live_value("pnls_max_lookback_days"),
+                lookback_config_value,
                 field_name="live.pnls_max_lookback_days",
             )
             age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
@@ -10196,12 +10204,28 @@ class Passivbot:
                 if self._fill_coverage_retry_deferred(coverage_status, now_ms):
                     state = getattr(self, "_fill_coverage_retry_state", {}) or {}
                     next_retry_ms = int(state.get("next_retry_ms", 0) or 0)
+                    refresh_mode = "coverage_retry_backoff"
+                    next_retry_in_ms = max(0, next_retry_ms - now_ms)
                     logging.debug(
                         "[fills] fill-history lookback proof deferred by retry backoff | "
                         "reason=%s scope=%s next_retry_in_ms=%d",
                         str(coverage_status.get("reason", "unknown")),
                         history_scope,
-                        max(0, next_retry_ms - now_ms),
+                        next_retry_in_ms,
+                    )
+                    self._emit_fills_refresh_summary_event(
+                        source=source,
+                        refresh_mode=refresh_mode,
+                        status="deferred",
+                        reason_code="fill_history_coverage_retry_backoff",
+                        elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                        lookback=lookback_config_value,
+                        history_scope=history_scope,
+                        event_count_before=before_events_count,
+                        coverage_before=coverage_status,
+                        next_retry_in_ms=next_retry_in_ms,
+                        retry_count=int(state.get("retry_count", 0) or 0),
+                        level="debug",
                     )
                     return False
             if needs_full_refresh:
@@ -10374,17 +10398,43 @@ class Passivbot:
                 before_events_count,
                 len(all_events),
                 len(new_events),
-                str(self.live_value("pnls_max_lookback_days")),
+                str(lookback_config_value),
                 self._pnls_manager.get_history_scope(),
                 coverage_ready_after,
                 str(post_refresh_coverage_status.get("reason", "unknown")),
                 (f"{overlap_minutes:.3f}" if overlap_minutes is not None else "-"),
                 len(pending_pnl_events),
             )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="succeeded" if pnls_complete and coverage_ready_after else "deferred",
+                reason_code=(
+                    "fills_refresh_succeeded"
+                    if pnls_complete and coverage_ready_after
+                    else (
+                        "pending_pnl_enrichment"
+                        if not pnls_complete
+                        else "fill_history_coverage_unavailable"
+                    )
+                ),
+                elapsed_ms=elapsed_ms,
+                lookback=lookback_config_value,
+                history_scope=self._pnls_manager.get_history_scope(),
+                event_count_before=before_events_count,
+                event_count_after=len(all_events),
+                new_count=len(new_events),
+                enriched_count=len(enriched_events),
+                pending_pnl_count=len(pending_pnl_events),
+                coverage_before=coverage_status,
+                coverage_after=post_refresh_coverage_status,
+                overlap_minutes=overlap_minutes,
+                level=logging.getLevelName(log_level).lower(),
+            )
 
             return pnls_complete and coverage_ready_after
 
-        except RateLimitExceeded:
+        except RateLimitExceeded as e:
             if self._shutdown_requested():
                 logging.debug(
                     "[shutdown] fill refresh stopped during rate-limit handling"
@@ -10398,6 +10448,18 @@ class Passivbot:
             )
             logging.warning(
                 "[rate] hit rate limit while fetching fill events; retrying next cycle"
+            )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="deferred",
+                reason_code="rate_limit",
+                elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                lookback=lookback_config_value,
+                event_count_before=before_events_count,
+                coverage_before=coverage_status,
+                error=e,
+                level="warning",
             )
             return False
         except Exception as e:
@@ -10420,6 +10482,19 @@ class Passivbot:
                 getattr(e, "status", "-"),
                 getattr(e, "code", "-"),
                 e,
+            )
+            self._emit_fills_refresh_summary_event(
+                source=source,
+                refresh_mode=refresh_mode,
+                status="failed",
+                reason_code="fill_refresh_failed",
+                elapsed_ms=int(max(0, utc_ms() - refresh_started_ms)),
+                lookback=lookback_config_value,
+                event_count_before=before_events_count,
+                coverage_before=coverage_status,
+                coverage_after=post_refresh_coverage_status,
+                error=e,
+                level="error",
             )
             if self.logging_level >= 2:
                 traceback.print_exc()

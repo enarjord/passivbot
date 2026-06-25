@@ -2017,6 +2017,100 @@ def emit_balance_changed_event(
         logging.debug("[event] failed to emit balance changed event: %s", exc)
 
 
+def _fill_coverage_summary(status: Any) -> dict[str, Any]:
+    if not isinstance(status, dict):
+        return {}
+    data: dict[str, Any] = {}
+    if "ready" in status:
+        data["ready"] = bool(status.get("ready"))
+    for key in ("reason", "history_scope", "gap_reason"):
+        value = status.get(key)
+        if value is not None:
+            data[key] = str(value)[:160]
+    for key in ("covered_start_ms", "oldest_event_ts", "gap_start_ts", "gap_end_ts"):
+        value = _safe_int(status.get(key))
+        if value is not None:
+            data[key] = value
+    return data
+
+
+def emit_fills_refresh_summary_event(
+    bot: Any,
+    *,
+    source: str,
+    refresh_mode: str,
+    status: str,
+    reason_code: str,
+    elapsed_ms: int,
+    lookback: Any = None,
+    history_scope: str | None = None,
+    event_count_before: int | None = None,
+    event_count_after: int | None = None,
+    new_count: int | None = None,
+    enriched_count: int | None = None,
+    pending_pnl_count: int | None = None,
+    coverage_before: dict[str, Any] | None = None,
+    coverage_after: dict[str, Any] | None = None,
+    overlap_minutes: float | None = None,
+    retry_count: int | None = None,
+    next_retry_in_ms: int | None = None,
+    error: BaseException | None = None,
+    level: str = "debug",
+) -> None:
+    try:
+        coverage_before_summary = _fill_coverage_summary(coverage_before)
+        coverage_after_summary = _fill_coverage_summary(coverage_after)
+        data: dict[str, Any] = {
+            "source": str(source),
+            "refresh_mode": str(refresh_mode),
+            "elapsed_ms": max(0, int(elapsed_ms)),
+            "lookback": str(lookback) if lookback is not None else None,
+            "history_scope": str(history_scope) if history_scope is not None else None,
+            "event_count_before": _safe_int(event_count_before),
+            "event_count_after": _safe_int(event_count_after),
+            "new_count": _safe_int(new_count),
+            "enriched_count": _safe_int(enriched_count),
+            "pending_pnl_count": _safe_int(pending_pnl_count),
+        }
+        if coverage_before_summary:
+            data["coverage_before"] = coverage_before_summary
+            if "ready" in coverage_before_summary:
+                data["coverage_ready_before"] = coverage_before_summary["ready"]
+            if "reason" in coverage_before_summary:
+                data["coverage_reason_before"] = coverage_before_summary["reason"]
+        if coverage_after_summary:
+            data["coverage_after"] = coverage_after_summary
+            if "ready" in coverage_after_summary:
+                data["coverage_ready_after"] = coverage_after_summary["ready"]
+            if "reason" in coverage_after_summary:
+                data["coverage_reason_after"] = coverage_after_summary["reason"]
+        overlap = _safe_float(overlap_minutes)
+        if overlap is not None:
+            data["overlap_minutes"] = overlap
+        retry_value = _safe_int(retry_count)
+        if retry_value is not None:
+            data["retry_count"] = retry_value
+        next_retry_value = _safe_int(next_retry_in_ms)
+        if next_retry_value is not None:
+            data["next_retry_in_ms"] = max(0, next_retry_value)
+        if error is not None:
+            data["error_type"] = type(error).__name__
+            data["error"] = _sanitize_remote_text(error, max_len=500)
+        _safe_emit(
+            bot,
+            EventTypes.FILLS_REFRESH_SUMMARY,
+            level=str(level).lower(),
+            component="fills.refresh",
+            tags=("fills", "refresh", "coverage"),
+            cycle_id=current_live_event_cycle_id(bot),
+            status=str(status),
+            reason_code=str(reason_code),
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit fills refresh summary event: %s", exc)
+
+
 def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = None) -> None:
     try:
         fill_payload = dict(payload or {})

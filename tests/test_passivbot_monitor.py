@@ -1751,6 +1751,71 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_fills_refresh_summary_event = (
+            pb_mod.Passivbot._emit_fills_refresh_summary_event
+        )
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_fills"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_fills_refresh_summary_event(
+        source="staged_blocking",
+        refresh_mode="lookback_bootstrap",
+        status="failed",
+        reason_code="fill_refresh_failed",
+        elapsed_ms=123,
+        lookback=30.0,
+        history_scope="window",
+        event_count_before=3,
+        coverage_before={
+            "ready": False,
+            "reason": "known_gap_overlaps_lookback",
+            "history_scope": "window",
+            "covered_start_ms": 100,
+            "oldest_event_ts": 90,
+            "gap_start_ts": 120,
+            "gap_end_ts": 180,
+            "gap_reason": "fetch_failed",
+        },
+        next_retry_in_ms=45_000,
+        error=RuntimeError("apiKey=secret-token failed"),
+        level="error",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    assert event.cycle_id == "cy_fills"
+    assert event.status == "failed"
+    assert event.reason_code == "fill_refresh_failed"
+    assert event.data["source"] == "staged_blocking"
+    assert event.data["refresh_mode"] == "lookback_bootstrap"
+    assert event.data["coverage_ready_before"] is False
+    assert event.data["coverage_reason_before"] == "known_gap_overlaps_lookback"
+    assert event.data["coverage_before"]["gap_reason"] == "fetch_failed"
+    assert event.data["next_retry_in_ms"] == 45_000
+    assert event.data["error_type"] == "RuntimeError"
+    assert "secret-token" not in event.data["error"]
+    assert "[redacted]" in event.data["error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_execute_orders_parent_records_order_opened_event():
     import passivbot as pb_mod

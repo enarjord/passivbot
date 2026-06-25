@@ -2931,6 +2931,15 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
         }
     }
     bot._authoritative_pending_confirmations = {}
+    sink = ListEventSink()
+    bot.exchange = "bybit"
+    bot.user = "bybit_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_fills"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
     bot._pnls_manager = _Manager(cached_events)
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: bot.config["live"][key]
@@ -2950,6 +2959,25 @@ async def test_update_pnls_window_lookback_uses_incremental_when_coverage_proven
         overlap=20,
         last_refresh_overlap_ms=10 * 60 * 1000,
     )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.cycle_id == "cy_fills"
+    assert event.status == "succeeded"
+    assert event.reason_code == "fills_refresh_succeeded"
+    assert event.data["refresh_mode"] == "incremental_recent"
+    assert event.data["event_count_before"] == 1
+    assert event.data["event_count_after"] == 1
+    assert event.data["coverage_ready_before"] is True
+    assert event.data["coverage_ready_after"] is True
+    assert event.data["coverage_reason_after"] == "window_covered"
+    assert event.data["pending_pnl_count"] == 0
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
@@ -3036,6 +3064,15 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
             "pnls_max_lookback_days": "all",
         }
     }
+    sink = ListEventSink()
+    bot.exchange = "bybit"
+    bot.user = "bybit_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_fills_error"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
     bot._pnls_manager = _Manager(cached_events, history_scope="all")
     bot.init_pnls = AsyncMock()
     bot.live_value = lambda key: "all" if key == "pnls_max_lookback_days" else None
@@ -3048,6 +3085,20 @@ async def test_update_pnls_propagates_unexpected_refresh_errors():
 
     with pytest.raises(RuntimeError, match="fill refresh failed"):
         await bot.update_pnls()
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.status == "failed"
+    assert event.reason_code == "fill_refresh_failed"
+    assert event.data["error_type"] == "RuntimeError"
+    assert event.data["error"] == "fill refresh failed"
+    assert event.data["coverage_ready_before"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
