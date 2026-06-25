@@ -14307,7 +14307,7 @@ class Passivbot:
                 projection_contexts[sym] = ctx
                 log_ema_issue(
                     ("late_open_tail_projection", sym),
-                    logging.INFO,
+                    logging.DEBUG,
                     "[candle] late open-tail EMA projection context %s tail_gap_age_ms=%s latest_expected_ts=%s last_cached_ts=%s reason=%s",
                     Passivbot._log_symbol(sym),
                     ctx.get("tail_gap_age_ms"),
@@ -14476,7 +14476,7 @@ class Passivbot:
                 mark_ema_unavailable(sym, reason)
                 log_ema_issue(
                     ("required_forager_missing", sym),
-                    logging.WARNING,
+                    logging.DEBUG,
                     "[ema] missing required forager EMA %s volume_spans=%s log_range_spans=%s action=mark_nontradable_until_fresh | %s",
                     Passivbot._log_symbol(sym),
                     ",".join(f"{span:.8g}" for span in missing_required_volume),
