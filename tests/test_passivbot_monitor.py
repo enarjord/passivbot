@@ -391,6 +391,81 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_action_planned_emitter_records_bounded_summary():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_action_planned_event = pb_mod.Passivbot._emit_action_planned_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_10"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    orders = [
+        {
+            "symbol_idx": 0,
+            "qty": 1.5,
+            "price": 100.0,
+            "order_type": "entry_grid_normal_long",
+            "execution_type": "limit",
+        },
+        {
+            "symbol_idx": 1,
+            "qty": -2.0,
+            "price": 101.0,
+            "order_type": "close_grid_short",
+            "execution_type": "market",
+        },
+    ]
+
+    bot._emit_action_planned_event(
+        orders=orders,
+        idx_to_symbol={0: "BTC/USDT:USDT", 1: "ETH/USDT:USDT"},
+        output_hash="out_hash",
+        remote_call_id="rust_1",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.ACTION_PLANNED
+    assert event.cycle_id == "cy_10"
+    assert event.remote_call_id == "rust_1"
+    assert event.status == "succeeded"
+    assert event.reason_code == "rust_output_actions"
+    assert event.raw_hash == "out_hash"
+    assert event.data["order_count"] == 2
+    assert event.data["by_order_type"] == {
+        "close_grid_short": 1,
+        "entry_grid_normal_long": 1,
+    }
+    assert event.data["by_pside"] == {"long": 1, "short": 1}
+    assert event.data["by_execution_type"] == {"limit": 1, "market": 1}
+    assert event.data["symbols"]["sample"] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert event.data["orders_truncated"] is False
+    assert event.data["orders_sample"][0] == {
+        "index": 0,
+        "symbol": "BTC/USDT:USDT",
+        "symbol_idx": 0,
+        "pside": "long",
+        "order_type": "entry_grid_normal_long",
+        "execution_type": "limit",
+        "qty": 1.5,
+        "price": 100.0,
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_forager_and_ema_summary_emitters_emit_structured_events():
     import passivbot as pb_mod
 
@@ -537,6 +612,11 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
             max_age_ms=60_000,
             fetch_budget=1,
         )
+        pb_mod.Passivbot._emit_action_planned_event(
+            bot,
+            orders=[{"symbol_idx": 0, "order_type": "entry_grid_normal_long"}],
+            idx_to_symbol=object(),
+        )
         pb_mod.Passivbot._emit_ema_bundle_started_event(
             bot,
             symbols=object(),
@@ -564,6 +644,7 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     messages = [record.message for record in caplog.records]
     assert any(EventTypes.FORAGER_FEATURE_UNAVAILABLE in msg for msg in messages)
     assert any(EventTypes.FORAGER_SELECTION in msg for msg in messages)
+    assert any(EventTypes.ACTION_PLANNED in msg for msg in messages)
     assert any(EventTypes.EMA_BUNDLE_STARTED in msg for msg in messages)
     assert any(EventTypes.EMA_BUNDLE_COMPLETED in msg for msg in messages)
     assert any(EventTypes.EMA_FALLBACK_USED in msg for msg in messages)

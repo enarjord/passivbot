@@ -610,6 +610,7 @@ class Passivbot:
         live_event_emitters.emit_execution_confirmation_satisfied_event
     )
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
+    _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_balance_changed_event = live_event_emitters.emit_balance_changed_event
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
     _emit_forager_feature_unavailable_event = (
@@ -14620,6 +14621,13 @@ class Passivbot:
                     sorted(diagnostics) if isinstance(diagnostics, dict) else []
                 ),
             },
+        )
+        Passivbot._emit_action_planned_event(
+            self,
+            orders=orders,
+            idx_to_symbol=idx_to_symbol,
+            output_hash=output_hash,
+            remote_call_id=rust_call_id,
         )
         self._log_realized_loss_gate_blocks(out, idx_to_symbol)
         if hasattr(self, "_log_min_effective_cost_blocks"):

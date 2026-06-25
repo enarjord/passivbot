@@ -136,6 +136,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
     for event_type in (
         EventTypes.FORAGER_SELECTION,
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
+        EventTypes.ACTION_PLANNED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
         EventTypes.EMA_FALLBACK_USED,
@@ -655,6 +656,7 @@ def test_cycle_events_are_reconstructable_by_cycle_id():
         EventTypes.SNAPSHOT_BUILT,
         EventTypes.RUST_ORCHESTRATOR_CALLED,
         EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        EventTypes.ACTION_PLANNED,
         EventTypes.ORDER_WAVE_COMPLETED,
         EventTypes.CYCLE_COMPLETED,
     ):
@@ -668,6 +670,7 @@ def test_cycle_events_are_reconstructable_by_cycle_id():
         EventTypes.SNAPSHOT_BUILT,
         EventTypes.RUST_ORCHESTRATOR_CALLED,
         EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        EventTypes.ACTION_PLANNED,
         EventTypes.ORDER_WAVE_COMPLETED,
         EventTypes.CYCLE_COMPLETED,
     ]
