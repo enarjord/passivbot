@@ -879,6 +879,65 @@ async def test_shutdown_gracefully_cancels_stuck_execution_loop_before_closing_s
 
 
 @pytest.mark.asyncio
+async def test_shutdown_gracefully_bounds_execution_loop_cancel_grace_before_closing_sessions():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_execution_grace_seconds = 0.0
+    bot._shutdown_execution_cancel_grace_seconds = 0.01
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+
+    seen = []
+    events = []
+    execution_loop_stopped = asyncio.Event()
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    async def _stubborn_execution_loop():
+        try:
+            await asyncio.sleep(3600)
+        except asyncio.CancelledError:
+            seen.append("execution_loop_cancelled")
+            await asyncio.sleep(3600)
+
+    class _Closer:
+        def __init__(self, key):
+            self.key = key
+
+        async def close(self):
+            seen.append(self.key)
+
+    execution_task = asyncio.create_task(_stubborn_execution_loop())
+    bot._emit_live_event = emit_event
+    bot._execution_loop_task = execution_task
+    bot._execution_loop_task_is_inline = False
+    bot._execution_loop_stopped = execution_loop_stopped
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot.ccp = _Closer("ccp_closed")
+    bot.cca = _Closer("cca_closed")
+
+    await bot.shutdown_gracefully()
+
+    timeout_events = [
+        kwargs
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["reason_code"] == "execution_loop_cancel_timeout"
+    ]
+    assert len(timeout_events) == 1
+    assert timeout_events[0]["status"] == "degraded"
+    assert timeout_events[0]["data"]["cancel_timeout_s"] == 0.01
+    assert execution_loop_stopped.is_set() is True
+    assert seen[-2:] == ["ccp_closed", "cca_closed"]
+    assert execution_task.done() is True
+
+
+@pytest.mark.asyncio
 async def test_shutdown_gracefully_does_not_cancel_inline_execution_task_on_timeout():
     bot = Passivbot.__new__(Passivbot)
     bot._shutdown_in_progress = False
