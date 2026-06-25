@@ -14,6 +14,17 @@ from typing import Any, Iterable, Mapping, Protocol
 
 SCHEMA_VERSION = 1
 REDACTED = "[redacted]"
+LIVE_EVENT_MONITOR_PAYLOAD_KEY = "_live_event"
+LIVE_EVENT_ID_KEYS = (
+    "bot_id",
+    "cycle_id",
+    "snapshot_id",
+    "plan_id",
+    "action_id",
+    "order_wave_id",
+    "remote_call_id",
+    "remote_call_group_id",
+)
 
 
 class EventTypes:
@@ -277,7 +288,7 @@ class LiveEvent:
 
     def to_monitor_event(self) -> tuple[str, tuple[str, ...], dict[str, Any]]:
         payload = dict(self.data)
-        payload["_live_event"] = {
+        payload[LIVE_EVENT_MONITOR_PAYLOAD_KEY] = {
             "schema_version": self.schema_version,
             "event_id": self.event_id,
             "event_type": self.event_type,
@@ -298,16 +309,7 @@ class LiveEvent:
             "data": dict(self.data),
             "raw_ref": self.raw_ref,
             "raw_hash": self.raw_hash,
-            "ids": {
-                "bot_id": self.bot_id,
-                "cycle_id": self.cycle_id,
-                "snapshot_id": self.snapshot_id,
-                "plan_id": self.plan_id,
-                "action_id": self.action_id,
-                "order_wave_id": self.order_wave_id,
-                "remote_call_id": self.remote_call_id,
-                "remote_call_group_id": self.remote_call_group_id,
-            },
+            "ids": {key: getattr(self, key) for key in LIVE_EVENT_ID_KEYS},
         }
         return self.event_type, self.tags, payload
 

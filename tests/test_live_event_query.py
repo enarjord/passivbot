@@ -156,4 +156,3 @@ def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["cycle"]["cycle_id"] == "cy_7"
     assert report["cycle"]["matched_events"] == 1
-

@@ -7,16 +7,9 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
+from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 
-EVENT_ID_KEYS = (
-    "cycle_id",
-    "snapshot_id",
-    "plan_id",
-    "action_id",
-    "order_wave_id",
-    "remote_call_id",
-    "remote_call_group_id",
-)
+EVENT_ID_KEYS = LIVE_EVENT_ID_KEYS
 
 
 @dataclass(frozen=True)
@@ -70,7 +63,7 @@ def _live_event_payload(row: dict[str, Any]) -> dict[str, Any] | None:
     payload = row.get("payload")
     if not isinstance(payload, dict):
         return None
-    live_event = payload.get("_live_event")
+    live_event = payload.get(LIVE_EVENT_MONITOR_PAYLOAD_KEY)
     return live_event if isinstance(live_event, dict) else None
 
 
@@ -268,4 +261,3 @@ def build_event_report(
             "events": cycle_events,
         }
     return report
-
