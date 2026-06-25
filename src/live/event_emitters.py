@@ -733,6 +733,31 @@ def emit_startup_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         )
 
 
+def _emit_health_summary_event_unchecked(
+    bot: Any,
+    payload: dict[str, Any],
+) -> None:
+    data = dict(payload or {})
+    _safe_emit(
+        bot,
+        EventTypes.HEALTH_SUMMARY,
+        level="debug",
+        component="bot.health",
+        tags=("health", "resource"),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code="periodic_health_summary",
+        data=data,
+    )
+
+
+def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_health_summary_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit health summary event: %s", exc)
+
+
 def _symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
     if symbols is None:
         values = []

@@ -34,6 +34,7 @@ class EventTypes:
     BOT_STOPPING = "bot.stopping"
     BOT_SHUTDOWN_STAGE = "bot.shutdown.stage"
     BOT_STOPPED = "bot.stopped"
+    HEALTH_SUMMARY = "health.summary"
     CYCLE_STARTED = "cycle.started"
     CYCLE_COMPLETED = "cycle.completed"
     CYCLE_DEGRADED = "cycle.degraded"
@@ -97,6 +98,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.BOT_STOPPING,
     EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
+    EventTypes.HEALTH_SUMMARY,
     EventTypes.CYCLE_STARTED,
     EventTypes.CYCLE_COMPLETED,
     EventTypes.CYCLE_DEGRADED,
@@ -376,6 +378,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
+    EventTypes.HEALTH_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.CYCLE_STARTED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),

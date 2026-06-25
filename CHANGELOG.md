@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `health.summary` live events for periodic health and
+  resource summaries without adding console noise.
 - Added `passivbot tool live-smoke-report` for local smoke-test summaries from
   monitor event NDJSON and recent text logs.
 - Added `passivbot tool live-event-query` filters for order wave id, remote

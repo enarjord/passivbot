@@ -659,6 +659,139 @@ def test_rust_orchestrator_emitters_are_best_effort(caplog):
     assert sum(EventTypes.RUST_ORCHESTRATOR_RETURNED in msg for msg in messages) == 2
 
 
+def test_health_summary_event_emitter_records_payload():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_health_summary_event = pb_mod.Passivbot._emit_health_summary_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_health"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_health_summary_event(
+        {
+            "uptime_ms": 60000,
+            "last_loop_duration_ms": 250,
+            "positions_long": 1,
+            "positions_short": 0,
+            "rss_bytes": 123456,
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.HEALTH_SUMMARY
+    assert event.level == "debug"
+    assert event.component == "bot.health"
+    assert event.tags == ("health", "resource")
+    assert event.cycle_id == "cy_health"
+    assert event.status == "succeeded"
+    assert event.reason_code == "periodic_health_summary"
+    assert event.data["rss_bytes"] == 123456
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_health_summary_event = pb_mod.Passivbot._emit_health_summary_event
+        _format_duration = pb_mod.Passivbot._format_duration
+        _log_health_summary = pb_mod.Passivbot._log_health_summary
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.quote = "USDT"
+            self.positions = {
+                "BTC/USDT:USDT": {
+                    "long": {"size": 0.01},
+                    "short": {"size": 0.0},
+                }
+            }
+            self._health_start_ms = 140000
+            self._last_loop_duration_ms = 2500
+            self._last_loop_timing_ms = {}
+            self._health_orders_placed = 2
+            self._health_orders_cancelled = 1
+            self._health_fills = 3
+            self._health_pnl = 1.25
+            self._health_ws_reconnects = 4
+            self._health_rate_limits = 5
+            self.error_counts = [190000]
+            self.candle_health_called = False
+            self.payload_now_ms = None
+            self._live_event_current_cycle_id = "cy_health"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+        def get_raw_balance(self):
+            return 1000.0
+
+        def get_hysteresis_snapped_balance(self):
+            return 999.5
+
+        def _build_health_summary_payload(self, *, now_ms=None):
+            self.payload_now_ms = now_ms
+            return {
+                "uptime_ms": 60000,
+                "last_loop_duration_ms": 2500,
+                "positions_long": 1,
+                "positions_short": 0,
+                "balance_raw": 1000.0,
+                "balance_snapped": 999.5,
+                "orders_placed": 2,
+                "orders_cancelled": 1,
+                "fills": 3,
+                "pnl": 1.25,
+                "errors_last_hour": 1,
+                "ws_reconnects": 4,
+                "rate_limits": 5,
+                "rss_bytes": 987654,
+            }
+
+        def _maybe_log_candle_health_summary(self):
+            self.candle_health_called = True
+
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: 200000)
+    bot = FakeBot()
+
+    with caplog.at_level(logging.INFO):
+        bot._log_health_summary()
+
+    assert "[health] uptime=1m0s" in caplog.text
+    assert "positions=1 long, 0 short" in caplog.text
+    assert "orders=+2/-1" in caplog.text
+    assert bot.candle_health_called is True
+    assert bot.payload_now_ms == 200000
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.HEALTH_SUMMARY
+    assert event.cycle_id == "cy_health"
+    assert event.data["rss_bytes"] == 987654
+    assert event.data["errors_last_hour"] == 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_forager_and_ema_summary_emitters_emit_structured_events():
     import passivbot as pb_mod
 
