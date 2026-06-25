@@ -177,6 +177,107 @@ def test_event_query_current_only_skips_rotated_segments(tmp_path):
     assert report["cycle_ids_sample"] == [{"cycle_id": "cy_current", "events": 1}]
 
 
+def test_event_query_filters_by_event_type_without_changing_summary_counts(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                symbol="BTC/USDT:USDT",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                symbol="ETH/USDT:USDT",
+            ),
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+                symbol="SOL/USDT:USDT",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        event_type="candle.tail_projected",
+        include_data=True,
+    )
+
+    assert report["ok"] is True
+    assert report["event_types"] == {
+        "candle.tail_projected": 2,
+        "remote_call.failed": 1,
+    }
+    assert report["query"]["filters"] == {
+        "event_types": ["candle.tail_projected"],
+    }
+    assert report["query"]["matched_events"] == 2
+    assert report["query"]["events_truncated"] is False
+    assert [event["symbol"] for event in report["query"]["events"]] == [
+        "BTC/USDT:USDT",
+        "SOL/USDT:USDT",
+    ]
+    assert report["query"]["events"][0]["data"] == {"seq": 1}
+
+
+def test_event_query_combines_cycle_and_event_type_filters(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_7",
+                seq=1,
+                ts=1000,
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_7",
+                seq=2,
+                ts=1100,
+            ),
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_8",
+                seq=3,
+                ts=1200,
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_7",
+        event_type=["candle.tail_projected,remote_call.failed"],
+    )
+
+    assert report["query"]["filters"] == {
+        "cycle_id": "cy_7",
+        "event_types": ["candle.tail_projected", "remote_call.failed"],
+    }
+    assert report["query"]["matched_events"] == 2
+    assert report["cycle"]["cycle_id"] == "cy_7"
+    assert report["cycle"]["event_types"] == [
+        "candle.tail_projected",
+        "remote_call.failed",
+    ]
+    assert report["cycle"]["matched_events"] == 2
+    assert [event["event_type"] for event in report["cycle"]["events"]] == [
+        "candle.tail_projected",
+        "remote_call.failed",
+    ]
+
+
 def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -196,6 +297,51 @@ def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["cycle"]["cycle_id"] == "cy_7"
     assert report["cycle"]["matched_events"] == 1
+
+
+def test_live_event_query_cli_accepts_event_type_and_kind_alias(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_7",
+                seq=1,
+                ts=1000,
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_8",
+                seq=2,
+                ts=1100,
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--event-type",
+                "candle.tail_projected",
+                "--kind",
+                "remote_call.failed",
+                "--limit",
+                "1",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"]["event_types"] == [
+        "candle.tail_projected",
+        "remote_call.failed",
+    ]
+    assert report["query"]["matched_events"] == 2
+    assert report["query"]["events_truncated"] is True
+    assert len(report["query"]["events"]) == 1
 
 
 def test_live_event_query_cli_defaults_to_current_only_for_directory_scans(

@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-event-query --event-type`/`--kind` filters for
+  inspecting specific structured live events without grepping monitor files.
 - Added structured `candle.tail_projected` live events for open-tail EMA
   projection decisions, preserving per-symbol candle-tail context without
   default console noise.
