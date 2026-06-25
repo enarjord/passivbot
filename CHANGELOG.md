@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 - Added `passivbot tool cache-integrity-doctor` for read-only local cache smoke
   reports covering root presence, file counts/sizes, and empty or corrupt
   JSON/NDJSON/NPY artifacts.
+- Improved `passivbot backtest --help-all` descriptions for high-impact
+  runtime/config overrides, including plot groups, suite aggregation,
+  HLCV dataset replay modes, HSL modes, and TWEL/WEL policy flags.
 - Added `passivbot tool live-event-query --cycle-trace` for offline cycle
   reconstruction grouped by cycle id, including bounded timeline samples,
   aggregate event summaries, and nested order traces.

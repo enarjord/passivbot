@@ -1155,6 +1155,10 @@ def _format_parser_help_with_config(command: str, config: dict, help_all: bool) 
     return parser.format_help()
 
 
+def _single_line_help(help_text: str) -> str:
+    return " ".join(help_text.split())
+
+
 def test_optimize_default_help_groups_common_flags_and_hides_bounds():
     config = get_template_config()
     help_text = _format_parser_help_with_config("optimize", config, help_all=False)
@@ -1267,8 +1271,36 @@ def test_backtest_default_help_hides_optimize_flags_and_shows_suite_controls():
     assert "--market-order-near-touch-threshold FLOAT, -montt FLOAT" in help_text
     assert "--max-realized-loss-pct FLOAT, -mrlp FLOAT" in help_text
     assert "--pnls-max-lookback-days FLOAT|all, -pmld FLOAT|all" in help_text
-    assert "--aggregate-default VALUE" in help_text
+    assert "--aggregate-default MODE" in help_text
     assert "--iters INT, -i INT" not in help_text
+
+
+def test_backtest_help_all_describes_high_value_overrides():
+    config = get_template_config()
+    help_text = _single_line_help(
+        _format_parser_help_with_config("backtest", config, help_all=True)
+    )
+
+    assert "--aggregate-default MODE" in help_text
+    assert "Allowed modes: mean, min, max, std, median" in help_text
+    assert "Suite scenario definitions" in help_text
+    assert "use --suite-config for complex scenario files" in help_text
+    assert "intersection keeps the current config clipped to the verified dataset" in help_text
+    assert "dataset adopts the dataset's effective coins and timestamp window" in help_text
+    assert "Backtest-only WEL denominator mode" in help_text
+    assert "max tradable coin count seen so far" in help_text
+    assert "Early-stop equity floor as a fraction of starting balance" in help_text
+    assert "Backtest-only simulated market-order slippage" in help_text
+    assert "not a live slippage cap" in help_text
+    assert "Terminal metric visibility config" in help_text
+    assert "[] shows all; a list adds named metrics" in help_text
+    assert "Allowed values: graceful_stop or tp_only_with_active_entry_cancellation" in help_text
+    assert "Allowed values: limit or market" in help_text
+    assert "Allowed values: reduce_overweight or reduce_portfolio" in help_text
+    assert "Allowed values: bounded or legacy_raw" in help_text
+    assert "Override bot.long.hsl.orange_tier_mode." not in help_text
+    assert "Override bot.short.risk.we_excess_allowance_mode." not in help_text
+    assert "Override backtest.dynamic_wel_by_tradability." not in help_text
 
 
 def test_live_reserved_pnls_lookback_alias_parses_short_and_long():
