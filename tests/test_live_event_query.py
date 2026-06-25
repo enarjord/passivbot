@@ -19,6 +19,9 @@ def _monitor_row(
     status: str = "succeeded",
     reason_code: str = "test",
     ids: dict | None = None,
+    data: dict | None = None,
+    order_id: str | None = None,
+    client_order_id: str | None = None,
 ) -> dict:
     event_ids = dict(ids or {})
     if cycle_id is not None:
@@ -35,9 +38,11 @@ def _monitor_row(
         "symbol": symbol,
         "pside": pside,
         "side": side,
+        "order_id": order_id,
+        "client_order_id": client_order_id,
         "status": status,
         "reason_code": reason_code,
-        "data": {"seq": seq},
+        "data": dict(data or {"seq": seq}),
         "ids": event_ids,
     }
     payload = {"_live_event": live_event}
@@ -876,6 +881,140 @@ def test_event_query_trace_summary_counts_all_matches_beyond_limit(tmp_path):
     }
 
 
+def test_event_query_order_trace_reconstructs_wave_actions_beyond_limit(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="order_wave.started",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                status="started",
+                ids={"order_wave_id": "ow_9"},
+                data={"planned_create": 1, "planned_cancel": 1},
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1100,
+                symbol="ETH/USDT:USDT",
+                pside="long",
+                side="buy",
+                status="started",
+                reason_code="submitted_to_exchange",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:create:0"},
+                data={
+                    "index": 0,
+                    "qty": 0.12,
+                    "price": 2500.0,
+                    "pb_order_type": "entry_grid_normal_long",
+                    "client_order_id_short": "cid-entry-0",
+                },
+                client_order_id="cid-entry-0-full-value",
+            ),
+            _monitor_row(
+                event_type="execution.create_succeeded",
+                cycle_id="cy_9",
+                seq=3,
+                ts=1200,
+                symbol="ETH/USDT:USDT",
+                pside="long",
+                side="buy",
+                status="succeeded",
+                reason_code="exchange_acknowledged",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:create:0"},
+                data={
+                    "index": 0,
+                    "result_order_id_short": "abc123",
+                    "result_client_order_id_short": "cid-entry-0",
+                },
+                order_id="abc123-full-value",
+            ),
+            _monitor_row(
+                event_type="execution.cancel_ambiguous_terminal",
+                cycle_id="cy_9",
+                seq=4,
+                ts=1300,
+                symbol="SOL/USDT:USDT",
+                pside="short",
+                side="sell",
+                status="degraded",
+                reason_code="requires_full_authoritative_confirmation",
+                ids={"order_wave_id": "ow_9", "action_id": "ow_9:cancel:0"},
+                data={"index": 0, "order_id_short": "cancel123"},
+            ),
+            _monitor_row(
+                event_type="execution.confirmation_requested",
+                cycle_id="cy_9",
+                seq=5,
+                ts=1400,
+                status="started",
+                reason_code="authoritative_confirmation",
+                ids={"order_wave_id": "ow_9"},
+                data={"target_epoch": 9, "current_epoch": 8},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        order_wave_id="ow_9",
+        order_trace=True,
+        limit=1,
+    )
+
+    assert report["query"]["matched_events"] == 5
+    trace = report["query"]["order_trace"]
+    assert trace["matched_order_events"] == 5
+    assert trace["order_wave_count"] == 1
+    assert trace["unscoped_event_count"] == 0
+    wave = trace["order_waves"][0]
+    assert wave["order_wave_id"] == "ow_9"
+    assert wave["event_count"] == 5
+    assert wave["events_truncated"] is True
+    assert len(wave["timeline"]) == 1
+    assert wave["event_types"] == {
+        "execution.cancel_ambiguous_terminal": 1,
+        "execution.confirmation_requested": 1,
+        "execution.create_sent": 1,
+        "execution.create_succeeded": 1,
+        "order_wave.started": 1,
+    }
+    assert wave["statuses"] == {"degraded": 1, "started": 3, "succeeded": 1}
+    assert wave["reason_codes"] == {
+        "authoritative_confirmation": 1,
+        "exchange_acknowledged": 1,
+        "requires_full_authoritative_confirmation": 1,
+        "submitted_to_exchange": 1,
+        "test": 1,
+    }
+    assert wave["symbols"] == ["ETH/USDT:USDT", "SOL/USDT:USDT"]
+    assert wave["action_count"] == 2
+    assert wave["confirmation_count"] == 1
+    assert wave["confirmations"][0]["event_type"] == "execution.confirmation_requested"
+
+    actions = {item["action_id"]: item for item in wave["actions"]}
+    create = actions["ow_9:create:0"]
+    assert create["event_count"] == 2
+    assert create["events_truncated"] is True
+    assert create["latest_event_type"] == "execution.create_succeeded"
+    assert create["latest_status"] == "succeeded"
+    assert create["latest_reason_code"] == "exchange_acknowledged"
+    assert create["order_ids_short"] == ["abc123"]
+    assert create["client_order_ids_short"] == ["cid-entry-0"]
+    assert create["events"][0]["price"] == 2500.0
+    assert create["events"][0]["qty"] == 0.12
+
+    cancel = actions["ow_9:cancel:0"]
+    assert cancel["event_count"] == 1
+    assert cancel["latest_event_type"] == "execution.cancel_ambiguous_terminal"
+    assert cancel["latest_status"] == "degraded"
+    assert cancel["order_ids_short"] == ["cancel123"]
+
+
 def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -919,6 +1058,49 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
         "order_wave.completed": 1,
         "order_wave.started": 1,
     }
+
+
+def test_live_event_query_cli_accepts_order_trace(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_7",
+                seq=1,
+                ts=1000,
+                status="started",
+                ids={"order_wave_id": "ow_7", "action_id": "ow_7:create:0"},
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                cycle_id="cy_7",
+                seq=2,
+                ts=1100,
+                status="failed",
+                reason_code="exchange_exception",
+                ids={"order_wave_id": "ow_7", "action_id": "ow_7:create:0"},
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--order-wave-id",
+                "ow_7",
+                "--order-trace",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    trace = report["query"]["order_trace"]
+    assert trace["matched_order_events"] == 2
+    assert trace["order_waves"][0]["actions"][0]["latest_status"] == "failed"
 
 
 def test_live_event_query_cli_defaults_to_current_only_for_directory_scans(

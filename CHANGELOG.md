@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-event-query --order-trace` for offline order
+  lifecycle reconstruction grouped by order wave and action ids.
 - Added startup phase timing baselines to `passivbot tool live-smoke-report`,
   showing latest phase timings with rolling median/p95 context from local
   monitor events.
