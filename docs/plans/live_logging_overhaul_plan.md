@@ -50,6 +50,11 @@ Recent live work on VPS5 and the local Bybit bot showed why this matters:
   sampled, and moved off the hot path where possible.
 - Console logs are useful for operators, but the full forensic record needs more
   detail than a human can tail during normal operation.
+- Repeated live restarts showed that shutdown and warm-cache startup need their
+  own explicit contracts. A shutdown signal should propagate into long candle,
+  fill, account-refresh, warmup, and HSL replay work so exit is prompt and
+  bounded. A short-downtime restart should prove cached coverage and reuse it
+  where safe instead of repeating cold-start work unnecessarily.
 
 ## Target Shape
 
@@ -392,6 +397,32 @@ Cache load/flush events should explain:
 
 This is especially important for candle and fill-history issues, where runtime
 behavior often depends on local cache coverage.
+
+## Operational Restart Goals
+
+These are adjacent behavior/performance goals discovered while smoke-testing the
+logging work. They should be implemented as reviewed slices with tests and live
+smoke, not hidden inside observability-only PRs.
+
+1. Shutdown contract.
+   Ctrl-C or process stop should set one shutdown intent that long-running live
+   paths observe quickly: candle warmup/fetch, fill refresh, account refresh,
+   HSL replay, background maintainers, executor waits, and lock waits. Work that
+   is not needed for safe cleanup should be cancelled or abandoned cleanly, while
+   session close and event/monitor flush still get a short bounded deadline.
+   Structured events should record `bot.stopping`, interrupted component,
+   cleanup duration, cancelled task counts, and any bounded cleanup timeout.
+2. Warm-cache fast restart.
+   If downtime is short and local cache metadata proves coverage, startup should
+   take a delta path instead of repeating cold-start warmup/replay. This must not
+   skip fresh account-critical state or weaken HSL/stateless safety. The bot
+   should emit structured startup evidence explaining which cached surfaces were
+   reused, which were refreshed, which coverage proofs were accepted/rejected,
+   and why cold-start work was still required.
+
+These goals depend on the event stream being good enough to prove whether an
+exit or restart was slow because of exchange I/O, cache coverage, HSL replay,
+lock contention, or intentional safety policy.
 
 ## Migration Plan
 
