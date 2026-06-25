@@ -43,7 +43,8 @@ Related detailed plans:
    now supports event discovery, compact JSON output, current-vs-rotated segment
    selection, terse timeline rendering, and filters for event type/kind, cycle
    id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
-   action id, symbol, pside, reason code, and status.
+   action id, symbol, pside, reason code, and status. It also supports
+   aggregate trace summaries over matched events and order waves.
 
    Remaining refinements: richer cycle/order reconstruction and incident-bundle
    integration.
@@ -133,8 +134,11 @@ Related detailed plans:
     they directly explain a blocked trading action.
 
 11. [ ] Order lifecycle trace completeness.
-    Status: partial. The order-wave/execution event chain exists, but there is
-    no single reconstruction view for every create/cancel/missing-order case.
+    Status: partial. The order-wave/execution event chain exists, and
+    `live-event-query --trace-summary` can aggregate matched event types,
+    statuses, reason codes, ID scopes, symbols, and order-wave/action coverage.
+    There is still no single reconstruction view for every
+    create/cancel/missing-order case.
 
     Keep tightening the end-to-end chain from Rust ideal order to executable
     order, gate decision, exchange payload, exchange response, local open-order
@@ -180,7 +184,9 @@ Related detailed plans:
 | 2026-06-25 | #1 Incident bundle generator | PR #641 / `e1f99002` | Added `passivbot tool live-incident-bundle`; bundle smoke on VPS5 created an archive with redacted monitor/config evidence | Supervisor/process status and tighter remote smoke integration |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
+| 2026-06-25 | #2/#11 Event query and order trace summaries | PR #648 / `774bcf74` | Added `live-event-query --trace-summary` aggregate counts across matched events, ID scopes, symbols, sides, and order waves | Full create/cancel/missing-order reconstruction view |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
+| 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
 | 2026-06-25 | #9 Reason-code registry | PR #645 / `31263bb9` | Added shared `EventTags` and `ReasonCodes` registries and migrated representative live event emitters without changing emitted strings | Continue migrating stable literals as nearby event surfaces are touched |
 | 2026-06-25 | #10 Operator console redesign from events | PR #646 / `521832cc` | Improved event-projected console/text summaries for already-routed execution events without changing routes or console event volume | Migrate high-value stdlib text logs to structured-event projections |
