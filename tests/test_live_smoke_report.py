@@ -73,6 +73,15 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
                 reason_code="request_timeout",
                 symbol="BTC/USDT:USDT",
                 ids={"remote_call_id": "rc_1"},
+                data={
+                    "surface": "balance",
+                    "error_type": "RequestTimeout",
+                    "elapsed_ms": 12345,
+                    "error": (
+                        "binance GET https://example.test/account"
+                        "?api_key=AKIA123"
+                    ),
+                },
             ),
         ],
     )
@@ -117,6 +126,26 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
     assert report["problem_events"][0]["event_type"] == "remote_call.failed"
     assert report["problem_events"][0]["hard"] is False
     assert report["problem_events"][0]["ids"] == {"remote_call_id": "rc_1"}
+    assert report["remote_call_failures"] == {
+        "total": 1,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "reason_code": "request_timeout",
+                "surface": "balance",
+                "error_type": "RequestTimeout",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 1100,
+                "latest_elapsed_ms": 12345,
+                "latest_error": (
+                    "binance GET https://example.test/account?api_key=[redacted]"
+                ),
+                "latest_ids": {"remote_call_id": "rc_1"},
+            }
+        ],
+    }
     assert report["hard_problem_event_count"] == 0
     assert report["logs"]["attention_matches"] == 2
     assert report["logs"]["hard_matches"] == 1
