@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Improved `passivbot backtest --help-all` descriptions for high-impact
+  runtime/config overrides, including plot groups, suite aggregation,
+  HLCV dataset replay modes, HSL modes, and TWEL/WEL policy flags.
 - Added `passivbot tool live-event-query --cycle-trace` for offline cycle
   reconstruction grouped by cycle id, including bounded timeline samples,
   aggregate event summaries, and nested order traces.

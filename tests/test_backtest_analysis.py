@@ -8,6 +8,7 @@ import backtest as bt
 import plotting
 from backtest import (
     BacktestPayload,
+    DISABLE_PLOTTING_HELP,
     calc_backtest_completion_ratio,
     execute_backtest,
     expand_analysis,
@@ -883,6 +884,12 @@ def test_parse_disabled_plot_groups_accepts_summary_alias_and_commas():
         "hard_stop",
         "coin_fills",
     }
+
+
+def test_disable_plotting_help_lists_every_plot_group():
+    assert "hard_stop" in DISABLE_PLOTTING_HELP
+    assert "summary disables balance, twe, pnl, and hard_stop" in DISABLE_PLOTTING_HELP
+    assert "coin_fills disables per-coin fill plots only" in DISABLE_PLOTTING_HELP
 
 
 def test_create_forager_hard_stop_drawdown_figure_returns_plot_when_enabled(monkeypatch):

@@ -1071,7 +1071,11 @@ RESERVED_CLI_ARGS = {
             "backtest": "Backtest Runtime",
             "optimize": "Backtest Runtime",
         },
-        "help": "HSL signal mode: unified, pside, or coin.",
+        "help": (
+            "HSL signal mode. unified uses one account-level strategy signal for both "
+            "sides; pside tracks long/short independently; coin tracks each coin+side "
+            "slot and panic-closes only the affected slot."
+        ),
     },
     "live.time_in_force": {
         "visible": ["--time-in-force", "-tif"],
@@ -1162,7 +1166,11 @@ RESERVED_CLI_ARGS = {
         "commands": {"backtest"},
         "group": {"backtest": "Backtest Runtime"},
         "choices": ("intersection", "dataset"),
-        "help": "How --hlcvs-data-dir chooses coins/range: intersection or dataset.",
+        "help": (
+            "How --hlcvs-data-dir chooses coins/range. intersection keeps the current "
+            "config clipped to the verified dataset; dataset adopts the dataset's "
+            "effective coins and timestamp window for exact artifact replay."
+        ),
     },
     "backtest.maker_fee_override": {
         "visible": ["--maker-fee-override"],
@@ -1201,10 +1209,14 @@ RESERVED_CLI_ARGS = {
         "visible": ["--aggregate-default"],
         "hidden": ["--backtest.aggregate.default", "--backtest_aggregate_default"],
         "type": str,
-        "metavar": "VALUE",
+        "metavar": "MODE",
         "commands": {"backtest"},
         "group": {"backtest": "Suite"},
-        "help": "Suite-only: default aggregation to use for scenario metrics.",
+        "help": (
+            "Suite-only default aggregation for scenario metrics. Allowed modes: "
+            "mean, min, max, std, median. Metric-specific backtest.aggregate entries "
+            "override this default."
+        ),
     },
     "optimize.iters": {
         "visible": ["--iters", "-i"],
@@ -1358,7 +1370,146 @@ def _argument_metavar(type_, full_name: str, value):
     return "VALUE"
 
 
+CLI_HELP_OVERRIDES = {
+    "backtest.scenarios": (
+        "Suite scenario definitions. Use --scenarios to select labels; use "
+        "--suite-config for complex scenario files. Scenario entries support "
+        "label, start_date, end_date, coins, ignored_coins, exchanges, "
+        "coin_sources, and overrides."
+    ),
+    "backtest.balance_sample_divider": (
+        "Minutes per saved balance/equity sample. 1 keeps per-minute series; "
+        "higher values thin balance_and_equity.csv.gz and related plots."
+    ),
+    "backtest.btc_collateral_cap": (
+        "Target and ceiling share of equity held as BTC collateral. 0 keeps "
+        "USD-only; 1 targets fully BTC collateral; values >1 allow leveraged "
+        "BTC collateral."
+    ),
+    "backtest.btc_collateral_ltv_cap": (
+        "Optional USD-debt/equity cap while topping up BTC collateral. Leave "
+        "unset for no LTV cap."
+    ),
+    "backtest.compress_cache": (
+        "Compress generated backtest cache artifacts to save disk. Set n/false "
+        "for faster reloads with larger files."
+    ),
+    "backtest.dynamic_wel_by_tradability": (
+        "Backtest-only WEL denominator mode. y grows the denominator with the "
+        "max tradable coin count seen so far; n uses fixed live-style "
+        "n_positions."
+    ),
+    "backtest.filter_by_min_effective_cost": (
+        "Skip coins whose projected initial entry is below the exchange "
+        "effective min cost. y improves live parity; n allows oversized "
+        "min-cost entries."
+    ),
+    "backtest.gap_tolerance_ohlcvs_minutes": (
+        "Largest internal candle gap, in minutes, that preparation may "
+        "tolerate or repair before excluding the affected tradable window."
+    ),
+    "backtest.ohlcv_source_dir": (
+        "Import legacy OHLCV shards before remote fetches. Expected layout: "
+        "<dir>/<exchange>/1m/<coin_or_symbol>/YYYY-MM-DD.npz or .npy."
+    ),
+    "live.max_warmup_minutes": (
+        "Hard cap on calculated EMA/history warmup minutes for backtests and "
+        "live. 0 disables the cap."
+    ),
+    "backtest.base_dir": "Directory where standalone backtest results are written.",
+    "backtest.volume_normalization": (
+        "Normalize volume across exchanges for combined datasets. Leave enabled "
+        "for comparable combined-exchange backtests."
+    ),
+    "backtest.liquidation_threshold": (
+        "Early-stop equity floor as a fraction of starting balance. Must "
+        "satisfy 0 <= x < 1; 0.05 stops once equity is <= 5 percent of start."
+    ),
+    "backtest.market_order_slippage_pct": (
+        "Backtest-only simulated market-order slippage as part-per-one. Applies "
+        "to market-promoted orders and market HSL panic closes; not a live "
+        "slippage cap."
+    ),
+    "backtest.suite_enabled": (
+        "Enable suite mode from config. CLI --suite y/n overrides it for one run."
+    ),
+    "backtest.visible_metrics": (
+        "Terminal metric visibility config. null uses optimize scoring/limits; "
+        "[] shows all; a list adds named metrics. Full analysis is still saved."
+    ),
+    "config_version": "Config schema version. Canonical V8 configs use v8.0.0.",
+}
+
+for _pside in ("long", "short"):
+    CLI_HELP_OVERRIDES.update(
+        {
+            f"bot.{_pside}.hsl.enabled": f"Enable HSL for the {_pside} side.",
+            f"bot.{_pside}.hsl.red_threshold": (
+                f"RED drawdown trigger for {_pside} HSL, as part-per-one."
+            ),
+            f"bot.{_pside}.hsl.ema_span_minutes": (
+                f"EMA span, in minutes, for the {_pside} HSL drawdown signal."
+            ),
+            f"bot.{_pside}.hsl.cooldown_minutes_after_red": (
+                f"Minutes to wait after {_pside} HSL RED is flattened before "
+                "restart is allowed."
+            ),
+            f"bot.{_pside}.hsl.no_restart_drawdown_threshold": (
+                f"Terminal {_pside} HSL drawdown threshold. Values below "
+                "red_threshold are clamped up to red_threshold."
+            ),
+            f"bot.{_pside}.hsl.tier_ratios.yellow": (
+                f"Multiplier of red_threshold used for the {_pside} YELLOW HSL tier."
+            ),
+            f"bot.{_pside}.hsl.tier_ratios.orange": (
+                f"Multiplier of red_threshold used for the {_pside} ORANGE HSL tier."
+            ),
+            f"bot.{_pside}.hsl.orange_tier_mode": (
+                "Allowed values: graceful_stop or "
+                "tp_only_with_active_entry_cancellation. Controls ORANGE-tier "
+                f"behavior for the {_pside} side."
+            ),
+            f"bot.{_pside}.hsl.panic_close_order_type": (
+                "Allowed values: limit or market. market uses "
+                "backtest.market_order_slippage_pct and taker fees in backtests."
+            ),
+            f"bot.{_pside}.risk.total_exposure_entry_gate_enabled": (
+                f"Enable the {_pside} TWEL entry cap for bot-generated entries."
+            ),
+            f"bot.{_pside}.risk.total_exposure_enforcer_enabled": (
+                f"Enable {_pside} TWEL auto-reduce repair for already-over-target "
+                "same-side exposure."
+            ),
+            f"bot.{_pside}.risk.total_exposure_enforcer_policy": (
+                "Allowed values: reduce_overweight or reduce_portfolio. Controls "
+                f"which managed {_pside} positions TWEL auto-reduce may trim."
+            ),
+            f"bot.{_pside}.risk.total_exposure_enforcer_threshold": (
+                f"Fraction of {_pside} TWEL used by entry gating and TWEL "
+                "auto-reduce repair."
+            ),
+            f"bot.{_pside}.risk.we_excess_allowance_mode": (
+                "Allowed values: bounded or legacy_raw. bounded caps per-symbol "
+                "excess by side TWEL; legacy_raw preserves raw v7-style allowance."
+            ),
+            f"bot.{_pside}.risk.we_excess_allowance_pct": (
+                f"Per-symbol allowance above the configured {_pside} WEL before "
+                "position exposure trimming."
+            ),
+            f"bot.{_pside}.risk.n_positions": (
+                f"Target number of concurrent {_pside} position slots."
+            ),
+            f"bot.{_pside}.risk.total_wallet_exposure_limit": (
+                f"Total wallet exposure limit for the {_pside} side."
+            ),
+        }
+    )
+
+
 def _argument_help_text(full_name: str, appendix: str) -> str:
+    override = CLI_HELP_OVERRIDES.get(full_name)
+    if override is not None:
+        return override
     base = f"Override {full_name}."
     if appendix:
         return f"{base} {appendix}".strip()

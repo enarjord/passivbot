@@ -156,6 +156,12 @@ from tools.event_loop_policy import set_windows_event_loop_policy
 
 PLOT_GROUP_SUMMARY = {"balance", "twe", "pnl", "hard_stop"}
 PLOT_GROUP_ALL = PLOT_GROUP_SUMMARY | {"coin_fills"}
+DISABLE_PLOTTING_HELP = (
+    "Disable selected plot groups. Use without a value to disable all plotting. "
+    "Allowed values: all, summary, balance, twe, pnl, hard_stop, coin_fills, "
+    "or a comma-separated combination. summary disables balance, twe, pnl, "
+    "and hard_stop; coin_fills disables per-coin fill plots only."
+)
 HLCVS_CACHE_ROOT = Path("caches") / "hlcvs_data"
 HLCVS_CACHE_HASH_LEN = 16
 HLCVS_CACHE_DIR_SEP = "__"
@@ -2618,10 +2624,7 @@ async def main():
         nargs="?",
         const="all",
         default=None,
-        help=(
-            "Disable selected plot groups. Use without a value to disable all plotting. "
-            "Allowed values: all, summary, balance, twe, pnl, coin_fills, or a comma-separated combination."
-        ),
+        help=DISABLE_PLOTTING_HELP,
     )
     runtime_group.add_argument(
         "--cm-debug",
