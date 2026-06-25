@@ -660,6 +660,87 @@ async def test_shutdown_gracefully_awaits_cancelled_maintainers():
 
 
 @pytest.mark.asyncio
+async def test_shutdown_gracefully_emits_stage_events():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = None
+    bot._execution_loop_stopped = None
+    bot.ccp = None
+    bot.cca = None
+    bot._live_event_pipeline = None
+
+    await bot.shutdown_gracefully()
+
+    stages = [
+        kwargs["reason_code"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+    ]
+    assert stages == [
+        "requested",
+        "monitor_snapshot_flushed",
+        "event_pipeline_closing",
+    ]
+    assert events[0][0] == EventTypes.BOT_STOPPING
+    assert any(event_type == EventTypes.BOT_STOPPED for event_type, _ in events)
+    assert all(
+        "elapsed_s" in kwargs["data"]
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+    )
+
+
+@pytest.mark.asyncio
+async def test_shutdown_gracefully_emits_slow_stage_after_threshold():
+    bot = Passivbot.__new__(Passivbot)
+    bot._shutdown_in_progress = False
+    bot.stop_signal_received = False
+    bot._shutdown_degraded_after_seconds = 0.0
+    events = []
+
+    def emit_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    bot._emit_live_event = emit_event
+    bot._monitor_emit_stop = lambda *args, **kwargs: None
+    bot._monitor_flush_snapshot = AsyncMock()
+    bot.monitor_publisher = None
+    bot.maintainers = {}
+    bot.WS_ohlcvs_1m_tasks = {}
+    bot._execution_loop_task = None
+    bot._execution_loop_stopped = None
+    bot.ccp = None
+    bot.cca = None
+    bot._live_event_pipeline = None
+
+    await bot.shutdown_gracefully()
+
+    slow_events = [
+        kwargs
+        for event_type, kwargs in events
+        if event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        and kwargs["reason_code"] == "shutdown_slow"
+    ]
+    assert len(slow_events) == 1
+    assert slow_events[0]["status"] == "degraded"
+    assert slow_events[0]["data"]["threshold_s"] == 0.0
+
+
+@pytest.mark.asyncio
 async def test_shutdown_gracefully_times_out_stuck_maintainer_before_closing_sessions(
     caplog,
 ):

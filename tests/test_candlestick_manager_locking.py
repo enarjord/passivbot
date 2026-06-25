@@ -126,3 +126,37 @@ async def test_fetch_lock_watchdog_logs_stale_local_holder_without_release(tmp_p
     assert any(
         "fetch_lock_hold_timeout" in record.message for record in caplog.records
     )
+
+
+@pytest.mark.asyncio
+async def test_fetch_lock_wait_aborts_when_shutdown_requested(tmp_path):
+    cache_dir = tmp_path / "caches"
+    key = ("BTC/USDC:USDC", "1m")
+    holder = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(cache_dir),
+        default_window_candles=5,
+    )
+    checks = 0
+
+    def stop_requested():
+        nonlocal checks
+        checks += 1
+        return checks >= 2
+
+    waiter = CandlestickManager(
+        exchange=FakeExchange(),
+        exchange_name="hyperliquid",
+        cache_dir=str(cache_dir),
+        default_window_candles=5,
+        stop_requested_callback=stop_requested,
+    )
+
+    async with holder._acquire_fetch_lock(*key):
+        with pytest.raises(asyncio.CancelledError):
+            async with waiter._acquire_fetch_lock(*key):
+                pass
+
+    assert checks >= 2
+    assert waiter._held_fetch_locks == {}

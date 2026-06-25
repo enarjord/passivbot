@@ -157,6 +157,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
@@ -558,6 +560,21 @@ def test_console_format_is_compact_and_operator_facing():
         "pside=long reason=stale_ema entries deferred"
     )
     assert format_console_event(event) == expected
+
+
+def test_shutdown_stage_console_format_uses_shutdown_tag():
+    event = LiveEvent(
+        EventTypes.BOT_SHUTDOWN_STAGE,
+        status="started",
+        reason_code="maintainers_stopping",
+        message="waiting for maintainer tasks task_count=2 elapsed=0.01s",
+    )
+
+    assert (
+        format_console_event(event)
+        == "[shutdown] started reason=maintainers_stopping waiting for maintainer "
+        "tasks task_count=2 elapsed=0.01s"
+    )
 
 
 def test_route_throttle_applies_only_to_console_and_text_sinks():

@@ -20,6 +20,7 @@ class EventTypes:
     BOT_STARTED = "bot.started"
     BOT_READY = "bot.ready"
     BOT_STOPPING = "bot.stopping"
+    BOT_SHUTDOWN_STAGE = "bot.shutdown.stage"
     BOT_STOPPED = "bot.stopped"
     CYCLE_STARTED = "cycle.started"
     CYCLE_COMPLETED = "cycle.completed"
@@ -74,6 +75,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.BOT_STARTED,
     EventTypes.BOT_READY,
     EventTypes.BOT_STOPPING,
+    EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
     EventTypes.CYCLE_STARTED,
     EventTypes.CYCLE_COMPLETED,
@@ -353,6 +355,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
     EventTypes.BOT_READY: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
+    EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
     EventTypes.CYCLE_STARTED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
@@ -446,7 +449,11 @@ class ListEventSink:
 
 
 def format_console_event(event: LiveEvent) -> str:
-    base = f"[{event.event_type}]"
+    base = (
+        "[shutdown]"
+        if event.event_type == EventTypes.BOT_SHUTDOWN_STAGE
+        else f"[{event.event_type}]"
+    )
     if event.status:
         base += f" {event.status}"
     if event.cycle_id:
