@@ -19,12 +19,12 @@ Last updated: 2026-06-25.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ff493541` merge of PR #654, `Add live event cycle trace view`.
+- `e65597c3` merge of PR #656, `Add local cache integrity doctor`.
 
 VPS5 deployment status:
 
 - Deployed through PR #642 at `ad36d8ea`.
-- PRs #643-#654 are merged to `v8`; VPS5 pull/restart and live smoke are next
+- PRs #643-#656 are merged to `v8`; VPS5 pull/restart and live smoke are next
   when explicitly authorized.
 
 ## Phase Checklist
@@ -39,7 +39,7 @@ VPS5 deployment status:
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, incident bundle, ID filters | Incident-bundle integration and cross-bot workflow |
-| Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup | Continue separate reviewed PRs for shutdown/warmup improvements |
+| Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
 
@@ -290,14 +290,33 @@ VPS5 deployment status:
   aggregate trace summaries, and nested order traces using the existing order
   lifecycle reconstruction.
 
+### PR #655: Cycle Trace Progress Update
+
+- Branch: `codex/v8-progress-after-cycle-trace`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PRs #652-#654 merged.
+
+### PR #656: Local Cache Integrity Doctor
+
+- Branch: `codex/v8-cache-integrity-doctor-slice`.
+- Scope: adjacent operations tooling.
+- Result: added `passivbot tool cache-integrity-doctor`, a read-only local
+  cache smoke report for root presence, aggregate file/size counts, empty
+  files, and corrupt JSON/NDJSON/NPY artifacts. This is an initial cache-doctor
+  slice; it does not yet prove warm-cache coverage or HSL/fill metadata
+  compatibility.
+
 ## Current Next Steps
 
 1. Pull merged `v8` on VPS5 and restart bots, if explicitly authorized, so PRs
-   #643-#654 are exercised by live processes.
+   #643-#656 are exercised by live processes.
 2. Verify `health.summary` includes resource pressure and event-pipeline fields,
    verify event-projected console summaries stay readable, and verify
    `live-smoke-report` shows startup timing baselines and `live-event-query
    --order-trace`/`--cycle-trace` reconstruct recent order waves and cycles.
+   Also run `cache-integrity-doctor` on local cache roots as a read-only smoke
+   when live/VPS access is explicitly authorized.
 3. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection, or add incident-bundle integration if live smoke
    shows that query tooling is still the sharper need.
