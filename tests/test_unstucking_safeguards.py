@@ -2767,6 +2767,8 @@ async def test_hard_stop_finalize_red_stop_equal_threshold_latches_terminal(
 
 @pytest.mark.asyncio
 async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypatch):
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     _hsl_cfg(bot)["cooldown_minutes_after_red"] = 1.0
@@ -2775,6 +2777,12 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
     _hsl_state(bot)["runtime"]._red_latched = True
     _hsl_state(bot)["runtime"]._tier = "red"
     _hsl_state(bot)["runtime"]._drawdown_ema = 0.12
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_hsl_finalize"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
 
     async def fake_compute(pside, _ts):
         assert pside == "long"
@@ -2808,7 +2816,17 @@ async def test_hard_stop_finalize_red_stop_autorestarts_after_cooldown(monkeypat
         _hsl_state(bot)["cooldown_until_ms"] == captured["payload"]["cooldown_until_ms"]
     )
     assert _hsl_state(bot)["runtime"].red_latched() is True
+    assert _hsl_state(bot)["red_trigger_event_emitted"] is True
     assert captured["pside"] == "long"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    red_events = [event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED]
+    assert len(red_events) == 1
+    assert red_events[0].cycle_id == "cy_hsl_finalize"
+    assert red_events[0].pside == "long"
+    assert red_events[0].reason_code == "red_stop_finalized"
+    assert red_events[0].data["stop_event_timestamp_ms"] == 1_700_000_000_000
+    assert red_events[0].data["cooldown_until_ms"] == captured["payload"]["cooldown_until_ms"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
