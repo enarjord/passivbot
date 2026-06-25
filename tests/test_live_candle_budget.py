@@ -1760,6 +1760,322 @@ async def test_trading_ready_warmup_only_uses_startup_active_symbols(monkeypatch
     ]
 
 
+def test_warmup_candle_cache_decision_accepts_fresh_complete_1m_cache(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 120 * 60_000
+    latest_expected = now_ms - 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        exchange = object()
+
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            assert symbol == "CACHED/USDT:USDT"
+            assert windows == {"1m": {"candles": 12, "required": True}}
+            return {
+                "ok": True,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": True,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": latest_expected,
+                        "missing_candles": 0,
+                        "last_refresh_ms": now_ms - 30_000,
+                        "refresh_age_ms": 30_000,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "bybit"
+    bot.user = "test_user"
+    bot.cm = FakeCM()
+
+    decision = pb_mod.Passivbot._warmup_candle_cache_decision(
+        bot,
+        "CACHED/USDT:USDT",
+        timeframe="1m",
+        required_candles=12,
+        ttl_ms=300_000,
+        now_ms=now_ms,
+    )
+
+    assert decision["accepted"] is True
+    assert decision["reason_code"] == "warm_cache_accepted"
+    assert decision["cold_path_required"] is False
+    assert decision["covered_end_ms"] == latest_expected
+    assert decision["source_fingerprint"] == "bybit:test_user:CACHED/USDT:USDT:1m:12"
+
+
+def test_warmup_candle_cache_decision_rejects_stale_or_forced_cache(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 120 * 60_000
+    latest_expected = now_ms - 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    class FakeCM:
+        exchange = object()
+
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            return {
+                "ok": True,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": True,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": latest_expected,
+                        "missing_candles": 0,
+                        "last_refresh_ms": now_ms - 600_001,
+                        "refresh_age_ms": 600_001,
+                    }
+                },
+            }
+
+    bot = pb_mod.Passivbot.__new__(pb_mod.Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "bybit"
+    bot.user = "test_user"
+    bot.cm = FakeCM()
+
+    stale = pb_mod.Passivbot._warmup_candle_cache_decision(
+        bot,
+        "STALE/USDT:USDT",
+        timeframe="1m",
+        required_candles=12,
+        ttl_ms=300_000,
+        now_ms=now_ms,
+    )
+    assert stale["accepted"] is False
+    assert stale["reason_code"] == "stale_refresh"
+    assert stale["cold_path_required"] is True
+
+    bot.config = {"live": {"force_cold_startup": True}}
+    forced = pb_mod.Passivbot._warmup_candle_cache_decision(
+        bot,
+        "STALE/USDT:USDT",
+        timeframe="1m",
+        required_candles=12,
+        ttl_ms=300_000,
+        now_ms=now_ms,
+    )
+    assert forced["accepted"] is False
+    assert forced["reason_code"] == "force_cold_startup"
+
+
+@pytest.mark.asyncio
+async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
+    import logging
+    import passivbot as pb_mod
+
+    now_ms = 120 * 60_000
+    latest_expected = now_ms - 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    def fake_compute_live_warmup_windows(*args, **kwargs):
+        return (
+            {"CACHED/USDT:USDT": 12, "MISS/USDT:USDT": 12},
+            {"CACHED/USDT:USDT": 0, "MISS/USDT:USDT": 0},
+            {"CACHED/USDT:USDT": True, "MISS/USDT:USDT": True},
+        )
+
+    monkeypatch.setattr(
+        pb_mod, "compute_live_warmup_windows", fake_compute_live_warmup_windows
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+        exchange = object()
+
+        def __init__(self):
+            self.calls = []
+
+        def start_synth_candle_batch(self):
+            return None
+
+        def start_candle_replace_batch(self):
+            return None
+
+        def flush_synth_candle_batch(self):
+            return None
+
+        def flush_candle_replace_batch(self):
+            return None
+
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            coverage_ok = symbol == "CACHED/USDT:USDT"
+            return {
+                "ok": coverage_ok,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": coverage_ok,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": latest_expected if coverage_ok else None,
+                        "missing_candles": 0 if coverage_ok else 12,
+                        "last_refresh_ms": now_ms - 30_000 if coverage_ok else 0,
+                        "refresh_age_ms": 30_000 if coverage_ok else None,
+                    }
+                },
+            }
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append((symbol, kwargs))
+            return []
+
+    class FakeBot:
+        config = {"live": {"force_cold_startup": False}}
+        exchange = "bybit"
+        user = "test_user"
+        approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+        stop_signal_received = False
+
+        def __init__(self):
+            self.cm = FakeCM()
+            self.rebuild_calls = []
+
+        _force_cold_startup = pb_mod.Passivbot._force_cold_startup
+
+        def get_max_n_positions(self, pside):
+            return 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def get_symbols_with_pos(self, pside):
+            return []
+
+        def _candle_fetch_concurrency(self, *, context):
+            return 1
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        async def _sleep_unless_shutdown(self, *args, **kwargs):
+            return None
+
+        async def rebuild_required_candle_indices(self, *args, **kwargs):
+            self.rebuild_calls.append((args, kwargs))
+
+    bot = FakeBot()
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot.warmup_candles_staggered(
+            bot,
+            symbols_override=["CACHED/USDT:USDT", "MISS/USDT:USDT"],
+            skip_jitter=True,
+            context="trading-ready warmup",
+        )
+
+    assert [symbol for symbol, _ in bot.cm.calls] == ["MISS/USDT:USDT"]
+    assert any(
+        "cache decision" in record.message
+        and "reused=1" in record.message
+        and "cold=1" in record.message
+        for record in caplog.records
+    )
+
+
+@pytest.mark.asyncio
+async def test_warmup_candles_force_cold_startup_fetches_cached_symbol(monkeypatch):
+    import passivbot as pb_mod
+
+    now_ms = 120 * 60_000
+    latest_expected = now_ms - 60_000
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: now_ms)
+
+    monkeypatch.setattr(
+        pb_mod,
+        "compute_live_warmup_windows",
+        lambda *args, **kwargs: (
+            {"CACHED/USDT:USDT": 12},
+            {"CACHED/USDT:USDT": 0},
+            {"CACHED/USDT:USDT": True},
+        ),
+    )
+
+    class FakeCM:
+        default_window_candles = 120
+        exchange = object()
+
+        def __init__(self):
+            self.calls = []
+
+        def start_synth_candle_batch(self):
+            return None
+
+        def start_candle_replace_batch(self):
+            return None
+
+        def flush_synth_candle_batch(self):
+            return None
+
+        def flush_candle_replace_batch(self):
+            return None
+
+        def get_completed_candle_health(self, symbol, windows, *, now_ms=None):
+            return {
+                "ok": True,
+                "timeframes": {
+                    "1m": {
+                        "coverage_ok": True,
+                        "latest_expected_ts": latest_expected,
+                        "last_cached_ts": latest_expected,
+                        "missing_candles": 0,
+                        "last_refresh_ms": now_ms - 30_000,
+                        "refresh_age_ms": 30_000,
+                    }
+                },
+            }
+
+        async def get_candles(self, symbol, **kwargs):
+            self.calls.append((symbol, kwargs))
+            return []
+
+    class FakeBot:
+        config = {"live": {"force_cold_startup": True}}
+        exchange = "bybit"
+        user = "test_user"
+        approved_coins_minus_ignored_coins = {"long": set(), "short": set()}
+        stop_signal_received = False
+
+        def __init__(self):
+            self.cm = FakeCM()
+
+        _force_cold_startup = pb_mod.Passivbot._force_cold_startup
+
+        def get_max_n_positions(self, pside):
+            return 0
+
+        def get_current_n_positions(self, pside):
+            return 0
+
+        def get_symbols_with_pos(self, pside):
+            return []
+
+        def _candle_fetch_concurrency(self, *, context):
+            return 1
+
+        def _get_fetch_delay_seconds(self):
+            return 0.0
+
+        async def _sleep_unless_shutdown(self, *args, **kwargs):
+            return None
+
+        async def rebuild_required_candle_indices(self, *args, **kwargs):
+            return None
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.warmup_candles_staggered(
+        bot,
+        symbols_override=["CACHED/USDT:USDT"],
+        skip_jitter=True,
+        context="trading-ready warmup",
+    )
+
+    assert [symbol for symbol, _ in bot.cm.calls] == ["CACHED/USDT:USDT"]
+
+
 @pytest.mark.asyncio
 async def test_background_candle_warmup_is_scheduled_not_awaited():
     import passivbot as pb_mod
