@@ -659,6 +659,7 @@ class Passivbot:
         live_event_emitters.emit_planning_symbol_state_event
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
+    _emit_health_summary_event = live_event_emitters.emit_health_summary_event
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
@@ -3062,6 +3063,12 @@ class Passivbot:
             self._health_rate_limits,
             f"{slow_phase_str}{f' | {mem_str}' if mem_str else ''}",
         )
+        emit_health_summary = getattr(self, "_emit_health_summary_event", None)
+        if callable(emit_health_summary):
+            try:
+                emit_health_summary(self._build_health_summary_payload(now_ms=now_ms))
+            except Exception as exc:
+                logging.debug("[event] failed preparing health summary event: %s", exc)
         self._maybe_log_candle_health_summary()
 
     def _unstuck_loss_allowance_pct_overrides_for_logging(self, pside: str) -> dict[str, float]:
