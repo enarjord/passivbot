@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tarfile
 
+import live.smoke_report as smoke_report_module
 from live.incident_bundle import _redact_url_userinfo, build_live_incident_bundle
 from tools import live_incident_bundle
 
@@ -256,6 +257,75 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
     assert smoke_report["logs"]["hard_matches"] == 0
+
+
+def test_live_incident_bundle_includes_process_status_when_requested(
+    tmp_path,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/v8.json -u binance_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 99 S 1.0 5.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/v8.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    report = build_live_incident_bundle(
+        tmp_path / "monitor",
+        output_path=output,
+        logs_root=None,
+        supervisor_config=supervisor_config,
+        include_event_segments=False,
+    )
+
+    assert report["ok"] is True
+    assert report["smoke_report"]["processes"] == {
+        "enabled": True,
+        "ok": True,
+        "expected_total": 1,
+        "running_live_total": 1,
+        "missing_expected": 0,
+    }
+    with tarfile.open(output, "r:gz") as tar:
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert smoke_report["processes"]["expected_total"] == 1
+    assert smoke_report["processes"]["matched_expected"] == 1
+    assert smoke_report["processes"]["missing_expected"] == []
 
 
 def test_live_incident_bundle_redacts_git_remote_url_userinfo():

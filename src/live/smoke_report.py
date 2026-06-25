@@ -4,6 +4,7 @@ import gzip
 import json
 import re
 import stat
+import subprocess
 from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,16 @@ SENSITIVE_LOG_VALUE_PATTERN = re.compile(
 )
 AUTH_SCHEME_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
 STARTUP_TIMING_BASELINE_WINDOW = 20
+DEFAULT_PROCESS_MATCH = "passivbot live"
+PROCESS_REPORT_FIELDS = {
+    "pid",
+    "age_s",
+    "stat",
+    "cpu_pct",
+    "mem_pct",
+    "command",
+    "command_key",
+}
 
 
 def _open_text(path: Path):
@@ -103,6 +114,260 @@ def _redact_log_text(value: str, *, max_len: int = 500) -> str:
     if len(text) > max_len:
         text = f"{text[:max_len]}...<truncated>"
     return text
+
+
+def _shell_tokens(value: str) -> list[str]:
+    try:
+        import shlex
+
+        return shlex.split(str(value))
+    except (ImportError, ValueError):
+        return str(value).split()
+
+
+def _canonical_live_command(value: str) -> str:
+    tokens = _shell_tokens(value)
+    for index, token in enumerate(tokens[:-1]):
+        if Path(token).name == "passivbot" and tokens[index + 1] == "live":
+            return " ".join([Path(tokens[index]).name, *tokens[index + 1 :]])
+    return ""
+
+
+def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]:
+    if config_path is None or str(config_path).strip() == "":
+        return {
+            "path": None,
+            "exists": False,
+            "error": None,
+            "expected": [],
+        }
+    path = Path(config_path).expanduser()
+    expected: list[dict[str, Any]] = []
+    if not path.exists():
+        return {
+            "path": str(path),
+            "exists": False,
+            "error": "config_not_found",
+            "expected": expected,
+        }
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError as exc:
+        return {
+            "path": str(path),
+            "exists": True,
+            "error": f"config_read_failed:{exc.__class__.__name__}",
+            "expected": expected,
+        }
+
+    current_window: str | None = None
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        window_line = stripped[2:].strip() if stripped.startswith("- ") else stripped
+        if window_line.startswith("window_name:"):
+            current_window = window_line.split(":", 1)[1].strip().strip("\"'")
+            continue
+        command = stripped
+        if command.startswith("- "):
+            command = command[2:].strip()
+        command = command.strip().strip("\"'")
+        command_key = _canonical_live_command(command)
+        if not command_key:
+            continue
+        expected.append(
+            {
+                "name": current_window,
+                "command": _redact_log_text(command, max_len=400),
+                "command_key": _redact_log_text(command_key, max_len=400),
+                "_match_key": command_key,
+            }
+        )
+    return {
+        "path": str(path),
+        "exists": True,
+        "error": None,
+        "expected": expected,
+    }
+
+
+def _ps_process_rows() -> tuple[list[str], str | None]:
+    commands = [
+        ["ps", "-eo", "pid=,ppid=,etimes=,stat=,pcpu=,pmem=,command="],
+        ["ps", "-axo", "pid=,ppid=,stat=,pcpu=,pmem=,command="],
+    ]
+    last_error: str | None = None
+    for command in commands:
+        try:
+            result = subprocess.run(
+                command,
+                capture_output=True,
+                text=True,
+                timeout=5.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            last_error = f"{command[0]}_failed:{exc.__class__.__name__}"
+            continue
+        if result.returncode != 0:
+            last_error = (result.stderr or result.stdout or "ps_failed").strip()
+            continue
+        return result.stdout.splitlines(), None
+    return [], last_error or "ps_failed"
+
+
+def _float_or_none(value: str) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _int_or_none(value: str) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _process_record_from_ps_line(line: str) -> dict[str, Any] | None:
+    stripped = line.strip()
+    if not stripped:
+        return None
+    parts = stripped.split(None, 6)
+    if len(parts) == 7 and _int_or_none(parts[2]) is not None:
+        pid, ppid, etimes, stat_value, pcpu, pmem, command = parts
+        age_s = _int_or_none(etimes)
+    else:
+        parts = stripped.split(None, 5)
+        if len(parts) != 6:
+            return None
+        pid, ppid, stat_value, pcpu, pmem, command = parts
+        age_s = None
+    command_key = _canonical_live_command(command)
+    if not command_key:
+        return None
+    return {
+        "pid": _int_or_none(pid),
+        "ppid": _int_or_none(ppid),
+        "age_s": age_s,
+        "stat": stat_value,
+        "cpu_pct": _float_or_none(pcpu),
+        "mem_pct": _float_or_none(pmem),
+        "command": _redact_log_text(command, max_len=500),
+        "command_key": _redact_log_text(command_key, max_len=500),
+        "_match_key": command_key,
+    }
+
+
+def _running_live_processes(*, command_match: str) -> dict[str, Any]:
+    rows, error = _ps_process_rows()
+    processes: list[dict[str, Any]] = []
+    for row in rows:
+        record = _process_record_from_ps_line(row)
+        if record is not None:
+            match_key = str(record.get("_match_key") or "")
+            command_key = str(record.get("command_key") or "")
+            if (
+                command_match
+                and command_match not in row
+                and command_match not in match_key
+                and command_match not in command_key
+            ):
+                continue
+            processes.append(record)
+    processes.sort(
+        key=lambda item: (str(item.get("command_key") or ""), int(item.get("pid") or 0))
+    )
+    return {
+        "scan_error": error,
+        "running": processes,
+    }
+
+
+def _build_process_report(
+    *,
+    include_processes: bool,
+    supervisor_config: str | Path | None,
+    process_command_match: str,
+) -> dict[str, Any]:
+    enabled = bool(include_processes or supervisor_config)
+    if not enabled:
+        return {
+            "enabled": False,
+            "ok": True,
+            "hard_failures": 0,
+            "expected_total": 0,
+            "running_live_total": 0,
+            "missing_expected": [],
+            "unexpected_running": [],
+        }
+
+    config = _parse_tmuxp_live_commands(supervisor_config)
+    running_scan = _running_live_processes(command_match=process_command_match)
+    running = running_scan["running"]
+    expected = config["expected"]
+    missing: list[dict[str, Any]] = []
+    matched_process_indexes: set[int] = set()
+    for item in expected:
+        match_key = item.get("_match_key")
+        matches = [
+            (index, process)
+            for index, process in enumerate(running)
+            if process.get("_match_key") == match_key
+        ]
+        if matches:
+            matched_process_indexes.add(matches[0][0])
+            continue
+        missing.append(
+            {
+                "name": item.get("name"),
+                "command": item.get("command"),
+                "command_key": item.get("command_key"),
+            }
+        )
+    unexpected = [
+        {
+            key: value
+            for key, value in process.items()
+            if key in PROCESS_REPORT_FIELDS
+        }
+        for index, process in enumerate(running)
+        if expected and index not in matched_process_indexes
+    ]
+    hard_failures = len(missing)
+    if config.get("error"):
+        hard_failures += 1
+    elif supervisor_config and not expected:
+        hard_failures += 1
+        config["error"] = "no_expected_live_commands"
+    if running_scan.get("scan_error"):
+        hard_failures += 1
+    return {
+        "enabled": True,
+        "ok": hard_failures == 0,
+        "hard_failures": hard_failures,
+        "scan_error": running_scan.get("scan_error"),
+        "config": {
+            "path": config.get("path"),
+            "exists": config.get("exists"),
+            "error": config.get("error"),
+        },
+        "expected_total": len(expected),
+        "running_live_total": len(running),
+        "matched_expected": max(0, len(expected) - len(missing)),
+        "missing_expected": missing,
+        "unexpected_running": unexpected,
+        "running": [
+            {
+                key: value
+                for key, value in process.items()
+                if key in PROCESS_REPORT_FIELDS
+            }
+            for process in running
+        ],
+    }
 
 
 def _non_negative_int(value: Any) -> int | None:
@@ -471,6 +736,9 @@ def build_live_smoke_report(
     monitor_root: str | Path = "monitor",
     *,
     logs_root: str | Path | None = "logs",
+    include_processes: bool = False,
+    supervisor_config: str | Path | None = None,
+    process_command_match: str = DEFAULT_PROCESS_MATCH,
     include_rotated: bool = False,
     max_problem_events: int = 50,
     max_log_files: int = 8,
@@ -504,11 +772,17 @@ def build_live_smoke_report(
         tail_lines=log_tail_lines,
         max_matches=max_log_matches,
     )
+    process_report = _build_process_report(
+        include_processes=include_processes,
+        supervisor_config=supervisor_config,
+        process_command_match=process_command_match,
+    )
     hard_failures = (
         int(event_report["error_count"])
         + int(event_scan["invalid_rows"])
         + int(event_scan["hard_problem_event_count"])
         + int(log_scan["hard_matches"])
+        + int(process_report["hard_failures"])
     )
     attention_count = int(event_scan["problem_event_count"]) + int(
         log_scan["attention_matches"]
@@ -536,4 +810,5 @@ def build_live_smoke_report(
         "problem_events": event_scan["problem_events"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
+        "processes": process_report,
     }

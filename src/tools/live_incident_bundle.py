@@ -51,6 +51,23 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Config path to hash into the bundle manifest. May be repeated.",
     )
+    parser.add_argument(
+        "--processes",
+        action="store_true",
+        help="Include read-only passivbot live process liveness details in smoke_report.json.",
+    )
+    parser.add_argument(
+        "--supervisor-config",
+        help=(
+            "Optional tmuxp-style config listing expected passivbot live panes. "
+            "Implies --processes and reports missing expected bots as hard failures."
+        ),
+    )
+    parser.add_argument(
+        "--process-match",
+        default="passivbot live",
+        help="Substring used before canonicalizing passivbot live process rows.",
+    )
     parser.add_argument("--cycle-id", help="Include compact records for one cycle_id.")
     parser.add_argument(
         "--event-type",
@@ -168,6 +185,9 @@ def main(argv: list[str] | None = None) -> int:
         output_path=args.output,
         logs_root=args.logs_root,
         config_paths=list(args.config or []),
+        include_processes=bool(args.processes),
+        supervisor_config=args.supervisor_config,
+        process_command_match=str(args.process_match),
         cycle_id=args.cycle_id,
         event_type=args.event_types,
         order_wave_id=args.order_wave_id,
