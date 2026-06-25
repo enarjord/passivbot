@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Changed `passivbot tool live-event-query` directory scans to inspect
+  `current.ndjson` segments by default; use `--include-rotated` for full
+  rotated history validation.
 - Added `live.limit_order_create_max_market_dist_pct` with a default of `0.8`
   so live skips limit-order creations far outside fresh market price bands
   instead of repeatedly submitting exchange-invalid deep orders.
