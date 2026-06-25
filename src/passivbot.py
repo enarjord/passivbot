@@ -627,6 +627,9 @@ class Passivbot:
     _emit_candle_tail_projected_event = (
         live_event_emitters.emit_candle_tail_projected_event
     )
+    _emit_cache_warmup_decision_event = (
+        live_event_emitters.emit_cache_warmup_decision_event
+    )
     _emit_order_wave_started_event = live_event_emitters.emit_order_wave_started_event
     _emit_order_wave_completed_event = live_event_emitters.emit_order_wave_completed_event
     _emit_planning_defer_summary_event = (
@@ -4684,6 +4687,20 @@ class Passivbot:
             cache_cold_1m,
             reasons,
             max(0.0, (utc_ms() - started_ms) / 1000.0),
+        )
+        Passivbot._emit_cache_warmup_decision_event(
+            self,
+            context=str(context),
+            timeframe="1m",
+            symbol_count=n,
+            reused_count=cache_reused_1m,
+            cold_count=cache_cold_1m,
+            reason_counts=cache_reason_counts,
+            elapsed_ms=max(0, int(utc_ms() - started_ms)),
+            concurrency=concurrency,
+            ttl_ms=ttl_ms,
+            window_min_candles=wmin,
+            window_max_candles=wmax,
         )
 
         # Warm 1h candles for grid log-range EMAs

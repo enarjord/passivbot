@@ -1988,6 +1988,14 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
             self.rebuild_calls.append((args, kwargs))
 
     bot = FakeBot()
+    events = []
+    bot._live_event_current_cycle_id = "cy_warmup"
+
+    def emit_live_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    bot._emit_live_event = emit_live_event
     with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot.warmup_candles_staggered(
             bot,
@@ -2003,6 +2011,25 @@ async def test_warmup_candles_reuses_fresh_1m_cache(monkeypatch, caplog):
         and "cold=1" in record.message
         for record in caplog.records
     )
+    warmup_events = [
+        kwargs
+        for event_type, kwargs in events
+        if event_type == EventTypes.CACHE_WARMUP_DECISION
+    ]
+    assert len(warmup_events) == 1
+    assert warmup_events[0]["cycle_id"] == "cy_warmup"
+    assert warmup_events[0]["reason_code"] == "warmup_cache_decision"
+    assert warmup_events[0]["data"]["context"] == "trading-ready warmup"
+    assert warmup_events[0]["data"]["symbol_count"] == 2
+    assert warmup_events[0]["data"]["reused_count"] == 1
+    assert warmup_events[0]["data"]["cold_count"] == 1
+    assert warmup_events[0]["data"]["cold_path_required"] is True
+    assert warmup_events[0]["data"]["reason_counts"] == {
+        "missing_coverage": 1,
+        "warm_cache_accepted": 1,
+    }
+    assert warmup_events[0]["data"]["window_min_candles"] == 12
+    assert warmup_events[0]["data"]["window_max_candles"] == 12
 
 
 @pytest.mark.asyncio
