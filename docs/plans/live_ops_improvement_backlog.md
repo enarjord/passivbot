@@ -44,9 +44,10 @@ Related detailed plans:
    selection, terse timeline rendering, and filters for event type/kind, cycle
    id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
    action id, symbol, pside, reason code, and status. It also supports
-   aggregate trace summaries over matched events and order waves.
+   aggregate trace summaries over matched events and order waves, plus a
+   dedicated order-trace reconstruction view for order waves/actions.
 
-   Remaining refinements: richer cycle/order reconstruction and incident-bundle
+   Remaining refinements: richer cycle reconstruction and incident-bundle
    integration.
 
 3. [ ] Live restart/smoke automation.
@@ -133,17 +134,19 @@ Related detailed plans:
     summaries. EMA/candle/cache internals should stay structured DEBUG unless
     they directly explain a blocked trading action.
 
-11. [ ] Order lifecycle trace completeness.
-    Status: partial. The order-wave/execution event chain exists, and
-    `live-event-query --trace-summary` can aggregate matched event types,
-    statuses, reason codes, ID scopes, symbols, and order-wave/action coverage.
-    There is still no single reconstruction view for every
-    create/cancel/missing-order case.
+11. [x] Order lifecycle trace completeness.
+    Status: initial reconstruction view merged. The order-wave/execution event
+    chain exists, `live-event-query --trace-summary` can aggregate matched event
+    types/statuses/reason codes/ID scopes, and `live-event-query --order-trace`
+    reconstructs order-wave/action lifecycles from existing execution events.
 
     Keep tightening the end-to-end chain from Rust ideal order to executable
     order, gate decision, exchange payload, exchange response, local open-order
     refresh, confirmation, and fill. The target is that any create/cancel/missing
     order can be reconstructed from one id without reading code.
+
+    Remaining refinements: add richer cycle-level reconstruction and incident
+    bundle integration as the event stream gains more producer coverage.
 
 12. [ ] Debug profile toggles.
     Status: open.
@@ -185,6 +188,7 @@ Related detailed plans:
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
 | 2026-06-25 | #2/#11 Event query and order trace summaries | PR #648 / `774bcf74` | Added `live-event-query --trace-summary` aggregate counts across matched events, ID scopes, symbols, sides, and order waves | Full create/cancel/missing-order reconstruction view |
+| 2026-06-25 | #2/#11 Event query and order trace completeness | PR #651 / `b9f42ebd` | Added `live-event-query --order-trace` reconstruction grouped by order wave and action, with confirmation events and bounded samples | Richer cycle reconstruction and incident-bundle integration |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
@@ -197,7 +201,7 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Richer cycle/order reconstruction on top of `live-event-query`.
+1. Richer cycle reconstruction on top of `live-event-query`.
 2. Live restart/smoke automation.
 3. Startup phase budget tracking.
 4. Operator console redesign from events.
