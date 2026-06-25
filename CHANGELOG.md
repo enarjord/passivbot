@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Reduced default console/file noise for candidate-only forager EMA and
+  open-tail projection diagnostics; detailed per-symbol internals remain in
+  structured/debug events while active-symbol failures still fail loudly.
 - Changed `passivbot tool live-event-query` directory scans to inspect
   `current.ndjson` segments by default; use `--include-rotated` for full
   rotated history validation.

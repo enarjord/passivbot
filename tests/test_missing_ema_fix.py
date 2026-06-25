@@ -856,6 +856,7 @@ async def test_explicit_normal_missing_required_forager_features_fails_loudly():
 async def test_candidate_only_missing_required_forager_features_marks_unavailable(caplog):
     try:
         import passivbot as pb_mod
+        from live.event_bus import EventTypes
     except ImportError:
         pytest.skip("passivbot module not importable in test environment")
 
@@ -875,6 +876,13 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     bot.cm.get_last_final_ts = lambda _symbol: int(time.time() * 1000)
     bot._candle_staleness_ms = lambda _symbol, now_ms=None: 0
     _enable_forager_required_ranking(bot)
+    events = []
+
+    def emit_live_event(event_type, *args, **kwargs):
+        events.append((event_type, kwargs))
+        return object()
+
+    bot._emit_live_event = emit_live_event
 
     with caplog.at_level(logging.WARNING):
         (
@@ -894,10 +902,25 @@ async def test_candidate_only_missing_required_forager_features_marks_unavailabl
     assert symbol not in volumes_long
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
-    assert any(
+    assert not any(
         "missing required forager EMA HYPE" in record.message
         and "action=mark_nontradable_until_fresh" in record.message
+        and record.levelno >= logging.WARNING
         for record in caplog.records
+    )
+    unavailable_events = [
+        kwargs
+        for event_type, kwargs in events
+        if event_type == EventTypes.EMA_UNAVAILABLE
+    ]
+    assert len(unavailable_events) == 1
+    event_data = unavailable_events[0]["data"]
+    assert event_data["candidate_unavailable"]["count"] == 0
+    assert event_data["unavailable"]["sample"] == [symbol]
+    assert any(
+        group["reason"] == "missing_required_forager_volume+missing_required_forager_log_range"
+        and group["symbols"]["sample"] == [symbol]
+        for group in event_data["unavailable_reasons"]
     )
 
 

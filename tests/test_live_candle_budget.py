@@ -854,6 +854,7 @@ async def test_orchestrator_ema_bundle_marks_flat_forager_candidate_required_m1_
 @pytest.mark.asyncio
 async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailable(
     monkeypatch,
+    caplog,
 ):
     import passivbot as pb_mod
 
@@ -1010,16 +1011,17 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
         _candle_staleness_ms = pb_mod.Passivbot._candle_staleness_ms
 
     bot = FakeBot()
-    (
-        m1_close_emas,
-        m1_volume_emas,
-        m1_log_range_emas,
-        _h1_log_range_emas,
-        volumes_long,
-        log_ranges_long,
-    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
-        bot, [symbol], modes=bot.PB_modes
-    )
+    with caplog.at_level(logging.INFO):
+        (
+            m1_close_emas,
+            m1_volume_emas,
+            m1_log_range_emas,
+            _h1_log_range_emas,
+            volumes_long,
+            log_ranges_long,
+        ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+            bot, [symbol], modes=bot.PB_modes
+        )
 
     assert m1_close_emas[symbol]
     assert m1_volume_emas[symbol][5.0] == pytest.approx(42.0)
@@ -1027,6 +1029,11 @@ async def test_orchestrator_ema_bundle_late_projection_marks_candidate_unavailab
     assert volumes_long[symbol] == pytest.approx(42.0)
     assert symbol not in log_ranges_long
     assert bot._orchestrator_ema_unavailable_symbols == {symbol}
+    assert not any(
+        "late open-tail EMA projection context" in record.message
+        and record.levelno >= logging.INFO
+        for record in caplog.records
+    )
 
 
 @pytest.mark.asyncio
