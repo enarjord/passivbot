@@ -32,7 +32,7 @@ def _event_path_sort_key(path: Path) -> tuple[str, int, str]:
     return (str(path.parent), 1 if path.name == "current.ndjson" else 0, path.name)
 
 
-def discover_event_files(root: str | Path) -> list[Path]:
+def discover_event_files(root: str | Path, *, include_rotated: bool = False) -> list[Path]:
     """Find monitor event NDJSON segments below a monitor root, bot root, or events dir."""
     path = Path(root).expanduser()
     if path.is_file():
@@ -48,6 +48,7 @@ def discover_event_files(root: str | Path) -> list[Path]:
             if candidate.is_file()
             and candidate.parent.name == "events"
             and _is_event_segment(candidate)
+            and (include_rotated or candidate.name == "current.ndjson")
         ),
         key=_event_path_sort_key,
     )
@@ -109,10 +110,11 @@ def build_event_report(
     cycle_id: str | None = None,
     limit: int = 200,
     include_data: bool = False,
+    include_rotated: bool = False,
 ) -> dict[str, Any]:
     issues: list[EventIssue] = []
     try:
-        files = discover_event_files(root)
+        files = discover_event_files(root, include_rotated=include_rotated)
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -238,6 +240,7 @@ def build_event_report(
     report: dict[str, Any] = {
         "ok": error_count == 0,
         "root": str(Path(root).expanduser()),
+        "include_rotated": bool(include_rotated),
         "files": [str(path) for path in files],
         "files_scanned": len(files),
         "records_total": records_total,

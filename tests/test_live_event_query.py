@@ -102,14 +102,20 @@ def test_event_query_discovers_rotated_current_and_reconstructs_cycle(tmp_path):
         ],
     )
 
-    assert discover_event_files(tmp_path / "monitor" / "binance" / "binance_01") == [
-        rotated,
-        current,
-    ]
+    assert discover_event_files(
+        tmp_path / "monitor" / "binance" / "binance_01",
+        include_rotated=True,
+    ) == [rotated, current]
 
-    report = build_event_report(tmp_path / "monitor", cycle_id="cy_1", include_data=True)
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_1",
+        include_data=True,
+        include_rotated=True,
+    )
 
     assert report["ok"] is True
+    assert report["include_rotated"] is True
     assert report["files_scanned"] == 2
     assert report["records_total"] == 4
     assert report["live_events"] == 3
@@ -137,6 +143,40 @@ def test_event_query_reports_invalid_json(tmp_path):
     assert report["issues"][0]["code"] == "invalid_json"
 
 
+def test_event_query_current_only_skips_rotated_segments(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "user01" / "events"
+    _write_gz_ndjson(
+        events_dir / "2026-06-25T00-00-00.ndjson.gz",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_old",
+                seq=1,
+                ts=1000,
+            )
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_current",
+                seq=2,
+                ts=2000,
+            )
+        ],
+    )
+
+    report = build_event_report(tmp_path / "monitor", include_rotated=False)
+
+    assert report["ok"] is True
+    assert report["include_rotated"] is False
+    assert report["files"] == [str(events_dir / "current.ndjson")]
+    assert report["files_scanned"] == 1
+    assert report["cycle_ids_sample"] == [{"cycle_id": "cy_current", "events": 1}]
+
+
 def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -156,3 +196,51 @@ def test_live_event_query_cli_outputs_json_and_status(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["cycle"]["cycle_id"] == "cy_7"
     assert report["cycle"]["matched_events"] == 1
+
+
+def test_live_event_query_cli_defaults_to_current_only_for_directory_scans(
+    tmp_path, capsys
+):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-06-25T00-00-00.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_old",
+                seq=1,
+                ts=1000,
+            )
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_current",
+                seq=2,
+                ts=2000,
+            )
+        ],
+    )
+
+    assert live_event_query.main([str(tmp_path / "monitor")]) == 0
+    current_only_report = json.loads(capsys.readouterr().out)
+    assert current_only_report["include_rotated"] is False
+    assert current_only_report["files"] == [str(events_dir / "current.ndjson")]
+    assert current_only_report["cycle_ids_sample"] == [
+        {"cycle_id": "cy_current", "events": 1}
+    ]
+
+    assert live_event_query.main([str(tmp_path / "monitor"), "--include-rotated"]) == 0
+    full_report = json.loads(capsys.readouterr().out)
+    assert full_report["include_rotated"] is True
+    assert full_report["files"] == [
+        str(events_dir / "2026-06-25T00-00-00.ndjson"),
+        str(events_dir / "current.ndjson"),
+    ]
+    assert full_report["cycle_ids_sample"] == [
+        {"cycle_id": "cy_old", "events": 1},
+        {"cycle_id": "cy_current", "events": 1},
+    ]

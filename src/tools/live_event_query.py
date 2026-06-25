@@ -35,6 +35,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include each matched event's bounded data payload.",
     )
     parser.add_argument(
+        "--include-rotated",
+        action="store_true",
+        help=(
+            "Also scan rotated/compressed history segments. By default directory "
+            "scans read current.ndjson files only."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -50,6 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         cycle_id=args.cycle_id,
         limit=args.limit,
         include_data=bool(args.include_data),
+        include_rotated=bool(args.include_rotated),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
