@@ -2330,27 +2330,33 @@ class CandlestickManager:
                 except Exception:
                     loaded_start_ts = None
                     loaded_end_ts = None
-            self._emit_disk_load_observer(
-                {
-                    "symbol": symbol,
-                    "timeframe": tf_norm,
-                    "start_ts": int(start_ts),
-                    "end_ts": int(end_ts),
-                    "loaded_rows": int(merged_disk.shape[0]),
-                    "loaded_start_ts": loaded_start_ts,
-                    "loaded_end_ts": loaded_end_ts,
-                    "days": int(len(load_keys)),
-                    "primary_days": int(primary_hits),
-                    "legacy_days": int(legacy_hits),
-                    "merged_days": int(merged_hits),
-                    "source_days": {
-                        "primary": int(primary_hits),
-                        "legacy": int(legacy_hits),
-                        "merged": int(merged_hits),
-                    },
-                    "elapsed_ms": int(max(0.0, (time.monotonic() - t0) * 1000.0)),
-                }
-            )
+            try:
+                self._emit_disk_load_observer(
+                    {
+                        "symbol": symbol,
+                        "timeframe": tf_norm,
+                        "start_ts": int(start_ts),
+                        "end_ts": int(end_ts),
+                        "loaded_rows": int(merged_disk.shape[0]),
+                        "loaded_start_ts": loaded_start_ts,
+                        "loaded_end_ts": loaded_end_ts,
+                        "days": int(len(load_keys)),
+                        "primary_days": int(primary_hits),
+                        "legacy_days": int(legacy_hits),
+                        "merged_days": int(merged_hits),
+                        "source_days": {
+                            "primary": int(primary_hits),
+                            "legacy": int(legacy_hits),
+                            "merged": int(merged_hits),
+                        },
+                        "elapsed_ms": int(
+                            max(0.0, (time.monotonic() - t0) * 1000.0)
+                        ),
+                    }
+                )
+            except Exception:
+                # Disk-load telemetry must never break cache loading.
+                pass
             if tf_norm == "1m":
                 existing = self._ensure_symbol_cache(symbol)
                 merged = self._merge_overwrite(existing, merged_disk)
