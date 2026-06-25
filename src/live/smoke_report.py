@@ -655,11 +655,33 @@ def _is_hard_problem_event(live_event: dict[str, Any]) -> bool:
     return level in {"error", "critical"} or event_type == "sink.degraded"
 
 
+def _event_window_report(
+    *,
+    since_ms: int | None,
+    until_ms: int | None,
+    events_considered: int,
+    events_skipped_before: int,
+    events_skipped_after: int,
+    invalid_window_ts: int,
+) -> dict[str, Any]:
+    return {
+        "enabled": since_ms is not None or until_ms is not None,
+        "since_ms": since_ms,
+        "until_ms": until_ms,
+        "events_considered": int(events_considered),
+        "events_skipped_before": int(events_skipped_before),
+        "events_skipped_after": int(events_skipped_after),
+        "invalid_window_ts": int(invalid_window_ts),
+    }
+
+
 def _scan_events(
     root: str | Path,
     *,
     include_rotated: bool,
     max_problem_events: int,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
 ) -> dict[str, Any]:
     files = discover_event_files(root, include_rotated=include_rotated)
     bots: dict[str, dict[str, Any]] = defaultdict(
@@ -676,6 +698,10 @@ def _scan_events(
     )
     problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
     invalid_rows = 0
+    events_considered = 0
+    events_skipped_before = 0
+    events_skipped_after = 0
+    invalid_window_ts = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 
@@ -697,6 +723,18 @@ def _scan_events(
                     live_event = _live_event_payload(row)
                     if live_event is None:
                         continue
+                    row_ts = _non_negative_int(row.get("ts"))
+                    if since_ms is not None or until_ms is not None:
+                        if row_ts is None:
+                            invalid_window_ts += 1
+                            continue
+                        if since_ms is not None and row_ts < since_ms:
+                            events_skipped_before += 1
+                            continue
+                        if until_ms is not None and row_ts > until_ms:
+                            events_skipped_after += 1
+                            continue
+                    events_considered += 1
                     bot_key = _bot_key(live_event, row)
                     bot = bots[bot_key]
                     bot["events"] += 1
@@ -776,6 +814,14 @@ def _scan_events(
         "startup_timings": _summarize_startup_timings(startup_timing_records),
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups
+        ),
+        "event_window": _event_window_report(
+            since_ms=since_ms,
+            until_ms=until_ms,
+            events_considered=events_considered,
+            events_skipped_before=events_skipped_before,
+            events_skipped_after=events_skipped_after,
+            invalid_window_ts=invalid_window_ts,
         ),
     }
 
@@ -878,6 +924,8 @@ def build_live_smoke_report(
     supervisor_config: str | Path | None = None,
     process_command_match: str = DEFAULT_PROCESS_MATCH,
     include_rotated: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
     max_problem_events: int = 50,
     max_log_files: int = 8,
     log_tail_lines: int = 300,
@@ -894,6 +942,8 @@ def build_live_smoke_report(
             monitor_root,
             include_rotated=include_rotated,
             max_problem_events=max_problem_events,
+            since_ms=since_ms,
+            until_ms=until_ms,
         )
     else:
         event_scan = {
@@ -908,6 +958,14 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "event_window": _event_window_report(
+                since_ms=since_ms,
+                until_ms=until_ms,
+                events_considered=0,
+                events_skipped_before=0,
+                events_skipped_after=0,
+                invalid_window_ts=0,
+            ),
         }
     log_scan = _scan_logs(
         logs_root,
@@ -951,6 +1009,7 @@ def build_live_smoke_report(
         "bots": event_scan["bots"],
         "startup_timings": event_scan["startup_timings"],
         "remote_call_failures": event_scan["remote_call_failures"],
+        "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
