@@ -7,9 +7,41 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
-from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_bus import EventTypes, LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 
 EVENT_ID_KEYS = LIVE_EVENT_ID_KEYS
+ORDER_TRACE_EVENT_TYPES = {
+    EventTypes.ORDER_WAVE_STARTED,
+    EventTypes.ORDER_WAVE_COMPLETED,
+    EventTypes.EXECUTION_CREATE_SENT,
+    EventTypes.EXECUTION_CREATE_SUCCEEDED,
+    EventTypes.EXECUTION_CREATE_FAILED,
+    EventTypes.EXECUTION_CREATE_REJECTED,
+    EventTypes.EXECUTION_CANCEL_SENT,
+    EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+    EventTypes.EXECUTION_CANCEL_FAILED,
+    EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+    EventTypes.EXECUTION_AMBIGUOUS,
+    EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+    EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+    EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+}
+ORDER_TRACE_EVENT_DETAIL_KEYS = (
+    "index",
+    "pb_order_type",
+    "order_type",
+    "context",
+    "reason",
+    "reduce_only",
+    "price",
+    "qty",
+    "elapsed_ms",
+    "confirm_ms",
+    "timeout_ms",
+    "result_status",
+    "current_epoch",
+    "target_epoch",
+)
 
 
 @dataclass(frozen=True)
@@ -214,6 +246,322 @@ def _sorted_values(values: set[str], *, limit: int = 20) -> list[str]:
     return sorted(values)[: max(0, int(limit))]
 
 
+def _record_ts(row: dict[str, Any]) -> int | None:
+    try:
+        return int(row.get("ts"))
+    except (TypeError, ValueError):
+        return None
+
+
+def _short_ref(value: Any, *, max_len: int = 32) -> str | None:
+    if value is None:
+        return None
+    text = str(value)
+    if not text:
+        return None
+    if len(text) <= max_len:
+        return text
+    keep = max(4, (max_len - 3) // 2)
+    return f"{text[:keep]}...{text[-keep:]}"
+
+
+def _first_data_value(data: dict[str, Any], *keys: str) -> Any:
+    for key in keys:
+        value = data.get(key)
+        if value is not None:
+            return value
+    return None
+
+
+def _action_from_event(event_type: str | None, action_id: Any) -> str | None:
+    if action_id is not None:
+        parts = str(action_id).split(":")
+        if len(parts) >= 2 and parts[-2]:
+            return parts[-2]
+    text = str(event_type or "")
+    if ".create_" in text or text.endswith(".create_sent"):
+        return "create"
+    if ".cancel_" in text or text.endswith(".cancel_sent"):
+        return "cancel"
+    return None
+
+
+def _action_index(action_id: Any) -> int | None:
+    if action_id is None:
+        return None
+    try:
+        return int(str(action_id).split(":")[-1])
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_order_trace_event(
+    live_event: dict[str, Any],
+    event_type: str | None,
+    ids: dict[str, Any],
+) -> bool:
+    return bool(
+        event_type in ORDER_TRACE_EVENT_TYPES
+        or ids.get("order_wave_id") is not None
+        or ids.get("action_id") is not None
+        or str(event_type or "").startswith("execution.")
+    )
+
+
+def _order_trace_event(
+    *,
+    path: Path,
+    line_no: int,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    event_type: str | None,
+) -> dict[str, Any]:
+    ids = _event_ids(live_event)
+    data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+    order_id = _first_data_value(data, "result_order_id_short", "order_id_short")
+    client_order_id = _first_data_value(
+        data,
+        "result_client_order_id_short",
+        "client_order_id_short",
+    )
+    if order_id is None:
+        order_id = live_event.get("order_id")
+    if client_order_id is None:
+        client_order_id = live_event.get("client_order_id")
+    item: dict[str, Any] = {
+        "path": str(path),
+        "line": int(line_no),
+        "ts": row.get("ts"),
+        "seq": row.get("seq"),
+        "event_type": event_type or row.get("kind"),
+        "level": live_event.get("level"),
+        "status": live_event.get("status"),
+        "reason_code": live_event.get("reason_code"),
+        "symbol": live_event.get("symbol") or row.get("symbol"),
+        "pside": live_event.get("pside") or row.get("pside"),
+        "side": live_event.get("side"),
+        "order_id_short": _short_ref(order_id),
+        "client_order_id_short": _short_ref(client_order_id),
+        "ids": {
+            key: ids.get(key)
+            for key in EVENT_ID_KEYS
+            if ids.get(key) is not None
+        },
+    }
+    for key in ORDER_TRACE_EVENT_DETAIL_KEYS:
+        value = data.get(key)
+        if value is not None:
+            item[key] = value
+    return {key: value for key, value in item.items() if value not in (None, {}, [])}
+
+
+class _OrderTraceBuilder:
+    def __init__(self, *, event_limit: int) -> None:
+        self.event_limit = max(0, int(event_limit))
+        self.matched_order_events = 0
+        self.unscoped_events: list[dict[str, Any]] = []
+        self.unscoped_event_count = 0
+        self.unscoped_events_truncated = False
+        self.waves: dict[str, dict[str, Any]] = {}
+
+    def add(
+        self,
+        *,
+        path: Path,
+        line_no: int,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        event_type: str | None,
+        ids: dict[str, Any],
+    ) -> None:
+        if not _is_order_trace_event(live_event, event_type, ids):
+            return
+        self.matched_order_events += 1
+        item = _order_trace_event(
+            path=path,
+            line_no=line_no,
+            row=row,
+            live_event=live_event,
+            event_type=event_type,
+        )
+        order_wave_id = ids.get("order_wave_id")
+        if order_wave_id is None:
+            self.unscoped_event_count += 1
+            if len(self.unscoped_events) < self.event_limit:
+                self.unscoped_events.append(item)
+            else:
+                self.unscoped_events_truncated = True
+            return
+        wave_id = str(order_wave_id)
+        wave = self.waves.setdefault(
+            wave_id,
+            {
+                "order_wave_id": wave_id,
+                "event_count": 0,
+                "events_truncated": False,
+                "timeline": [],
+                "event_types": Counter(),
+                "statuses": Counter(),
+                "reason_codes": Counter(),
+                "symbols": set(),
+                "psides": set(),
+                "sides": set(),
+                "actions": {},
+                "confirmations": [],
+                "confirmation_count": 0,
+                "confirmations_truncated": False,
+                "first_ts": None,
+                "last_ts": None,
+            },
+        )
+        self._add_event_summary(wave, item)
+        action_id = ids.get("action_id")
+        if action_id is None:
+            if str(event_type or "").startswith("execution.confirmation_"):
+                wave["confirmation_count"] += 1
+                if len(wave["confirmations"]) < self.event_limit:
+                    wave["confirmations"].append(item)
+                else:
+                    wave["confirmations_truncated"] = True
+            return
+        action_key = str(action_id)
+        action = wave["actions"].setdefault(
+            action_key,
+            {
+                "action_id": action_key,
+                "action": _action_from_event(event_type, action_id),
+                "index": _action_index(action_id),
+                "event_count": 0,
+                "events_truncated": False,
+                "events": [],
+                "event_types": Counter(),
+                "statuses": Counter(),
+                "reason_codes": Counter(),
+                "symbols": set(),
+                "psides": set(),
+                "sides": set(),
+                "order_ids_short": set(),
+                "client_order_ids_short": set(),
+                "first_ts": None,
+                "last_ts": None,
+                "latest_event_type": None,
+                "latest_status": None,
+                "latest_reason_code": None,
+            },
+        )
+        self._add_event_summary(action, item, keep_timeline_key="events")
+
+    def _add_event_summary(
+        self,
+        summary: dict[str, Any],
+        item: dict[str, Any],
+        *,
+        keep_timeline_key: str = "timeline",
+    ) -> None:
+        summary["event_count"] += 1
+        ts = _record_ts(item)
+        if ts is not None:
+            if summary.get("first_ts") is None:
+                summary["first_ts"] = ts
+            summary["last_ts"] = ts
+        event_type = item.get("event_type")
+        if event_type is not None:
+            summary["event_types"][str(event_type)] += 1
+            summary["latest_event_type"] = str(event_type)
+        status = item.get("status")
+        if status is not None:
+            summary["statuses"][str(status)] += 1
+            summary["latest_status"] = str(status)
+        reason_code = item.get("reason_code")
+        if reason_code is not None:
+            summary["reason_codes"][str(reason_code)] += 1
+            summary["latest_reason_code"] = str(reason_code)
+        for key, target in (
+            ("symbol", "symbols"),
+            ("pside", "psides"),
+            ("side", "sides"),
+            ("order_id_short", "order_ids_short"),
+            ("client_order_id_short", "client_order_ids_short"),
+        ):
+            value = item.get(key)
+            if value is not None and target in summary:
+                summary[target].add(str(value))
+        kept = summary[keep_timeline_key]
+        if len(kept) < self.event_limit:
+            kept.append(item)
+        else:
+            summary["events_truncated"] = True
+
+    def to_dict(self) -> dict[str, Any]:
+        waves = []
+        for wave_id, summary in sorted(self.waves.items()):
+            actions = []
+            for action_id, action in sorted(summary["actions"].items()):
+                actions.append(self._finalize_action(action))
+            waves.append(
+                {
+                    "order_wave_id": wave_id,
+                    "event_count": int(summary["event_count"]),
+                    "events_truncated": bool(summary["events_truncated"]),
+                    "first_ts": summary.get("first_ts"),
+                    "last_ts": summary.get("last_ts"),
+                    "event_types": _sorted_counter(summary["event_types"]),
+                    "statuses": _sorted_counter(summary["statuses"]),
+                    "reason_codes": _sorted_counter(summary["reason_codes"]),
+                    "symbols": _sorted_values(summary["symbols"]),
+                    "psides": _sorted_values(summary["psides"]),
+                    "sides": _sorted_values(summary["sides"]),
+                    "action_count": len(summary["actions"]),
+                    "actions": actions,
+                    "confirmation_count": int(summary["confirmation_count"]),
+                    "confirmations_truncated": bool(
+                        summary["confirmations_truncated"]
+                    ),
+                    "confirmations": summary["confirmations"],
+                    "timeline": summary["timeline"],
+                }
+            )
+        out: dict[str, Any] = {
+            "matched_order_events": int(self.matched_order_events),
+            "order_wave_count": len(self.waves),
+            "order_waves": waves,
+            "unscoped_event_count": int(self.unscoped_event_count),
+        }
+        if self.unscoped_events or self.unscoped_events_truncated:
+            out["unscoped_events"] = self.unscoped_events
+            out["unscoped_events_truncated"] = bool(self.unscoped_events_truncated)
+        return out
+
+    def _finalize_action(self, action: dict[str, Any]) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "action_id": action["action_id"],
+                "action": action.get("action"),
+                "index": action.get("index"),
+                "event_count": int(action["event_count"]),
+                "events_truncated": bool(action["events_truncated"]),
+                "first_ts": action.get("first_ts"),
+                "last_ts": action.get("last_ts"),
+                "latest_event_type": action.get("latest_event_type"),
+                "latest_status": action.get("latest_status"),
+                "latest_reason_code": action.get("latest_reason_code"),
+                "event_types": _sorted_counter(action["event_types"]),
+                "statuses": _sorted_counter(action["statuses"]),
+                "reason_codes": _sorted_counter(action["reason_codes"]),
+                "symbols": _sorted_values(action["symbols"]),
+                "psides": _sorted_values(action["psides"]),
+                "sides": _sorted_values(action["sides"]),
+                "order_ids_short": _sorted_values(action["order_ids_short"]),
+                "client_order_ids_short": _sorted_values(
+                    action["client_order_ids_short"]
+                ),
+                "events": action["events"],
+            }.items()
+            if value not in (None, {}, [])
+        }
+
+
 class _TraceSummaryBuilder:
     def __init__(self) -> None:
         self.events = 0
@@ -360,6 +708,7 @@ def build_event_report(
     include_rotated: bool = False,
     timeline: bool = False,
     trace_summary: bool = False,
+    order_trace: bool = False,
 ) -> dict[str, Any]:
     issues: list[EventIssue] = []
     try:
@@ -393,6 +742,8 @@ def build_event_report(
     query_trace = _TraceSummaryBuilder()
     cycle_trace = _TraceSummaryBuilder()
     max_events = max(0, int(limit))
+    query_order_trace = _OrderTraceBuilder(event_limit=max_events)
+    cycle_order_trace = _OrderTraceBuilder(event_limit=max_events)
     event_type_filter = _normalize_filter_values(event_type)
     bot_filter = _normalize_filter_values(bot_id)
     snapshot_filter = _normalize_filter_values(snapshot_id)
@@ -422,7 +773,7 @@ def build_event_report(
         )
     )
     has_query_filter = has_non_cycle_filter or bool(
-        (timeline or trace_summary) and cycle_id is None
+        (timeline or trace_summary or order_trace) and cycle_id is None
     )
 
     for path in files:
@@ -564,6 +915,15 @@ def build_event_report(
                                 live_event=live_event,
                                 event_type=record_event_type,
                             )
+                        if order_trace:
+                            query_order_trace.add(
+                                path=path,
+                                line_no=line_no,
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                                ids=ids,
+                            )
                         if len(query_events) < max_events:
                             query_events.append(
                                 _compact_record(
@@ -581,6 +941,15 @@ def build_event_report(
                                 row=row,
                                 live_event=live_event,
                                 event_type=record_event_type,
+                            )
+                        if order_trace:
+                            cycle_order_trace.add(
+                                path=path,
+                                line_no=line_no,
+                                row=row,
+                                live_event=live_event,
+                                event_type=record_event_type,
+                                ids=ids,
                             )
                         if len(cycle_events) < max_events:
                             cycle_events.append(
@@ -646,6 +1015,8 @@ def build_event_report(
             ]
         if trace_summary:
             report["query"]["trace_summary"] = query_trace.to_dict()
+        if order_trace:
+            report["query"]["order_trace"] = query_order_trace.to_dict()
     if cycle_id is not None:
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
@@ -676,6 +1047,8 @@ def build_event_report(
             ]
         if trace_summary:
             report["cycle"]["trace_summary"] = cycle_trace.to_dict()
+        if order_trace:
+            report["cycle"]["order_trace"] = cycle_order_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
     return report

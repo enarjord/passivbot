@@ -156,6 +156,14 @@ def build_parser() -> argparse.ArgumentParser:
             "the limited event sample."
         ),
     )
+    parser.add_argument(
+        "--order-trace",
+        action="store_true",
+        help=(
+            "Include an order lifecycle reconstruction view grouped by order "
+            "wave and action ids. Event samples are bounded by --limit."
+        ),
+    )
     return parser
 
 
@@ -182,6 +190,7 @@ def main(argv: list[str] | None = None) -> int:
         include_rotated=bool(args.include_rotated),
         timeline=bool(args.timeline),
         trace_summary=bool(args.trace_summary),
+        order_trace=bool(args.order_trace),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
