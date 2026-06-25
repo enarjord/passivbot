@@ -902,6 +902,116 @@ def _safe_emit(bot: Any, event_type: str, **kwargs: Any) -> Any:
         return None
 
 
+def _emit_rust_orchestrator_called_event_unchecked(
+    bot: Any,
+    *,
+    rust_call_id: str | None,
+    input_hash: str,
+    symbol_count: int,
+    tradable_count: int,
+    ema_unavailable_count: int,
+    trailing_unavailable_count: int,
+    hedge_mode: bool,
+    strategy_kind: str | None,
+) -> None:
+    bot._emit_live_event(
+        EventTypes.RUST_ORCHESTRATOR_CALLED,
+        level="debug",
+        component="rust_orchestrator",
+        tags=("planning", "rust", "orchestrator"),
+        cycle_id=current_live_event_cycle_id(bot),
+        remote_call_id=rust_call_id,
+        status="started",
+        raw_hash=str(input_hash),
+        data={
+            "symbol_count": int(symbol_count),
+            "tradable_count": int(tradable_count),
+            "ema_unavailable_count": int(ema_unavailable_count),
+            "trailing_unavailable_count": int(trailing_unavailable_count),
+            "hedge_mode": bool(hedge_mode),
+            "strategy_kind": strategy_kind,
+            "input_hash": str(input_hash),
+        },
+    )
+
+
+def emit_rust_orchestrator_called_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_rust_orchestrator_called_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.RUST_ORCHESTRATOR_CALLED,
+            exc,
+        )
+
+
+def _emit_rust_orchestrator_returned_event_unchecked(
+    bot: Any,
+    *,
+    rust_call_id: str | None,
+    status: str,
+    input_hash: str,
+    elapsed_ms: int,
+    output_hash: str | None = None,
+    order_count: int | None = None,
+    diagnostics: Any = None,
+    error: BaseException | None = None,
+) -> None:
+    event_status = str(status or "succeeded").lower()
+    failed = event_status == "failed" or error is not None
+    data: dict[str, Any] = {
+        "elapsed_ms": int(max(0, int(elapsed_ms))),
+        "input_hash": str(input_hash),
+    }
+    raw_hash = str(input_hash)
+    level = "error" if failed else "debug"
+    tags = ["planning", "rust", "orchestrator"]
+    reason_code = None
+    if failed:
+        err = error or RuntimeError("rust orchestrator failed")
+        tags.append("error")
+        reason_code = type(err).__name__
+        data.update(
+            {
+                "error_type": type(err).__name__,
+                "error": _sanitize_remote_text(err, max_len=500),
+            }
+        )
+    else:
+        if output_hash is not None:
+            raw_hash = str(output_hash)
+            data["output_hash"] = str(output_hash)
+        data["order_count"] = int(order_count or 0)
+        data["diagnostic_keys"] = (
+            sorted(diagnostics) if isinstance(diagnostics, dict) else []
+        )
+
+    bot._emit_live_event(
+        EventTypes.RUST_ORCHESTRATOR_RETURNED,
+        level=level,
+        component="rust_orchestrator",
+        tags=tuple(tags),
+        cycle_id=current_live_event_cycle_id(bot),
+        remote_call_id=rust_call_id,
+        status="failed" if failed else "succeeded",
+        reason_code=reason_code,
+        raw_hash=raw_hash,
+        data=data,
+    )
+
+
+def emit_rust_orchestrator_returned_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_rust_orchestrator_returned_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit %s: %s",
+            EventTypes.RUST_ORCHESTRATOR_RETURNED,
+            exc,
+        )
+
+
 def _emit_forager_feature_unavailable_event_unchecked(
     bot: Any,
     *,
