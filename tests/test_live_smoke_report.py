@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import live.smoke_report as smoke_report_module
 from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor
 from tools import live_smoke_report
@@ -549,6 +551,14 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
     assert report["logs"]["files_scanned"] == 0
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
+
+
+def test_live_smoke_report_cli_rejects_invalid_window_timestamp(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(["monitor", "--since-ms", "not-an-int"])
+
+    assert exc_info.value.code == 2
+    assert "invalid int value" in capsys.readouterr().err
 
 
 def test_live_smoke_report_process_status_matches_supervisor_config(

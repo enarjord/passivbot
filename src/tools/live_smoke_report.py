@@ -13,12 +13,6 @@ if str(SRC_ROOT) not in sys.path:
 from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor  # noqa: E402
 
 
-def _parse_ms(value: str | None) -> int | None:
-    if value is None:
-        return None
-    return int(value)
-
-
 def _since_ms_from_recent_minutes(value: float | None) -> int | None:
     if value is None:
         return None
@@ -73,10 +67,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--since-ms",
+        type=int,
         help="Only include structured monitor events at or after this monitor ts.",
     )
     parser.add_argument(
         "--until-ms",
+        type=int,
         help="Only include structured monitor events at or before this monitor ts.",
     )
     parser.add_argument(
@@ -126,7 +122,7 @@ def main(argv: list[str] | None = None) -> int:
         logs_root = default_logs_root_for_monitor(args.monitor_root)
     else:
         logs_root = args.logs_root if str(args.logs_root).strip() else None
-    since_ms = _parse_ms(args.since_ms)
+    since_ms = args.since_ms
     try:
         recent_since_ms = _since_ms_from_recent_minutes(args.recent_minutes)
     except ValueError as exc:
@@ -135,7 +131,7 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms and --recent-minutes are mutually exclusive")
     if recent_since_ms is not None:
         since_ms = recent_since_ms
-    until_ms = _parse_ms(args.until_ms)
+    until_ms = args.until_ms
     if since_ms is not None and until_ms is not None and since_ms > until_ms:
         parser.error("--since-ms must be <= --until-ms")
     report = build_live_smoke_report(
