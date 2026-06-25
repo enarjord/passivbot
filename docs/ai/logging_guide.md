@@ -38,6 +38,10 @@ Use stable `[tag]` prefixes, for example:
 8. `[risk]`
 9. `[ema]`
 
+Structured live event tags and reason codes must use the shared registries in
+`src/live/event_bus.py` (`EventTags`, `ReasonCodes`) when a stable value already
+exists there. Add new registry values before introducing repeated literals.
+
 ## Fallback Visibility
 
 Fallbacks in critical paths log warnings with required context from `error_contract.md`.

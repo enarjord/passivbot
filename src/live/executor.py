@@ -7,7 +7,7 @@ import traceback
 from collections import defaultdict
 
 from passivbot_exceptions import RestartBotException
-from live.event_bus import EventTypes
+from live.event_bus import EventTypes, ReasonCodes
 from procedures import print_async_exception
 from pure_funcs import shorten_custom_id
 from utils import utc_ms as _utils_utc_ms
@@ -348,7 +348,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             order=order,
             action="create",
             status="started",
-            reason_code="submitted_to_exchange",
+            reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
             index=idx,
             wave=wave,
         )
@@ -364,7 +364,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order=order,
                 action="create",
                 status="degraded",
-                reason_code="exchange_exception",
+                reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
                 level="warning",
                 index=idx,
                 wave=wave,
@@ -376,7 +376,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order,
                 emitted_ts,
                 status="create_error_ambiguous",
-                reason="exchange_exception",
+                reason=ReasonCodes.EXCHANGE_EXCEPTION,
                 error=exc,
             )
         raise
@@ -416,7 +416,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order=order,
                 action="create",
                 status="degraded",
-                reason_code="length_mismatch",
+                reason_code=ReasonCodes.LENGTH_MISMATCH,
                 level="warning",
                 index=idx,
                 wave=wave,
@@ -428,7 +428,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
                 order,
                 emitted_ts,
                 status="create_response_partial",
-                reason="length_mismatch",
+                reason=ReasonCodes.LENGTH_MISMATCH,
             )
         return []
     to_return = []
@@ -495,7 +495,7 @@ async def execute_orders_parent(bot, orders: list[dict]) -> list[dict]:
             order=order,
             action="create",
             status="succeeded",
-            reason_code="exchange_acknowledged",
+            reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
             index=idx,
             wave=wave,
             result=ex,
@@ -553,7 +553,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
             order=order,
             action="cancel",
             status="started",
-            reason_code="submitted_to_exchange",
+            reason_code=ReasonCodes.SUBMITTED_TO_EXCHANGE,
             index=idx,
             wave=wave,
         )
@@ -569,7 +569,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 order=order,
                 action="cancel",
                 status="failed",
-                reason_code="exchange_exception",
+                reason_code=ReasonCodes.EXCHANGE_EXCEPTION,
                 level="warning",
                 index=idx,
                 wave=wave,
@@ -586,7 +586,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 order=order,
                 action="cancel",
                 status="degraded",
-                reason_code="length_mismatch",
+                reason_code=ReasonCodes.LENGTH_MISMATCH,
                 level="warning",
                 index=idx,
                 wave=wave,
@@ -652,7 +652,7 @@ async def execute_cancellations_parent(bot, orders: list[dict]) -> list[dict]:
                 order=order,
                 action="cancel",
                 status="succeeded",
-                reason_code="exchange_acknowledged",
+                reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
                 index=idx,
                 wave=wave,
                 result=ex,

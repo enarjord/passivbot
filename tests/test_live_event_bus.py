@@ -1,6 +1,7 @@
 import json
 import logging
 import queue
+import re
 import threading
 import time
 
@@ -9,6 +10,7 @@ import pytest
 from live.event_bus import (
     DEFAULT_ROUTES,
     EventRoute,
+    EventTags,
     EventTypes,
     ListEventSink,
     LiveEvent,
@@ -16,11 +18,14 @@ from live.event_bus import (
     LiveEventPipeline,
     MonitorEventSink,
     REDACTED,
+    ReasonCodes,
+    authoritative_reason_code,
     format_console_event,
     normalize_event_type,
     payload_hash,
     payload_hash_raw,
     redact_payload,
+    sink_failed_reason_code,
 )
 from live.events import DiagnosticEvent
 from monitor_publisher import MonitorPublisher
@@ -47,6 +52,36 @@ def _make_monitor_publisher(tmp_path, **overrides):
     }
     params.update(overrides)
     return MonitorPublisher(**params)
+
+
+def _registry_values(registry: type) -> list[str]:
+    return [
+        value
+        for name, value in vars(registry).items()
+        if name.isupper() and isinstance(value, str)
+    ]
+
+
+def test_live_event_tag_registry_values_are_unique_and_query_safe():
+    values = _registry_values(EventTags)
+
+    assert EventTags.REMOTE_CALL == "remote_call"
+    assert EventTags.CANDLE == "candle"
+    assert EventTags.EMA == "ema"
+    assert len(values) == len(set(values))
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", value) for value in values)
+
+
+def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
+    values = _registry_values(ReasonCodes)
+
+    assert ReasonCodes.REQUIRED_EMA_UNAVAILABLE == "required_ema_unavailable"
+    assert ReasonCodes.EXCHANGE_ACKNOWLEDGED == "exchange_acknowledged"
+    assert ReasonCodes.WARMUP_CACHE_DECISION == "warmup_cache_decision"
+    assert authoritative_reason_code("balance") == "authoritative_balance"
+    assert sink_failed_reason_code("monitor") == "monitor_sink_failed"
+    assert len(values) == len(set(values))
+    assert all(re.fullmatch(r"[a-z][a-z0-9_]*", value) for value in values)
 
 
 def test_live_event_serializes_stable_envelope_and_redacts_sensitive_data():
