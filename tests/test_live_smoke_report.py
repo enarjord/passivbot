@@ -16,6 +16,7 @@ def _monitor_row(
     reason_code: str = "test",
     symbol: str | None = None,
     ids: dict | None = None,
+    data: dict | None = None,
 ) -> dict:
     live_event = {
         "schema_version": 1,
@@ -29,7 +30,7 @@ def _monitor_row(
         "symbol": symbol,
         "status": status,
         "reason_code": reason_code,
-        "data": {"seq": seq},
+        "data": dict(data or {"seq": seq}),
         "ids": dict(ids or {}),
     }
     return {
@@ -119,6 +120,121 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
     assert report["logs"]["attention_matches"] == 2
     assert report["logs"]["hard_matches"] == 1
     assert [match["hard"] for match in report["logs"]["matches"]] == [False, True]
+
+
+def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 2000,
+                    "since_previous_ms": 2000,
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "startup",
+                    "elapsed_ms": 8000,
+                    "since_previous_ms": 6000,
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=3,
+                ts=3000,
+                level="debug",
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 3000,
+                    "since_previous_ms": 3000,
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=4,
+                ts=4000,
+                level="debug",
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "startup",
+                    "elapsed_ms": 10000,
+                    "since_previous_ms": 7000,
+                    "details": "ready api_key=AKIA123 Authorization: Bearer TOKEN123",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["startup_timings"] == [
+        {
+            "bot": "binance/binance_01",
+            "baseline_window": 20,
+            "phases": {
+                "account": {
+                    "samples": 2,
+                    "latest_ts": 3000,
+                    "latest_elapsed_ms": 3000,
+                    "latest_since_previous_ms": 3000,
+                    "elapsed_baseline": {
+                        "median_ms": 2500,
+                        "p95_ms": 3000,
+                        "min_ms": 2000,
+                        "max_ms": 3000,
+                    },
+                    "phase_baseline": {
+                        "median_ms": 2500,
+                        "p95_ms": 3000,
+                        "min_ms": 2000,
+                        "max_ms": 3000,
+                    },
+                    "latest_elapsed_vs_p95_pct": 100,
+                    "latest_phase_vs_p95_pct": 100,
+                },
+                "startup": {
+                    "samples": 2,
+                    "latest_ts": 4000,
+                    "latest_elapsed_ms": 10000,
+                    "latest_since_previous_ms": 7000,
+                    "elapsed_baseline": {
+                        "median_ms": 9000,
+                        "p95_ms": 10000,
+                        "min_ms": 8000,
+                        "max_ms": 10000,
+                    },
+                    "phase_baseline": {
+                        "median_ms": 6500,
+                        "p95_ms": 7000,
+                        "min_ms": 6000,
+                        "max_ms": 7000,
+                    },
+                    "latest_elapsed_vs_p95_pct": 100,
+                    "latest_phase_vs_p95_pct": 100,
+                    "latest_details": (
+                        "ready api_key=[redacted] Authorization: [redacted]"
+                    ),
+                },
+            },
+        }
+    ]
+    latest_details = report["startup_timings"][0]["phases"]["startup"]["latest_details"]
+    assert "AKIA123" not in latest_details
+    assert "TOKEN123" not in latest_details
 
 
 def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(

@@ -8,7 +8,7 @@ from collections import Counter, defaultdict, deque
 from pathlib import Path
 from typing import Any
 
-from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes
 from live.event_query import build_event_report, discover_event_files
 
 
@@ -29,6 +29,7 @@ SENSITIVE_LOG_VALUE_PATTERN = re.compile(
     r"([\"']?\s*(?:[:=]|\s)\s*)[\"']?[^,\s;&\"'}]+"
 )
 AUTH_SCHEME_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+STARTUP_TIMING_BASELINE_WINDOW = 20
 
 
 def _open_text(path: Path):
@@ -104,6 +105,151 @@ def _redact_log_text(value: str, *, max_len: int = 500) -> str:
     return text
 
 
+def _non_negative_int(value: Any) -> int | None:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0, parsed)
+
+
+def _nearest_rank(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(int(value) for value in values)
+    rank = max(1, int(len(ordered) * float(percentile) / 100.0 + 0.999999))
+    return ordered[min(len(ordered) - 1, rank - 1)]
+
+
+def _median(values: list[int]) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(int(value) for value in values)
+    midpoint = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[midpoint]
+    return int(round((ordered[midpoint - 1] + ordered[midpoint]) / 2.0))
+
+
+def _ms_summary(values: list[int]) -> dict[str, int | None]:
+    if not values:
+        return {
+            "median_ms": None,
+            "p95_ms": None,
+            "min_ms": None,
+            "max_ms": None,
+        }
+    return {
+        "median_ms": _median(values),
+        "p95_ms": _nearest_rank(values, 95.0),
+        "min_ms": min(values),
+        "max_ms": max(values),
+    }
+
+
+def _usage_pct(value: int | None, budget: int | None) -> int | None:
+    if value is None or budget is None or budget <= 0:
+        return None
+    return int(round(float(value) * 100.0 / float(budget)))
+
+
+def _startup_timing_record(
+    *,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any] | None:
+    if live_event.get("event_type") != EventTypes.BOT_STARTUP_TIMING:
+        return None
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return None
+    phase = str(data.get("phase") or "").strip()
+    if not phase:
+        return None
+    elapsed_ms = _non_negative_int(data.get("elapsed_ms"))
+    since_previous_ms = _non_negative_int(data.get("since_previous_ms"))
+    if elapsed_ms is None and since_previous_ms is None:
+        return None
+    return {
+        "phase": phase,
+        "elapsed_ms": elapsed_ms,
+        "since_previous_ms": since_previous_ms,
+        "details": data.get("details"),
+        "ts": row.get("ts"),
+        "seq": row.get("seq"),
+        "path": str(path),
+        "line": int(line_no),
+    }
+
+
+def _sort_startup_record_key(record: dict[str, Any]) -> tuple[int, int, str, int]:
+    ts = _non_negative_int(record.get("ts"))
+    seq = _non_negative_int(record.get("seq"))
+    return (
+        -1 if ts is None else ts,
+        -1 if seq is None else seq,
+        str(record.get("path") or ""),
+        int(record.get("line") or 0),
+    )
+
+
+def _summarize_startup_timings(
+    records_by_bot: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    summaries: list[dict[str, Any]] = []
+    for bot_key, records in sorted(records_by_bot.items()):
+        phases: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for record in sorted(records, key=_sort_startup_record_key):
+            phases[str(record["phase"])].append(record)
+        phase_summaries: dict[str, dict[str, Any]] = {}
+        for phase, phase_records in sorted(phases.items()):
+            window = phase_records[-STARTUP_TIMING_BASELINE_WINDOW:]
+            latest = window[-1]
+            elapsed_values = [
+                int(record["elapsed_ms"])
+                for record in window
+                if record.get("elapsed_ms") is not None
+            ]
+            phase_values = [
+                int(record["since_previous_ms"])
+                for record in window
+                if record.get("since_previous_ms") is not None
+            ]
+            elapsed_summary = _ms_summary(elapsed_values)
+            phase_summary = _ms_summary(phase_values)
+            latest_elapsed = latest.get("elapsed_ms")
+            latest_phase = latest.get("since_previous_ms")
+            phase_summaries[phase] = {
+                "samples": len(window),
+                "latest_ts": latest.get("ts"),
+                "latest_elapsed_ms": latest_elapsed,
+                "latest_since_previous_ms": latest_phase,
+                "elapsed_baseline": elapsed_summary,
+                "phase_baseline": phase_summary,
+                "latest_elapsed_vs_p95_pct": _usage_pct(
+                    latest_elapsed, elapsed_summary["p95_ms"]
+                ),
+                "latest_phase_vs_p95_pct": _usage_pct(
+                    latest_phase, phase_summary["p95_ms"]
+                ),
+            }
+            details = latest.get("details")
+            if details not in (None, ""):
+                phase_summaries[phase]["latest_details"] = _redact_log_text(
+                    str(details)
+                )
+        summaries.append(
+            {
+                "bot": bot_key,
+                "baseline_window": STARTUP_TIMING_BASELINE_WINDOW,
+                "phases": phase_summaries,
+            }
+        )
+    return summaries
+
+
 def _is_problem_event(live_event: dict[str, Any]) -> bool:
     level = str(live_event.get("level") or "").lower()
     status = str(live_event.get("status") or "").lower()
@@ -142,6 +288,7 @@ def _scan_events(
     )
     problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
     invalid_rows = 0
+    startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
 
     for path in files:
         try:
@@ -194,6 +341,14 @@ def _scan_events(
                         problem_events.append(
                             problem_event
                         )
+                    startup_timing = _startup_timing_record(
+                        row=row,
+                        live_event=live_event,
+                        path=path,
+                        line_no=line_no,
+                    )
+                    if startup_timing is not None:
+                        startup_timing_records[bot_key].append(startup_timing)
         except OSError:
             invalid_rows += 1
 
@@ -218,6 +373,7 @@ def _scan_events(
         "hard_problem_event_count": sum(
             int(value["hard_problem_events"]) for value in bots.values()
         ),
+        "startup_timings": _summarize_startup_timings(startup_timing_records),
     }
 
 
@@ -340,6 +496,7 @@ def build_live_smoke_report(
             "problem_events": [],
             "problem_event_count": 0,
             "hard_problem_event_count": 0,
+            "startup_timings": [],
         }
     log_scan = _scan_logs(
         logs_root,
@@ -375,6 +532,7 @@ def build_live_smoke_report(
             "issues": event_report["issues"],
         },
         "bots": event_scan["bots"],
+        "startup_timings": event_scan["startup_timings"],
         "problem_events": event_scan["problem_events"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,

@@ -59,8 +59,10 @@ Related detailed plans:
    explicit, and produce a reviewable smoke report.
 
 4. [ ] Startup phase budget tracking.
-   Status: partial. Startup timing and warmup cache decision events exist, but
-   durable phase budgets and rolling baselines do not.
+   Status: partial. Startup timing and warmup cache decision events exist, and
+   `live-smoke-report` now summarizes latest startup phase timings with rolling
+   median/p95 baselines from local monitor events. Explicit durable phase budget
+   configuration/events are not implemented.
 
    Startup currently has timing events, but the next step is durable budget
    accounting by phase: account-critical fetches, fill/PnL refresh, active

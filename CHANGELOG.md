@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added startup phase timing baselines to `passivbot tool live-smoke-report`,
+  showing latest phase timings with rolling median/p95 context from local
+  monitor events.
 - Added `passivbot tool live-event-query --trace-summary` for compact aggregate
   summaries of matched live event traces, including event types, statuses,
   reason codes, ids, symbols, and order-wave coverage.
