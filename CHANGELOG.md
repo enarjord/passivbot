@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-event-query --cycle-trace` for offline cycle
+  reconstruction grouped by cycle id, including bounded timeline samples,
+  aggregate event summaries, and nested order traces.
 - Added `passivbot tool live-event-query --order-trace` for offline order
   lifecycle reconstruction grouped by order wave and action ids.
 - Added startup phase timing baselines to `passivbot tool live-smoke-report`,
