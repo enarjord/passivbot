@@ -19,12 +19,13 @@ Last updated: 2026-06-25.
 
 Current `origin/v8` logging-overhaul head:
 
-- `09fd305b` merge of PR #643, `Enrich live health resource summaries`.
+- `521832cc` merge of PR #646, `Improve live event console summaries`.
 
 VPS5 deployment status:
 
 - Deployed through PR #642 at `ad36d8ea`.
-- PR #643 is merged to `v8`; VPS5 pull/restart and health-summary smoke are next.
+- PRs #643-#646 are merged to `v8`; VPS5 pull/restart and live smoke are next
+  when explicitly authorized.
 
 ## Phase Checklist
 
@@ -35,7 +36,7 @@ VPS5 deployment status:
 | Phase 2: data gatherer events | Mostly done | Account remote-call cohorts, candle tail/coverage, fill refresh summaries, cache load/flush, warmup/startup timing | Not every exchange/network call is instrumented; richer remote-call payload summaries remain incremental |
 | Phase 3: Rust planning and payload refs | Partially done | Rust orchestrator called/returned events, redacted error hardening, action/planning summaries | Full raw-ref retention/debug policy still limited |
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
-| Phase 5: migrate meaningful text logs | Not started as a dedicated phase | Some noisy EMA console output already reduced; many text logs now have event equivalents | Redesign console as a projection of structured events; migrate high-value stdlib logs first |
+| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
 | Operator tools | In progress | `live-event-query`, `live-smoke-report`, incident bundle, ID filters | Richer cycle replay and cross-bot incident workflow |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup | Continue separate reviewed PRs for shutdown/warmup improvements |
@@ -214,12 +215,35 @@ VPS5 deployment status:
   `d34241a4`; CI green; local targeted tests passed before merge.
 - VPS5 evidence: pending pull/restart/smoke.
 
+### PR #644: Logging And Ops Progress Tracking
+
+- Branch: `codex/v8-live-logging-progress-tracker`.
+- Scope: process tracking.
+- Result: added this progress ledger and converted the live operations backlog
+  into a living checklist with per-item statuses and a merged-work log.
+
+### PR #645: Reason-Code Registry Slice
+
+- Branch: `codex/v8-reason-code-registry-slice`.
+- Scope: event taxonomy and drift prevention.
+- Result: added shared `EventTags` and `ReasonCodes` registries for common live
+  event tags/reason codes, migrated representative emitters without changing
+  emitted strings, and documented the registry rule.
+
+### PR #646: Console Event Summaries
+
+- Branch: `codex/v8-console-event-summaries`.
+- Scope: Phase 5 console/text projection.
+- Result: improved `format_console_event()` with compact operator-facing tags
+  and typed summaries for order waves, order writes, confirmation results, and
+  Rust planning returns. Routes and console event volume were unchanged.
+
 ## Current Next Steps
 
-1. Pull merged `v8` on VPS5 and restart bots so PR #643 runtime health-summary
-   fields are emitted by live processes.
-2. Verify `health.summary` includes resource pressure and event-pipeline fields
-   without increasing console noise or trading behavior.
-3. Continue Phase 5 with a small console-projection/text-log migration slice, or
-   add the next high-value operator query/replay helper if live smoke shows that
-   debugging still needs better cycle reconstruction.
+1. Pull merged `v8` on VPS5 and restart bots, if explicitly authorized, so PRs
+   #643-#646 are exercised by live processes.
+2. Verify `health.summary` includes resource pressure and event-pipeline fields,
+   and verify event-projected console summaries stay readable.
+3. Continue Phase 5 by migrating one high-value stdlib text log family to
+   structured-event projection, or add a richer cycle/order reconstruction helper
+   if live smoke shows that query tooling is still the sharper need.

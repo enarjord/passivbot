@@ -105,7 +105,7 @@ Related detailed plans:
    with changed HSL configs easier to reason about before live execution.
 
 9. [ ] Reason-code registry.
-   Status: initial registry slice in progress in PR #645.
+   Status: partial. Initial registry slice merged in PR #645.
 
    Centralize reason codes and event tags enough to prevent drift. The stream is
    much easier to search when `stale_ema`, `missing_canonical_candles`,
@@ -121,7 +121,8 @@ Related detailed plans:
    surfaces are touched.
 
 10. [ ] Operator console redesign from events.
-    Status: open.
+    Status: partial. PR #646 improved event-projected summaries for already
+    routed execution events.
 
     Continue moving console output to be a projection of structured events.
     Default console should focus on fills, positions, balance, order writes,
@@ -179,6 +180,8 @@ Related detailed plans:
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
+| 2026-06-25 | #9 Reason-code registry | PR #645 / `31263bb9` | Added shared `EventTags` and `ReasonCodes` registries and migrated representative live event emitters without changing emitted strings | Continue migrating stable literals as nearby event surfaces are touched |
+| 2026-06-25 | #10 Operator console redesign from events | PR #646 / `521832cc` | Improved event-projected console/text summaries for already-routed execution events without changing routes or console event volume | Migrate high-value stdlib text logs to structured-event projections |
 | 2026-06-24 | Operational restart goals | PR #619 / `e71c4f6c` | Improved shutdown progress and bounded shutdown cancel grace coverage | Broader interruptible shutdown contract remains separate work |
 | 2026-06-24 | Operational restart goals | PR #622 / `29eba387` | Improved live startup warm-cache reuse | Deeper cache doctor and budget tracking remain open |
 
@@ -186,10 +189,10 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Event query/timeline CLI.
+1. Richer cycle/order reconstruction on top of `live-event-query`.
 2. Live restart/smoke automation.
 3. Startup phase budget tracking.
-4. Resource pressure telemetry.
+4. Operator console redesign from events.
 5. HSL dry-run preview.
 
 These make every later live debugging session cheaper and provide direct
