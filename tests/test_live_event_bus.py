@@ -155,6 +155,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         assert DEFAULT_ROUTES[event_type].text is False
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
@@ -658,6 +660,7 @@ def test_cycle_events_are_reconstructable_by_cycle_id():
         EventTypes.RUST_ORCHESTRATOR_RETURNED,
         EventTypes.ACTION_PLANNED,
         EventTypes.ORDER_WAVE_COMPLETED,
+        EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
         EventTypes.CYCLE_COMPLETED,
     ):
         pipeline.emit(LiveEvent(event_type, status="succeeded"))
@@ -672,6 +675,7 @@ def test_cycle_events_are_reconstructable_by_cycle_id():
         EventTypes.RUST_ORCHESTRATOR_RETURNED,
         EventTypes.ACTION_PLANNED,
         EventTypes.ORDER_WAVE_COMPLETED,
+        EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
         EventTypes.CYCLE_COMPLETED,
     ]
     assert {event.cycle_id for event in structured.events} == {"cy_1"}

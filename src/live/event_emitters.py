@@ -1501,6 +1501,55 @@ def emit_execution_confirmation_satisfied_event(
         logging.debug("[event] failed to emit confirmation satisfied event: %s", exc)
 
 
+def emit_execution_confirmation_timeout_event(
+    bot: Any,
+    *,
+    wave: dict,
+    confirmations: dict,
+    current_epoch: int,
+    fresh_surfaces: set[str],
+    elapsed_ms: int,
+    confirm_ms: int,
+    timeout_ms: int,
+    level: str = "warning",
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+            level=str(level).lower(),
+            component="execution.confirmation",
+            tags=("execution", "confirmation", "timeout"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
+            status="degraded",
+            reason_code="authoritative_confirmation_timeout",
+            data={
+                "id": int(wave.get("id", 0) or 0),
+                "elapsed_ms": int(elapsed_ms),
+                "confirm_ms": int(confirm_ms),
+                "timeout_ms": int(timeout_ms),
+                "current_epoch": int(current_epoch),
+                "confirmations": {
+                    str(surface): int(epoch)
+                    for surface, epoch in dict(confirmations or {}).items()
+                },
+                "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
+                "pending_surfaces": sorted(
+                    str(surface)
+                    for surface, epoch in dict(confirmations or {}).items()
+                    if surface not in fresh_surfaces or current_epoch < int(epoch)
+                ),
+                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+                "planned_create": int(wave.get("planned_create", 0) or 0),
+                "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
+                "create_posted": int(wave.get("create_posted", 0) or 0),
+                "symbols": list(wave.get("symbols") or []),
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit confirmation timeout event: %s", exc)
+
+
 def emit_balance_changed_event(
     bot: Any,
     *,
