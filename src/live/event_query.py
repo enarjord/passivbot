@@ -73,6 +73,22 @@ def _event_ids(live_event: dict[str, Any]) -> dict[str, Any]:
     return dict(ids) if isinstance(ids, dict) else {}
 
 
+def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
+    if values is None:
+        return set()
+    if isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = list(values)
+    out: set[str] = set()
+    for value in raw_values:
+        for part in str(value).split(","):
+            cleaned = part.strip()
+            if cleaned:
+                out.add(cleaned)
+    return out
+
+
 def _compact_record(
     *,
     path: Path,
@@ -108,6 +124,7 @@ def build_event_report(
     root: str | Path,
     *,
     cycle_id: str | None = None,
+    event_type: str | Iterable[str] | None = None,
     limit: int = 200,
     include_data: bool = False,
     include_rotated: bool = False,
@@ -133,7 +150,11 @@ def build_event_report(
     missing_cycle_id = 0
     cycle_events: list[dict[str, Any]] = []
     cycle_match_count = 0
+    query_events: list[dict[str, Any]] = []
+    query_match_count = 0
     max_events = max(0, int(limit))
+    event_type_filter = _normalize_filter_values(event_type)
+    has_query_filter = bool(event_type_filter)
 
     for path in files:
         try:
@@ -174,8 +195,8 @@ def build_event_report(
                         continue
                     live_events += 1
 
-                    event_type = live_event.get("event_type") or row.get("kind")
-                    if not event_type:
+                    record_event_type = live_event.get("event_type") or row.get("kind")
+                    if not record_event_type:
                         issues.append(
                             EventIssue(
                                 str(path),
@@ -186,16 +207,16 @@ def build_event_report(
                             )
                         )
                     else:
-                        event_type = str(event_type)
-                        event_type_counts[event_type] += 1
-                        if row.get("kind") and str(row.get("kind")) != event_type:
+                        record_event_type = str(record_event_type)
+                        event_type_counts[record_event_type] += 1
+                        if row.get("kind") and str(row.get("kind")) != record_event_type:
                             issues.append(
                                 EventIssue(
                                     str(path),
                                     line_no,
                                     "warning",
                                     "kind_event_type_mismatch",
-                                    f"kind={row.get('kind')} event_type={event_type}",
+                                    f"kind={row.get('kind')} event_type={record_event_type}",
                                 )
                             )
 
@@ -218,7 +239,30 @@ def build_event_report(
                     else:
                         record_cycle_id = str(record_cycle_id)
                         cycle_counts[record_cycle_id] += 1
-                    if cycle_id is not None and record_cycle_id == str(cycle_id):
+
+                    event_type_matches = (
+                        not event_type_filter
+                        or (
+                            record_event_type is not None
+                            and str(record_event_type) in event_type_filter
+                        )
+                    )
+                    cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
+                    query_matches = event_type_matches and cycle_matches
+
+                    if has_query_filter and query_matches:
+                        query_match_count += 1
+                        if len(query_events) < max_events:
+                            query_events.append(
+                                _compact_record(
+                                    path=path,
+                                    line_no=line_no,
+                                    row=row,
+                                    live_event=live_event,
+                                    include_data=include_data,
+                                )
+                            )
+                    if cycle_id is not None and query_matches:
                         cycle_match_count += 1
                         if len(cycle_events) < max_events:
                             cycle_events.append(
@@ -256,11 +300,24 @@ def build_event_report(
             for key, value in cycle_counts.most_common(20)
         ],
     }
+    if has_query_filter:
+        report["query"] = {
+            "filters": {
+                "event_types": sorted(event_type_filter),
+                **({"cycle_id": str(cycle_id)} if cycle_id is not None else {}),
+            },
+            "matched_events": query_match_count,
+            "events_truncated": query_match_count > len(query_events),
+            "events": query_events,
+        }
     if cycle_id is not None:
         report["cycle"] = {
             "cycle_id": str(cycle_id),
+            "event_types": sorted(event_type_filter) if event_type_filter else None,
             "matched_events": cycle_match_count,
             "events_truncated": cycle_match_count > len(cycle_events),
             "events": cycle_events,
         }
+        if not event_type_filter:
+            report["cycle"].pop("event_types", None)
     return report

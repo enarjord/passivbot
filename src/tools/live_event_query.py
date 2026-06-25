@@ -24,6 +24,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--cycle-id", help="Return compact records for one cycle_id.")
     parser.add_argument(
+        "--event-type",
+        "--kind",
+        dest="event_types",
+        action="append",
+        help=(
+            "Return compact records matching one event type. May be repeated or "
+            "comma-separated; --kind is accepted as an alias for monitor terminology."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=200,
@@ -56,6 +66,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_event_report(
         args.path,
         cycle_id=args.cycle_id,
+        event_type=args.event_types,
         limit=args.limit,
         include_data=bool(args.include_data),
         include_rotated=bool(args.include_rotated),
