@@ -1102,6 +1102,7 @@ def _emit_cache_load_completed_event_unchecked(
         "legacy_days",
         "merged_days",
         "elapsed_ms",
+        "suppressed_count",
     ):
         value = _safe_int(data_in.get(key))
         if value is not None:
