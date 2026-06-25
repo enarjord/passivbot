@@ -56,6 +56,12 @@ Related detailed plans:
    after short-downtime restarts.
 
 5. Resource pressure telemetry.
+   Initial implementation: `health.summary` events now include process RSS,
+   memory percent when available, open file descriptor count, system load
+   averages, CPU count, and live-event pipeline queue/drop/sink error counters.
+   Remaining refinements include exchange-call counts, candle-fetch concurrency,
+   loop lag, thresholded console warnings, and richer system memory/swap fields.
+
    VPS5 repeatedly showed tight memory, swap usage, and high load during
    restarts. Add low-frequency process/system resource events: RSS, open file
    count, event queue depth, event drops, exchange-call counts, candle-fetch

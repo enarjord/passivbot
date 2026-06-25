@@ -703,6 +703,90 @@ def test_health_summary_event_emitter_records_payload():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
+    import passivbot as pb_mod
+
+    class FakePipeline:
+        def health_snapshot(self):
+            return {
+                "event_queue_depth": 3,
+                "event_queue_maxsize": 100,
+                "event_dropped_total": 2,
+                "event_drop_counts": {"remote_call.started": 2},
+                "event_sink_error_total": 1,
+                "event_sink_error_counts": {"monitor": 1},
+                "event_degraded_count": 4,
+                "event_pipeline_worker_alive": True,
+            }
+
+    class FakeBot:
+        _build_health_summary_payload = pb_mod.Passivbot._build_health_summary_payload
+
+        def __init__(self):
+            self.positions = {
+                "BTC/USDT:USDT": {
+                    "long": {"size": 0.01},
+                    "short": {"size": 0.0},
+                },
+                "ETH/USDT:USDT": {
+                    "long": {"size": 0.0},
+                    "short": {"size": -0.02},
+                },
+            }
+            self._health_start_ms = 100_000
+            self._last_loop_duration_ms = 1234
+            self._monitor_last_equity = 1001.0
+            self._health_orders_placed = 5
+            self._health_orders_cancelled = 2
+            self._health_fills = 7
+            self._health_pnl = 8.5
+            self._health_ws_reconnects = 1
+            self._health_rate_limits = 2
+            self.error_counts = [159_000, 10_000]
+            self._live_event_pipeline = FakePipeline()
+
+        def get_raw_balance(self):
+            return 1000.0
+
+        def get_hysteresis_snapped_balance(self):
+            return 999.0
+
+    monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_rss_bytes", lambda: 123456)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_get_process_memory_percent", lambda: 12.5)
+    monkeypatch.setattr(pb_mod.pb_monitor, "_get_open_fd_count", lambda: 42)
+    monkeypatch.setattr(
+        pb_mod.pb_monitor,
+        "_get_loadavg_payload",
+        lambda: {
+            "loadavg_1m": 1.5,
+            "loadavg_5m": 1.25,
+            "loadavg_15m": 1.0,
+            "cpu_count": 1,
+        },
+    )
+
+    payload = FakeBot()._build_health_summary_payload(now_ms=160_000)
+
+    assert payload["uptime_ms"] == 60_000
+    assert payload["positions_long"] == 1
+    assert payload["positions_short"] == 1
+    assert payload["rss_bytes"] == 123456
+    assert payload["memory_percent"] == 12.5
+    assert payload["open_fds"] == 42
+    assert payload["loadavg_1m"] == 1.5
+    assert payload["loadavg_5m"] == 1.25
+    assert payload["loadavg_15m"] == 1.0
+    assert payload["cpu_count"] == 1
+    assert payload["event_queue_depth"] == 3
+    assert payload["event_queue_maxsize"] == 100
+    assert payload["event_dropped_total"] == 2
+    assert payload["event_drop_counts"] == {"remote_call.started": 2}
+    assert payload["event_sink_error_total"] == 1
+    assert payload["event_sink_error_counts"] == {"monitor": 1}
+    assert payload["event_degraded_count"] == 4
+    assert payload["event_pipeline_worker_alive"] is True
+
+
 def test_log_health_summary_emits_structured_event(caplog, monkeypatch):
     import passivbot as pb_mod
 
