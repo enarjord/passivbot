@@ -119,9 +119,12 @@ Related detailed plans:
    - 2026-06-25: Added shared `EventTags` and `ReasonCodes` registries for
      common live-event tags/reason codes, migrated representative emitters
      without changing emitted strings, and added registry contract tests.
+   - 2026-06-25: Added a focused AI doc for the live event tag/reason-code
+     registry plus a docs drift test so stable values stay discoverable.
 
    Remaining refinements: migrate additional stable literals as nearby event
-   surfaces are touched.
+   surfaces are touched, and expand the docs when new stable query-facing values
+   are added.
 
 10. [ ] Operator console redesign from events.
     Status: partial. PR #646 improved event-projected summaries for already
