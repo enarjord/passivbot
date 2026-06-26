@@ -79,6 +79,14 @@ PROCESS_REPORT_FIELDS = {
 }
 
 
+def _resolve_path(path: str | Path) -> Path:
+    candidate = Path(path).expanduser()
+    try:
+        return candidate.resolve()
+    except OSError:
+        return candidate.absolute()
+
+
 def _open_text(path: Path):
     if path.name.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
@@ -675,6 +683,102 @@ def _ps_process_rows() -> tuple[list[str], str | None]:
             continue
         return result.stdout.splitlines(), None
     return [], last_error or "ps_failed"
+
+
+def _find_repository_root(
+    monitor_root: str | Path,
+    *,
+    repo_root: str | Path | None,
+) -> Path:
+    if repo_root is not None:
+        return _resolve_path(repo_root)
+
+    starts: list[Path] = []
+    monitor_path = _resolve_path(monitor_root)
+    starts.append(monitor_path.parent if monitor_path.name == "monitor" else monitor_path)
+    starts.append(_resolve_path(Path.cwd()))
+
+    seen: set[Path] = set()
+    for start in starts:
+        for ancestor in (start, *start.parents):
+            if ancestor in seen:
+                continue
+            seen.add(ancestor)
+            if (ancestor / ".git").exists():
+                return ancestor
+    return starts[0]
+
+
+def _git_output(
+    repo_root: Path,
+    args: list[str],
+    *,
+    timeout: float = 2.0,
+) -> tuple[str | None, str | None]:
+    try:
+        result = subprocess.run(
+            ["git", *args],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        return None, f"git_failed:{exc.__class__.__name__}"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or f"git_exit_{result.returncode}").strip()
+        return None, _redact_log_text(detail, max_len=300)
+    return result.stdout.strip(), None
+
+
+def _build_repository_report(
+    monitor_root: str | Path,
+    *,
+    repo_root: str | Path | None,
+) -> dict[str, Any]:
+    root = _find_repository_root(monitor_root, repo_root=repo_root)
+    report: dict[str, Any] = {
+        "root": str(root),
+        "is_git_repo": False,
+        "branch": None,
+        "head": None,
+        "head_full": None,
+        "dirty": None,
+        "tracked_changes": None,
+        "error": None,
+    }
+    inside_work_tree, error = _git_output(root, ["rev-parse", "--is-inside-work-tree"])
+    if error is not None or inside_work_tree != "true":
+        report["error"] = error
+        return report
+
+    report["is_git_repo"] = True
+    errors: list[str] = []
+    head_full, error = _git_output(root, ["rev-parse", "HEAD"])
+    if error is None:
+        report["head_full"] = head_full
+    else:
+        errors.append(f"head:{error}")
+    head, error = _git_output(root, ["rev-parse", "--short", "HEAD"])
+    if error is None:
+        report["head"] = head
+    else:
+        errors.append(f"head_short:{error}")
+    branch, error = _git_output(root, ["rev-parse", "--abbrev-ref", "HEAD"])
+    if error is None:
+        report["branch"] = branch
+    else:
+        errors.append(f"branch:{error}")
+    status, error = _git_output(root, ["status", "--porcelain", "--untracked-files=no"])
+    if error is None:
+        changes = [line for line in (status or "").splitlines() if line.strip()]
+        report["dirty"] = bool(changes)
+        report["tracked_changes"] = len(changes)
+    else:
+        errors.append(f"status:{error}")
+    report["error"] = ";".join(errors) or None
+    return report
 
 
 def _float_or_none(value: str) -> float | None:
@@ -1393,6 +1497,7 @@ def build_live_smoke_report(
     monitor_root: str | Path = "monitor",
     *,
     logs_root: str | Path | None = "logs",
+    repo_root: str | Path | None = None,
     include_processes: bool = False,
     supervisor_config: str | Path | None = None,
     process_command_match: str = DEFAULT_PROCESS_MATCH,
@@ -1466,6 +1571,7 @@ def build_live_smoke_report(
         supervisor_config=supervisor_config,
         process_command_match=process_command_match,
     )
+    repository_report = _build_repository_report(monitor_root, repo_root=repo_root)
     hard_failures = (
         int(event_report["error_count"])
         + int(event_scan["invalid_rows"])
@@ -1505,4 +1611,5 @@ def build_live_smoke_report(
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
         "processes": process_report,
+        "repository": repository_report,
     }
