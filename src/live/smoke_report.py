@@ -2298,3 +2298,121 @@ def summarize_live_smoke_report(
         ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
     }
+
+
+def _count_value(value: Any) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    return {
+        key: value
+        for key, value in {
+            "total": _count_value(summary.get("total")),
+            "succeeded": _count_value(summary.get("succeeded")),
+            "failed": _count_value(summary.get("failed")),
+            "throttled": _count_value(summary.get("throttled")),
+            "failure_pct": summary.get("failure_pct"),
+            "throttled_pct": summary.get("throttled_pct"),
+        }.items()
+        if value is not None
+    }
+
+
+def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
+    """Project a full smoke report into top-level smoke-loop counters."""
+
+    logs = report.get("logs") if isinstance(report.get("logs"), dict) else {}
+    processes = (
+        report.get("processes") if isinstance(report.get("processes"), dict) else {}
+    )
+    repository = (
+        report.get("repository") if isinstance(report.get("repository"), dict) else {}
+    )
+    monitor = report.get("monitor") if isinstance(report.get("monitor"), dict) else {}
+    risk_events = (
+        report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+    event_window = (
+        report.get("event_window") if isinstance(report.get("event_window"), dict) else {}
+    )
+    return {
+        "ok": bool(report.get("ok")),
+        "attention": bool(report.get("attention")),
+        "hard_failures": _count_value(report.get("hard_failures")),
+        "attention_count": _count_value(report.get("attention_count")),
+        "repository": {
+            key: repository.get(key)
+            for key in ("branch", "head", "dirty", "tracked_changes")
+            if key in repository
+        },
+        "monitor": {
+            key: monitor.get(key)
+            for key in (
+                "files_scanned",
+                "records_total",
+                "live_events",
+                "legacy_events",
+                "error_count",
+                "warning_count",
+            )
+            if key in monitor
+        },
+        "event_window": {
+            key: event_window.get(key)
+            for key in (
+                "since_ms",
+                "until_ms",
+                "events_considered",
+                "events_skipped_before",
+                "events_skipped_after",
+                "invalid_window_ts",
+            )
+            if key in event_window
+        },
+        "processes": {
+            key: processes.get(key)
+            for key in (
+                "enabled",
+                "ok",
+                "hard_failures",
+                "expected_total",
+                "matched_expected",
+                "running_live_total",
+                "scan_error",
+            )
+            if key in processes
+        }
+        | {
+            "missing_expected_count": len(processes.get("missing_expected") or []),
+            "unexpected_running_count": len(processes.get("unexpected_running") or []),
+        },
+        "logs": {
+            "files_scanned": _count_value(logs.get("files_scanned")),
+            "hard_matches": _count_value(logs.get("hard_matches")),
+            "attention_matches": _count_value(logs.get("attention_matches")),
+            "dropped_unparsed_attention_matches": _count_value(
+                logs.get("dropped_unparsed_attention_matches")
+            ),
+            "dropped_unparsed_hard_matches": _count_value(
+                logs.get("dropped_unparsed_hard_matches")
+            ),
+        },
+        "problem_events": {
+            "total": _count_value(report.get("problem_event_count")),
+            "hard": _count_value(report.get("hard_problem_event_count")),
+        },
+        "remote_calls": _brief_remote_call_health(report.get("remote_call_health")),
+        "account_critical_remote_calls": _brief_remote_call_health(
+            report.get("account_critical_remote_call_health")
+        ),
+        "risk_events": {
+            "total": _count_value(risk_events.get("total")),
+            "event_types": risk_events.get("event_types") or {},
+        },
+    }

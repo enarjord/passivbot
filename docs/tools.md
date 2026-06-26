@@ -135,6 +135,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool monitor-web`
 - `passivbot tool monitor-tui`
 - `passivbot tool monitor-dev`
+- `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
+  operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
+  `--brief` for top-level counters suitable for repeated VPS smoke loops.
 
 ## Exchange Helpers
 
