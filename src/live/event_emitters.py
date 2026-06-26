@@ -1882,6 +1882,59 @@ def _execution_event_ids(
     return order_wave_id, action_id
 
 
+def emit_execution_create_filter_event(
+    bot: Any,
+    *,
+    event_type: str,
+    status: str,
+    reason_code: str,
+    order_count: int,
+    symbols: Any,
+    wave: dict | None = None,
+    level: str = "debug",
+    message: str | None = None,
+    data: dict | None = None,
+) -> None:
+    """Emit a bounded event for create orders filtered before exchange write."""
+    try:
+        order_wave_id, _action_id = _execution_event_ids(
+            wave, action="create", index=None
+        )
+        try:
+            symbol_values = sorted({str(symbol) for symbol in symbols or [] if symbol})
+        except TypeError:
+            symbol_values = [str(symbols)]
+        payload = dict(data or {})
+        payload.update(
+            {
+                "order_count": max(0, int(order_count)),
+                "symbols": symbol_values[:12],
+                "symbols_count": len(symbol_values),
+                "symbols_truncated": len(symbol_values) > 12,
+            }
+        )
+        bot._emit_live_event(
+            event_type,
+            level=level,
+            component="execution.create_filter",
+            tags=(EventTags.EXECUTION, EventTags.ORDER, EventTags.GATE, "create"),
+            cycle_id=bot._current_live_event_cycle_id(),
+            order_wave_id=order_wave_id,
+            status=status,
+            reason_code=reason_code,
+            message=message,
+            data={key: value for key, value in payload.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit execution create filter event type=%s status=%s reason=%s: %s",
+            event_type,
+            status,
+            reason_code,
+            exc,
+        )
+
+
 def emit_execution_order_event(
     bot: Any,
     *,

@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from ccxt.base.errors import BadRequest, RateLimitExceeded
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
 
 class FreshPlanningSnapshot:
@@ -544,6 +545,13 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
     import passivbot as pb_mod
 
     class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
         debug_mode = False
         balance_threshold = 1.0
         quote = "USDT"
@@ -551,6 +559,12 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
         state_change_detected_by_symbol = set()
 
         def __init__(self):
+            self._live_event_current_cycle_id = "cy_low_balance"
+            self._live_event_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink],
+                monitor_sinks=[],
+            )
             self.cancel_called = False
             self.create_called = False
             self.config_called = False
@@ -593,16 +607,27 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
             self.create_called = True
             return []
 
-        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
-
     bot = FakeBot()
     with caplog.at_level(logging.INFO):
         await pb_mod.Passivbot.execute_to_exchange(bot)
 
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot.cancel_called
     assert not bot.config_called
     assert not bot.create_called
     assert bot.execution_scheduled is True
+    skipped_events = [
+        event
+        for event in bot._live_event_sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(skipped_events) == 1
+    assert skipped_events[0].cycle_id == "cy_low_balance"
+    assert skipped_events[0].status == "skipped"
+    assert skipped_events[0].reason_code == ReasonCodes.LOW_BALANCE
+    assert skipped_events[0].data["order_count"] == 1
+    assert skipped_events[0].data["symbols"] == ["BTC/USDT:USDT"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
     assert any(
         "skipped 1 exposure-increasing order creates" in record.message
         for record in caplog.records
@@ -812,6 +837,244 @@ async def test_execute_to_exchange_configures_only_symbols_with_creations():
 
 
 @pytest.mark.asyncio
+async def test_execute_to_exchange_emits_recent_execution_deferred_event():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_recent_execution"
+            self._live_event_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink],
+                monitor_sinks=[],
+            )
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        async def execution_cycle(self):
+            return None
+
+        async def calc_orders_to_cancel_and_create(self):
+            return [], [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                },
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                },
+            ]
+
+        async def execute_cancellations_parent(self, orders):
+            return []
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = symbols
+            return set(symbols or [])
+
+        def get_raw_balance(self):
+            return 1.0
+
+        def order_was_recently_updated(self, order):
+            if order["symbol"] == "BTC/USDT:USDT":
+                return 5_000
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return []
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_to_exchange(bot)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot.config_symbols == ["ETH/USDT:USDT"]
+    assert [order["symbol"] for order in bot.created_orders] == ["ETH/USDT:USDT"]
+    deferred_events = [
+        event
+        for event in bot._live_event_sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_DEFERRED
+    ]
+    assert len(deferred_events) == 1
+    assert deferred_events[0].cycle_id == "cy_recent_execution"
+    assert deferred_events[0].status == "deferred"
+    assert deferred_events[0].reason_code == ReasonCodes.RECENT_EXECUTION
+    assert deferred_events[0].data["order_count"] == 1
+    assert deferred_events[0].data["symbols"] == ["BTC/USDT:USDT"]
+    assert deferred_events[0].data["max_delay_ms"] == 5_000
+    assert bot.execution_scheduled is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_execute_to_exchange_emits_state_change_skipped_event():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+        debug_mode = False
+        balance_threshold = 0.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = {"BTC/USDT:USDT"}
+        config = {"live": {}, "_raw_effective": {"live": {}}}
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_state_change"
+            self._live_event_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink],
+                monitor_sinks=[],
+            )
+            self.config_symbols = None
+            self.created_orders = None
+            self.execution_scheduled = False
+            self._current_planning_snapshot = FreshPlanningSnapshot()
+            self.market_snapshot_provider = FreshMarketSnapshotProvider()
+
+        async def execution_cycle(self):
+            return None
+
+        async def calc_orders_to_cancel_and_create(self):
+            return [], [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                },
+                {
+                    "symbol": "ETH/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                },
+            ]
+
+        async def execute_cancellations_parent(self, orders):
+            return []
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_symbols = symbols
+            return set(symbols or [])
+
+        def get_raw_balance(self):
+            return 1.0
+
+        def order_was_recently_updated(self, order):
+            return 0
+
+        async def execute_orders_parent(self, orders):
+            self.created_orders = list(orders)
+            return []
+
+        def _current_planning_snapshot_invalid_for_creations(self, symbols):
+            return []
+
+        async def _get_live_market_snapshots(
+            self,
+            symbols,
+            *,
+            max_age_ms=10_000,
+            context="live",
+            allow_completed_candle_fallback=False,
+        ):
+            return await self.market_snapshot_provider.get_snapshots(
+                symbols, max_age_ms=max_age_ms
+            )
+
+        def _live_market_snapshot_max_age_ms(self):
+            return 10_000
+
+        def _record_market_snapshot_surface(self, symbols, snapshots):
+            return None
+
+        def _market_snapshot_signature_invalid(self, symbols):
+            return []
+
+        _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
+
+    bot = FakeBot()
+    await pb_mod.Passivbot.execute_to_exchange(bot)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot.config_symbols == ["ETH/USDT:USDT"]
+    assert [order["symbol"] for order in bot.created_orders] == ["ETH/USDT:USDT"]
+    skipped_events = [
+        event
+        for event in bot._live_event_sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(skipped_events) == 1
+    assert skipped_events[0].cycle_id == "cy_state_change"
+    assert skipped_events[0].status == "skipped"
+    assert skipped_events[0].reason_code == ReasonCodes.STATE_CHANGE_DETECTED
+    assert skipped_events[0].data["order_count"] == 1
+    assert skipped_events[0].data["symbols"] == ["BTC/USDT:USDT"]
+    assert skipped_events[0].data["blocked_symbols_count"] == 1
+    assert bot.execution_scheduled is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle():
     import passivbot as pb_mod
 
@@ -882,7 +1145,7 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
             "symbol": symbol,
             "side": "sell",
             "position_side": "long",
-            "price": 100.0,
+            "price": 1.0,
             "qty": 1.0,
             "reduce_only": True,
         }
@@ -892,7 +1155,7 @@ async def test_execute_order_plan_posts_replacement_matching_cancel_same_cycle()
             "symbol": symbol,
             "side": "sell",
             "position_side": "long",
-            "price": 100.0,
+            "price": 1.0,
             "qty": 1.0,
             "reduce_only": True,
             "pb_order_type": "close_grid_long",
@@ -913,6 +1176,13 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
     import passivbot as pb_mod
 
     class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
         debug_mode = False
         balance_threshold = 0.0
         quote = "USDT"
@@ -921,6 +1191,12 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
 
         def __init__(self):
             self.stop_signal_received = False
+            self._live_event_current_cycle_id = "cy_pending_config"
+            self._live_event_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink],
+                monitor_sinks=[],
+            )
             self.config_symbols = None
             self.created_orders = None
             self._current_planning_snapshot = FreshPlanningSnapshot()
@@ -992,10 +1268,23 @@ async def test_execute_to_exchange_skips_creations_pending_exchange_config():
             return []
 
         _ensure_freshness_ledger = pb_mod.Passivbot._ensure_freshness_ledger
-        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
     bot = FakeBot()
     await pb_mod.Passivbot.execute_to_exchange(bot)
 
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
     assert bot.config_symbols == ["PENDING/USDT:USDT", "READY/USDT:USDT"]
     assert [order["symbol"] for order in bot.created_orders] == ["READY/USDT:USDT"]
+    skipped_events = [
+        event
+        for event in bot._live_event_sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(skipped_events) == 1
+    assert skipped_events[0].cycle_id == "cy_pending_config"
+    assert skipped_events[0].status == "skipped"
+    assert skipped_events[0].reason_code == ReasonCodes.PENDING_EXCHANGE_CONFIG
+    assert skipped_events[0].data["order_count"] == 1
+    assert skipped_events[0].data["symbols"] == ["PENDING/USDT:USDT"]
+    assert skipped_events[0].data["pending_symbols_count"] == 1
+    assert bot._live_event_pipeline.close(timeout=2.0) is True

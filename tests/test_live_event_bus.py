@@ -199,6 +199,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         assert DEFAULT_ROUTES[event_type].text is False
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].console is False
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
@@ -691,6 +693,28 @@ def test_console_format_summarizes_order_write_without_raw_payload():
         "[order] succeeded cycle=cy_3 wave=ow_2 side=buy type=limit "
         "qty=1.23456789 price=88.7654321 exchange_status=open "
         "order_id=abc123 client_id=pbot_456 symbol=AAVE/USDT:USDT pside=long"
+    )
+
+
+def test_console_format_summarizes_create_filter_payload():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="cy_8",
+        order_wave_id="ow_4",
+        reason_code=ReasonCodes.PENDING_EXCHANGE_CONFIG,
+        message="create orders skipped while exchange config update is pending",
+        data={
+            "order_count": 2,
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[gate] skipped cycle=cy_8 wave=ow_4 orders=2 "
+        "symbols=BTC/USDT:USDT,ETH/USDT:USDT "
+        "reason=pending_exchange_config "
+        "create orders skipped while exchange config update is pending"
     )
 
 

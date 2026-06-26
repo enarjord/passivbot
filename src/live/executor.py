@@ -74,6 +74,10 @@ def _order_is_protective_create(order: dict) -> bool:
     return _order_is_reduce_only(order) or _order_is_panic(order)
 
 
+def _symbols_from_orders(orders: list[dict]) -> list[str]:
+    return sorted(str(order["symbol"]) for order in orders if order.get("symbol"))
+
+
 def _create_rejection_reason(result) -> str:
     if isinstance(result, BaseException):
         return "result_exception"
@@ -179,6 +183,24 @@ async def execute_order_plan(
             ]
             if order_wave is not None:
                 order_wave["skipped_create"] += len(blocked_creates)
+            if blocked_creates:
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                    status="skipped",
+                    reason_code=ReasonCodes.LOW_BALANCE,
+                    order_count=len(blocked_creates),
+                    symbols=_symbols_from_orders(blocked_creates),
+                    wave=order_wave,
+                    message="exposure-increasing creates skipped because balance is below threshold",
+                    data={
+                        "raw_balance": raw_balance,
+                        "balance_threshold": balance_threshold,
+                        "quote": bot.quote,
+                        "allowed_cancel": len(to_cancel),
+                        "allowed_protective_create": len(to_create),
+                    },
+                )
             logging.info(
                 "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
                 "allowing %d cancellations and %d protective creates",
@@ -210,12 +232,14 @@ async def execute_order_plan(
             )
     else:
         to_create_mod = []
+        recent_execution_deferred: list[tuple[dict, float]] = []
         for order in to_create:
             xf_log = (
                 f"{passivbot_cls._log_symbol(order['symbol'])} {order['side']} "
                 f"{order['position_side']} {order['qty']} @ {order['price']}"
             )
             if delay_time_ms := bot.order_was_recently_updated(order):
+                recent_execution_deferred.append((order, float(delay_time_ms)))
                 logging.info(
                     "[order] recent execution found; delaying for up to %.1f secs: %s",
                     delay_time_ms / 1000,
@@ -223,15 +247,58 @@ async def execute_order_plan(
                 )
             else:
                 to_create_mod.append(order)
+        if recent_execution_deferred:
+            passivbot_cls._emit_execution_create_filter_event(
+                bot,
+                event_type=EventTypes.EXECUTION_CREATE_DEFERRED,
+                status="deferred",
+                reason_code=ReasonCodes.RECENT_EXECUTION,
+                order_count=len(recent_execution_deferred),
+                symbols=_symbols_from_orders(
+                    [order for order, _delay in recent_execution_deferred]
+                ),
+                wave=order_wave,
+                message="create orders deferred because a matching recent execution exists",
+                data={
+                    "max_delay_ms": int(
+                        max(delay for _order, delay in recent_execution_deferred)
+                    ),
+                    "delays_sample_ms": [
+                        int(delay)
+                        for _order, delay in recent_execution_deferred[:8]
+                    ],
+                },
+            )
         if order_wave is not None:
             order_wave["deferred_create"] += max(0, len(to_create) - len(to_create_mod))
         if bot.state_change_detected_by_symbol:
+            state_filtered_orders = [
+                order
+                for order in to_create_mod
+                if order["symbol"] in bot.state_change_detected_by_symbol
+            ]
             logging.info(
                 "[order] state change detected; skipping order creation for %s until next cycle",
                 passivbot_cls._log_symbols(
                     sorted(bot.state_change_detected_by_symbol), limit=12
                 ),
             )
+            if state_filtered_orders:
+                passivbot_cls._emit_execution_create_filter_event(
+                    bot,
+                    event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                    status="skipped",
+                    reason_code=ReasonCodes.STATE_CHANGE_DETECTED,
+                    order_count=len(state_filtered_orders),
+                    symbols=_symbols_from_orders(state_filtered_orders),
+                    wave=order_wave,
+                    message="create orders skipped until authoritative state settles",
+                    data={
+                        "blocked_symbols_count": len(
+                            bot.state_change_detected_by_symbol
+                        )
+                    },
+                )
             before_state_filter = len(to_create_mod)
             to_create_mod = [
                 order
@@ -252,10 +319,29 @@ async def execute_order_plan(
                 set(creation_symbols) - set(configured_symbols or set())
             )
             if pending_config:
+                pending_config_orders = [
+                    order for order in to_create_mod if order["symbol"] in pending_config
+                ]
                 logging.warning(
                     "[config] skipping order creation for symbols pending exchange config: %s",
                     passivbot_cls._log_symbols(pending_config, limit=12),
                 )
+                if pending_config_orders:
+                    passivbot_cls._emit_execution_create_filter_event(
+                        bot,
+                        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+                        status="skipped",
+                        reason_code=ReasonCodes.PENDING_EXCHANGE_CONFIG,
+                        order_count=len(pending_config_orders),
+                        symbols=_symbols_from_orders(pending_config_orders),
+                        wave=order_wave,
+                        level="warning",
+                        message="create orders skipped while exchange config update is pending",
+                        data={
+                            "configured_symbols_count": len(configured_symbols or set()),
+                            "pending_symbols_count": len(pending_config),
+                        },
+                    )
                 before_config_filter = len(to_create_mod)
                 to_create_mod = [
                     order
