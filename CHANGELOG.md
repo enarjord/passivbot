@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added account-critical remote-call health summaries to
+  `passivbot tool live-smoke-report`, isolating balance, position, and
+  open-order endpoint health from broader candle/fill traffic.
 - Added top-level success, failure, and throttle totals to remote-call health
   summaries in `passivbot tool live-smoke-report`.
 - Added remote-call health rollups to `passivbot tool live-smoke-report`,
