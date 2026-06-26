@@ -44,6 +44,7 @@ DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
+REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 RISK_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
@@ -53,6 +54,11 @@ RISK_EVENT_TYPES = {
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
+}
+REMOTE_CALL_TIMING_EVENT_TYPES = {
+    EventTypes.REMOTE_CALL_SUCCEEDED,
+    EventTypes.REMOTE_CALL_FAILED,
+    EventTypes.REMOTE_CALL_THROTTLED,
 }
 PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
     EventTypes.CYCLE_DEGRADED: ("details", "authoritative_epoch"),
@@ -327,6 +333,143 @@ def _summarize_remote_call_failures(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > REMOTE_CALL_FAILURE_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _remote_call_timing_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any] | None:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
+    if elapsed_ms is None:
+        return None
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "reason_code": live_event.get("reason_code"),
+        "surface": payload.get("surface"),
+        "kind": payload.get("kind"),
+        "error_type": payload.get("error_type"),
+        "component": live_event.get("component"),
+        "status": live_event.get("status"),
+        "symbol": live_event.get("symbol"),
+        "count": 1,
+        "elapsed_values": [elapsed_ms],
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_elapsed_ms": elapsed_ms,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "remote_call_id", "remote_call_group_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_remote_call_timing_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("event_type"),
+        group.get("reason_code"),
+        group.get("surface"),
+        group.get("kind"),
+        group.get("error_type"),
+        group.get("component"),
+        group.get("status"),
+        group.get("symbol"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_elapsed_ms",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _remote_call_timing_sort_key(
+    group: dict[str, Any],
+) -> tuple[int, int, int, int, str, str]:
+    summary = _ms_summary(
+        [
+            int(value)
+            for value in (group.get("elapsed_values") or [])
+            if _non_negative_int(value) is not None
+        ]
+    )
+    return (
+        -int(summary.get("p95_ms") or 0),
+        -int(summary.get("max_ms") or 0),
+        -int(group.get("count", 0)),
+        -int(_non_negative_int(group.get("latest_ts")) or 0),
+        str(group.get("bot") or ""),
+        str(group.get("reason_code") or ""),
+    )
+
+
+def _summarize_remote_call_timings(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(groups.values(), key=_remote_call_timing_sort_key)
+    compact_groups = []
+    for group in ordered[:REMOTE_CALL_TIMING_GROUP_LIMIT]:
+        compact = {
+            key: value
+            for key, value in group.items()
+            if key
+            not in {
+                "elapsed_values",
+                "latest_path",
+                "latest_line",
+                "latest_seq",
+            }
+            and value not in (None, {}, [])
+        }
+        compact["elapsed_ms"] = _ms_summary(
+            [
+                int(value)
+                for value in (group.get("elapsed_values") or [])
+                if _non_negative_int(value) is not None
+            ]
+        )
+        compact_groups.append(compact)
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > REMOTE_CALL_TIMING_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -1145,6 +1288,7 @@ def _scan_events(
     invalid_window_ts = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1202,6 +1346,19 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type in REMOTE_CALL_TIMING_EVENT_TYPES:
+                        remote_call_timing_group = _remote_call_timing_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if remote_call_timing_group is not None:
+                            _merge_remote_call_timing_group(
+                                remote_call_timing_groups,
+                                remote_call_timing_group,
+                            )
                     if event_type in RISK_EVENT_TYPES:
                         risk_event_type_counts[str(event_type)] += 1
                         _merge_risk_event_group(
@@ -1283,6 +1440,7 @@ def _scan_events(
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups
         ),
+        "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
             risk_event_type_counts,
@@ -1542,6 +1700,11 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "remote_call_timings": {
+                "total": 0,
+                "groups_truncated": False,
+                "groups": [],
+            },
             "risk_events": {
                 "total": 0,
                 "groups_truncated": False,
@@ -1603,6 +1766,7 @@ def build_live_smoke_report(
         "bots": event_scan["bots"],
         "startup_timings": event_scan["startup_timings"],
         "remote_call_failures": event_scan["remote_call_failures"],
+        "remote_call_timings": event_scan["remote_call_timings"],
         "risk_events": event_scan["risk_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],

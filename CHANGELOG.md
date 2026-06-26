@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added remote-call elapsed-time summaries to `passivbot tool live-smoke-report`
+  so slow exchange/API calls can be inspected even when they eventually succeed.
 - Added repository branch/head metadata to `passivbot tool live-smoke-report`
   so VPS smoke evidence records the deployed code revision without counting
   local untracked artifacts as dirty.

@@ -164,10 +164,158 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
             }
         ],
     }
+    assert report["remote_call_timings"] == {
+        "total": 1,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "remote_call.failed",
+                "reason_code": "request_timeout",
+                "surface": "balance",
+                "error_type": "RequestTimeout",
+                "component": "test",
+                "status": "failed",
+                "symbol": "BTC/USDT:USDT",
+                "count": 1,
+                "latest_ts": 1100,
+                "latest_elapsed_ms": 12345,
+                "latest_ids": {"remote_call_id": "rc_1"},
+                "elapsed_ms": {
+                    "median_ms": 12345,
+                    "p95_ms": 12345,
+                    "min_ms": 12345,
+                    "max_ms": 12345,
+                },
+            }
+        ],
+    }
     assert report["hard_problem_event_count"] == 0
     assert report["logs"]["attention_matches"] == 2
     assert report["logs"]["hard_matches"] == 1
     assert [match["hard"] for match in report["logs"]["matches"]] == [False, True]
+
+
+def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rca_1",
+                    "remote_call_group_id": "cy_1:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 5000,
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 15000,
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=3,
+                ts=3000,
+                level="debug",
+                reason_code="authoritative_open_orders",
+                ids={
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_3",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "open_orders",
+                    "elapsed_ms": 90000,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["remote_call_failures"] == {
+        "total": 0,
+        "groups_truncated": False,
+        "groups": [],
+    }
+    assert report["remote_call_timings"] == {
+        "total": 3,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "remote_call.succeeded",
+                "reason_code": "authoritative_open_orders",
+                "surface": "open_orders",
+                "kind": "authoritative_state_fetch",
+                "component": "test",
+                "status": "succeeded",
+                "count": 1,
+                "latest_ts": 3000,
+                "latest_elapsed_ms": 90000,
+                "latest_ids": {
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_3",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                "elapsed_ms": {
+                    "median_ms": 90000,
+                    "p95_ms": 90000,
+                    "min_ms": 90000,
+                    "max_ms": 90000,
+                },
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "remote_call.succeeded",
+                "reason_code": "authoritative_balance",
+                "surface": "balance",
+                "kind": "authoritative_state_fetch",
+                "component": "test",
+                "status": "succeeded",
+                "count": 2,
+                "latest_ts": 2000,
+                "latest_elapsed_ms": 15000,
+                "latest_ids": {
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                "elapsed_ms": {
+                    "median_ms": 10000,
+                    "p95_ms": 15000,
+                    "min_ms": 5000,
+                    "max_ms": 15000,
+                },
+            },
+        ],
+    }
 
 
 def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path):
@@ -768,6 +916,11 @@ def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_pat
     assert report["hard_problem_event_count"] == 0
     assert report["problem_events"] == []
     assert report["remote_call_failures"] == {
+        "total": 0,
+        "groups_truncated": False,
+        "groups": [],
+    }
+    assert report["remote_call_timings"] == {
         "total": 0,
         "groups_truncated": False,
         "groups": [],
