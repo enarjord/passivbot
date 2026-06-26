@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 from passivbot_exceptions import FatalBotException
 from live.event_bus import (
+    DEFAULT_ROUTES,
     EventTags,
     EventTypes,
     ListEventSink,
@@ -175,6 +176,65 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
     assert manager.quarantine_reason == "legacy_pnl_contract"
     assert manager.refresh_calls == [(1_700_000_000_000, None)]
     assert manager.history_scope == "window"
+
+
+@pytest.mark.asyncio
+async def test_init_pnls_emits_cache_ready_event(monkeypatch):
+    managers = []
+
+    class _Manager:
+        def __init__(self, **_kwargs):
+            self._events = [object(), object(), object()]
+            self.history_scope = "all"
+            managers.append(self)
+
+        async def ensure_loaded(self):
+            return None
+
+        def get_history_scope(self):
+            return self.history_scope
+
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot.config = {"live": {"pnls_max_lookback_days": "all"}}
+    bot._pnls_initialized = False
+    bot._live_event_current_cycle_id = "cy_init_fills"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+
+    monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
+    monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
+    monkeypatch.setattr(passivbot_module, "_build_fetcher_for_bot", lambda *_args: object())
+    monkeypatch.setattr(passivbot_module, "FillEventsManager", _Manager)
+
+    await Passivbot.init_pnls(bot)
+
+    assert bot._pnls_initialized is True
+    assert len(managers) == 1
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.cycle_id == "cy_init_fills"
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.FILL_CACHE_READY
+    assert event.data["source"] == "startup"
+    assert event.data["refresh_mode"] == "cache_load"
+    assert event.data["event_count_after"] == 3
+    assert event.data["history_scope"] == "all"
+    route = DEFAULT_ROUTES[EventTypes.FILLS_REFRESH_SUMMARY]
+    assert route.console is False
+    assert route.text is False
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def _counted_staged_account_refresh_bot(

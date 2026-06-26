@@ -63,6 +63,7 @@ from live.event_bus import (
     LiveEventContext,
     LiveEventPipeline,
     MonitorEventSink,
+    ReasonCodes,
     payload_hash_raw,
 )
 import live.event_emitters as live_event_emitters
@@ -10039,6 +10040,7 @@ class Passivbot:
         if self._pnls_initialized:
             return
 
+        init_started_ms = utc_ms()
         try:
             logging.debug("[fills] initializing FillEventsManager")
 
@@ -10160,6 +10162,23 @@ class Passivbot:
 
             cached_count = len(self._pnls_manager._events)
             logging.info("[fills] cache ready: %d cached events loaded", cached_count)
+            history_scope = None
+            try:
+                get_history_scope = getattr(self._pnls_manager, "get_history_scope", None)
+                if callable(get_history_scope):
+                    history_scope = get_history_scope()
+            except Exception as exc:
+                logging.debug("[event] failed to read fill-cache history scope: %s", exc)
+            self._emit_fills_refresh_summary_event(
+                source="startup",
+                refresh_mode="cache_load",
+                status="succeeded",
+                reason_code=ReasonCodes.FILL_CACHE_READY,
+                elapsed_ms=int(max(0, utc_ms() - init_started_ms)),
+                history_scope=history_scope,
+                event_count_after=cached_count,
+                level="debug",
+            )
 
             self._pnls_initialized = True
 

@@ -151,6 +151,7 @@ class ReasonCodes:
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
     EXCHANGE_EXCEPTION = "exchange_exception"
     EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
+    FILL_CACHE_READY = "fill_cache_ready"
     LENGTH_MISMATCH = "length_mismatch"
     LOW_BALANCE = "low_balance"
     NEW_FILL = "new_fill"

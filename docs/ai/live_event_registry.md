@@ -65,6 +65,7 @@ across time.
 - `exchange_acknowledged`
 - `exchange_exception`
 - `execution_loop_error_burst`
+- `fill_cache_ready`
 - `length_mismatch`
 - `low_balance`
 - `new_fill`
