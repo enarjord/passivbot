@@ -68,19 +68,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--since-ms",
         type=int,
-        help="Only include structured monitor events at or after this monitor ts.",
+        help=(
+            "Only include structured monitor events and timestamped text log "
+            "lines at or after this epoch-ms timestamp."
+        ),
     )
     parser.add_argument(
         "--until-ms",
         type=int,
-        help="Only include structured monitor events at or before this monitor ts.",
+        help=(
+            "Only include structured monitor events and timestamped text log "
+            "lines at or before this epoch-ms timestamp."
+        ),
     )
     parser.add_argument(
         "--recent-minutes",
         type=float,
         help=(
-            "Only include structured monitor events from the last N minutes. "
-            "Equivalent to --since-ms based on local wall-clock time."
+            "Only include structured monitor events and timestamped text log "
+            "lines from the last N minutes. Equivalent to --since-ms based on "
+            "local wall-clock time."
         ),
     )
     parser.add_argument(

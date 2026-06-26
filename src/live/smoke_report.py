@@ -6,6 +6,7 @@ import re
 import stat
 import subprocess
 from collections import Counter, defaultdict, deque
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,9 @@ SENSITIVE_LOG_VALUE_PATTERN = re.compile(
     r"([\"']?\s*(?:[:=]|\s)\s*)[\"']?[^,\s;&\"'}]+"
 )
 AUTH_SCHEME_PATTERN = re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+")
+LOG_LINE_TS_PATTERN = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z)\b"
+)
 STARTUP_TIMING_BASELINE_WINDOW = 20
 DEFAULT_PROCESS_MATCH = "passivbot live"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
@@ -861,6 +865,37 @@ def _tail_lines(path: Path, *, max_lines: int) -> list[tuple[int, str]]:
     return [(line_no, line.rstrip("\n")) for line_no, line in rows]
 
 
+def _parse_log_line_ts_ms(line: str) -> int | None:
+    match = LOG_LINE_TS_PATTERN.match(str(line))
+    if match is None:
+        return None
+    try:
+        parsed = datetime.fromisoformat(match.group("ts").replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return int(parsed.timestamp() * 1000)
+
+
+def _log_window_report(
+    *,
+    since_ms: int | None,
+    until_ms: int | None,
+    lines_considered: int,
+    lines_skipped_before: int,
+    lines_skipped_after: int,
+    unparsed_ts: int,
+) -> dict[str, Any]:
+    return {
+        "enabled": since_ms is not None or until_ms is not None,
+        "since_ms": since_ms,
+        "until_ms": until_ms,
+        "lines_considered": int(lines_considered),
+        "lines_skipped_before": int(lines_skipped_before),
+        "lines_skipped_after": int(lines_skipped_after),
+        "unparsed_ts": int(unparsed_ts),
+    }
+
+
 def default_logs_root_for_monitor(monitor_root: str | Path) -> Path | None:
     path = Path(monitor_root).expanduser()
     start = path.parent if path.is_file() else path
@@ -877,21 +912,49 @@ def _scan_logs(
     max_files: int,
     tail_lines: int,
     max_matches: int,
+    since_ms: int | None,
+    until_ms: int | None,
 ) -> dict[str, Any]:
+    window_enabled = since_ms is not None or until_ms is not None
+    window_report = _log_window_report(
+        since_ms=since_ms,
+        until_ms=until_ms,
+        lines_considered=0,
+        lines_skipped_before=0,
+        lines_skipped_after=0,
+        unparsed_ts=0,
+    )
     if root is None:
         return {
             "root": None,
             "files_scanned": 0,
             "hard_matches": 0,
             "attention_matches": 0,
+            "window": window_report,
             "matches": [],
         }
     files = _recent_log_files(root, max_files=max_files)
     matches: list[dict[str, Any]] = []
     hard_matches = 0
     attention_matches = 0
+    lines_considered = 0
+    lines_skipped_before = 0
+    lines_skipped_after = 0
+    unparsed_ts = 0
     for path in files:
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
+            line_ts = _parse_log_line_ts_ms(line)
+            if window_enabled:
+                if line_ts is None:
+                    unparsed_ts += 1
+                else:
+                    if since_ms is not None and line_ts < since_ms:
+                        lines_skipped_before += 1
+                        continue
+                    if until_ms is not None and line_ts > until_ms:
+                        lines_skipped_after += 1
+                        continue
+            lines_considered += 1
             if not ATTENTION_LOG_PATTERN.search(line):
                 continue
             attention_matches += 1
@@ -899,19 +962,28 @@ def _scan_logs(
             if hard:
                 hard_matches += 1
             if len(matches) < max(0, int(max_matches)):
-                matches.append(
-                    {
-                        "path": str(path),
-                        "line": int(line_no),
-                        "hard": hard,
-                        "text": _redact_log_text(line, max_len=500),
-                    }
-                )
+                match = {
+                    "path": str(path),
+                    "line": int(line_no),
+                    "hard": hard,
+                    "text": _redact_log_text(line, max_len=500),
+                }
+                if line_ts is not None:
+                    match["ts"] = line_ts
+                matches.append(match)
     return {
         "root": str(Path(root).expanduser()),
         "files_scanned": len(files),
         "hard_matches": hard_matches,
         "attention_matches": attention_matches,
+        "window": _log_window_report(
+            since_ms=since_ms,
+            until_ms=until_ms,
+            lines_considered=lines_considered,
+            lines_skipped_before=lines_skipped_before,
+            lines_skipped_after=lines_skipped_after,
+            unparsed_ts=unparsed_ts,
+        ),
         "matches": matches,
     }
 
@@ -972,6 +1044,8 @@ def build_live_smoke_report(
         max_files=max_log_files,
         tail_lines=log_tail_lines,
         max_matches=max_log_matches,
+        since_ms=since_ms,
+        until_ms=until_ms,
     )
     process_report = _build_process_report(
         include_processes=include_processes,

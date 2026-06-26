@@ -469,6 +469,62 @@ def test_live_smoke_report_log_scan_deduplicates_aliases_and_matches_levels(
     assert "TOKEN123" not in emitted
 
 
+def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "okx_faisal.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:01Z ERROR stale before window",
+                "1970-01-01T00:00:03Z ERROR fresh in window",
+                "ERROR unparseable timestamp kept visible",
+                "1970-01-01T00:00:05Z CRITICAL future hard skipped",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        since_ms=2000,
+        until_ms=4000,
+        log_tail_lines=10,
+    )
+
+    assert report["ok"] is True
+    assert report["logs"]["attention_matches"] == 2
+    assert report["logs"]["hard_matches"] == 0
+    assert report["logs"]["window"] == {
+        "enabled": True,
+        "since_ms": 2000,
+        "until_ms": 4000,
+        "lines_considered": 2,
+        "lines_skipped_before": 1,
+        "lines_skipped_after": 1,
+        "unparsed_ts": 1,
+    }
+    assert [match["text"] for match in report["logs"]["matches"]] == [
+        "1970-01-01T00:00:03Z ERROR fresh in window",
+        "ERROR unparseable timestamp kept visible",
+    ]
+    assert report["logs"]["matches"][0]["ts"] == 3000
+    assert "future hard skipped" not in json.dumps(report["logs"]["matches"])
+
+
 def test_live_smoke_report_default_logs_root_follows_monitor_root(tmp_path, capsys):
     bot_root = tmp_path / "bot"
     events_dir = bot_root / "monitor" / "gateio" / "gateio_01" / "events"
