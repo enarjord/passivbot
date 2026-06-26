@@ -67,6 +67,8 @@ class EventTypes:
     EXECUTION_CREATE_SUCCEEDED = "execution.create_succeeded"
     EXECUTION_CREATE_FAILED = "execution.create_failed"
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
+    EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
+    EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
     EXECUTION_CANCEL_SENT = "execution.cancel_sent"
     EXECUTION_CANCEL_SUCCEEDED = "execution.cancel_succeeded"
     EXECUTION_CANCEL_FAILED = "execution.cancel_failed"
@@ -147,12 +149,15 @@ class ReasonCodes:
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
     EXCHANGE_EXCEPTION = "exchange_exception"
     LENGTH_MISMATCH = "length_mismatch"
+    LOW_BALANCE = "low_balance"
     NEW_FILL = "new_fill"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
     OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
+    PENDING_EXCHANGE_CONFIG = "pending_exchange_config"
     PERIODIC_HEALTH_SUMMARY = "periodic_health_summary"
     QUEUE_FULL = "queue_full"
     RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
+    RECENT_EXECUTION = "recent_execution"
     REMOTE_FETCH = "remote_fetch"
     REQUIRED_CANDLE_DISK_COVERAGE = "required_candle_disk_coverage"
     REQUIRED_EMA_UNAVAILABLE = "required_ema_unavailable"
@@ -160,6 +165,7 @@ class ReasonCodes:
     SINK_PIPELINE_CLOSING = "pipeline_closing"
     SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
     STARTUP_PHASE_READY = "startup_phase_ready"
+    STATE_CHANGE_DETECTED = "state_change_detected"
     SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
     WARMUP_CACHE_DECISION = "warmup_cache_decision"
 
@@ -212,6 +218,8 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_SUCCEEDED,
     EventTypes.EXECUTION_CREATE_FAILED,
     EventTypes.EXECUTION_CREATE_REJECTED,
+    EventTypes.EXECUTION_CREATE_DEFERRED,
+    EventTypes.EXECUTION_CREATE_SKIPPED,
     EventTypes.EXECUTION_CANCEL_SENT,
     EventTypes.EXECUTION_CANCEL_SUCCEEDED,
     EventTypes.EXECUTION_CANCEL_FAILED,
@@ -500,6 +508,8 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_FAILED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
+    EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
+    EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_FAILED: EventRoute(console=True, text=True),
@@ -573,6 +583,8 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_CREATE_SUCCEEDED: "order",
     EventTypes.EXECUTION_CREATE_FAILED: "order",
     EventTypes.EXECUTION_CREATE_REJECTED: "order",
+    EventTypes.EXECUTION_CREATE_DEFERRED: "gate",
+    EventTypes.EXECUTION_CREATE_SKIPPED: "gate",
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: "order",
     EventTypes.EXECUTION_CANCEL_FAILED: "order",
     EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL: "order",
@@ -697,6 +709,20 @@ def _console_order_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_create_filter_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.order_wave_id:
+        parts.append(f"wave={event.order_wave_id}")
+    count = _data_int(data, "order_count")
+    if count is not None:
+        parts.append(f"orders={count}")
+    symbols = _compact_csv(data.get("symbols"), limit=4)
+    if symbols:
+        parts.append(f"symbols={symbols}")
+    return parts
+
+
 def _console_confirmation_summary(event: LiveEvent) -> list[str]:
     data = event.data if isinstance(event.data, Mapping) else {}
     parts: list[str] = []
@@ -735,6 +761,11 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
 def _console_data_summary(event: LiveEvent) -> list[str]:
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
         return _console_order_wave_summary(event)
+    if event.event_type in {
+        EventTypes.EXECUTION_CREATE_DEFERRED,
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+    }:
+        return _console_create_filter_summary(event)
     if event.event_type in {
         EventTypes.EXECUTION_CREATE_SUCCEEDED,
         EventTypes.EXECUTION_CREATE_FAILED,

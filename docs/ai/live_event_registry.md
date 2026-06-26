@@ -65,12 +65,15 @@ across time.
 - `exchange_acknowledged`
 - `exchange_exception`
 - `length_mismatch`
+- `low_balance`
 - `new_fill`
 - `open_tail_projection`
 - `optional_ema_dropped`
+- `pending_exchange_config`
 - `periodic_health_summary`
 - `queue_full`
 - `ranking_features_unavailable`
+- `recent_execution`
 - `remote_fetch`
 - `required_candle_disk_coverage`
 - `required_ema_unavailable`
@@ -78,6 +81,7 @@ across time.
 - `pipeline_closing`
 - `snapshot_symbol_state`
 - `startup_phase_ready`
+- `state_change_detected`
 - `submitted_to_exchange`
 - `warmup_cache_decision`
 

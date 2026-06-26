@@ -614,6 +614,9 @@ class Passivbot:
         live_event_emitters.emit_execution_confirmation_timeout_event
     )
     _emit_execution_order_event = live_event_emitters.emit_execution_order_event
+    _emit_execution_create_filter_event = (
+        live_event_emitters.emit_execution_create_filter_event
+    )
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_rust_orchestrator_called_event = (
         live_event_emitters.emit_rust_orchestrator_called_event
@@ -4048,11 +4051,13 @@ class Passivbot:
             if elapsed_ms >= 1_000 or cancel_posted or create_posted
             else logging.DEBUG
         )
-        self._emit_order_wave_completed_event(
-            wave,
-            elapsed_ms=elapsed_ms,
-            level=logging.getLevelName(log_level).lower(),
-        )
+        emit_completed = getattr(self, "_emit_order_wave_completed_event", None)
+        if callable(emit_completed):
+            emit_completed(
+                wave,
+                elapsed_ms=elapsed_ms,
+                level=logging.getLevelName(log_level).lower(),
+            )
         if log_level == logging.DEBUG and summary_key == getattr(
             self, "_order_wave_last_summary_key", None
         ):
