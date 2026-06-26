@@ -25,6 +25,7 @@ across time.
 - `degraded`
 - `ema`
 - `execution`
+- `exchange`
 - `fallback`
 - `fill`
 - `fills`
@@ -50,6 +51,7 @@ across time.
 - `summary`
 - `tail`
 - `timeout`
+- `time_sync`
 - `unavailable`
 - `warmup`
 - `wave`
@@ -64,6 +66,8 @@ across time.
 - `ema_fallback_used`
 - `exchange_acknowledged`
 - `exchange_exception`
+- `exchange_time_sync`
+- `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`
 - `fill_cache_ready`
 - `length_mismatch`

@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `exchange.time_sync` live events for CCXT timestamp/nonce
+  recovery diagnostics without changing recovery behavior or console volume.
 - Added structured `fills.refresh_summary` startup cache-ready events for fill
   history cache load diagnostics without adding console noise.
 - Added `passivbot tool live-smoke-report --brief` for top-level VPS smoke
