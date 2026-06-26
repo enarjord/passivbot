@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -119,6 +120,21 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--since-ms",
+        type=int,
+        help="Only include live events with monitor ts at or after this epoch-ms value.",
+    )
+    parser.add_argument(
+        "--until-ms",
+        type=int,
+        help="Only include live events with monitor ts at or before this epoch-ms value.",
+    )
+    parser.add_argument(
+        "--recent-minutes",
+        type=float,
+        help="Only include live events from the last N minutes.",
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=200,
@@ -179,6 +195,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.since_ms is not None and args.recent_minutes is not None:
+        parser.error("--since-ms and --recent-minutes are mutually exclusive")
+    since_ms = args.since_ms
+    if args.recent_minutes is not None:
+        if args.recent_minutes <= 0:
+            parser.error("--recent-minutes must be greater than 0")
+        since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
+    if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
+        parser.error("--since-ms/--recent-minutes must be <= --until-ms")
     report = build_event_report(
         args.path,
         cycle_id=args.cycle_id,
@@ -194,6 +219,8 @@ def main(argv: list[str] | None = None) -> int:
         pside=args.pside,
         reason_code=args.reason_code,
         status=args.status,
+        since_ms=since_ms,
+        until_ms=args.until_ms,
         limit=args.limit,
         include_data=bool(args.include_data),
         include_rotated=bool(args.include_rotated),
