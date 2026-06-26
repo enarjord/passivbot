@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added repository branch/head metadata to `passivbot tool live-smoke-report`
+  so VPS smoke evidence records the deployed code revision without counting
+  local untracked artifacts as dirty.
 - Added grouped problem-event summaries to `passivbot tool live-smoke-report`
   so repeated structured degradation can be inspected by bot, event type,
   reason, and hard/non-hard status without reading every event sample.

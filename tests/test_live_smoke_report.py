@@ -57,6 +57,20 @@ def _write_ndjson(path, rows):
     )
 
 
+def _write_minimal_monitor_event(monitor_root):
+    _write_ndjson(
+        monitor_root / "binance" / "binance_01" / "events" / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+
+
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -1383,3 +1397,104 @@ def test_live_smoke_report_process_scan_without_config_is_observational(
     assert report["processes"]["running"][0]["command_key"] == (
         "passivbot live configs/v8.json -u okx_faisal"
     )
+
+
+def test_live_smoke_report_includes_repository_metadata(tmp_path, monkeypatch):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    calls = []
+    responses = {
+        ("rev-parse", "--is-inside-work-tree"): ("true", None),
+        ("rev-parse", "HEAD"): ("abcdef1234567890", None),
+        ("rev-parse", "--short", "HEAD"): ("abcdef1", None),
+        ("rev-parse", "--abbrev-ref", "HEAD"): ("v8", None),
+        ("status", "--porcelain", "--untracked-files=no"): (
+            " M src/live/smoke_report.py\nM  tests/test_live_smoke_report.py",
+            None,
+        ),
+    }
+
+    def fake_git_output(repo_root, args, *, timeout=2.0):
+        calls.append((repo_root, tuple(args), timeout))
+        return responses[tuple(args)]
+
+    monkeypatch.setattr(smoke_report_module, "_git_output", fake_git_output)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        repo_root=tmp_path,
+    )
+
+    repository = report["repository"]
+    assert report["ok"] is True
+    assert repository == {
+        "root": str(tmp_path.resolve()),
+        "is_git_repo": True,
+        "branch": "v8",
+        "head": "abcdef1",
+        "head_full": "abcdef1234567890",
+        "dirty": True,
+        "tracked_changes": 2,
+        "error": None,
+    }
+    assert calls[-1][1] == ("status", "--porcelain", "--untracked-files=no")
+
+
+def test_live_smoke_report_discovers_repository_from_monitor_root(tmp_path, monkeypatch):
+    repo_root = tmp_path / "passivbot"
+    (repo_root / ".git").mkdir(parents=True)
+    _write_minimal_monitor_event(repo_root / "monitor")
+    roots = []
+
+    def fake_git_output(repo_root, args, *, timeout=2.0):
+        roots.append(repo_root)
+        if args == ["rev-parse", "--is-inside-work-tree"]:
+            return "true", None
+        if args == ["rev-parse", "HEAD"]:
+            return "1234567890abcdef", None
+        if args == ["rev-parse", "--short", "HEAD"]:
+            return "1234567", None
+        if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return "v8", None
+        if args == ["status", "--porcelain", "--untracked-files=no"]:
+            return "", None
+        raise AssertionError(args)
+
+    monkeypatch.setattr(smoke_report_module, "_git_output", fake_git_output)
+
+    report = build_live_smoke_report(repo_root / "monitor", logs_root=None)
+
+    assert set(roots) == {repo_root.resolve()}
+    assert report["repository"]["root"] == str(repo_root.resolve())
+    assert report["repository"]["dirty"] is False
+
+
+def test_live_smoke_report_repository_metadata_is_observational_on_git_error(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_git_output",
+        lambda repo_root, args, *, timeout=2.0: (None, "not_a_git_repo"),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        repo_root=tmp_path,
+    )
+
+    assert report["ok"] is True
+    assert report["hard_failures"] == 0
+    assert report["repository"] == {
+        "root": str(tmp_path.resolve()),
+        "is_git_repo": False,
+        "branch": None,
+        "head": None,
+        "head_full": None,
+        "dirty": None,
+        "tracked_changes": None,
+        "error": "not_a_git_repo",
+    }
