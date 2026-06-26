@@ -19,14 +19,14 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `3aa1e7a7` merge of PR #675, `Add smoke log unparsed window policy`.
+- `eda7cb2f` merge of PR #677, `Emit execution loop error burst events`.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #675 at `3aa1e7a7`.
-- Bots were restarted from `/root/bots_vps5.yaml` and left running. Four bots
-  exited promptly after Ctrl-C; Kucoin took about 105 seconds before the old
-  process disappeared.
+- Repository pulled through PR #677 at `eda7cb2f`.
+- Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
+  running. The old process set stopped after about 36 seconds before the tmuxp
+  reload.
 - `tmuxp load` returned a nonzero attach error because SSH had no terminal, but
   it created the `passivbot` session and all five configured bot processes.
 - VPS5 post-restart smoke with text logs disabled and
@@ -53,6 +53,15 @@ VPS5 deployment status:
   `hard_problem_event_count=0`, `logs.hard_matches=0`,
   `remote_call_failures.total=0`, `matched_expected=5`, and
   `missing_expected=[]`.
+- PR #677 was pulled to VPS5 and bots were restarted. Repeated settled
+  2-minute smokes with `--log-window-unparsed-policy drop` and
+  `/root/bots_vps5.yaml` process matching reported `ok=true`,
+  `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, and `missing_expected=[]`. One intermediate Kucoin
+  authoritative account-refresh timeout was visible in structured events and
+  recovered without intervention. Remaining smoke attention came from non-hard
+  EMA readiness / staged-execution degradation and GateIO ZEC HSL cooldown, not
+  from the PR #677 logging migration.
 
 ## Phase Checklist
 
@@ -477,13 +486,42 @@ VPS5 deployment status:
   running, no hard failures, no log matches, no remote-call failures, and
   `logs.window.unparsed_policy=drop`.
 
+### PR #676: Smoke Log Unparsed Policy Progress
+
+- Branch: `codex/v8-progress-after-unparsed-policy`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #675 merged and VPS5 smoke confirmed the unparseable-log window policy.
+
+### PR #677: Execution Loop Error Burst Event
+
+- Branch: `codex/v8-execution-loop-error-burst-event`.
+- Scope: Phase 5 text-log-to-event migration.
+- Result: the existing execution-loop error burst warning now emits a bounded
+  structured `health.summary` event with reason code
+  `execution_loop_error_burst` before the existing stdlib warning. Emission is
+  best-effort, uses the existing warning threshold, redacts/caps latest error
+  text, and does not change restart/backoff/trading behavior or default console
+  volume.
+- Review evidence: Claude and Hermes approved head `409f5d8e`; focused pytest,
+  compileall, and `git diff --check` passed before merge.
+- VPS5 evidence: deployed to VPS5 at `eda7cb2f` with a full bot restart. Three
+  smoke windows reported all five configured bots running, no hard failures, no
+  log hard matches, and no missing expected processes. Settled windows still
+  showed non-hard EMA readiness / staged-execution degradation and GateIO ZEC
+  HSL cooldown, which remain separate operational signals.
+
 ## Current Next Steps
 
 1. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
-2. Add read-only exchange health probes for account-critical endpoint timeouts
+2. Use the persistent non-hard EMA readiness / staged-execution degradation
+   visible in VPS5 smokes as the next candidate for either richer structured
+   diagnostics or a targeted readiness fix, if existing event fields are
+   insufficient.
+3. Add read-only exchange health probes for account-critical endpoint timeouts
    if passive event summaries are insufficient.
-3. Start the live restart/smoke automation slice if operational workflow speed
+4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-4. Continue cache-doctor refinements in separate adjacent PRs: cache-family
+5. Continue cache-doctor refinements in separate adjacent PRs: cache-family
    metadata, coverage windows, suspicious gaps, and warm-cache readiness.
