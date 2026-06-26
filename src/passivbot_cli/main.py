@@ -110,6 +110,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_config_preflight",
         "read-only offline live config preflight report",
     ),
+    "hsl-startup-preview": CommandSpec(
+        "tools.hsl_startup_preview",
+        "read-only offline HSL startup preview",
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",
