@@ -66,8 +66,10 @@ Related detailed plans:
    bounded latest problem-event
    context for selected non-hard groups such as EMA/cycle readiness
    degradation, plus aggregate problem-event groups keyed by bot/event/reason/
-   status/hard flag/symbol/position side. The safe restart orchestration
-   contract is not implemented.
+   status/hard flag/symbol/position side, passive remote-call health summaries,
+   account-critical remote-call summaries, repository state, and a concise
+   `--summary` projection for operator smoke checks. The safe restart
+   orchestration contract is not implemented.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
@@ -76,6 +78,9 @@ Related detailed plans:
    explicit, and produce a reviewable smoke report.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
+   The concise summary is still intentionally bounded but can be tightened
+   further with row limits or a brief mode if chat-facing smoke output remains
+   too large.
 
 4. [ ] Startup phase budget tracking.
    Status: partial. Startup timing and warmup cache decision events exist, and
@@ -273,6 +278,7 @@ Related detailed plans:
 | 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #690 / `dc99378a` | Added `remote_call_health` groups to `live-smoke-report`, rolling up terminal remote-call successes/failures/throttles, latency, reason/error counts, and affected symbols by bot/component/kind/surface; VPS5 smoke on `b150176f` returned `ok=true`, no hard failures, all five bots matched, and summarized 445 terminal remote calls | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
 | 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #692 / `ac4afe3f` | Added top-level `remote_call_health` success/failure/throttle totals and percentages to `live-smoke-report`; VPS5 smoke on `c8ce4880` returned `ok=true`, no hard failures, all five bots matched, and reported total=390, succeeded=389, failed=1, throttled=0 | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
 | 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #694 / `bebbb3f6` | Added `account_critical_remote_call_health` to `live-smoke-report`, isolating authoritative balance/positions/open-orders style endpoint health from candle/fill traffic; VPS5 smoke on `3299c1ca` returned `ok=true`, no hard failures, all five bots matched, and reported account-critical total=126, succeeded=126, failed=0, throttled=0 | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #696 / `f1efbe45` | Added `live-smoke-report --summary`, a concise high-signal projection of smoke health, process/repository state, problem groups, remote-call/account-critical health, and risk events; VPS5 compact summary smoke on `d850daf5` returned `ok=true`, no hard failures, all five bots matched, and account-critical total=58, succeeded=58 | Safe pull/stop/start orchestration remains open; optional row-limit/brief summary mode could reduce chat-facing output further |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
