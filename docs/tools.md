@@ -148,7 +148,10 @@ passivbot tool fetch-balance --user bybit_01
 Ticker probes inspect CCXT ticker support and latency without placing orders:
 
 - `passivbot tool ticker-probe` checks ticker capability behavior for one exchange/user context.
-- `passivbot tool ticker-endpoint-probe` compares CCXT ticker endpoint latency across configured users.
+- `passivbot tool ticker-endpoint-probe` compares CCXT ticker endpoint latency across configured
+  users. When authenticated probes are enabled, its JSON includes an `account_critical_health`
+  summary for the read-only balance, positions, and open-orders endpoints required before live
+  exchange actions. Keep authenticated runs low-rate when a live bot is using the same account.
 
 ## Hyperliquid live probes
 

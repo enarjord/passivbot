@@ -3,10 +3,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import math
+import statistics
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from procedures import load_user_info
+from live.smoke_report import _redact_log_text
 from tools.probe_ticker_capabilities import (
     create_exchange,
     is_active_linear_swap,
@@ -15,9 +19,16 @@ from tools.probe_ticker_capabilities import (
     summarize_order_book,
     summarize_ticker,
     summarize_tickers,
-    timed_call,
+    timed_call as _raw_timed_call,
 )
 from utils import ts_to_date, utc_ms
+
+
+ACCOUNT_CRITICAL_ENDPOINTS = {
+    "balance": "fetch_balance",
+    "positions": "fetch_positions",
+    "open_orders": "fetch_open_orders_all",
+}
 
 
 def select_default_symbols(
@@ -126,8 +137,146 @@ def format_outcome(outcome: dict[str, Any]) -> str:
     )
 
 
+def _redact_probe_outcome_error(outcome: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(outcome, dict):
+        return outcome
+    error = outcome.get("error")
+    if not isinstance(error, str):
+        return outcome
+    out = dict(outcome)
+    out["error"] = _redact_log_text(error, max_len=500)
+    return out
+
+
+async def _timed_call(coro) -> dict[str, Any]:
+    return _redact_probe_outcome_error(await _raw_timed_call(coro))
+
+
+def _pct(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(float(numerator) * 100.0 / float(denominator), 3)
+
+
+def _elapsed_ms(outcome: Any) -> float | None:
+    if not isinstance(outcome, dict):
+        return None
+    elapsed = outcome.get("elapsed_ms")
+    if not isinstance(elapsed, (int, float)):
+        return None
+    return round(float(elapsed), 3)
+
+
+def _latency_summary(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {
+            "count": 0,
+            "min": None,
+            "median": None,
+            "p95": None,
+            "max": None,
+        }
+    ordered = sorted(values)
+    p95_index = min(len(ordered) - 1, max(0, math.ceil(len(ordered) * 0.95) - 1))
+    return {
+        "count": len(ordered),
+        "min": round(ordered[0], 3),
+        "median": round(float(statistics.median(ordered)), 3),
+        "p95": round(ordered[p95_index], 3),
+        "max": round(ordered[-1], 3),
+    }
+
+
+def summarize_account_critical_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize authenticated account-state endpoint health without raw payloads/errors."""
+    include_private = bool(probe.get("include_private", True))
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    surfaces: dict[str, Any] = {}
+    for surface, outcome_key in ACCOUNT_CRITICAL_ENDPOINTS.items():
+        total = 0
+        succeeded = 0
+        failed = 0
+        latencies = []
+        error_types: Counter[str] = Counter()
+        latest: dict[str, Any] | None = None
+        for repeat in repeats:
+            outcome = repeat.get(outcome_key) if isinstance(repeat, dict) else None
+            if outcome is None and not include_private:
+                continue
+            total += 1
+            elapsed_ms = _elapsed_ms(outcome)
+            if elapsed_ms is not None:
+                latencies.append(elapsed_ms)
+            ok = bool(outcome.get("ok")) if isinstance(outcome, dict) else False
+            if ok:
+                succeeded += 1
+                latest = {"ok": True, "elapsed_ms": elapsed_ms}
+                continue
+            failed += 1
+            error_type = (
+                str(outcome.get("error_type") or "unknown")
+                if isinstance(outcome, dict)
+                else "missing_outcome"
+            )
+            error_types[error_type] += 1
+            latest = {"ok": False, "elapsed_ms": elapsed_ms, "error_type": error_type}
+        surfaces[surface] = {
+            "endpoint": outcome_key,
+            "total": total,
+            "succeeded": succeeded,
+            "failed": failed,
+            "failure_pct": _pct(failed, total),
+            "latency_ms": _latency_summary(latencies),
+            "error_types": dict(sorted(error_types.items())),
+            "latest": latest,
+        }
+
+    total = sum(int(surface["total"]) for surface in surfaces.values())
+    succeeded = sum(int(surface["succeeded"]) for surface in surfaces.values())
+    failed = sum(int(surface["failed"]) for surface in surfaces.values())
+    return {
+        "enabled": include_private,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "surfaces": surfaces,
+    }
+
+
+def summarize_account_critical_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    total = 0
+    succeeded = 0
+    failed = 0
+    for probe in probes:
+        summary = probe.get("account_critical_health")
+        if not isinstance(summary, dict):
+            summary = summarize_account_critical_probe_health(probe)
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "enabled": bool(summary.get("enabled")),
+            "total": int(summary.get("total") or 0),
+            "succeeded": int(summary.get("succeeded") or 0),
+            "failed": int(summary.get("failed") or 0),
+            "failure_pct": summary.get("failure_pct"),
+        }
+        users.append(user_summary)
+        total += user_summary["total"]
+        succeeded += user_summary["succeeded"]
+        failed += user_summary["failed"]
+    return {
+        "users": users,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
-    outcome = await timed_call(exchange.load_markets())
+    outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
     if outcome["ok"]:
         outcome["value"] = {
@@ -141,7 +290,7 @@ async def _fetch_ticker_sequential(exchange, symbols: list[str]) -> dict[str, An
     started_ms = utc_ms()
     results = {}
     for symbol in symbols:
-        outcome = await timed_call(exchange.fetch_ticker(symbol))
+        outcome = await _timed_call(exchange.fetch_ticker(symbol))
         if outcome["ok"]:
             outcome["value"] = summarize_ticker(outcome["value"])
         results[symbol] = outcome
@@ -155,7 +304,7 @@ async def _fetch_ticker_sequential(exchange, symbols: list[str]) -> dict[str, An
 
 async def _fetch_ticker_concurrent(exchange, symbols: list[str]) -> dict[str, Any]:
     async def _one(symbol: str) -> tuple[str, dict[str, Any]]:
-        outcome = await timed_call(exchange.fetch_ticker(symbol))
+        outcome = await _timed_call(exchange.fetch_ticker(symbol))
         if outcome["ok"]:
             outcome["value"] = summarize_ticker(outcome["value"])
         return symbol, outcome
@@ -175,7 +324,7 @@ async def _fetch_order_books_sequential(exchange, symbols: list[str]) -> dict[st
     started_ms = utc_ms()
     results = {}
     for symbol in symbols:
-        outcome = await timed_call(exchange.fetch_order_book(symbol, limit=5))
+        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=5))
         if outcome["ok"]:
             outcome["value"] = summarize_order_book(outcome["value"])
         results[symbol] = outcome
@@ -188,7 +337,7 @@ async def _fetch_order_books_sequential(exchange, symbols: list[str]) -> dict[st
 
 async def _fetch_order_books_concurrent(exchange, symbols: list[str]) -> dict[str, Any]:
     async def _one(symbol: str) -> tuple[str, dict[str, Any]]:
-        outcome = await timed_call(exchange.fetch_order_book(symbol, limit=5))
+        outcome = await _timed_call(exchange.fetch_order_book(symbol, limit=5))
         if outcome["ok"]:
             outcome["value"] = summarize_order_book(outcome["value"])
         return symbol, outcome
@@ -207,7 +356,7 @@ async def _fetch_ohlcvs(exchange, symbols: list[str]) -> dict[str, Any]:
     started_ms = utc_ms()
     results = {}
     for symbol in symbols:
-        outcome = await timed_call(exchange.fetch_ohlcv(symbol, timeframe="1m", limit=3))
+        outcome = await _timed_call(exchange.fetch_ohlcv(symbol, timeframe="1m", limit=3))
         if outcome["ok"]:
             outcome["value"] = summarize_ohlcvs(outcome["value"])
         results[symbol] = outcome
@@ -222,7 +371,7 @@ async def _timed_method(exchange, method_name: str, *args, summary=None) -> dict
     method = getattr(exchange, method_name, None)
     if method is None:
         return {"ok": False, "elapsed_ms": 0, "error_type": "AttributeError", "error": method_name}
-    outcome = await timed_call(method(*args))
+    outcome = await _timed_call(method(*args))
     if outcome["ok"] and summary is not None:
         outcome["value"] = summary(outcome["value"])
     return outcome
@@ -265,6 +414,7 @@ async def probe_exchange_ticker_endpoints(
         "exchange": exchange_id,
         "quote": quote or user_info.get("quote"),
         "symbols": resolved_symbols,
+        "include_private": bool(include_private),
         "market_count": len(markets) if isinstance(markets, dict) else None,
         "has": {
             "fetchBalance": bool(getattr(exchange, "has", {}).get("fetchBalance")),
@@ -297,7 +447,7 @@ async def probe_exchange_ticker_endpoints(
         }
 
         emit_progress(f"{repeat_label} fetch_tickers()", enabled=progress)
-        all_outcome = await timed_call(exchange.fetch_tickers())
+        all_outcome = await _timed_call(exchange.fetch_tickers())
         if all_outcome["ok"]:
             all_outcome["value"] = summarize_tickers(all_outcome["value"], resolved_symbols)
         repeat["fetch_tickers_all"] = all_outcome
@@ -307,7 +457,7 @@ async def probe_exchange_ticker_endpoints(
         )
 
         emit_progress(f"{repeat_label} fetch_tickers(symbols)", enabled=progress)
-        listed_outcome = await timed_call(exchange.fetch_tickers(resolved_symbols))
+        listed_outcome = await _timed_call(exchange.fetch_tickers(resolved_symbols))
         if listed_outcome["ok"]:
             listed_outcome["value"] = summarize_tickers(listed_outcome["value"], resolved_symbols)
         repeat["fetch_tickers_symbols"] = listed_outcome
@@ -435,6 +585,7 @@ async def probe_exchange_ticker_endpoints(
             )
             await asyncio.sleep(float(sleep_between_seconds))
 
+    out["account_critical_health"] = summarize_account_critical_probe_health(out)
     return out
 
 
@@ -555,6 +706,9 @@ async def async_main() -> int:
         )
         emit_progress(f"[{user}] probe complete", enabled=not bool(args.quiet))
 
+    result["account_critical_health"] = summarize_account_critical_probe_collection(
+        result["probes"]
+    )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str) + "\n")

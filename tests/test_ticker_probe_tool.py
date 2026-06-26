@@ -11,6 +11,8 @@ from tools.probe_ticker_capabilities import (
 from tools.probe_ccxt_ticker_endpoints import (
     probe_exchange_ticker_endpoints,
     select_default_symbols,
+    summarize_account_critical_probe_collection,
+    summarize_account_critical_probe_health,
 )
 
 
@@ -304,4 +306,170 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert repeat["fetch_positions"]["ok"] is True
     assert repeat["fetch_open_orders_all"]["ok"] is True
     assert repeat["fetch_my_trades_first_symbol"]["ok"] is True
+    assert out["account_critical_health"]["enabled"] is True
+    assert out["account_critical_health"]["total"] == 3
+    assert out["account_critical_health"]["succeeded"] == 3
+    assert out["account_critical_health"]["failed"] == 0
+    assert out["account_critical_health"]["surfaces"]["balance"]["latency_ms"]["count"] == 1
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
+
+
+def test_account_critical_probe_health_summarizes_failures_without_raw_errors():
+    summary = summarize_account_critical_probe_health(
+        {
+            "include_private": True,
+            "repeats": [
+                {
+                    "fetch_balance": {
+                        "ok": True,
+                        "elapsed_ms": 1.25,
+                        "value": {"redacted": True},
+                    },
+                    "fetch_positions": {
+                        "ok": False,
+                        "elapsed_ms": 2.5,
+                        "error_type": "RequestTimeout",
+                        "error": "https://api.exchange.invalid/path?secret=leak",
+                    },
+                    "fetch_open_orders_all": {
+                        "ok": False,
+                        "elapsed_ms": 3.75,
+                        "error_type": "RuntimeError",
+                        "error": "raw payload should not appear",
+                    },
+                }
+            ],
+        }
+    )
+
+    assert summary["enabled"] is True
+    assert summary["total"] == 3
+    assert summary["succeeded"] == 1
+    assert summary["failed"] == 2
+    assert summary["failure_pct"] == pytest.approx(66.667)
+    assert summary["surfaces"]["positions"]["error_types"] == {"RequestTimeout": 1}
+    assert summary["surfaces"]["open_orders"]["latest"]["error_type"] == "RuntimeError"
+    assert "secret=leak" not in str(summary)
+    assert "raw payload" not in str(summary)
+
+
+def test_account_critical_probe_collection_aggregates_user_summaries():
+    probes = [
+        {
+            "user": "kucoin_01",
+            "exchange": "kucoinfutures",
+            "include_private": True,
+            "repeats": [
+                {
+                    "fetch_balance": {"ok": True, "elapsed_ms": 10.0},
+                    "fetch_positions": {"ok": True, "elapsed_ms": 20.0},
+                    "fetch_open_orders_all": {"ok": False, "error_type": "RequestTimeout"},
+                }
+            ],
+        },
+        {
+            "user": "binance_01",
+            "exchange": "binance",
+            "include_private": False,
+            "repeats": [{"fetch_tickers_all": {"ok": True}}],
+        },
+    ]
+
+    collection = summarize_account_critical_probe_collection(probes)
+
+    assert collection["total"] == 3
+    assert collection["succeeded"] == 2
+    assert collection["failed"] == 1
+    assert collection["users"][0]["user"] == "kucoin_01"
+    assert collection["users"][0]["exchange"] == "kucoinfutures"
+    assert collection["users"][0]["enabled"] is True
+    assert collection["users"][0]["total"] == 3
+    assert collection["users"][0]["succeeded"] == 2
+    assert collection["users"][0]["failed"] == 1
+    assert collection["users"][0]["failure_pct"] == pytest.approx(33.333)
+    assert collection["users"][1] == {
+        "user": "binance_01",
+        "exchange": "binance",
+        "enabled": False,
+        "total": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "failure_pct": None,
+    }
+
+
+@pytest.mark.asyncio
+async def test_probe_exchange_ticker_endpoints_redacts_stored_endpoint_errors():
+    class FakeExchange:
+        id = "fake"
+        has = {
+            "fetchBalance": True,
+            "fetchBidsAsks": True,
+            "fetchMyTrades": True,
+            "fetchOpenOrders": True,
+            "fetchPositions": True,
+            "fetchTicker": True,
+            "fetchTickers": True,
+        }
+
+        async def load_markets(self):
+            return {
+                "BTC/USDT:USDT": {
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                }
+            }
+
+        async def fetch_tickers(self, symbols=None):
+            selected = symbols or ["BTC/USDT:USDT"]
+            return {symbol: {"symbol": symbol, "bid": 9.0, "ask": 11.0, "last": 10.0} for symbol in selected}
+
+        async def fetch_bids_asks(self, symbols=None):
+            selected = symbols or ["BTC/USDT:USDT"]
+            return {symbol: {"symbol": symbol, "bid": 9.0, "ask": 11.0, "last": 10.0} for symbol in selected}
+
+        async def fetch_ticker(self, symbol):
+            return {"symbol": symbol, "bid": 9.0, "ask": 11.0, "last": 10.0}
+
+        async def fetch_balance(self):
+            raise RuntimeError(
+                "GET https://api.exchange.invalid/account?apiKey=SECRET&signature=SIG "
+                "Authorization: Bearer TOKEN"
+            )
+
+        async def fetch_positions(self):
+            return []
+
+        async def fetch_open_orders(self):
+            return []
+
+        async def fetch_my_trades(self, symbol=None, since=None, limit=None):
+            return []
+
+    out = await probe_exchange_ticker_endpoints(
+        FakeExchange(),
+        user="fake_user",
+        user_info={"quote": "USDT"},
+        symbols=["BTC/USDT:USDT"],
+        coins=[],
+        quote=None,
+        max_symbols=1,
+        repeats=1,
+        sleep_between_seconds=0.0,
+        include_order_book=False,
+        include_ohlcv=False,
+    )
+
+    error = out["repeats"][0]["fetch_balance"]["error"]
+    assert "SECRET" not in error
+    assert "SIG" not in error
+    assert "TOKEN" not in error
+    assert "apiKey=[redacted]" in error
+    assert "signature=[redacted]" in error
+    assert "Authorization: [redacted]" in error
+    assert out["account_critical_health"]["surfaces"]["balance"]["error_types"] == {
+        "RuntimeError": 1
+    }
