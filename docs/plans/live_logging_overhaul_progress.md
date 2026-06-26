@@ -19,11 +19,18 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `eda7cb2f` merge of PR #677, `Emit execution loop error burst events`.
+- `ff714b61` merge of PR #679, `Surface smoke problem event context`.
+
+Current review gate:
+
+- Composer has been stopped/retired from this loop. The normal review gate is
+  now Claude + Hermes + CI. For low-risk docs/tooling-only slices, a degraded
+  gate may still be used after repeated Claude absence, but that exception must
+  be called out in the progress evidence.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #677 at `eda7cb2f`.
+- Repository pulled through PR #679 at `ff714b61`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -62,6 +69,17 @@ VPS5 deployment status:
   recovered without intervention. Remaining smoke attention came from non-hard
   EMA readiness / staged-execution degradation and GateIO ZEC HSL cooldown, not
   from the PR #677 logging migration.
+- PRs #678 and #679 were pulled to VPS5 without bot restart because they only
+  changed docs and read-only smoke-report tooling. A later 2-minute smoke with
+  `--log-window-unparsed-policy drop`, text logs enabled, and
+  `/root/bots_vps5.yaml` process matching reported `ok=true`,
+  `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `matched_expected=5`, and
+  `missing_expected=[]`. One non-hard Kucoin candle `RequestTimeout` remained
+  visible in `remote_call_failures`. The smoke output now includes bounded
+  `problem_events.latest_data` for persistent non-hard `ema.unavailable` and
+  `cycle.degraded` groups, and stale unparseable traceback/header fragments are
+  filtered by timestamp context instead of causing false recent-window matches.
 
 ## Phase Checklist
 
@@ -511,14 +529,44 @@ VPS5 deployment status:
   showed non-hard EMA readiness / staged-execution degradation and GateIO ZEC
   HSL cooldown, which remain separate operational signals.
 
+### PR #678: Execution Burst Progress Update
+
+- Branch: `codex/v8-progress-after-execution-burst-event`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #677 merged and VPS5 smoke confirmed the execution-loop error burst event
+  migration.
+
+### PR #679: Smoke Problem Event Context
+
+- Branch: `codex/v8-smoke-problem-event-data`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes bounded,
+  allowlisted `latest_data` for relevant problem-event groups such as
+  `ema.unavailable` and `cycle.degraded`, with recursive redaction and payload
+  bounds. The text-log scanner also uses the last parsed timestamp as context
+  for unparseable continuation lines inside active windows, so stale traceback
+  fragments after old errors are skipped while current traceback signals remain
+  preserved.
+- Review evidence: Hermes approved the original and amended delta; CI was
+  green; focused smoke-report tests, compileall, and `git diff --check` passed
+  before merge. Claude did not return during repeated polls, and Composer had
+  been retired, so this docs/tooling-only slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `ff714b61` without bot restart. A
+  2-minute smoke with `--log-window-unparsed-policy drop` and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no hard problem events, no text-log hard or
+  attention matches, and exposed useful `latest_data` for the remaining
+  non-hard EMA/cycle readiness groups.
+
 ## Current Next Steps
 
 1. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 2. Use the persistent non-hard EMA readiness / staged-execution degradation
-   visible in VPS5 smokes as the next candidate for either richer structured
-   diagnostics or a targeted readiness fix, if existing event fields are
-   insufficient.
+   visible in VPS5 smokes as the next candidate for targeted readiness
+   diagnostics or a narrow fix. PR #679 made the problem groups easier to
+   inspect by surfacing bounded latest event data.
 3. Add read-only exchange health probes for account-critical endpoint timeouts
    if passive event summaries are insufficient.
 4. Start the live restart/smoke automation slice if operational workflow speed

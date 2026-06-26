@@ -61,8 +61,9 @@ Related detailed plans:
    config, scope structured monitor events and parseable timestamped text logs
    to a requested time window, apply an explicit unparseable text-log policy,
    avoid traceback-prose false positives, and summarize recent HSL/risk events
-   from the structured stream, but the safe restart orchestration contract is
-   not implemented.
+   from the structured stream. It also surfaces bounded latest problem-event
+   context for selected non-hard groups such as EMA/cycle readiness
+   degradation. The safe restart orchestration contract is not implemented.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
@@ -250,6 +251,7 @@ Related detailed plans:
 | 2026-06-26 | #3/#8 Live restart/smoke automation and HSL preview | PR #673 / `2697ff48` | Added bounded `risk_events` summaries to `live-smoke-report`; VPS5 smoke exposed GateIO ZEC long HSL RED cooldown without changing smoke health policy | Safe pull/stop/start orchestration and true HSL dry-run preview still open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #675 / `3aa1e7a7` | Added explicit `keep|drop` policy for unparseable text-log lines in smoke windows; opt-in `drop` suppresses only non-signal unparseable noise and preserves traceback/hard signals; VPS5 smoke with `drop` passed | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #10 Operator console redesign from events | PR #677 / `409f5d8e` | Mirrored existing execution-loop error burst warnings into structured `health.summary` events with `execution_loop_error_burst`, best-effort and redacted | Continue migrating high-value text logs to structured events without increasing console noise |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #679 / `60c9a41` | Added bounded `problem_events.latest_data` for selected smoke problem groups and timestamp-context filtering for stale unparseable log continuations; VPS5 smoke after deploy returned `ok=true`, no hard problem events, no log hard/attention matches, and all five bots matched | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
