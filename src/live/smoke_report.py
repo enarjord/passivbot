@@ -340,9 +340,6 @@ def _summarize_remote_call_failures(
 
 
 def _remote_call_status(live_event: dict[str, Any], row: dict[str, Any]) -> str | None:
-    status = live_event.get("status")
-    if status not in (None, ""):
-        return str(status).lower()
     event_type = live_event.get("event_type") or row.get("kind")
     if event_type == EventTypes.REMOTE_CALL_SUCCEEDED:
         return "succeeded"
@@ -350,6 +347,16 @@ def _remote_call_status(live_event: dict[str, Any], row: dict[str, Any]) -> str 
         return "failed"
     if event_type == EventTypes.REMOTE_CALL_THROTTLED:
         return "throttled"
+    status = live_event.get("status")
+    if status not in (None, ""):
+        return str(status).lower()
+    return None
+
+
+def _remote_call_raw_status(live_event: dict[str, Any]) -> str | None:
+    status = live_event.get("status")
+    if status not in (None, ""):
+        return str(status).lower()
     return None
 
 
@@ -366,6 +373,7 @@ def _remote_call_health_group(
     ids = _event_ids(live_event)
     elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
     status = _remote_call_status(live_event, row)
+    raw_status = _remote_call_raw_status(live_event)
     reason_code = live_event.get("reason_code")
     error_type = payload.get("error_type")
     symbol = live_event.get("symbol")
@@ -377,6 +385,9 @@ def _remote_call_health_group(
         "count": 1,
         "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
         "statuses": Counter([status]) if status else Counter(),
+        "raw_statuses": Counter([raw_status])
+        if raw_status and raw_status != status
+        else Counter(),
         "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
         "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
         "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
@@ -386,6 +397,7 @@ def _remote_call_health_group(
         "latest_line": int(line_no),
         "latest_event_type": live_event.get("event_type") or row.get("kind"),
         "latest_status": status,
+        "latest_raw_status": raw_status if raw_status and raw_status != status else None,
         "latest_elapsed_ms": elapsed_ms,
         "latest_symbol": symbol,
         "latest_error_type": error_type,
@@ -413,7 +425,7 @@ def _merge_remote_call_health_group(
         return
     existing["count"] = int(existing.get("count", 0)) + 1
     existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
-    for field in ("statuses", "reason_codes", "error_types", "symbols"):
+    for field in ("statuses", "raw_statuses", "reason_codes", "error_types", "symbols"):
         counter = existing.setdefault(field, Counter())
         counter.update(group.get(field) or Counter())
     current_key = _sort_event_position_key(
@@ -436,6 +448,7 @@ def _merge_remote_call_health_group(
             "latest_line",
             "latest_event_type",
             "latest_status",
+            "latest_raw_status",
             "latest_elapsed_ms",
             "latest_symbol",
             "latest_error_type",
@@ -497,6 +510,11 @@ def _summarize_remote_call_health(
             if isinstance(group.get("reason_codes"), Counter)
             else Counter()
         )
+        raw_statuses = (
+            group.get("raw_statuses")
+            if isinstance(group.get("raw_statuses"), Counter)
+            else Counter()
+        )
         error_types = (
             group.get("error_types") if isinstance(group.get("error_types"), Counter) else Counter()
         )
@@ -517,6 +535,10 @@ def _summarize_remote_call_health(
             "throttled_pct": _usage_pct(throttled_count, count),
             "statuses": _top_counter_values(
                 statuses,
+                limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+            ),
+            "raw_statuses": _top_counter_values(
+                raw_statuses,
                 limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
             ),
             "reason_codes": _top_counter_values(
@@ -541,6 +563,7 @@ def _summarize_remote_call_health(
             "latest_ts": group.get("latest_ts"),
             "latest_event_type": group.get("latest_event_type"),
             "latest_status": group.get("latest_status"),
+            "latest_raw_status": group.get("latest_raw_status"),
             "latest_elapsed_ms": group.get("latest_elapsed_ms"),
             "latest_symbol": group.get("latest_symbol"),
             "latest_error_type": group.get("latest_error_type"),

@@ -420,6 +420,79 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
     }
 
 
+def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.throttled",
+                seq=1,
+                ts=1000,
+                status="deferred",
+                level="debug",
+                reason_code="rate_limited",
+                symbol="TRX/USDT:USDT",
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rct_1",
+                    "remote_call_group_id": "cy_1:candles",
+                },
+                data={
+                    "kind": "ccxt_fetch_ohlcv",
+                    "elapsed_ms": 250,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    assert report["remote_call_health"] == {
+        "total": 1,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "component": "test",
+                "kind": "ccxt_fetch_ohlcv",
+                "count": 1,
+                "succeeded": 0,
+                "failed": 0,
+                "throttled": 1,
+                "failure_pct": 0,
+                "throttled_pct": 100,
+                "statuses": {"throttled": 1},
+                "raw_statuses": {"deferred": 1},
+                "reason_codes": {"rate_limited": 1},
+                "symbols": {
+                    "count": 1,
+                    "sample": ["TRX/USDT:USDT"],
+                    "truncated": 0,
+                },
+                "elapsed_ms": {
+                    "median_ms": 250,
+                    "p95_ms": 250,
+                    "min_ms": 250,
+                    "max_ms": 250,
+                },
+                "latest_ts": 1000,
+                "latest_event_type": "remote_call.throttled",
+                "latest_status": "throttled",
+                "latest_raw_status": "deferred",
+                "latest_elapsed_ms": 250,
+                "latest_symbol": "TRX/USDT:USDT",
+                "latest_ids": {
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rct_1",
+                    "remote_call_group_id": "cy_1:candles",
+                },
+            }
+        ],
+    }
+
+
 def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(
