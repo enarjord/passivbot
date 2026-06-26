@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-restart-smoke-plan` for read-only dry-run restart
+  smoke planning from a tmuxp-style supervisor config, with explicit
+  non-execution metadata and rejected execution flags.
 - Added `passivbot tool hsl-startup-preview` for read-only offline HSL
   startup previews from config and local monitor events, with explicit
   unavailable fields for current drawdown and panic-order prediction.

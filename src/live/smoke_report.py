@@ -1548,6 +1548,21 @@ def _public_expected_record(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]:
+    """Return sanitized passivbot live commands from a tmuxp-style config."""
+    config = _parse_tmuxp_live_commands(config_path)
+    return {
+        "path": _user_safe_display_path(config["path"])
+        if config.get("path") is not None
+        else None,
+        "exists": bool(config.get("exists")),
+        "error": config.get("error"),
+        "expected": [
+            _public_expected_record(item) for item in config.get("expected") or []
+        ],
+    }
+
+
 def _build_process_report(
     *,
     include_processes: bool,
