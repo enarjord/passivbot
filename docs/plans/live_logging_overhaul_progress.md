@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `a2f93456e` merge of PR #703, `Add account-only ticker endpoint probe mode`.
+- `4e7520005` merge of PR #705, `Add brief live smoke report summary`.
 
 Current review gate:
 
@@ -202,6 +202,30 @@ VPS5 deployment status:
   `a2f93456` reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
   `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
   `matched_expected=5`, and `missing_expected=[]`.
+- PR #704 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only updated progress docs. A compact
+  smoke at `65589e71` reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`.
+- After `/root/bots_vps5.yaml` was updated to run the new HSL forager config on
+  Binance, Kucoin, GateIO, and OKX while leaving `hyperliquid_tradfi`
+  unchanged, a 10-minute smoke at `65589e71` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. One non-hard Kucoin candle `RequestTimeout` recovered
+  in subsequent candle calls. Remaining attention came from known non-hard
+  Hyperliquid tradfi EMA/staged readiness events.
+- PR #705 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only changed read-only smoke-report
+  tooling. A 10-minute `--brief` smoke at `4e752000` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `repository.dirty=false`,
+  `remote_calls.total=606`, `remote_calls.failed=1`,
+  `account_critical_remote_calls.total=90`, and
+  `account_critical_remote_calls.failed=0`. The single remote failure was a
+  non-hard Kucoin candle timeout; no account-critical failure or hard problem
+  event was present.
 
 ## Phase Checklist
 
@@ -214,7 +238,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy/brief smoke counters, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
