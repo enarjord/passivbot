@@ -53,6 +53,20 @@ RISK_EVENT_TYPES = {
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
 }
+PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
+    EventTypes.CYCLE_DEGRADED: ("details", "authoritative_epoch"),
+    EventTypes.EMA_UNAVAILABLE: (
+        "optional_drop_count",
+        "optional_drop_groups",
+        "candidate_unavailable",
+        "candidate_unavailable_groups",
+        "unavailable",
+        "unavailable_reasons",
+    ),
+}
+PROBLEM_EVENT_DATA_MAX_DEPTH = 4
+PROBLEM_EVENT_DATA_MAX_ITEMS = 8
+PROBLEM_EVENT_DATA_MAX_TEXT = 240
 PROCESS_REPORT_FIELDS = {
     "pid",
     "age_s",
@@ -89,6 +103,64 @@ def _bot_key(live_event: dict[str, Any], row: dict[str, Any]) -> str:
     return f"{exchange}/{user}"
 
 
+def _compact_problem_event_data_value(value: Any, *, depth: int = 0) -> Any:
+    if value in (None, "", [], {}, ()):
+        return None
+    if isinstance(value, bool) or isinstance(value, int) or isinstance(value, float):
+        return value
+    if isinstance(value, str):
+        text = _redact_log_text(value)
+        if len(text) > PROBLEM_EVENT_DATA_MAX_TEXT:
+            text = text[:PROBLEM_EVENT_DATA_MAX_TEXT] + "..."
+        return text
+    if depth >= PROBLEM_EVENT_DATA_MAX_DEPTH:
+        return _compact_problem_event_data_value(str(value), depth=depth)
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key in sorted(value, key=str)[:PROBLEM_EVENT_DATA_MAX_ITEMS]:
+            compact = _compact_problem_event_data_value(
+                value.get(key),
+                depth=depth + 1,
+            )
+            if compact not in (None, "", [], {}):
+                out[str(key)] = compact
+        truncated = max(0, len(value) - PROBLEM_EVENT_DATA_MAX_ITEMS)
+        if truncated:
+            out["truncated"] = truncated
+        return out or None
+    if isinstance(value, (list, tuple, set)):
+        values = list(value)
+        out = [
+            compact
+            for item in values[:PROBLEM_EVENT_DATA_MAX_ITEMS]
+            if (compact := _compact_problem_event_data_value(item, depth=depth + 1))
+            not in (None, "", [], {})
+        ]
+        truncated = max(0, len(values) - PROBLEM_EVENT_DATA_MAX_ITEMS)
+        if truncated:
+            out.append({"truncated": truncated})
+        return out or None
+    return _compact_problem_event_data_value(str(value), depth=depth)
+
+
+def _compact_problem_event_data(live_event: dict[str, Any]) -> dict[str, Any]:
+    event_type = str(live_event.get("event_type") or "")
+    keys = PROBLEM_EVENT_DATA_KEYS.get(event_type)
+    if not keys:
+        return {}
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in keys:
+        if key not in data:
+            continue
+        compact = _compact_problem_event_data_value(data.get(key))
+        if compact not in (None, "", [], {}):
+            out[key] = compact
+    return out
+
+
 def _compact_problem_event(
     *,
     path: Path,
@@ -122,6 +194,7 @@ def _compact_problem_event(
                 )
                 if ids.get(key) is not None
             },
+            "latest_data": _compact_problem_event_data(live_event),
         }.items()
         if value not in (None, {}, [])
     }
@@ -1125,12 +1198,22 @@ def _scan_logs(
     unparsed_ts = 0
     lines_skipped_unparsed = 0
     for path in files:
+        log_context_ts_ms: int | None = None
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
             line_ts = _parse_log_line_ts_ms(line)
+            if line_ts is not None:
+                log_context_ts_ms = line_ts
             attention = bool(ATTENTION_LOG_PATTERN.search(line))
             if window_enabled:
                 if line_ts is None:
                     unparsed_ts += 1
+                    if log_context_ts_ms is not None:
+                        if since_ms is not None and log_context_ts_ms < since_ms:
+                            lines_skipped_before += 1
+                            continue
+                        if until_ms is not None and log_context_ts_ms > until_ms:
+                            lines_skipped_after += 1
+                            continue
                     if unparsed_policy == "drop" and not attention:
                         lines_skipped_unparsed += 1
                         continue
