@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `c8ce48809` merge of PR #692, `Add smoke remote-call health totals`.
+- `3299c1cac` merge of PR #694, `Add account-critical smoke health summary`.
 
 Current review gate:
 
@@ -139,6 +139,15 @@ VPS5 deployment status:
   `missing_expected=[]`. The new top-level `remote_call_health` summary was
   present with `total=390`, `succeeded=389`, `failed=1`, `throttled=0`,
   `failure_pct=0`, and `throttled_pct=0`.
+- PR #694 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. A 5-minute smoke with text logs,
+  `--log-window-unparsed-policy drop`, and `/root/bots_vps5.yaml` process
+  matching reported `ok=true`, `hard_failures=0`,
+  `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `matched_expected=5`, and
+  `missing_expected=[]`. The new `account_critical_remote_call_health`
+  summary was present with `total=126`, `succeeded=126`, `failed=0`,
+  `throttled=0`, `failure_pct=0`, and `throttled_pct=0`.
 
 ## Phase Checklist
 
@@ -151,7 +160,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -759,23 +768,46 @@ VPS5 deployment status:
   `total=390`, `succeeded=389`, `failed=1`, `throttled=0`, `failure_pct=0`,
   and `throttled_pct=0`.
 
+### PR #694: Account-Critical Remote-Call Health
+
+- Branch: `codex/v8-smoke-authoritative-health`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes
+  `account_critical_remote_call_health`, a filtered view of terminal
+  authoritative balance, position, open-order, and Hyperliquid split
+  account-state surfaces. It reuses the existing bounded remote-call health
+  summarizer while excluding broader candle/fill traffic.
+- Review evidence: Hermes approved head `bebbb3f6`; CI was green; focused
+  smoke-report and incident-bundle tests, compileall, `git diff --check`, and
+  the touched-file silent-handling audit passed before merge. Claude did not
+  return during repeated polls, and Composer had been retired, so this
+  read-only tooling slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `3299c1ca` without bot restart. A
+  5-minute smoke with text logs, `--log-window-unparsed-policy drop`, and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no hard problem events, no log hard or attention
+  matches, and account-critical health totals:
+  `total=126`, `succeeded=126`, `failed=0`, `throttled=0`, `failure_pct=0`,
+  and `throttled_pct=0`.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
    runtime staged-refresh event producer slice. CI is green on rebased head
-   `3a0d5d1e0`, and Hermes approved that head. Claude has not reviewed the
-   current runtime head.
+   `7b87d6b6d9`, and Hermes approved that head. Claude has not reviewed the
+   current runtime head. Because PR #694 moved `v8`, rebase PR #681 before
+   merge if Claude later approves.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
    to inspect by surfacing bounded latest event data and aggregate groups.
-4. Add read-only exchange health probes for account-critical endpoint timeouts.
-   VPS5 Kucoin now repeatedly shows authoritative state fetch `RequestTimeout`
-   events and long refresh wall times. PRs #688 and #690 show slow endpoint
-   calls even when they eventually succeed, grouped by timing and health, so
-   this item has enough evidence to justify a focused probe/diagnostic slice.
+4. Add active read-only exchange health probes for account-critical endpoint
+   timeouts. VPS5 Kucoin now repeatedly shows authoritative state fetch
+   `RequestTimeout` events and long refresh wall times. PRs #688, #690, #692,
+   and #694 expose passive timing/health summaries from already-emitted events;
+   explicit pre-smoke endpoint probes remain open.
 5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 6. Continue cache-doctor refinements in separate adjacent PRs: cache-family
