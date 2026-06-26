@@ -18,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import build_event_report, discover_event_files
 from live.smoke_report import (
+    DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     _redact_log_text,
     build_live_smoke_report,
     default_logs_root_for_monitor,
@@ -611,6 +612,7 @@ def build_live_incident_bundle(
     max_log_files: int = 8,
     log_tail_lines: int = 500,
     max_log_matches: int = 100,
+    log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     max_snapshot_files: int = 20,
     max_snapshot_file_bytes: int = 1_000_000,
     max_event_segment_bytes: int = 10_000_000,
@@ -666,6 +668,7 @@ def build_live_incident_bundle(
         max_log_files=max_log_files,
         log_tail_lines=log_tail_lines,
         max_log_matches=max_log_matches,
+        log_window_unparsed_policy=log_window_unparsed_policy,
     )
 
     with tempfile.TemporaryDirectory(prefix="passivbot_incident_bundle_") as tmp_name:

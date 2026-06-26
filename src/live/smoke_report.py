@@ -41,6 +41,8 @@ LOG_LINE_TS_PATTERN = re.compile(
 )
 STARTUP_TIMING_BASELINE_WINDOW = 20
 DEFAULT_PROCESS_MATCH = "passivbot live"
+LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
+DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 RISK_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
@@ -1038,6 +1040,16 @@ def _parse_log_line_ts_ms(line: str) -> int | None:
     return int(parsed.timestamp() * 1000)
 
 
+def _normalize_log_window_unparsed_policy(value: str | None) -> str:
+    policy = str(value or DEFAULT_LOG_WINDOW_UNPARSED_POLICY).strip().lower()
+    if policy not in LOG_WINDOW_UNPARSED_POLICIES:
+        raise ValueError(
+            "log_window_unparsed_policy must be one of "
+            f"{sorted(LOG_WINDOW_UNPARSED_POLICIES)}"
+        )
+    return policy
+
+
 def _log_window_report(
     *,
     since_ms: int | None,
@@ -1046,6 +1058,8 @@ def _log_window_report(
     lines_skipped_before: int,
     lines_skipped_after: int,
     unparsed_ts: int,
+    unparsed_policy: str,
+    lines_skipped_unparsed: int,
 ) -> dict[str, Any]:
     return {
         "enabled": since_ms is not None or until_ms is not None,
@@ -1055,6 +1069,8 @@ def _log_window_report(
         "lines_skipped_before": int(lines_skipped_before),
         "lines_skipped_after": int(lines_skipped_after),
         "unparsed_ts": int(unparsed_ts),
+        "unparsed_policy": _normalize_log_window_unparsed_policy(unparsed_policy),
+        "lines_skipped_unparsed": int(lines_skipped_unparsed),
     }
 
 
@@ -1076,8 +1092,10 @@ def _scan_logs(
     max_matches: int,
     since_ms: int | None,
     until_ms: int | None,
+    log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
 ) -> dict[str, Any]:
     window_enabled = since_ms is not None or until_ms is not None
+    unparsed_policy = _normalize_log_window_unparsed_policy(log_window_unparsed_policy)
     window_report = _log_window_report(
         since_ms=since_ms,
         until_ms=until_ms,
@@ -1085,6 +1103,8 @@ def _scan_logs(
         lines_skipped_before=0,
         lines_skipped_after=0,
         unparsed_ts=0,
+        unparsed_policy=unparsed_policy,
+        lines_skipped_unparsed=0,
     )
     if root is None:
         return {
@@ -1103,12 +1123,17 @@ def _scan_logs(
     lines_skipped_before = 0
     lines_skipped_after = 0
     unparsed_ts = 0
+    lines_skipped_unparsed = 0
     for path in files:
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
             line_ts = _parse_log_line_ts_ms(line)
+            attention = bool(ATTENTION_LOG_PATTERN.search(line))
             if window_enabled:
                 if line_ts is None:
                     unparsed_ts += 1
+                    if unparsed_policy == "drop" and not attention:
+                        lines_skipped_unparsed += 1
+                        continue
                 else:
                     if since_ms is not None and line_ts < since_ms:
                         lines_skipped_before += 1
@@ -1117,7 +1142,7 @@ def _scan_logs(
                         lines_skipped_after += 1
                         continue
             lines_considered += 1
-            if not ATTENTION_LOG_PATTERN.search(line):
+            if not attention:
                 continue
             attention_matches += 1
             hard = bool(HARD_LOG_PATTERN.search(line))
@@ -1145,6 +1170,8 @@ def _scan_logs(
             lines_skipped_before=lines_skipped_before,
             lines_skipped_after=lines_skipped_after,
             unparsed_ts=unparsed_ts,
+            unparsed_policy=unparsed_policy,
+            lines_skipped_unparsed=lines_skipped_unparsed,
         ),
         "matches": matches,
     }
@@ -1164,6 +1191,7 @@ def build_live_smoke_report(
     max_log_files: int = 8,
     log_tail_lines: int = 300,
     max_log_matches: int = 50,
+    log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
 ) -> dict[str, Any]:
     event_report = build_event_report(
         monitor_root,
@@ -1214,6 +1242,7 @@ def build_live_smoke_report(
         max_matches=max_log_matches,
         since_ms=since_ms,
         until_ms=until_ms,
+        log_window_unparsed_policy=log_window_unparsed_policy,
     )
     process_report = _build_process_report(
         include_processes=include_processes,

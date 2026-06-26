@@ -617,6 +617,7 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
                 "1970-01-01T00:00:01Z ERROR stale before window",
                 "1970-01-01T00:00:03Z ERROR fresh in window",
                 "ERROR unparseable timestamp kept visible",
+                "unparseable timestamp noise",
                 "1970-01-01T00:00:05Z CRITICAL future hard skipped",
             ]
         )
@@ -639,10 +640,12 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
         "enabled": True,
         "since_ms": 2000,
         "until_ms": 4000,
-        "lines_considered": 2,
+        "lines_considered": 3,
         "lines_skipped_before": 1,
         "lines_skipped_after": 1,
-        "unparsed_ts": 1,
+        "unparsed_ts": 2,
+        "unparsed_policy": "keep",
+        "lines_skipped_unparsed": 0,
     }
     assert [match["text"] for match in report["logs"]["matches"]] == [
         "1970-01-01T00:00:03Z ERROR fresh in window",
@@ -650,6 +653,91 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
     ]
     assert report["logs"]["matches"][0]["ts"] == 3000
     assert "future hard skipped" not in json.dumps(report["logs"]["matches"])
+
+    drop_report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        since_ms=2000,
+        until_ms=4000,
+        log_tail_lines=10,
+        log_window_unparsed_policy="drop",
+    )
+
+    assert drop_report["ok"] is True
+    assert drop_report["logs"]["attention_matches"] == 2
+    assert drop_report["logs"]["hard_matches"] == 0
+    assert drop_report["logs"]["window"] == {
+        "enabled": True,
+        "since_ms": 2000,
+        "until_ms": 4000,
+        "lines_considered": 2,
+        "lines_skipped_before": 1,
+        "lines_skipped_after": 1,
+        "unparsed_ts": 2,
+        "unparsed_policy": "drop",
+        "lines_skipped_unparsed": 1,
+    }
+    assert [match["text"] for match in drop_report["logs"]["matches"]] == [
+        "1970-01-01T00:00:03Z ERROR fresh in window",
+        "ERROR unparseable timestamp kept visible",
+    ]
+
+
+def test_live_smoke_report_log_window_drop_preserves_unparseable_hard_signal(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "okx_faisal.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:03Z ERROR exchange call failed",
+                "Traceback (most recent call last):",
+                "  File \"/tmp/passivbot.py\", line 1, in run",
+                "old unparseable non-signal noise",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        since_ms=2000,
+        until_ms=4000,
+        log_tail_lines=10,
+        log_window_unparsed_policy="drop",
+    )
+
+    assert report["ok"] is False
+    assert report["logs"]["attention_matches"] == 2
+    assert report["logs"]["hard_matches"] == 1
+    assert report["logs"]["window"] == {
+        "enabled": True,
+        "since_ms": 2000,
+        "until_ms": 4000,
+        "lines_considered": 2,
+        "lines_skipped_before": 0,
+        "lines_skipped_after": 0,
+        "unparsed_ts": 3,
+        "unparsed_policy": "drop",
+        "lines_skipped_unparsed": 2,
+    }
+    assert [match["text"] for match in report["logs"]["matches"]] == [
+        "1970-01-01T00:00:03Z ERROR exchange call failed",
+        "Traceback (most recent call last):",
+    ]
 
 
 def test_live_smoke_report_log_scan_ignores_traceback_prose(tmp_path):
@@ -778,6 +866,64 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
     assert report["logs"]["files_scanned"] == 0
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
+
+
+def test_live_smoke_report_cli_can_drop_unparseable_window_log_lines(
+    tmp_path,
+    capsys,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "okx_faisal.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:03Z ERROR fresh in window",
+                "stale unparseable noise dropped",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        live_smoke_report.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                str(logs_dir),
+                "--since-ms",
+                "2000",
+                "--until-ms",
+                "4000",
+                "--log-tail-lines",
+                "10",
+                "--log-window-unparsed-policy",
+                "drop",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["logs"]["attention_matches"] == 1
+    assert report["logs"]["window"]["unparsed_policy"] == "drop"
+    assert report["logs"]["window"]["lines_skipped_unparsed"] == 1
+    assert [match["text"] for match in report["logs"]["matches"]] == [
+        "1970-01-01T00:00:03Z ERROR fresh in window"
+    ]
 
 
 def test_live_smoke_report_cli_rejects_invalid_window_timestamp(capsys):

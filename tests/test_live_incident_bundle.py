@@ -273,6 +273,65 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert smoke_report["logs"]["hard_matches"] == 0
 
 
+def test_live_incident_bundle_cli_passes_log_window_unparsed_policy(
+    tmp_path,
+    capsys,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "okx_01.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:03Z ERROR fresh in window",
+                "old unparseable noise dropped",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                str(logs_dir),
+                "--since-ms",
+                "2000",
+                "--until-ms",
+                "4000",
+                "--log-window-unparsed-policy",
+                "drop",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    with tarfile.open(output, "r:gz") as tar:
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert smoke_report["logs"]["attention_matches"] == 1
+    assert smoke_report["logs"]["window"]["unparsed_policy"] == "drop"
+    assert smoke_report["logs"]["window"]["lines_skipped_unparsed"] == 1
+
+
 def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_incident_bundle.main(["monitor", "--since-ms", "not-an-int"])
