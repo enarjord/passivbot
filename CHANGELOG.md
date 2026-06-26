@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added top-level success, failure, and throttle totals to remote-call health
+  summaries in `passivbot tool live-smoke-report`.
 - Added remote-call health rollups to `passivbot tool live-smoke-report`,
   grouping successes, failures, throttles, latency, and affected symbols by
   bot/component/kind/surface.
