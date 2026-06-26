@@ -68,7 +68,9 @@ Related detailed plans:
    degradation, plus aggregate problem-event groups keyed by bot/event/reason/
    status/hard flag/symbol/position side, passive remote-call health summaries,
    account-critical remote-call summaries, repository state, and a concise
-   `--summary` projection for operator smoke checks. The smoke report now also
+   `--summary` projection for operator smoke checks. It also has a `--brief`
+   projection for top-level smoke-loop counters without event groups or log
+   matches. The smoke report now also
    redacts common user/home prefixes from `repository.root` for shareable
    reports and surfaces explicit dropped-unparsed attention/hard counters when
    the opt-in log-window drop policy suppresses contextless hard-looking log
@@ -81,9 +83,8 @@ Related detailed plans:
    explicit, and produce a reviewable smoke report.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
-   The concise summary is still intentionally bounded but can be tightened
-   further with row limits or a brief mode if chat-facing smoke output remains
-   too large.
+   The concise and brief summaries are intentionally bounded; further changes
+   should target missing smoke fields rather than larger chat-facing payloads.
 
 4. [ ] Startup phase budget tracking.
    Status: partial. Startup timing and warmup cache decision events exist, and
