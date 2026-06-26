@@ -164,6 +164,44 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
             }
         ],
     }
+    assert report["remote_call_health"] == {
+        "total": 1,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "component": "test",
+                "surface": "balance",
+                "count": 1,
+                "succeeded": 0,
+                "failed": 1,
+                "throttled": 0,
+                "failure_pct": 100,
+                "throttled_pct": 0,
+                "statuses": {"failed": 1},
+                "reason_codes": {"request_timeout": 1},
+                "error_types": {"RequestTimeout": 1},
+                "symbols": {
+                    "count": 1,
+                    "sample": ["BTC/USDT:USDT"],
+                    "truncated": 0,
+                },
+                "elapsed_ms": {
+                    "median_ms": 12345,
+                    "p95_ms": 12345,
+                    "min_ms": 12345,
+                    "max_ms": 12345,
+                },
+                "latest_ts": 1100,
+                "latest_event_type": "remote_call.failed",
+                "latest_status": "failed",
+                "latest_elapsed_ms": 12345,
+                "latest_symbol": "BTC/USDT:USDT",
+                "latest_error_type": "RequestTimeout",
+                "latest_ids": {"remote_call_id": "rc_1"},
+            }
+        ],
+    }
     assert report["remote_call_timings"] == {
         "total": 1,
         "groups_truncated": False,
@@ -263,6 +301,70 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
         "total": 0,
         "groups_truncated": False,
         "groups": [],
+    }
+    assert report["remote_call_health"] == {
+        "total": 3,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "component": "test",
+                "kind": "authoritative_state_fetch",
+                "surface": "open_orders",
+                "count": 1,
+                "succeeded": 1,
+                "failed": 0,
+                "throttled": 0,
+                "failure_pct": 0,
+                "throttled_pct": 0,
+                "statuses": {"succeeded": 1},
+                "reason_codes": {"authoritative_open_orders": 1},
+                "elapsed_ms": {
+                    "median_ms": 90000,
+                    "p95_ms": 90000,
+                    "min_ms": 90000,
+                    "max_ms": 90000,
+                },
+                "latest_ts": 3000,
+                "latest_event_type": "remote_call.succeeded",
+                "latest_status": "succeeded",
+                "latest_elapsed_ms": 90000,
+                "latest_ids": {
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_3",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+            },
+            {
+                "bot": "binance/binance_01",
+                "component": "test",
+                "kind": "authoritative_state_fetch",
+                "surface": "balance",
+                "count": 2,
+                "succeeded": 2,
+                "failed": 0,
+                "throttled": 0,
+                "failure_pct": 0,
+                "throttled_pct": 0,
+                "statuses": {"succeeded": 2},
+                "reason_codes": {"authoritative_balance": 2},
+                "elapsed_ms": {
+                    "median_ms": 10000,
+                    "p95_ms": 15000,
+                    "min_ms": 5000,
+                    "max_ms": 15000,
+                },
+                "latest_ts": 2000,
+                "latest_event_type": "remote_call.succeeded",
+                "latest_status": "succeeded",
+                "latest_elapsed_ms": 15000,
+                "latest_ids": {
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+            },
+        ],
     }
     assert report["remote_call_timings"] == {
         "total": 3,
@@ -916,6 +1018,11 @@ def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_pat
     assert report["hard_problem_event_count"] == 0
     assert report["problem_events"] == []
     assert report["remote_call_failures"] == {
+        "total": 0,
+        "groups_truncated": False,
+        "groups": [],
+    }
+    assert report["remote_call_health"] == {
         "total": 0,
         "groups_truncated": False,
         "groups": [],

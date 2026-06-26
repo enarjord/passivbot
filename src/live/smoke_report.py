@@ -44,7 +44,9 @@ DEFAULT_PROCESS_MATCH = "passivbot live"
 LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
+REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
+REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
 RISK_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
@@ -333,6 +335,228 @@ def _summarize_remote_call_failures(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > REMOTE_CALL_FAILURE_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _remote_call_status(live_event: dict[str, Any], row: dict[str, Any]) -> str | None:
+    status = live_event.get("status")
+    if status not in (None, ""):
+        return str(status).lower()
+    event_type = live_event.get("event_type") or row.get("kind")
+    if event_type == EventTypes.REMOTE_CALL_SUCCEEDED:
+        return "succeeded"
+    if event_type == EventTypes.REMOTE_CALL_FAILED:
+        return "failed"
+    if event_type == EventTypes.REMOTE_CALL_THROTTLED:
+        return "throttled"
+    return None
+
+
+def _remote_call_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
+    status = _remote_call_status(live_event, row)
+    reason_code = live_event.get("reason_code")
+    error_type = payload.get("error_type")
+    symbol = live_event.get("symbol")
+    return {
+        "bot": bot_key,
+        "component": live_event.get("component"),
+        "kind": payload.get("kind"),
+        "surface": payload.get("surface"),
+        "count": 1,
+        "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
+        "statuses": Counter([status]) if status else Counter(),
+        "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
+        "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
+        "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_event_type": live_event.get("event_type") or row.get("kind"),
+        "latest_status": status,
+        "latest_elapsed_ms": elapsed_ms,
+        "latest_symbol": symbol,
+        "latest_error_type": error_type,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "remote_call_id", "remote_call_group_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_remote_call_health_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("component"),
+        group.get("kind"),
+        group.get("surface"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
+    for field in ("statuses", "reason_codes", "error_types", "symbols"):
+        counter = existing.setdefault(field, Counter())
+        counter.update(group.get(field) or Counter())
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_event_type",
+            "latest_status",
+            "latest_elapsed_ms",
+            "latest_symbol",
+            "latest_error_type",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _top_counter_values(counter: Counter[str], *, limit: int) -> dict[str, int]:
+    if not counter:
+        return {}
+    ordered = sorted(counter.items(), key=lambda item: (-int(item[1]), str(item[0])))
+    return {str(key): int(value) for key, value in ordered[:limit]}
+
+
+def _symbol_sample(counter: Counter[str], *, limit: int) -> dict[str, Any]:
+    if not counter:
+        return {}
+    ordered = sorted(counter.items(), key=lambda item: (-int(item[1]), str(item[0])))
+    sample = [str(key) for key, _value in ordered[:limit]]
+    return {
+        "count": len(counter),
+        "sample": sample,
+        "truncated": max(0, len(counter) - limit),
+    }
+
+
+def _remote_call_health_sort_key(
+    group: dict[str, Any],
+) -> tuple[int, int, int, int, int, str, str]:
+    statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+    elapsed = _ms_summary(
+        [
+            int(value)
+            for value in (group.get("elapsed_values") or [])
+            if _non_negative_int(value) is not None
+        ]
+    )
+    return (
+        -int(statuses.get("failed", 0)),
+        -int(statuses.get("throttled", 0)),
+        -int(elapsed.get("p95_ms") or 0),
+        -int(elapsed.get("max_ms") or 0),
+        -int(group.get("count", 0)),
+        str(group.get("bot") or ""),
+        str(group.get("kind") or group.get("surface") or ""),
+    )
+
+
+def _summarize_remote_call_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(groups.values(), key=_remote_call_health_sort_key)
+    compact_groups = []
+    for group in ordered[:REMOTE_CALL_HEALTH_GROUP_LIMIT]:
+        statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        reason_codes = (
+            group.get("reason_codes")
+            if isinstance(group.get("reason_codes"), Counter)
+            else Counter()
+        )
+        error_types = (
+            group.get("error_types") if isinstance(group.get("error_types"), Counter) else Counter()
+        )
+        symbols = group.get("symbols") if isinstance(group.get("symbols"), Counter) else Counter()
+        count = int(group.get("count", 0))
+        failed_count = int(statuses.get("failed", 0))
+        throttled_count = int(statuses.get("throttled", 0))
+        compact = {
+            "bot": group.get("bot"),
+            "component": group.get("component"),
+            "kind": group.get("kind"),
+            "surface": group.get("surface"),
+            "count": count,
+            "succeeded": int(statuses.get("succeeded", 0)),
+            "failed": failed_count,
+            "throttled": throttled_count,
+            "failure_pct": _usage_pct(failed_count, count),
+            "throttled_pct": _usage_pct(throttled_count, count),
+            "statuses": _top_counter_values(
+                statuses,
+                limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+            ),
+            "reason_codes": _top_counter_values(
+                reason_codes,
+                limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+            ),
+            "error_types": _top_counter_values(
+                error_types,
+                limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+            ),
+            "symbols": _symbol_sample(
+                symbols,
+                limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+            ),
+            "elapsed_ms": _ms_summary(
+                [
+                    int(value)
+                    for value in (group.get("elapsed_values") or [])
+                    if _non_negative_int(value) is not None
+                ]
+            ),
+            "latest_ts": group.get("latest_ts"),
+            "latest_event_type": group.get("latest_event_type"),
+            "latest_status": group.get("latest_status"),
+            "latest_elapsed_ms": group.get("latest_elapsed_ms"),
+            "latest_symbol": group.get("latest_symbol"),
+            "latest_error_type": group.get("latest_error_type"),
+            "latest_ids": group.get("latest_ids"),
+        }
+        compact_groups.append(
+            {
+                key: value
+                for key, value in compact.items()
+                if key not in {"latest_path", "latest_line", "latest_seq"}
+                and value not in (None, {}, [])
+            }
+        )
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -1288,6 +1512,7 @@ def _scan_events(
     invalid_window_ts = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
@@ -1347,6 +1572,16 @@ def _scan_events(
                             ),
                         )
                     if event_type in REMOTE_CALL_TIMING_EVENT_TYPES:
+                        _merge_remote_call_health_group(
+                            remote_call_health_groups,
+                            _remote_call_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                         remote_call_timing_group = _remote_call_timing_group(
                             bot_key=bot_key,
                             row=row,
@@ -1440,6 +1675,7 @@ def _scan_events(
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups
         ),
+        "remote_call_health": _summarize_remote_call_health(remote_call_health_groups),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
@@ -1700,6 +1936,11 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "remote_call_health": {
+                "total": 0,
+                "groups_truncated": False,
+                "groups": [],
+            },
             "remote_call_timings": {
                 "total": 0,
                 "groups_truncated": False,
@@ -1766,6 +2007,7 @@ def build_live_smoke_report(
         "bots": event_scan["bots"],
         "startup_timings": event_scan["startup_timings"],
         "remote_call_failures": event_scan["remote_call_failures"],
+        "remote_call_health": event_scan["remote_call_health"],
         "remote_call_timings": event_scan["remote_call_timings"],
         "risk_events": event_scan["risk_events"],
         "event_window": event_scan["event_window"],
