@@ -178,13 +178,21 @@ Related detailed plans:
     Status: partial. PR #646 improved event-projected summaries for already
     routed execution events. PR #677 mirrored the existing execution-loop error
     burst warning into a structured `health.summary` event without changing
-    console volume or restart/backoff behavior.
+    console volume or restart/backoff behavior. PR #707 added a throttled
+    console projection for active coin-mode HSL positions using existing
+    `hsl.status` distance-to-red metrics.
 
     Continue moving console output to be a projection of structured events.
     Default console should focus on fills, positions, balance, order writes,
     meaningful risk/HSL/unstuck transitions, and compact "waiting because"
     summaries. EMA/candle/cache internals should stay structured DEBUG unless
     they directly explain a blocked trading action.
+
+    Work log:
+    - 2026-06-26: Added periodic `[risk] HSL[pside:symbol] status` console
+      lines for active coin-mode HSL positions, including distance to red,
+      drawdown, slot budget, realized PnL peak, and unrealized PnL. The
+      structured `hsl.status` event remains the durable source.
 
 11. [x] Order lifecycle trace completeness.
     Status: initial reconstruction view merged. The order-wave/execution event
