@@ -45,6 +45,7 @@ LOG_WINDOW_UNPARSED_POLICIES = {"keep", "drop"}
 DEFAULT_LOG_WINDOW_UNPARSED_POLICY = "keep"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 RISK_EVENT_GROUP_LIMIT = 20
+PROBLEM_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -318,6 +319,119 @@ def _summarize_remote_call_failures(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > REMOTE_CALL_FAILURE_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _problem_event_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+    hard: bool,
+) -> dict[str, Any]:
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "hard": bool(hard),
+        "symbol": live_event.get("symbol") or row.get("symbol"),
+        "pside": live_event.get("pside") or row.get("pside"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_data": _compact_problem_event_data(live_event),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in (
+                "cycle_id",
+                "order_wave_id",
+                "remote_call_id",
+                "remote_call_group_id",
+            )
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_problem_event_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("event_type"),
+        group.get("reason_code"),
+        group.get("status"),
+        group.get("hard"),
+        group.get("symbol"),
+        group.get("pside"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_problem_event_groups(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            not bool(item.get("hard")),
+            -int(item.get("count", 0)),
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("event_type") or ""),
+            str(item.get("reason_code") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:PROBLEM_EVENT_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > PROBLEM_EVENT_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -929,6 +1043,7 @@ def _scan_events(
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
+    problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     for path in files:
         try:
@@ -1006,6 +1121,17 @@ def _scan_events(
                         hard = _is_hard_problem_event(live_event)
                         if hard:
                             bot["hard_problem_events"] += 1
+                        _merge_problem_event_group(
+                            problem_event_groups,
+                            _problem_event_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                                hard=hard,
+                            ),
+                        )
                         problem_event = _compact_problem_event(
                             path=path,
                             line_no=line_no,
@@ -1044,6 +1170,7 @@ def _scan_events(
             for key, value in sorted(bots.items())
         ],
         "problem_events": list(problem_events),
+        "problem_event_groups": _summarize_problem_event_groups(problem_event_groups),
         "problem_event_count": sum(int(value["problem_events"]) for value in bots.values()),
         "hard_problem_event_count": sum(
             int(value["hard_problem_events"]) for value in bots.values()
@@ -1295,6 +1422,11 @@ def build_live_smoke_report(
             "invalid_rows": 0,
             "bots": [],
             "problem_events": [],
+            "problem_event_groups": {
+                "total": 0,
+                "groups_truncated": False,
+                "groups": [],
+            },
             "problem_event_count": 0,
             "hard_problem_event_count": 0,
             "startup_timings": [],
@@ -1366,6 +1498,8 @@ def build_live_smoke_report(
         "risk_events": event_scan["risk_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
+        "problem_event_groups": event_scan["problem_event_groups"],
+        "problem_event_count": event_scan["problem_event_count"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
         "processes": process_report,
