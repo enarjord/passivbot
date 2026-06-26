@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `dff400014` merge of PR #684, `Drop contextless stale traceback smoke matches`.
+- `9e898019` merge of PR #686, `Add smoke report repository metadata`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #684 at `dff40001`.
+- Repository pulled through PR #686 at `9e898019`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -105,6 +105,12 @@ VPS5 deployment status:
   `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
   `logs.attention_matches=0`, `remote_call_failures.total=0`,
   `matched_expected=5`, and `missing_expected=[]`.
+- PR #686 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. The smoke report confirmed
+  `repository.branch=v8`, `repository.head=9e898019`,
+  `repository.dirty=false`, `tracked_changes=0`, and all five configured bots
+  running. The same smoke surfaced repeated Kucoin authoritative REST
+  `RequestTimeout` events unrelated to the tooling change.
 
 ## Phase Checklist
 
@@ -640,19 +646,41 @@ VPS5 deployment status:
   running, no hard failures, no hard problem events, no log hard or attention
   matches, and no remote-call failures.
 
+### PR #686: Smoke Repository Metadata
+
+- Branch: `codex/v8-smoke-repo-metadata`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes a best-effort
+  `repository` block with worktree root, branch, head, full head, tracked-only
+  dirty status, and tracked change count. Git lookup failures remain
+  observational and do not affect smoke hard-failure accounting.
+- Review evidence: Hermes approved head `b03f4139`; CI was green; focused
+  smoke-report and incident-bundle tests, compileall, and `git diff --check`
+  passed before merge. Claude did not return during repeated polls, and
+  Composer had been retired, so this read-only tooling slice used the degraded
+  gate.
+- VPS5 evidence: deployed to VPS5 at `9e898019` without bot restart. The smoke
+  report confirmed `repository.branch=v8`, `repository.head=9e898019`,
+  `repository.dirty=false`, `tracked_changes=0`, and all five configured bots
+  running. The same smoke surfaced a separate Kucoin operational issue:
+  repeated authoritative balance/positions/open-orders `RequestTimeout` events
+  with 98-140s staged refresh wall times and websocket ping timeouts.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
    runtime staged-refresh event producer slice. Hermes and CI are already green
-   on rebased head `d38bfc72f`, but Claude has not reviewed that head.
+   on rebased head `91466a16`, but Claude has not reviewed that head.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
    to inspect by surfacing bounded latest event data and aggregate groups.
-4. Add read-only exchange health probes for account-critical endpoint timeouts
-   if passive event summaries are insufficient.
+4. Add read-only exchange health probes for account-critical endpoint timeouts.
+   VPS5 Kucoin now repeatedly shows authoritative state fetch `RequestTimeout`
+   events and long refresh wall times, so this item has enough evidence to
+   justify a focused probe/diagnostic slice.
 5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 6. Continue cache-doctor refinements in separate adjacent PRs: cache-family
