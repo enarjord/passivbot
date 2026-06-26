@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-config-preflight` for read-only offline summaries
+  of risk-relevant live config facts before startup.
 - Added structured `exchange.time_sync` live events for CCXT timestamp/nonce
   recovery diagnostics without changing recovery behavior or console volume.
 - Added structured `fills.refresh_summary` startup cache-ready events for fill
