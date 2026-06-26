@@ -151,7 +151,10 @@ Ticker probes inspect CCXT ticker support and latency without placing orders:
 - `passivbot tool ticker-endpoint-probe` compares CCXT ticker endpoint latency across configured
   users. When authenticated probes are enabled, its JSON includes an `account_critical_health`
   summary for the read-only balance, positions, and open-orders endpoints required before live
-  exchange actions. Keep authenticated runs low-rate when a live bot is using the same account.
+  exchange actions. Use `--account-only` for the lower-impact balance/positions/open-orders probe,
+  which still loads markets to resolve an open-orders fallback symbol, or `--skip-my-trades` to
+  omit the fill-history endpoint. Keep authenticated runs low-rate when a live bot is using the
+  same account.
 
 ## Hyperliquid live probes
 
