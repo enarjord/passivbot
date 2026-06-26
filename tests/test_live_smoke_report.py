@@ -1584,6 +1584,8 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
         "unparsed_ts": 2,
         "unparsed_policy": "keep",
         "lines_skipped_unparsed": 0,
+        "dropped_unparsed_attention_matches": 0,
+        "dropped_unparsed_hard_matches": 0,
     }
     assert [match["text"] for match in report["logs"]["matches"]] == [
         "1970-01-01T00:00:03Z ERROR fresh in window",
@@ -1614,6 +1616,8 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
         "unparsed_ts": 2,
         "unparsed_policy": "drop",
         "lines_skipped_unparsed": 1,
+        "dropped_unparsed_attention_matches": 0,
+        "dropped_unparsed_hard_matches": 0,
     }
     assert [match["text"] for match in drop_report["logs"]["matches"]] == [
         "1970-01-01T00:00:03Z ERROR fresh in window",
@@ -1671,6 +1675,8 @@ def test_live_smoke_report_log_window_drop_preserves_unparseable_hard_signal(tmp
         "unparsed_ts": 3,
         "unparsed_policy": "drop",
         "lines_skipped_unparsed": 2,
+        "dropped_unparsed_attention_matches": 0,
+        "dropped_unparsed_hard_matches": 0,
     }
     assert [match["text"] for match in report["logs"]["matches"]] == [
         "1970-01-01T00:00:03Z ERROR exchange call failed",
@@ -1728,6 +1734,8 @@ def test_live_smoke_report_log_window_drops_stale_traceback_with_context(tmp_pat
         "unparsed_ts": 1,
         "unparsed_policy": "drop",
         "lines_skipped_unparsed": 0,
+        "dropped_unparsed_attention_matches": 0,
+        "dropped_unparsed_hard_matches": 0,
     }
 
 
@@ -1769,8 +1777,12 @@ def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_pat
     )
 
     assert report["ok"] is True
+    assert report["attention"] is True
+    assert report["attention_count"] == 1
     assert report["logs"]["attention_matches"] == 0
     assert report["logs"]["hard_matches"] == 0
+    assert report["logs"]["dropped_unparsed_attention_matches"] == 1
+    assert report["logs"]["dropped_unparsed_hard_matches"] == 1
     assert report["logs"]["matches"] == []
     assert report["logs"]["window"] == {
         "enabled": True,
@@ -1782,6 +1794,8 @@ def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_pat
         "unparsed_ts": 2,
         "unparsed_policy": "drop",
         "lines_skipped_unparsed": 2,
+        "dropped_unparsed_attention_matches": 1,
+        "dropped_unparsed_hard_matches": 1,
     }
 
 

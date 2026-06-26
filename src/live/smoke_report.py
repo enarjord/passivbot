@@ -1856,6 +1856,8 @@ def _log_window_report(
     unparsed_ts: int,
     unparsed_policy: str,
     lines_skipped_unparsed: int,
+    dropped_unparsed_attention_matches: int,
+    dropped_unparsed_hard_matches: int,
 ) -> dict[str, Any]:
     return {
         "enabled": since_ms is not None or until_ms is not None,
@@ -1867,6 +1869,10 @@ def _log_window_report(
         "unparsed_ts": int(unparsed_ts),
         "unparsed_policy": _normalize_log_window_unparsed_policy(unparsed_policy),
         "lines_skipped_unparsed": int(lines_skipped_unparsed),
+        "dropped_unparsed_attention_matches": int(
+            dropped_unparsed_attention_matches
+        ),
+        "dropped_unparsed_hard_matches": int(dropped_unparsed_hard_matches),
     }
 
 
@@ -1901,6 +1907,8 @@ def _scan_logs(
         unparsed_ts=0,
         unparsed_policy=unparsed_policy,
         lines_skipped_unparsed=0,
+        dropped_unparsed_attention_matches=0,
+        dropped_unparsed_hard_matches=0,
     )
     if root is None:
         return {
@@ -1910,6 +1918,8 @@ def _scan_logs(
             "attention_matches": 0,
             "window": window_report,
             "matches": [],
+            "dropped_unparsed_attention_matches": 0,
+            "dropped_unparsed_hard_matches": 0,
         }
     files = _recent_log_files(root, max_files=max_files)
     matches: list[dict[str, Any]] = []
@@ -1920,6 +1930,8 @@ def _scan_logs(
     lines_skipped_after = 0
     unparsed_ts = 0
     lines_skipped_unparsed = 0
+    dropped_unparsed_attention_matches = 0
+    dropped_unparsed_hard_matches = 0
     for path in files:
         log_context_ts_ms: int | None = None
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
@@ -1940,6 +1952,10 @@ def _scan_logs(
                     if unparsed_policy == "drop" and (
                         log_context_ts_ms is None or not attention
                     ):
+                        if log_context_ts_ms is None and attention:
+                            dropped_unparsed_attention_matches += 1
+                            if HARD_LOG_PATTERN.search(line):
+                                dropped_unparsed_hard_matches += 1
                         lines_skipped_unparsed += 1
                         continue
                 else:
@@ -1980,8 +1996,12 @@ def _scan_logs(
             unparsed_ts=unparsed_ts,
             unparsed_policy=unparsed_policy,
             lines_skipped_unparsed=lines_skipped_unparsed,
+            dropped_unparsed_attention_matches=dropped_unparsed_attention_matches,
+            dropped_unparsed_hard_matches=dropped_unparsed_hard_matches,
         ),
         "matches": matches,
+        "dropped_unparsed_attention_matches": dropped_unparsed_attention_matches,
+        "dropped_unparsed_hard_matches": dropped_unparsed_hard_matches,
     }
 
 
@@ -2096,8 +2116,10 @@ def build_live_smoke_report(
         + int(log_scan["hard_matches"])
         + int(process_report["hard_failures"])
     )
-    attention_count = int(event_scan["problem_event_count"]) + int(
-        log_scan["attention_matches"]
+    attention_count = (
+        int(event_scan["problem_event_count"])
+        + int(log_scan["attention_matches"])
+        + int(log_scan.get("dropped_unparsed_attention_matches", 0))
     )
     return {
         "ok": hard_failures == 0,
@@ -2249,6 +2271,12 @@ def summarize_live_smoke_report(
             "files_scanned": int(logs.get("files_scanned") or 0),
             "hard_matches": int(logs.get("hard_matches") or 0),
             "attention_matches": int(logs.get("attention_matches") or 0),
+            "dropped_unparsed_attention_matches": int(
+                logs.get("dropped_unparsed_attention_matches") or 0
+            ),
+            "dropped_unparsed_hard_matches": int(
+                logs.get("dropped_unparsed_hard_matches") or 0
+            ),
             "matches_truncated": len(matches) > max_groups,
             "matches": matches[:max_groups],
             "window": logs.get("window"),
