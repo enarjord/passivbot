@@ -1729,6 +1729,64 @@ def test_log_staged_refresh_timings_logs_only_for_slow_refreshes(caplog):
     ]
 
 
+def test_log_staged_refresh_timings_emits_structured_event():
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_event_current_cycle_id = "cy_refresh"
+    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = {"positions"}
+
+    bot._log_staged_refresh_timings(
+        {"balance", "positions", "open_orders", "fills"},
+        {"balance": 1200, "positions": 1700, "open_orders": 900, "fills": 1300},
+        4100,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.STATE_REFRESH_TIMING
+    assert event.level == "info"
+    assert event.component == "state.refresh"
+    assert event.tags == ("state", "refresh", "account")
+    assert event.cycle_id == "cy_refresh"
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.STAGED_REFRESH_TIMING
+    assert event.data["plan"] == ["balance", "fills", "open_orders", "positions"]
+    assert event.data["timings_ms"] == {
+        "balance": 1200,
+        "fills": 1300,
+        "open_orders": 900,
+        "positions": 1700,
+    }
+    assert event.data["wall_ms"] == 4100
+    assert event.data["surface_sum_ms"] == 5100
+    assert event.data["surface_max_ms"] == 1700
+    assert event.data["residual_ms"] == 2400
+    assert event.data["meaningful_change"] is True
+    assert event.data["epoch_changed"] == ["positions"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_log_staged_refresh_timings_skips_structured_debug_sample():
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_event_current_cycle_id = "cy_refresh_debug"
+    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+
+    bot._log_staged_refresh_timings(
+        {"balance", "positions", "open_orders", "fills"},
+        {"balance": 250, "positions": 300, "open_orders": 200, "fills": 400},
+        650,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events == []
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_routine_completed_candle_defers_are_debug_with_periodic_summary(
     caplog, monkeypatch
 ):
@@ -7587,6 +7645,55 @@ def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(
     assert "plan=open_orders" in messages[0]
     assert "count=60" in messages[0]
     assert "open_orders=100/130/159ms" in messages[0]
+
+
+def test_staged_refresh_timing_summary_emits_structured_event(monkeypatch):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+    bot._live_event_current_cycle_id = "cy_refresh_summary"
+    bot._live_event_pipeline = LiveEventPipeline(structured_sinks=[sink], monitor_sinks=[])
+    bot._authoritative_pending_confirmations = {}
+    bot._authoritative_refresh_epoch_changed = set()
+
+    for i in range(60):
+        bot._log_staged_refresh_timings(
+            {"open_orders"},
+            {"open_orders": 100 + i},
+            100 + i,
+        )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.STATE_REFRESH_TIMING
+    assert event.level == "info"
+    assert event.component == "state.refresh"
+    assert event.tags == ("state", "refresh", "account", "summary")
+    assert event.cycle_id == "cy_refresh_summary"
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.STAGED_REFRESH_TIMING
+    assert event.data["summary"] is True
+    assert event.data["plan"] == ["open_orders"]
+    assert event.data["count"] == 60
+    assert event.data["wall_ms"] == {"count": 60, "min": 100, "mean": 130, "max": 159}
+    assert event.data["surface_sum_ms"] == {
+        "count": 60,
+        "min": 100,
+        "mean": 130,
+        "max": 159,
+    }
+    assert event.data["surface_max_ms"] == {
+        "count": 60,
+        "min": 100,
+        "mean": 130,
+        "max": 159,
+    }
+    assert event.data["residual_ms"] == {"count": 60, "min": 0, "mean": 0, "max": 0}
+    assert event.data["surfaces_ms"] == {
+        "open_orders": {"count": 60, "min": 100, "mean": 130, "max": 159}
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def test_staged_refresh_timing_summary_includes_debug_moderate_refreshes(

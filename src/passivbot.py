@@ -666,6 +666,15 @@ class Passivbot:
     _emit_execution_loop_error_burst_event = (
         live_event_emitters.emit_execution_loop_error_burst_event
     )
+    _emit_state_refresh_timing_event = (
+        live_event_emitters.emit_state_refresh_timing_event
+    )
+    _emit_state_refresh_timing_summary_event = (
+        live_event_emitters.emit_state_refresh_timing_summary_event
+    )
+    _emit_state_refresh_progress_event = (
+        live_event_emitters.emit_state_refresh_progress_event
+    )
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids

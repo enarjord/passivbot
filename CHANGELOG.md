@@ -27,6 +27,9 @@ All notable user-facing changes will be documented in this file.
   to skip contextless unparsed log lines inside time-windowed scans, avoiding
   stale traceback matches when the tail starts in the middle of an old
   traceback.
+- Added structured `state.refresh_timing` and `state.refresh_progress` live
+  events for staged authoritative refresh timing/progress diagnostics, with
+  bounded smoke-report context for slow pending refresh surfaces.
 - Added live-event trace summary and order-trace sections to
   `passivbot tool live-incident-bundle` event reports, with
   `--no-trace-report` for compact bundles.
