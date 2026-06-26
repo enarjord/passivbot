@@ -19,8 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b150176fe` merge of PR #690, `Add remote call health rollups to live smoke
-  report`.
+- `c8ce48809` merge of PR #692, `Add smoke remote-call health totals`.
 
 Current review gate:
 
@@ -131,6 +130,15 @@ VPS5 deployment status:
   terminal remote-call categories by bot/component/kind/surface, including
   slow-but-successful Binance authoritative fill fetches and candle fetch
   groups.
+- PR #692 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. A 5-minute smoke with text logs,
+  `--log-window-unparsed-policy drop`, and `/root/bots_vps5.yaml` process
+  matching reported `ok=true`, `hard_failures=0`,
+  `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `matched_expected=5`, and
+  `missing_expected=[]`. The new top-level `remote_call_health` summary was
+  present with `total=390`, `succeeded=389`, `failed=1`, `throttled=0`,
+  `failure_pct=0`, and `throttled_pct=0`.
 
 ## Phase Checklist
 
@@ -143,7 +151,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -728,12 +736,35 @@ VPS5 deployment status:
   running, no hard failures, no hard problem events, no log hard or attention
   matches, no remote-call failures, and `remote_call_health.total=445`.
 
+### PR #692: Remote-Call Health Top-Level Totals
+
+- Branch: `codex/v8-smoke-remote-call-health-totals`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes top-level
+  `remote_call_health` success, failure, throttle, failure-percent, and
+  throttle-percent totals in addition to the existing bounded per-group health
+  details. This keeps operator smoke summaries scannable without changing
+  `ok`, `attention`, event producers, or trading behavior.
+- Review evidence: Hermes first found that the new aggregate failure/throttle
+  counters could be overwritten by per-group counters, then approved fixed head
+  `ac4afe3f`; CI was green; focused smoke-report and incident-bundle tests,
+  compileall, and `git diff --check` passed before merge. Claude did not return
+  during repeated polls, and Composer had been retired, so this read-only
+  tooling slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `c8ce4880` without bot restart. A
+  5-minute smoke with text logs, `--log-window-unparsed-policy drop`, and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no hard problem events, no log hard or attention
+  matches, and top-level `remote_call_health` totals:
+  `total=390`, `succeeded=389`, `failed=1`, `throttled=0`, `failure_pct=0`,
+  and `throttled_pct=0`.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
    runtime staged-refresh event producer slice. CI is green on rebased head
-   `bfde8bfdb`, but Hermes and Claude have not reviewed that head yet. Claude
-   has not reviewed the current runtime head.
+   `3a0d5d1e0`, and Hermes approved that head. Claude has not reviewed the
+   current runtime head.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
