@@ -138,6 +138,14 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
+  With `--supervisor-config`, the read-only process section compares configured
+  `passivbot live` commands to the local process table and reports matched, missing,
+  duplicate-command, and extra/orphan-like live processes. This does not prove tmux pane
+  ownership; the fields are command-match diagnostics intended to make stale process leftovers
+  obvious before any restart orchestration. Shutdown orchestration should follow an explicit
+  escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
+  graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
+  signals.
 
 ## Exchange Helpers
 

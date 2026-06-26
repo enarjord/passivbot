@@ -2240,12 +2240,183 @@ def test_live_smoke_report_process_status_matches_supervisor_config(
     assert report["processes"]["missing_expected"] == [
         {
             "name": "gateio_01",
+            "account": "gateio_01",
+            "config_path": "configs/forager.json",
+            "config_key": "gateio_01:configs/forager.json",
             "command": "passivbot live configs/forager.json -u gateio_01",
             "command_key": "passivbot live configs/forager.json -u gateio_01",
+            "match_count": 0,
         }
     ]
     assert report["processes"]["running"][0]["pid"] == 123
     assert report["processes"]["running"][0]["age_s"] == 42
+    assert report["processes"]["running"][0]["account"] == "binance_01"
+    assert report["processes"]["running"][0]["config_path"] == "configs/forager.json"
+
+
+def test_live_smoke_report_process_status_parses_no_rss_etimes_passivbot_rows(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    supervisor_config = tmp_path / "bots.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u binance_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 3.5 7.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        supervisor_config=supervisor_config,
+    )
+
+    assert report["ok"] is True
+    assert report["processes"]["running_live_total"] == 1
+    assert report["processes"]["matched_expected"] == 1
+    assert report["processes"]["running"][0]["pid"] == 123
+    assert report["processes"]["running"][0]["age_s"] == 42
+    assert "rss_kb" not in report["processes"]["running"][0]
+    assert report["processes"]["running"][0]["command_key"] == (
+        "passivbot live configs/forager.json -u binance_01"
+    )
+
+
+def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_processes(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    supervisor_config = tmp_path / "bots.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u binance_01",
+                "  - window_name: gateio_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u gateio_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 3.5 7.0 100000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                ),
+                (
+                    "124 1 44 S 1.5 3.0 90000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                ),
+                (
+                    "125 1 45 S 0.5 2.0 80000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u gateio_01"
+                ),
+                (
+                    "126 1 46 S 0.1 1.0 70000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/old.json -u okx_old"
+                ),
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        supervisor_config=supervisor_config,
+    )
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is False
+    assert report["processes"]["ok"] is False
+    assert report["processes"]["hard_failures"] == 2
+    assert report["processes"]["expected_total"] == 2
+    assert report["processes"]["matched_expected"] == 2
+    assert report["processes"]["missing_expected"] == []
+    assert report["processes"]["classification_source"] == (
+        "local_process_table_command_match"
+    )
+    assert report["processes"]["tmux_pane_ownership"] == (
+        "not_available_from_process_table"
+    )
+    assert report["processes"]["duplicate_configured_command_matches"][0][
+        "account"
+    ] == "binance_01"
+    assert report["processes"]["duplicate_configured_command_matches"][0][
+        "match_count"
+    ] == 2
+    assert [
+        process["pid"]
+        for process in report["processes"]["duplicate_configured_command_matches"][0][
+            "matched_processes"
+        ]
+    ] == [123, 124]
+    assert report["processes"]["running"][0]["rss_kb"] == 100000
+    assert report["processes"]["extra_passivbot_live_processes"] == [
+        {
+            "pid": 126,
+            "ppid": 1,
+            "age_s": 46,
+            "stat": "S",
+            "cpu_pct": 0.1,
+            "mem_pct": 1.0,
+            "rss_kb": 70000,
+            "account": "okx_old",
+            "config_path": "configs/old.json",
+            "config_key": "okx_old:configs/old.json",
+            "command": (
+                "/root/passivbot/venv/bin/passivbot live configs/old.json -u okx_old"
+            ),
+            "command_key": "passivbot live configs/old.json -u okx_old",
+        }
+    ]
+    assert report["processes"]["unexpected_running"] == report["processes"][
+        "extra_passivbot_live_processes"
+    ]
+    assert summary["processes"]["duplicate_configured_command_matches_count"] == 1
+    assert summary["processes"]["extra_passivbot_live_processes_count"] == 1
+    assert len(summary["processes"]["duplicate_configured_command_matches"]) == 1
+    assert len(summary["processes"]["extra_passivbot_live_processes"]) == 1
+    assert brief["processes"]["duplicate_configured_command_matches_count"] == 1
+    assert brief["processes"]["extra_passivbot_live_processes_count"] == 1
 
 
 def test_live_smoke_report_process_scan_without_config_is_observational(

@@ -100,10 +100,23 @@ PROBLEM_EVENT_DATA_MAX_ITEMS = 8
 PROBLEM_EVENT_DATA_MAX_TEXT = 240
 PROCESS_REPORT_FIELDS = {
     "pid",
+    "ppid",
     "age_s",
     "stat",
     "cpu_pct",
     "mem_pct",
+    "rss_kb",
+    "account",
+    "config_path",
+    "config_key",
+    "command",
+    "command_key",
+}
+EXPECTED_PROCESS_FIELDS = {
+    "name",
+    "account",
+    "config_path",
+    "config_key",
     "command",
     "command_key",
 }
@@ -1063,6 +1076,46 @@ def _canonical_live_command(value: str) -> str:
     return ""
 
 
+def _live_command_context(command_key: str) -> dict[str, str]:
+    tokens = _shell_tokens(command_key)
+    if len(tokens) < 2 or tokens[0] != "passivbot" or tokens[1] != "live":
+        return {}
+    account: str | None = None
+    config_path: str | None = None
+    args = tokens[2:]
+    index = 0
+    while index < len(args):
+        token = args[index]
+        if token in {"-u", "--user"}:
+            if index + 1 < len(args):
+                account = args[index + 1]
+            index += 2
+            continue
+        if token.startswith("--user="):
+            account = token.split("=", 1)[1]
+            index += 1
+            continue
+        if token.startswith("-"):
+            index += 1
+            continue
+        if config_path is None:
+            config_path = token
+        index += 1
+
+    out: dict[str, str] = {}
+    if account:
+        out["account"] = _redact_log_text(account, max_len=160)
+    if config_path:
+        out["config_path"] = _redact_log_text(config_path, max_len=260)
+    if account and config_path:
+        out["config_key"] = _redact_log_text(f"{account}:{config_path}", max_len=320)
+    elif account:
+        out["config_key"] = _redact_log_text(account, max_len=160)
+    elif config_path:
+        out["config_key"] = _redact_log_text(config_path, max_len=260)
+    return out
+
+
 def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]:
     if config_path is None or str(config_path).strip() == "":
         return {
@@ -1106,12 +1159,14 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
         command_key = _canonical_live_command(command)
         if not command_key:
             continue
+        context = _live_command_context(command_key)
         expected.append(
             {
                 "name": current_window,
                 "command": _redact_log_text(command, max_len=400),
                 "command_key": _redact_log_text(command_key, max_len=400),
                 "_match_key": command_key,
+                **context,
             }
         )
     return {
@@ -1124,6 +1179,8 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
 
 def _ps_process_rows() -> tuple[list[str], str | None]:
     commands = [
+        ["ps", "-eo", "pid=,ppid=,etimes=,stat=,pcpu=,pmem=,rss=,command="],
+        ["ps", "-axo", "pid=,ppid=,stat=,pcpu=,pmem=,rss=,command="],
         ["ps", "-eo", "pid=,ppid=,etimes=,stat=,pcpu=,pmem=,command="],
         ["ps", "-axo", "pid=,ppid=,stat=,pcpu=,pmem=,command="],
     ]
@@ -1261,30 +1318,47 @@ def _process_record_from_ps_line(line: str) -> dict[str, Any] | None:
     stripped = line.strip()
     if not stripped:
         return None
-    parts = stripped.split(None, 6)
-    if len(parts) == 7 and _int_or_none(parts[2]) is not None:
-        pid, ppid, etimes, stat_value, pcpu, pmem, command = parts
+    parts = stripped.split(None, 7)
+    if (
+        len(parts) == 8
+        and _int_or_none(parts[2]) is not None
+        and _int_or_none(parts[6]) is not None
+    ):
+        pid, ppid, etimes, stat_value, pcpu, pmem, rss, command = parts
         age_s = _int_or_none(etimes)
     else:
-        parts = stripped.split(None, 5)
-        if len(parts) != 6:
-            return None
-        pid, ppid, stat_value, pcpu, pmem, command = parts
-        age_s = None
+        parts = stripped.split(None, 6)
+        if len(parts) == 7 and _int_or_none(parts[2]) is not None:
+            pid, ppid, etimes, stat_value, pcpu, pmem, command = parts
+            age_s = _int_or_none(etimes)
+            rss = None
+        elif len(parts) == 7 and _int_or_none(parts[5]) is not None:
+            pid, ppid, stat_value, pcpu, pmem, rss, command = parts
+            age_s = None
+        else:
+            parts = stripped.split(None, 5)
+            if len(parts) != 6:
+                return None
+            pid, ppid, stat_value, pcpu, pmem, command = parts
+            age_s = None
+            rss = None
     command_key = _canonical_live_command(command)
     if not command_key:
         return None
-    return {
+    record = {
         "pid": _int_or_none(pid),
         "ppid": _int_or_none(ppid),
         "age_s": age_s,
         "stat": stat_value,
         "cpu_pct": _float_or_none(pcpu),
         "mem_pct": _float_or_none(pmem),
+        "rss_kb": _int_or_none(rss) if rss is not None else None,
         "command": _redact_log_text(command, max_len=500),
         "command_key": _redact_log_text(command_key, max_len=500),
         "_match_key": command_key,
     }
+    record.update(_live_command_context(command_key))
+    return record
 
 
 def _running_live_processes(*, command_match: str) -> dict[str, Any]:
@@ -1312,6 +1386,22 @@ def _running_live_processes(*, command_match: str) -> dict[str, Any]:
     }
 
 
+def _public_process_record(process: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in process.items()
+        if key in PROCESS_REPORT_FIELDS and value is not None
+    }
+
+
+def _public_expected_record(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in item.items()
+        if key in EXPECTED_PROCESS_FIELDS and value is not None
+    }
+
+
 def _build_process_report(
     *,
     include_processes: bool,
@@ -1328,6 +1418,8 @@ def _build_process_report(
             "running_live_total": 0,
             "missing_expected": [],
             "unexpected_running": [],
+            "duplicate_configured_command_matches": [],
+            "extra_passivbot_live_processes": [],
         }
 
     config = _parse_tmuxp_live_commands(supervisor_config)
@@ -1335,6 +1427,8 @@ def _build_process_report(
     running = running_scan["running"]
     expected = config["expected"]
     missing: list[dict[str, Any]] = []
+    duplicate_matches: list[dict[str, Any]] = []
+    expected_status: list[dict[str, Any]] = []
     matched_process_indexes: set[int] = set()
     for item in expected:
         match_key = item.get("_match_key")
@@ -1344,25 +1438,34 @@ def _build_process_report(
             if process.get("_match_key") == match_key
         ]
         if matches:
-            matched_process_indexes.add(matches[0][0])
+            matched_process_indexes.update(index for index, _process in matches)
+            matched_processes = [
+                _public_process_record(process) for _index, process in matches
+            ]
+            expected_row = _public_expected_record(item)
+            expected_row["match_count"] = len(matches)
+            expected_row["matched_processes"] = matched_processes
+            expected_status.append(expected_row)
+            if len(matches) > 1:
+                duplicate_row = _public_expected_record(item)
+                duplicate_row["match_count"] = len(matches)
+                duplicate_row["matched_processes"] = matched_processes
+                duplicate_matches.append(duplicate_row)
             continue
-        missing.append(
-            {
-                "name": item.get("name"),
-                "command": item.get("command"),
-                "command_key": item.get("command_key"),
-            }
-        )
+        missing_row = _public_expected_record(item)
+        missing_row["match_count"] = 0
+        missing.append(missing_row)
+        expected_row = dict(missing_row)
+        expected_row["matched_processes"] = []
+        expected_status.append(expected_row)
     unexpected = [
-        {
-            key: value
-            for key, value in process.items()
-            if key in PROCESS_REPORT_FIELDS
-        }
+        _public_process_record(process)
         for index, process in enumerate(running)
         if expected and index not in matched_process_indexes
     ]
     hard_failures = len(missing)
+    if supervisor_config:
+        hard_failures += len(duplicate_matches) + len(unexpected)
     if config.get("error"):
         hard_failures += 1
     elif supervisor_config and not expected:
@@ -1383,16 +1486,14 @@ def _build_process_report(
         "expected_total": len(expected),
         "running_live_total": len(running),
         "matched_expected": max(0, len(expected) - len(missing)),
+        "classification_source": "local_process_table_command_match",
+        "tmux_pane_ownership": "not_available_from_process_table",
+        "expected": expected_status,
         "missing_expected": missing,
+        "duplicate_configured_command_matches": duplicate_matches,
+        "extra_passivbot_live_processes": unexpected,
         "unexpected_running": unexpected,
-        "running": [
-            {
-                key: value
-                for key, value in process.items()
-                if key in PROCESS_REPORT_FIELDS
-            }
-            for process in running
-        ],
+        "running": [_public_process_record(process) for process in running],
     }
 
 
@@ -2256,14 +2357,28 @@ def summarize_live_smoke_report(
                 "expected_total",
                 "matched_expected",
                 "running_live_total",
+                "classification_source",
+                "tmux_pane_ownership",
                 "scan_error",
             )
             if key in processes
         }
         | {
             "missing_expected_count": len(processes.get("missing_expected") or []),
+            "duplicate_configured_command_matches_count": len(
+                processes.get("duplicate_configured_command_matches") or []
+            ),
+            "extra_passivbot_live_processes_count": len(
+                processes.get("extra_passivbot_live_processes") or []
+            ),
             "unexpected_running_count": len(processes.get("unexpected_running") or []),
             "missing_expected": (processes.get("missing_expected") or [])[:max_groups],
+            "duplicate_configured_command_matches": (
+                processes.get("duplicate_configured_command_matches") or []
+            )[:max_groups],
+            "extra_passivbot_live_processes": (
+                processes.get("extra_passivbot_live_processes") or []
+            )[:max_groups],
             "unexpected_running": (processes.get("unexpected_running") or [])[:max_groups],
         },
         "logs": {
@@ -2384,12 +2499,20 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "expected_total",
                 "matched_expected",
                 "running_live_total",
+                "classification_source",
+                "tmux_pane_ownership",
                 "scan_error",
             )
             if key in processes
         }
         | {
             "missing_expected_count": len(processes.get("missing_expected") or []),
+            "duplicate_configured_command_matches_count": len(
+                processes.get("duplicate_configured_command_matches") or []
+            ),
+            "extra_passivbot_live_processes_count": len(
+                processes.get("extra_passivbot_live_processes") or []
+            ),
             "unexpected_running_count": len(processes.get("unexpected_running") or []),
         },
         "logs": {
