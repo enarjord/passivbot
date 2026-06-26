@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `3299c1cac` merge of PR #694, `Add account-critical smoke health summary`.
+- `d850daf55` merge of PR #696, `Add concise live smoke summary output`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #690 at `b150176f`.
+- Repository pulled through PR #696 at `d850daf5`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -148,6 +148,16 @@ VPS5 deployment status:
   `missing_expected=[]`. The new `account_critical_remote_call_health`
   summary was present with `total=126`, `succeeded=126`, `failed=0`,
   `throttled=0`, `failure_pct=0`, and `throttled_pct=0`.
+- PR #696 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. A 2-minute compact summary smoke with text
+  logs, `--log-window-unparsed-policy drop`, and `/root/bots_vps5.yaml`
+  process matching reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `logs.attention_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, `remote_calls.total=169`, `remote_calls.succeeded=169`,
+  `account_critical_remote_calls.total=58`, and
+  `account_critical_remote_calls.succeeded=58`. Remaining `attention=true`
+  came from known non-hard EMA readiness / staged-execution / HSL cooldown
+  groups.
 
 ## Phase Checklist
 
@@ -790,13 +800,35 @@ VPS5 deployment status:
   `total=126`, `succeeded=126`, `failed=0`, `throttled=0`, `failure_pct=0`,
   and `throttled_pct=0`.
 
+### PR #696: Concise Live Smoke Summary
+
+- Branch: `codex/v8-smoke-report-summary`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report --summary` now projects the full
+  report down to high-signal smoke fields: health booleans/counters,
+  repository state, monitor totals, event/log windows, process summary,
+  bounded problem groups, remote-call/account-critical health, and risk events.
+  `--compact` can be combined with `--summary` for short machine-readable
+  output. Full report generation and exit-code behavior are unchanged.
+- Review evidence: Hermes approved head `f1efbe45`; CI was green; focused
+  smoke-report tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge. Claude did not return during
+  repeated polls, and Composer had been retired, so this read-only tooling
+  slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `d850daf5` without bot restart. A
+  2-minute compact summary smoke with text logs,
+  `--log-window-unparsed-policy drop`, and `/root/bots_vps5.yaml` process
+  matching reported all five configured bots running, no hard failures, no log
+  hard or attention matches, account-critical calls `total=58`,
+  `succeeded=58`, and all terminal remote calls `total=169`,
+  `succeeded=169`.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
    runtime staged-refresh event producer slice. CI is green on rebased head
-   `7b87d6b6d9`, and Hermes approved that head. Claude has not reviewed the
-   current runtime head. Because PR #694 moved `v8`, rebase PR #681 before
-   merge if Claude later approves.
+   `bddf5a4c2`; current-head Claude and Hermes reviews are still pending after
+   the PR #696 rebase. Composer has been retired from the gate.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
