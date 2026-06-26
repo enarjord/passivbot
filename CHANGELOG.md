@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `fills.refresh_summary` startup cache-ready events for fill
+  history cache load diagnostics without adding console noise.
 - Added `passivbot tool live-smoke-report --brief` for top-level VPS smoke
   counters without event groups or log match details.
 - Added periodic console status lines for coin-mode HSL positions, including
