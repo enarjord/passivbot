@@ -156,6 +156,118 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
     assert [match["hard"] for match in report["logs"]["matches"]] == [False, True]
 
 
+def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="debug",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_ema"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "candidate_required_ema_unavailable",
+                            "symbols": {
+                                "count": 1,
+                                "sample": ["ZEC/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                            "error_types": ["MissingCloseEma"],
+                            "example_error": (
+                                "GET https://example.test/candles"
+                                "?api_key=SECRET&signature=SIG"
+                            ),
+                        }
+                    ],
+                    "unavailable_reasons": [
+                        {
+                            "reason": "candidate_required_ema_unavailable",
+                            "symbols": {
+                                "count": 1,
+                                "sample": ["ZEC/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                        }
+                    ],
+                    "ignored_extra": "do not surface",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    event = report["problem_events"][0]
+    assert event["event_type"] == "ema.unavailable"
+    assert event["ids"] == {"cycle_id": "cy_ema"}
+    latest_data = event["latest_data"]
+    assert latest_data["candidate_unavailable"]["sample"] == ["ZEC/USDT:USDT"]
+    assert latest_data["candidate_unavailable_groups"][0]["reason"] == (
+        "candidate_required_ema_unavailable"
+    )
+    assert (
+        latest_data["candidate_unavailable_groups"][0]["example_error"]
+        == "GET https://example.test/candles?api_key=[redacted]&signature=[redacted]"
+    )
+    assert "ignored_extra" not in latest_data
+
+
+def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="debug",
+                reason_code="staged_execution_not_ready",
+                ids={"cycle_id": "cy_blocked"},
+                data={
+                    "details": {
+                        "context": "market snapshot refresh",
+                        "missing": ["completed_candles"],
+                        "required": ["positions", "balance"],
+                        "invalid": {
+                            "auth": "api_key=SECRET&signature=SIG",
+                        },
+                    },
+                    "timings_ms": {"market_state": 112},
+                    "authoritative_epoch": 9,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    event = report["problem_events"][0]
+    assert event["event_type"] == "cycle.degraded"
+    assert event["latest_data"] == {
+        "authoritative_epoch": 9,
+        "details": {
+            "context": "market snapshot refresh",
+            "invalid": {"auth": "api_key=[redacted]&signature=[redacted]"},
+            "missing": ["completed_candles"],
+            "required": ["positions", "balance"],
+        },
+    }
+
+
 def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -738,6 +850,59 @@ def test_live_smoke_report_log_window_drop_preserves_unparseable_hard_signal(tmp
         "1970-01-01T00:00:03Z ERROR exchange call failed",
         "Traceback (most recent call last):",
     ]
+
+
+def test_live_smoke_report_log_window_drops_stale_traceback_with_context(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "kucoin_01.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:01Z ERROR old exchange call failed",
+                "Traceback (most recent call last):",
+                "1970-01-01T00:00:03Z INFO recovered",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        since_ms=2000,
+        until_ms=4000,
+        log_tail_lines=10,
+        log_window_unparsed_policy="drop",
+    )
+
+    assert report["ok"] is True
+    assert report["logs"]["attention_matches"] == 0
+    assert report["logs"]["hard_matches"] == 0
+    assert report["logs"]["matches"] == []
+    assert report["logs"]["window"] == {
+        "enabled": True,
+        "since_ms": 2000,
+        "until_ms": 4000,
+        "lines_considered": 1,
+        "lines_skipped_before": 2,
+        "lines_skipped_after": 0,
+        "unparsed_ts": 1,
+        "unparsed_policy": "drop",
+        "lines_skipped_unparsed": 0,
+    }
 
 
 def test_live_smoke_report_log_scan_ignores_traceback_prose(tmp_path):
