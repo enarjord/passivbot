@@ -62,6 +62,7 @@ ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
     }
 )
 RISK_EVENT_GROUP_LIMIT = 20
+SHUTDOWN_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
@@ -70,6 +71,11 @@ RISK_EVENT_TYPES = {
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
+}
+SHUTDOWN_EVENT_TYPES = {
+    EventTypes.BOT_STOPPING,
+    EventTypes.BOT_SHUTDOWN_STAGE,
+    EventTypes.BOT_STOPPED,
 }
 REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -1049,6 +1055,146 @@ def _summarize_risk_events(
     }
 
 
+def _compact_shutdown_event_data(live_event: dict[str, Any]) -> dict[str, Any]:
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in (
+        "reason",
+        "stage",
+        "elapsed_s",
+        "task_count",
+        "timeout_s",
+        "cancel_timeout_s",
+        "threshold_s",
+        "closed",
+        "inline",
+        "error",
+    ):
+        if key not in data or data.get(key) is None:
+            continue
+        value = data.get(key)
+        if isinstance(value, str):
+            out[key] = _redact_log_text(value, max_len=240)
+        elif isinstance(value, (bool, int, float)):
+            out[key] = value
+        else:
+            compact = _compact_problem_event_data_value(value)
+            if compact not in (None, "", [], {}):
+                out[key] = compact
+    return out
+
+
+def _shutdown_event_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    ids = _event_ids(live_event)
+    message = live_event.get("message")
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_message": (
+            _redact_log_text(str(message), max_len=240)
+            if message not in (None, "")
+            else None
+        ),
+        "latest_data": _compact_shutdown_event_data(live_event),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_shutdown_event_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("event_type"),
+        group.get("reason_code"),
+        group.get("status"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_message",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_shutdown_events(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("event_type") or ""),
+            str(item.get("reason_code") or ""),
+            str(item.get("status") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:SHUTDOWN_EVENT_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > SHUTDOWN_EVENT_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "groups": compact_groups,
+    }
+
+
 def _redact_log_text(value: str, *, max_len: int = 500) -> str:
     text = str(value)
     text = SENSITIVE_LOG_HEADER_PATTERN.sub(r"\1\2[redacted]", text)
@@ -1712,6 +1858,8 @@ def _scan_events(
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
+    shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    shutdown_event_type_counts: Counter[str] = Counter()
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
 
     for path in files:
@@ -1802,6 +1950,18 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type in SHUTDOWN_EVENT_TYPES:
+                        shutdown_event_type_counts[str(event_type)] += 1
+                        _merge_shutdown_event_group(
+                            shutdown_event_groups,
+                            _shutdown_event_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     level = live_event.get("level")
                     if level:
                         bot["levels"][str(level).lower()] += 1
@@ -1879,6 +2039,10 @@ def _scan_events(
         "risk_events": _summarize_risk_events(
             risk_event_groups,
             risk_event_type_counts,
+        ),
+        "shutdown_events": _summarize_shutdown_events(
+            shutdown_event_groups,
+            shutdown_event_type_counts,
         ),
         "event_window": _event_window_report(
             since_ms=since_ms,
@@ -2186,6 +2350,12 @@ def build_live_smoke_report(
                 "event_types": {},
                 "groups": [],
             },
+            "shutdown_events": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "groups": [],
+            },
             "event_window": _event_window_report(
                 since_ms=since_ms,
                 until_ms=until_ms,
@@ -2249,6 +2419,7 @@ def build_live_smoke_report(
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
         "risk_events": event_scan["risk_events"],
+        "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
         "problem_event_groups": event_scan["problem_event_groups"],
@@ -2316,6 +2487,11 @@ def summarize_live_smoke_report(
     )
     risk_events = (
         report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+    shutdown_events = (
+        report.get("shutdown_events")
+        if isinstance(report.get("shutdown_events"), dict)
+        else {}
     )
 
     return {
@@ -2412,6 +2588,10 @@ def summarize_live_smoke_report(
             limit=max_groups,
         ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
+        "shutdown_events": _summary_limited_groups(
+            shutdown_events,
+            limit=max_groups,
+        ),
     }
 
 
@@ -2452,6 +2632,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     monitor = report.get("monitor") if isinstance(report.get("monitor"), dict) else {}
     risk_events = (
         report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+    shutdown_events = (
+        report.get("shutdown_events")
+        if isinstance(report.get("shutdown_events"), dict)
+        else {}
     )
     event_window = (
         report.get("event_window") if isinstance(report.get("event_window"), dict) else {}
@@ -2537,5 +2722,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "risk_events": {
             "total": _count_value(risk_events.get("total")),
             "event_types": risk_events.get("event_types") or {},
+        },
+        "shutdown_events": {
+            "total": _count_value(shutdown_events.get("total")),
+            "event_types": shutdown_events.get("event_types") or {},
         },
     }

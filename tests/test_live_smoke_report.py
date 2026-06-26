@@ -1163,6 +1163,82 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     assert "TOKEN123" not in latest_details
 
 
+def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=1,
+                ts=1000,
+                status="started",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully"},
+            ),
+            _monitor_row(
+                event_type="bot.shutdown.stage",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="maintainers_timeout",
+                data={
+                    "stage": "maintainers_timeout",
+                    "elapsed_s": 6.25,
+                    "task_count": 4,
+                    "timeout_s": 5.0,
+                    "error": "api_key=AKIA123 Authorization: Bearer TOKEN123",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=3,
+                ts=3000,
+                status="succeeded",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully", "elapsed_s": 7.5},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=2)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is True
+    assert report["shutdown_events"]["total"] == 3
+    assert report["shutdown_events"]["event_types"] == {
+        "bot.stopping": 1,
+        "bot.shutdown.stage": 1,
+        "bot.stopped": 1,
+    }
+    assert [group["event_type"] for group in report["shutdown_events"]["groups"]] == [
+        "bot.stopped",
+        "bot.shutdown.stage",
+        "bot.stopping",
+    ]
+    stage_group = report["shutdown_events"]["groups"][1]
+    assert stage_group["reason_code"] == "maintainers_timeout"
+    assert stage_group["status"] == "degraded"
+    assert stage_group["latest_data"]["elapsed_s"] == 6.25
+    assert stage_group["latest_data"]["task_count"] == 4
+    assert "AKIA123" not in stage_group["latest_data"]["error"]
+    assert "TOKEN123" not in stage_group["latest_data"]["error"]
+    assert summary["shutdown_events"]["total"] == 3
+    assert summary["shutdown_events"]["groups_truncated"] is True
+    assert len(summary["shutdown_events"]["groups"]) == 2
+    assert brief["shutdown_events"] == {
+        "total": 3,
+        "event_types": {
+            "bot.stopping": 1,
+            "bot.shutdown.stage": 1,
+            "bot.stopped": 1,
+        },
+    }
+
+
 def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
     _write_ndjson(

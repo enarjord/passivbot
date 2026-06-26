@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Added `passivbot tool live-config-preflight` for read-only offline summaries
   of risk-relevant live config facts before startup.
+- Added shutdown-event summaries to `passivbot tool live-smoke-report`, including
+  `bot.stopping`, shutdown stage, and `bot.stopped` events in full, summary, and
+  brief reports.
 - Added structured `exchange.time_sync` live events for CCXT timestamp/nonce
   recovery diagnostics without changing recovery behavior or console volume.
 - Added structured `fills.refresh_summary` startup cache-ready events for fill
