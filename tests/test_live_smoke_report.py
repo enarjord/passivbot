@@ -2254,6 +2254,57 @@ def test_live_smoke_report_process_status_matches_supervisor_config(
     assert report["processes"]["running"][0]["config_path"] == "configs/forager.json"
 
 
+def test_live_smoke_report_process_status_parses_no_rss_etimes_passivbot_rows(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    supervisor_config = tmp_path / "bots.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/forager.json -u binance_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 3.5 7.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/forager.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        supervisor_config=supervisor_config,
+    )
+
+    assert report["ok"] is True
+    assert report["processes"]["running_live_total"] == 1
+    assert report["processes"]["matched_expected"] == 1
+    assert report["processes"]["running"][0]["pid"] == 123
+    assert report["processes"]["running"][0]["age_s"] == 42
+    assert "rss_kb" not in report["processes"]["running"][0]
+    assert report["processes"]["running"][0]["command_key"] == (
+        "passivbot live configs/forager.json -u binance_01"
+    )
+
+
 def test_live_smoke_report_process_status_reports_duplicates_and_extra_live_processes(
     tmp_path,
     monkeypatch,

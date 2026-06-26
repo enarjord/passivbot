@@ -1319,7 +1319,11 @@ def _process_record_from_ps_line(line: str) -> dict[str, Any] | None:
     if not stripped:
         return None
     parts = stripped.split(None, 7)
-    if len(parts) == 8 and _int_or_none(parts[2]) is not None:
+    if (
+        len(parts) == 8
+        and _int_or_none(parts[2]) is not None
+        and _int_or_none(parts[6]) is not None
+    ):
         pid, ppid, etimes, stat_value, pcpu, pmem, rss, command = parts
         age_s = _int_or_none(etimes)
     else:
