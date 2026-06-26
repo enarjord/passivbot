@@ -60,10 +60,13 @@ from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedge
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.event_bus import (
     EventTypes,
+    LIVE_EVENT_DEBUG_PROFILE_ENV,
     LiveEventContext,
     LiveEventPipeline,
     MonitorEventSink,
     ReasonCodes,
+    live_event_debug_profile_enabled,
+    normalize_live_event_debug_profiles,
     payload_hash_raw,
 )
 import live.event_emitters as live_event_emitters
@@ -830,6 +833,14 @@ class Passivbot:
         self.ccp = None
         self.create_ccxt_sessions()
         self.debug_mode = False
+        self.live_event_debug_profiles = normalize_live_event_debug_profiles(
+            os.environ.get(
+                LIVE_EVENT_DEBUG_PROFILE_ENV,
+                get_optional_config_value(
+                    config, "logging.live_event_debug_profiles", ()
+                ),
+            )
+        )
         self.balance_threshold = (
             1.0  # don't create orders if balance is less than threshold
         )
@@ -3299,6 +3310,16 @@ class Passivbot:
         logging.info("[boot] starting bot %s...", self.exchange)
         boot_stage = "start"
         try:
+            live_event_debug_profiles = list(
+                getattr(self, "live_event_debug_profiles", ()) or ()
+            )
+            bot_started_data = {
+                "pid": os.getpid(),
+                "quote": self.quote,
+                "start_time_ms": int(self.start_time_ms),
+            }
+            if live_event_debug_profiles:
+                bot_started_data["live_event_debug_profiles"] = live_event_debug_profiles
             self._monitor_record_event(
                 "bot.start",
                 ("bot", "lifecycle", "start"),
@@ -3308,6 +3329,11 @@ class Passivbot:
                     "pid": os.getpid(),
                     "quote": self.quote,
                     "start_time_ms": int(self.start_time_ms),
+                    **(
+                        {"live_event_debug_profiles": live_event_debug_profiles}
+                        if live_event_debug_profiles
+                        else {}
+                    ),
                 },
                 ts=int(self.start_time_ms),
             )
@@ -3317,11 +3343,7 @@ class Passivbot:
                 component="lifecycle",
                 tags=("bot", "lifecycle", "start"),
                 status="started",
-                data={
-                    "pid": os.getpid(),
-                    "quote": self.quote,
-                    "start_time_ms": int(self.start_time_ms),
-                },
+                data=bot_started_data,
             )
 
             # Random boot stagger to spread API load when multiple bots start simultaneously.
@@ -3437,10 +3459,13 @@ class Passivbot:
             Passivbot._startup_timing_mark(self, "startup")
             self._bot_ready = True
             ready_ts = utc_ms()
+            ready_data = {"debug_mode": bool(self.debug_mode)}
+            if live_event_debug_profiles:
+                ready_data["live_event_debug_profiles"] = live_event_debug_profiles
             self._monitor_record_event(
                 "bot.ready",
                 ("bot", "lifecycle", "ready"),
-                {"debug_mode": bool(self.debug_mode)},
+                ready_data,
                 ts=ready_ts,
             )
             self._emit_live_event(
@@ -3449,7 +3474,7 @@ class Passivbot:
                 component="lifecycle",
                 tags=("bot", "lifecycle", "ready"),
                 status="succeeded",
-                data={"debug_mode": bool(self.debug_mode)},
+                data=ready_data,
             )
             await self._monitor_flush_snapshot(force=True, ts=ready_ts)
             if not self.debug_mode:
@@ -6515,6 +6540,7 @@ class Passivbot:
                 bot_id=getattr(self, "bot_id", None),
             ),
             monitor_sinks=[MonitorEventSink(publisher)],
+            debug_profiles=getattr(self, "live_event_debug_profiles", ()),
         )
         self._live_event_pipeline = pipeline
         return pipeline
@@ -15322,6 +15348,7 @@ class Passivbot:
         tradable_count = sum(
             1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
         )
+        rust_debug_profile_enabled = live_event_debug_profile_enabled(self, "rust")
         self._emit_rust_orchestrator_called_event(
             rust_call_id=rust_call_id,
             input_hash=input_hash,
@@ -15331,6 +15358,14 @@ class Passivbot:
             trailing_unavailable_count=len(trailing_unavailable_symbols),
             hedge_mode=bool(effective_hedge_mode),
             strategy_kind=strategy_kind,
+            input_symbol_sample=(
+                live_event_emitters.rust_input_symbol_debug_sample(
+                    input_dict.get("symbols"),
+                    idx_to_symbol=idx_to_symbol,
+                )
+                if rust_debug_profile_enabled
+                else None
+            ),
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
@@ -15369,6 +15404,14 @@ class Passivbot:
             elapsed_ms=int(elapsed_ms),
             order_count=len(orders),
             diagnostics=diagnostics,
+            output_order_sample=(
+                live_event_emitters.rust_output_order_debug_sample(
+                    orders,
+                    idx_to_symbol=idx_to_symbol,
+                )
+                if rust_debug_profile_enabled
+                else None
+            ),
         )
         Passivbot._emit_action_planned_event(
             self,

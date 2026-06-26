@@ -758,6 +758,119 @@ def _safe_int(value: Any) -> int | None:
         return None
 
 
+def _rust_symbol_name(
+    idx_to_symbol: dict[int, str] | None, symbol_idx: int | None
+) -> str | None:
+    if symbol_idx is None or not isinstance(idx_to_symbol, dict):
+        return None
+    value = idx_to_symbol.get(int(symbol_idx))
+    return str(value) if value is not None else None
+
+
+def rust_input_symbol_debug_sample(
+    input_symbols: Any,
+    *,
+    idx_to_symbol: dict[int, str] | None = None,
+    limit: int = 8,
+) -> dict[str, Any]:
+    """Return a bounded, non-raw sample of Rust orchestrator symbol inputs."""
+    symbols = (
+        list(input_symbols or []) if isinstance(input_symbols, (list, tuple)) else []
+    )
+    sample: list[dict[str, Any]] = []
+    for item in symbols[: max(0, int(limit))]:
+        if not isinstance(item, dict):
+            continue
+        symbol_idx = _safe_int(item.get("symbol_idx"))
+        order_book = (
+            item.get("order_book") if isinstance(item.get("order_book"), dict) else {}
+        )
+        emas = item.get("emas") if isinstance(item.get("emas"), dict) else {}
+        m1 = emas.get("m1") if isinstance(emas.get("m1"), dict) else {}
+        h1 = emas.get("h1") if isinstance(emas.get("h1"), dict) else {}
+        active_psides: list[str] = []
+        for pside in ("long", "short"):
+            side_cfg = item.get(pside) if isinstance(item.get(pside), dict) else {}
+            position = (
+                side_cfg.get("position")
+                if isinstance(side_cfg.get("position"), dict)
+                else {}
+            )
+            size = _safe_float(position.get("size"))
+            if size is not None and abs(size) > 0.0:
+                active_psides.append(pside)
+        payload = {
+            "symbol_idx": symbol_idx,
+            "symbol": _rust_symbol_name(idx_to_symbol, symbol_idx),
+            "tradable": bool(item.get("tradable")),
+            "has_bid": order_book.get("bid") is not None,
+            "has_ask": order_book.get("ask") is not None,
+            "effective_min_cost": _safe_float(item.get("effective_min_cost")),
+            "m1_close_ema_count": len(m1.get("close") or []),
+            "m1_log_range_ema_count": len(m1.get("log_range") or []),
+            "m1_volume_ema_count": len(m1.get("volume") or []),
+            "h1_log_range_ema_count": len(h1.get("log_range") or []),
+            "active_psides": active_psides,
+        }
+        sample.append(
+            {key: value for key, value in payload.items() if value is not None}
+        )
+    return {
+        "count": len(symbols),
+        "sample": sample,
+        "truncated": max(0, len(symbols) - len(sample)),
+    }
+
+
+def rust_output_order_debug_sample(
+    orders: Any,
+    *,
+    idx_to_symbol: dict[int, str] | None = None,
+    limit: int = 12,
+) -> dict[str, Any]:
+    """Return a bounded sample of Rust output orders for diagnostics."""
+    values = list(orders or []) if isinstance(orders, (list, tuple)) else []
+    sample: list[dict[str, Any]] = []
+    for item in values[: max(0, int(limit))]:
+        if not isinstance(item, dict):
+            continue
+        symbol_idx = _safe_int(item.get("symbol_idx"))
+        payload: dict[str, Any] = {
+            "symbol_idx": symbol_idx,
+            "symbol": _rust_symbol_name(idx_to_symbol, symbol_idx),
+            "order_type": (
+                str(item.get("order_type"))
+                if item.get("order_type") is not None
+                else None
+            ),
+            "execution_type": (
+                str(item.get("execution_type"))
+                if item.get("execution_type") is not None
+                else None
+            ),
+            "side": str(item.get("side")) if item.get("side") is not None else None,
+            "pside": (
+                str(item.get("pside") or item.get("position_side"))
+                if item.get("pside") is not None
+                or item.get("position_side") is not None
+                else None
+            ),
+            "qty": _safe_float(item.get("qty")),
+            "price": _safe_float(item.get("price")),
+            "reduce_only": bool(item.get("reduce_only"))
+            if item.get("reduce_only") is not None
+            else None,
+        }
+        sample.append(
+            {key: value for key, value in payload.items() if value is not None}
+        )
+    return {
+        "count": len(values),
+        "sample": sample,
+        "truncated": max(0, len(values) - len(sample)),
+    }
+
+
 def _emit_startup_timing_event_unchecked(
     bot: Any,
     *,
@@ -1226,7 +1339,20 @@ def _emit_rust_orchestrator_called_event_unchecked(
     trailing_unavailable_count: int,
     hedge_mode: bool,
     strategy_kind: str | None,
+    input_symbol_sample: dict[str, Any] | None = None,
 ) -> None:
+    data = {
+        "symbol_count": int(symbol_count),
+        "tradable_count": int(tradable_count),
+        "ema_unavailable_count": int(ema_unavailable_count),
+        "trailing_unavailable_count": int(trailing_unavailable_count),
+        "hedge_mode": bool(hedge_mode),
+        "strategy_kind": strategy_kind,
+        "input_hash": str(input_hash),
+    }
+    if input_symbol_sample is not None:
+        data["debug_profile"] = "rust"
+        data["input_symbol_sample"] = input_symbol_sample
     bot._emit_live_event(
         EventTypes.RUST_ORCHESTRATOR_CALLED,
         level="debug",
@@ -1236,15 +1362,7 @@ def _emit_rust_orchestrator_called_event_unchecked(
         remote_call_id=rust_call_id,
         status="started",
         raw_hash=str(input_hash),
-        data={
-            "symbol_count": int(symbol_count),
-            "tradable_count": int(tradable_count),
-            "ema_unavailable_count": int(ema_unavailable_count),
-            "trailing_unavailable_count": int(trailing_unavailable_count),
-            "hedge_mode": bool(hedge_mode),
-            "strategy_kind": strategy_kind,
-            "input_hash": str(input_hash),
-        },
+        data=data,
     )
 
 
@@ -1270,6 +1388,7 @@ def _emit_rust_orchestrator_returned_event_unchecked(
     order_count: int | None = None,
     diagnostics: Any = None,
     error: BaseException | None = None,
+    output_order_sample: dict[str, Any] | None = None,
 ) -> None:
     event_status = str(status or "succeeded").lower()
     failed = event_status == "failed" or error is not None
@@ -1299,6 +1418,9 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         data["diagnostic_keys"] = (
             sorted(diagnostics) if isinstance(diagnostics, dict) else []
         )
+        if output_order_sample is not None:
+            data["debug_profile"] = "rust"
+            data["output_order_sample"] = output_order_sample
 
     bot._emit_live_event(
         EventTypes.RUST_ORCHESTRATOR_RETURNED,

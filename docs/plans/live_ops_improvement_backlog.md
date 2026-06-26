@@ -246,12 +246,21 @@ Related detailed plans:
     surfaces are touched.
 
 12. [ ] Debug profile toggles.
-    Status: open.
+    Status: partial. Initial Rust live-event debug profile slice is in review.
 
     Add narrow runtime/debug profiles that increase event detail for one domain:
     candles, fills, HSL, Rust payloads, order execution, or exchange calls. This
     avoids code patches or globally noisy DEBUG logs when diagnosing a live
     issue.
+
+    Work log:
+    - 2026-06-26: Added `logging.live_event_debug_profiles` and
+      `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES`, with initial `rust` support for
+      bounded Rust orchestrator input-symbol and output-order samples on
+      structured events only.
+
+    Remaining refinements: add targeted profiles for remote calls, candle/EMA,
+    HSL, fills, and execution as those diagnostics need deeper live evidence.
 
 13. [ ] Cache integrity doctor.
     Status: partial. Initial read-only local cache smoke doctor and
@@ -329,6 +338,7 @@ Related detailed plans:
 | 2026-06-26 | #3 Live restart/smoke automation | PR #699 / `4e2fcee7` | Surfaced dropped contextless unparsed attention/hard counters under `--log-window-unparsed-policy drop`; dropped attention now makes smoke `attention=true` without making stale tail fragments hard failures; VPS5 settled smoke on `d5639813` returned `ok=true`, no hard failures, all five bots matched | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #709 / `71479c61` deploy evidence | VPS5 restart smoke after the fill-cache event slice returned `ok=true`, no hard failures, all five bots matched; the restart exposed four orphaned live processes after two Ctrl+C rounds, cleared by SIGTERM before reload | Safe pull/stop/start orchestration should include shutdown timing, orphan detection, and escalation policy |
 | 2026-06-26 | #3/#14 Supervisor/process diagnostics | PR #712 / `51ba92a3` | Extended `live-smoke-report --supervisor-config` to classify expected matches, missing expected commands, duplicate configured-command process matches, and extra/orphan-like `passivbot live` processes with bounded per-process metadata; VPS5 smoke showed all five configured bots matched with zero duplicate or extra live process matches; documented the read-only command-match limitation and shutdown escalation ladder as policy only | Safe pull/stop/start orchestration remains open |
+| 2026-06-26 | #12 Debug profile toggles | pending PR | Added opt-in live-event debug profiles via config/env and initial Rust orchestrator structured-event enrichment with bounded input-symbol and output-order samples | Add remote-call, candle/EMA, HSL, fills, and execution profiles as needed |
 | 2026-06-26 | #7 Live config preflight/linter | PR #714 / `564dc0a8` | Added `passivbot tool live-config-preflight`, a local-only JSON report for one config's risk-relevant live facts with bounded coin samples and malformed-structure errors; VPS5 preflight smoke returned `ok=true` with one expected missing short-side warning | Config diffing, deeper cache compatibility checks, and live startup enforcement remain open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #715 / `7b12d4b2` | Added passive `shutdown_events` summaries to full, summary, and brief `live-smoke-report` output for existing bot stopping/stage/stopped events; VPS5 no-restart smoke showed `shutdown_events.total=0`, all five bots matched, and no hard failures | Safe pull/stop/start orchestration remains open |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |

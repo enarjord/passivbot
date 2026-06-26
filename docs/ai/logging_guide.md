@@ -47,6 +47,22 @@ exists there. Add new registry values before introducing repeated literals. See
 
 Fallbacks in critical paths log warnings with required context from `error_contract.md`.
 
+## Live Event Debug Profiles
+
+Use `logging.live_event_debug_profiles` or the
+`PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` environment variable to opt into narrow
+structured-event enrichment without increasing default console noise. Values may
+be a list or comma/space separated string. `all` enables every known profile.
+
+Initial supported profile behavior:
+
+1. `rust` adds bounded Rust orchestrator input-symbol and output-order samples
+   to the existing `rust_orchestrator.called` and
+   `rust_orchestrator.returned` events. Full raw Rust payload persistence remains
+   disabled; hashes stay present for correlation.
+
+Unknown profile names should fail visibly instead of being ignored silently.
+
 ## Review Heuristic
 
 1. Can INFO be tailed for long periods without noise overload?

@@ -8,6 +8,7 @@ import numpy as np
 
 import pytest
 
+import live.event_emitters as live_event_emitters
 from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
 
@@ -603,6 +604,125 @@ def test_rust_orchestrator_emitters_record_bounded_summaries():
     assert "MissingEma" in failed.data["error"]
     assert "SECRET" not in failed.data["error"]
     assert "[redacted]" in failed.data["error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_rust_orchestrator_debug_profile_samples_are_bounded():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_rust_orchestrator_called_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_called_event
+        )
+        _emit_rust_orchestrator_returned_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_returned_event
+        )
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_rust"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    idx_to_symbol = {0: "BTC/USDT:USDT", 1: "ETH/USDT:USDT"}
+    input_sample = live_event_emitters.rust_input_symbol_debug_sample(
+        [
+            {
+                "symbol_idx": 0,
+                "tradable": True,
+                "order_book": {"bid": 100.0, "ask": 101.0},
+                "effective_min_cost": 5.0,
+                "emas": {
+                    "m1": {"close": [[100.0, 1.0]], "log_range": [], "volume": []},
+                    "h1": {"log_range": [[100.0, 0.01]]},
+                },
+                "long": {"position": {"size": 0.01}},
+                "short": {"position": {"size": 0.0}},
+            },
+            {"symbol_idx": 1, "tradable": False, "emas": {}},
+        ],
+        idx_to_symbol=idx_to_symbol,
+        limit=1,
+    )
+    output_sample = live_event_emitters.rust_output_order_debug_sample(
+        [
+            {
+                "symbol_idx": 0,
+                "order_type": "entry_grid_normal_long",
+                "execution_type": "limit",
+                "side": "buy",
+                "position_side": "long",
+                "qty": 0.01,
+                "price": 100.0,
+                "reduce_only": False,
+            },
+            {"symbol_idx": 1, "order_type": "unstuck_close_short"},
+        ],
+        idx_to_symbol=idx_to_symbol,
+        limit=1,
+    )
+
+    bot = FakeBot()
+    bot._emit_rust_orchestrator_called_event(
+        rust_call_id="rust_7",
+        input_hash="input_hash",
+        symbol_count=2,
+        tradable_count=1,
+        ema_unavailable_count=0,
+        trailing_unavailable_count=0,
+        hedge_mode=True,
+        strategy_kind="recursive_grid",
+        input_symbol_sample=input_sample,
+    )
+    bot._emit_rust_orchestrator_returned_event(
+        rust_call_id="rust_7",
+        status="succeeded",
+        input_hash="input_hash",
+        output_hash="output_hash",
+        elapsed_ms=12,
+        order_count=2,
+        diagnostics={},
+        output_order_sample=output_sample,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    called, returned = sink.events
+    assert called.data["debug_profile"] == "rust"
+    assert called.data["input_symbol_sample"]["count"] == 2
+    assert called.data["input_symbol_sample"]["truncated"] == 1
+    assert called.data["input_symbol_sample"]["sample"] == [
+        {
+            "symbol_idx": 0,
+            "symbol": "BTC/USDT:USDT",
+            "tradable": True,
+            "has_bid": True,
+            "has_ask": True,
+            "effective_min_cost": 5.0,
+            "m1_close_ema_count": 1,
+            "m1_log_range_ema_count": 0,
+            "m1_volume_ema_count": 0,
+            "h1_log_range_ema_count": 1,
+            "active_psides": ["long"],
+        }
+    ]
+    assert returned.data["debug_profile"] == "rust"
+    assert returned.data["output_order_sample"]["count"] == 2
+    assert returned.data["output_order_sample"]["truncated"] == 1
+    assert (
+        returned.data["output_order_sample"]["sample"][0]["symbol"]
+        == "BTC/USDT:USDT"
+    )
+    assert returned.data["output_order_sample"]["sample"][0]["order_type"] == (
+        "entry_grid_normal_long"
+    )
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

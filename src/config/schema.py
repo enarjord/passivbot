@@ -426,6 +426,7 @@ def get_template_config():
                 "backup_count": 5,
                 "dir": "logs",
                 "level": 1,
+                "live_event_debug_profiles": [],
                 "max_bytes_mb": 10.0,
                 "memory_snapshot_interval_minutes": 30,
                 "persist_to_file": True,

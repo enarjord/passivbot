@@ -12,6 +12,7 @@ from live.event_bus import (
     EventRoute,
     EventTags,
     EventTypes,
+    LIVE_EVENT_DEBUG_PROFILES,
     ListEventSink,
     LiveEvent,
     LiveEventContext,
@@ -21,6 +22,8 @@ from live.event_bus import (
     ReasonCodes,
     authoritative_reason_code,
     format_console_event,
+    live_event_debug_profile_enabled,
+    normalize_live_event_debug_profiles,
     normalize_event_type,
     payload_hash,
     payload_hash_raw,
@@ -83,6 +86,34 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
     assert sink_failed_reason_code("monitor") == "monitor_sink_failed"
     assert len(values) == len(set(values))
     assert all(re.fullmatch(r"[a-z][a-z0-9_]*", value) for value in values)
+
+
+def test_live_event_debug_profiles_normalize_and_validate():
+    assert normalize_live_event_debug_profiles(None) == ()
+    assert normalize_live_event_debug_profiles("") == ()
+    assert normalize_live_event_debug_profiles("rust,remote-calls candle") == (
+        "candles",
+        "remote_calls",
+        "rust",
+    )
+    assert normalize_live_event_debug_profiles(["rust", "rust", "off", "hsl"]) == (
+        "hsl",
+        "rust",
+    )
+    assert normalize_live_event_debug_profiles("all") == tuple(
+        sorted(LIVE_EVENT_DEBUG_PROFILES)
+    )
+    with pytest.raises(ValueError, match="unknown live event debug profile"):
+        normalize_live_event_debug_profiles("rust,unknown_profile")
+
+    class Holder:
+        live_event_debug_profiles = ("rust",)
+
+    assert live_event_debug_profile_enabled(Holder(), "rust")
+    assert live_event_debug_profile_enabled(Holder(), "remote_calls") is False
+    assert LiveEventPipeline(debug_profiles="rust", start=False).debug_profiles == (
+        "rust",
+    )
 
 
 def test_live_event_serializes_stable_envelope_and_redacts_sensitive_data():
