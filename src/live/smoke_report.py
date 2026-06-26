@@ -117,6 +117,32 @@ def _resolve_path(path: str | Path) -> Path:
         return candidate.absolute()
 
 
+def _user_safe_display_path(path: str | Path) -> str:
+    resolved = _resolve_path(path)
+
+    def _tilde_path(tail: tuple[str, ...]) -> str:
+        return "~" if not tail else "~/" + "/".join(tail)
+
+    try:
+        home = _resolve_path(Path.home())
+        relative = resolved.relative_to(home)
+        return _tilde_path(relative.parts)
+    except (OSError, RuntimeError, ValueError):
+        pass
+
+    display_candidate = Path(path).expanduser()
+    try:
+        display_path = display_candidate.absolute()
+    except OSError:
+        display_path = resolved
+    parts = display_path.parts
+    if len(parts) >= 2 and parts[:2] == ("/", "root"):
+        return _tilde_path(tuple(parts[2:]))
+    if len(parts) >= 3 and parts[0] == "/" and parts[1] in {"home", "Users"}:
+        return _tilde_path(tuple(parts[3:]))
+    return str(resolved)
+
+
 def _open_text(path: Path):
     if path.name.endswith(".gz"):
         return gzip.open(path, "rt", encoding="utf-8", errors="replace")
@@ -1175,7 +1201,7 @@ def _build_repository_report(
 ) -> dict[str, Any]:
     root = _find_repository_root(monitor_root, repo_root=repo_root)
     report: dict[str, Any] = {
-        "root": str(root),
+        "root": _user_safe_display_path(root),
         "is_git_repo": False,
         "branch": None,
         "head": None,

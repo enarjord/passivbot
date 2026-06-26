@@ -2187,6 +2187,51 @@ def test_live_smoke_report_includes_repository_metadata(tmp_path, monkeypatch):
     assert calls[-1][1] == ("status", "--porcelain", "--untracked-files=no")
 
 
+def test_live_smoke_report_repository_root_redacts_home_prefix(tmp_path, monkeypatch):
+    home = tmp_path / "home" / "operator"
+    repo_root = home / "passivbot"
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    calls = []
+
+    def fake_git_output(root, args, *, timeout=2.0):
+        calls.append(root)
+        if args == ["rev-parse", "--is-inside-work-tree"]:
+            return "true", None
+        if args == ["rev-parse", "HEAD"]:
+            return "1234567890abcdef", None
+        if args == ["rev-parse", "--short", "HEAD"]:
+            return "1234567", None
+        if args == ["rev-parse", "--abbrev-ref", "HEAD"]:
+            return "v8", None
+        if args == ["status", "--porcelain", "--untracked-files=no"]:
+            return "", None
+        raise AssertionError(args)
+
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(smoke_report_module, "_git_output", fake_git_output)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        repo_root=repo_root,
+    )
+
+    assert report["repository"]["root"] == "~/passivbot"
+    assert set(calls) == {repo_root.resolve()}
+
+
+def test_live_smoke_report_repository_root_redacts_common_user_dirs():
+    assert smoke_report_module._user_safe_display_path("/root/passivbot") == "~/passivbot"
+    assert (
+        smoke_report_module._user_safe_display_path("/home/deploy/passivbot")
+        == "~/passivbot"
+    )
+    assert (
+        smoke_report_module._user_safe_display_path("/Users/operator/passivbot")
+        == "~/passivbot"
+    )
+
+
 def test_live_smoke_report_discovers_repository_from_monitor_root(tmp_path, monkeypatch):
     repo_root = tmp_path / "passivbot"
     (repo_root / ".git").mkdir(parents=True)
