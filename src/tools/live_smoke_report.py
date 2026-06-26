@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +11,15 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor  # noqa: E402
+
+
+def _since_ms_from_recent_minutes(value: float | None) -> int | None:
+    if value is None:
+        return None
+    minutes = float(value)
+    if minutes <= 0:
+        raise ValueError("--recent-minutes must be positive")
+    return int(time.time() * 1000) - int(minutes * 60_000)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,6 +66,24 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also scan rotated/compressed monitor event segments.",
     )
     parser.add_argument(
+        "--since-ms",
+        type=int,
+        help="Only include structured monitor events at or after this monitor ts.",
+    )
+    parser.add_argument(
+        "--until-ms",
+        type=int,
+        help="Only include structured monitor events at or before this monitor ts.",
+    )
+    parser.add_argument(
+        "--recent-minutes",
+        type=float,
+        help=(
+            "Only include structured monitor events from the last N minutes. "
+            "Equivalent to --since-ms based on local wall-clock time."
+        ),
+    )
+    parser.add_argument(
         "--max-problem-events",
         type=int,
         default=50,
@@ -94,6 +122,18 @@ def main(argv: list[str] | None = None) -> int:
         logs_root = default_logs_root_for_monitor(args.monitor_root)
     else:
         logs_root = args.logs_root if str(args.logs_root).strip() else None
+    since_ms = args.since_ms
+    try:
+        recent_since_ms = _since_ms_from_recent_minutes(args.recent_minutes)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if since_ms is not None and recent_since_ms is not None:
+        parser.error("--since-ms and --recent-minutes are mutually exclusive")
+    if recent_since_ms is not None:
+        since_ms = recent_since_ms
+    until_ms = args.until_ms
+    if since_ms is not None and until_ms is not None and since_ms > until_ms:
+        parser.error("--since-ms must be <= --until-ms")
     report = build_live_smoke_report(
         args.monitor_root,
         logs_root=logs_root,
@@ -101,6 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         supervisor_config=args.supervisor_config,
         process_command_match=str(args.process_match),
         include_rotated=bool(args.include_rotated),
+        since_ms=since_ms,
+        until_ms=until_ms,
         max_problem_events=int(args.max_problem_events),
         max_log_files=int(args.max_log_files),
         log_tail_lines=int(args.log_tail_lines),

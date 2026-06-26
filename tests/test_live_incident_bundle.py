@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import tarfile
 
+import pytest
+
 import live.smoke_report as smoke_report_module
 from live.incident_bundle import _redact_url_userinfo, build_live_incident_bundle
 from tools import live_incident_bundle
@@ -147,6 +149,15 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["event_report"]["order_trace_matched_events"] == 2
     assert report["event_report"]["cycle_trace_matched_events"] == 3
     assert report["time_window"]["matched_events"] == 1
+    assert report["smoke_report"]["event_window"] == {
+        "enabled": True,
+        "since_ms": 1500,
+        "until_ms": 2500,
+        "events_considered": 1,
+        "events_skipped_before": 3,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+    }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -169,6 +180,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         manifest = _read_tar_json(tar, "manifest.json")
         event_report = _read_tar_json(tar, "event_report.json")
         window_report = _read_tar_json(tar, "time_window_report.json")
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
         config_hashes = _read_tar_json(tar, "config_hashes.json")
         redacted_snapshot = _read_tar_json(
             tar,
@@ -200,6 +212,8 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     )
     assert window_report["events"][0]["seq"] == 2
     assert "remote_call.failed" in window_report["timeline"][0]
+    assert smoke_report["event_window"] == report["smoke_report"]["event_window"]
+    assert smoke_report["remote_call_failures"]["total"] == 1
 
 
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
@@ -257,6 +271,14 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
     assert smoke_report["logs"]["hard_matches"] == 0
+
+
+def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(["monitor", "--since-ms", "not-an-int"])
+
+    assert exc_info.value.code == 2
+    assert "invalid int value" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_includes_process_status_when_requested(

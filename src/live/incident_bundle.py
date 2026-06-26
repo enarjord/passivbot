@@ -660,6 +660,8 @@ def build_live_incident_bundle(
         supervisor_config=supervisor_config,
         process_command_match=process_command_match,
         include_rotated=include_rotated,
+        since_ms=since_ms,
+        until_ms=until_ms,
         max_problem_events=max_problem_events,
         max_log_files=max_log_files,
         log_tail_lines=log_tail_lines,
@@ -761,6 +763,7 @@ def build_live_incident_bundle(
             "attention": smoke_report.get("attention"),
             "hard_failures": smoke_report.get("hard_failures"),
             "attention_count": smoke_report.get("attention_count"),
+            "event_window": smoke_report.get("event_window"),
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),

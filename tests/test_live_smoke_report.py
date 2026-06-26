@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 import live.smoke_report as smoke_report_module
 from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor
 from tools import live_smoke_report
@@ -339,6 +341,75 @@ def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     assert report["problem_events"][0]["hard"] is False
 
 
+def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="old_terminal_failure",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="warning",
+                reason_code="old_timeout",
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=3000,
+                ids={"cycle_id": "cy_fresh"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        since_ms=2500,
+    )
+
+    assert report["ok"] is True
+    assert report["monitor"]["live_events"] == 3
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 2500,
+        "until_ms": None,
+        "events_considered": 1,
+        "events_skipped_before": 2,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+    }
+    assert report["bots"] == [
+        {
+            "bot": "binance/binance_01",
+            "events": 1,
+            "event_types": {"cycle.completed": 1},
+            "invalid_ts": 0,
+            "last_ts": 3000,
+            "levels": {"info": 1},
+            "hard_problem_events": 0,
+            "problem_events": 0,
+            "statuses": {"succeeded": 1},
+        }
+    ]
+    assert report["hard_problem_event_count"] == 0
+    assert report["problem_events"] == []
+    assert report["remote_call_failures"] == {
+        "total": 0,
+        "groups_truncated": False,
+        "groups": [],
+    }
+
+
 def test_live_smoke_report_log_scan_deduplicates_aliases_and_matches_levels(
     tmp_path,
 ):
@@ -453,16 +524,41 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
 
     assert (
         live_smoke_report.main(
-            [str(tmp_path / "monitor"), "--logs-root", "", "--compact"]
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--since-ms",
+                "1001",
+                "--compact",
+            ]
         )
         == 0
     )
 
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is True
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 1001,
+        "until_ms": None,
+        "events_considered": 0,
+        "events_skipped_before": 1,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+    }
+    assert report["bots"] == []
     assert report["logs"]["files_scanned"] == 0
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
+
+
+def test_live_smoke_report_cli_rejects_invalid_window_timestamp(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(["monitor", "--since-ms", "not-an-int"])
+
+    assert exc_info.value.code == 2
+    assert "invalid int value" in capsys.readouterr().err
 
 
 def test_live_smoke_report_process_status_matches_supervisor_config(

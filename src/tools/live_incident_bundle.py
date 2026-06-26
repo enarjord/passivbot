@@ -12,12 +12,6 @@ if str(SRC_ROOT) not in sys.path:
 from live.incident_bundle import build_live_incident_bundle  # noqa: E402
 
 
-def _parse_ms(value: str | None) -> int | None:
-    if value is None:
-        return None
-    return int(value)
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
@@ -106,8 +100,16 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help="Filter compact records by status. May be repeated or comma-separated.",
     )
-    parser.add_argument("--since-ms", help="Include live events at or after this monitor ts.")
-    parser.add_argument("--until-ms", help="Include live events at or before this monitor ts.")
+    parser.add_argument(
+        "--since-ms",
+        type=int,
+        help="Include live events at or after this monitor ts.",
+    )
+    parser.add_argument(
+        "--until-ms",
+        type=int,
+        help="Include live events at or before this monitor ts.",
+    )
     parser.add_argument(
         "--limit",
         type=int,
@@ -196,8 +198,8 @@ def main(argv: list[str] | None = None) -> int:
         pside=args.pside,
         reason_code=args.reason_code,
         status=args.status,
-        since_ms=_parse_ms(args.since_ms),
-        until_ms=_parse_ms(args.until_ms),
+        since_ms=args.since_ms,
+        until_ms=args.until_ms,
         include_data=bool(args.include_data),
         include_trace_report=not bool(args.no_trace_report),
         include_rotated=bool(args.include_rotated),
