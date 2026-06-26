@@ -1411,6 +1411,105 @@ async def test_start_bot_treats_hsl_value_error_as_terminal_startup_failure(monk
     }
 
 
+def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatch):
+    sink = ListEventSink()
+
+    class FakeBot:
+        _emit_live_event = Passivbot._emit_live_event
+        _equity_hard_stop_emit_coin_status = Passivbot._equity_hard_stop_emit_coin_status
+        _hsl_coin_state = Passivbot._hsl_coin_state
+
+        def __init__(self, *, has_position: bool):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_coin_hsl"
+            self._live_event_current_cycle_id = "cy_hsl_coin"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+            self.has_position = has_position
+            self._equity_hard_stop_coin = {
+                "long": {
+                    "NEAR/USDT:USDT": {
+                        "last_status_log_ms": 0,
+                        "cooldown_until_ms": None,
+                        "last_stop_event": None,
+                        "pending_red_since_ms": None,
+                    }
+                },
+                "short": {},
+            }
+
+        def _equity_hard_stop_has_open_position_symbol(self, pside, symbol):
+            return self.has_position
+
+    metrics = {
+        "timestamp_ms": 10_000,
+        "tier": "yellow",
+        "red_threshold": 0.10,
+        "drawdown_score": 0.06,
+        "drawdown_raw": 0.05,
+        "drawdown_ema": 0.06,
+        "slot_budget": 500.0,
+        "realized_pnl": -10.0,
+        "peak_realized_pnl": 20.0,
+        "unrealized_pnl": -15.0,
+    }
+    bot = FakeBot(has_position=True)
+
+    with caplog.at_level(logging.INFO):
+        bot._equity_hard_stop_emit_coin_status("long", "NEAR/USDT:USDT", metrics)
+
+    messages = [record.message for record in caplog.records]
+    assert any("[risk] HSL[long:NEAR/USDT:USDT] status" in msg for msg in messages)
+    assert any("dist_to_red=0.040000" in msg for msg in messages)
+    assert any("slot_budget=500.000000" in msg for msg in messages)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.HSL_STATUS
+    assert event.symbol == "NEAR/USDT:USDT"
+    assert event.pside == "long"
+    assert event.data["dist_to_red"] == pytest.approx(0.04)
+
+    caplog.clear()
+    sink.events.clear()
+    flat_bot = FakeBot(has_position=False)
+    with caplog.at_level(logging.INFO):
+        flat_bot._equity_hard_stop_emit_coin_status(
+            "long",
+            "NEAR/USDT:USDT",
+            metrics | {"timestamp_ms": 20_000},
+        )
+
+    assert not [
+        record
+        for record in caplog.records
+        if "[risk] HSL[long:NEAR/USDT:USDT] status" in record.message
+    ]
+    assert flat_bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].event_type == EventTypes.HSL_STATUS
+
+    import passivbot_hsl as hsl_mod
+
+    def fail_info(*args, **kwargs):
+        raise RuntimeError("logging failed")
+
+    caplog.clear()
+    sink.events.clear()
+    monkeypatch.setattr(hsl_mod.logging, "info", fail_info)
+    failing_log_bot = FakeBot(has_position=True)
+    failing_log_bot._equity_hard_stop_emit_coin_status(
+        "long",
+        "NEAR/USDT:USDT",
+        metrics | {"timestamp_ms": 30_000},
+    )
+
+    assert failing_log_bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert sink.events[-1].event_type == EventTypes.HSL_STATUS
+    assert sink.events[-1].data["dist_to_red"] == pytest.approx(0.04)
+
+
 def test_startup_timing_marks_log_once(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
     now_ms = [1_000]
