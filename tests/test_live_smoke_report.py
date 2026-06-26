@@ -580,6 +580,117 @@ def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     assert report["problem_events"][0]["hard"] is False
 
 
+def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_ema_1"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_ema_2"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 2,
+                        "sample": ["XRP/USDT:USDT", "ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 2,
+                        "sample": ["XRP/USDT:USDT", "ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=3,
+                ts=3000,
+                status="failed",
+                level="critical",
+                reason_code="terminal_startup_failure",
+                ids={"cycle_id": "cy_terminal"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        max_problem_events=1,
+    )
+
+    assert report["problem_event_count"] == 3
+    assert len(report["problem_events"]) == 1
+    assert report["problem_event_groups"] == {
+        "total": 3,
+        "groups_truncated": False,
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "bot.stopped",
+                "reason_code": "terminal_startup_failure",
+                "status": "failed",
+                "level": "critical",
+                "hard": True,
+                "component": "test",
+                "count": 1,
+                "latest_ts": 3000,
+                "latest_ids": {"cycle_id": "cy_terminal"},
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "ema.unavailable",
+                "reason_code": "required_ema_unavailable",
+                "status": "degraded",
+                "level": "warning",
+                "hard": False,
+                "component": "test",
+                "count": 2,
+                "latest_ts": 2000,
+                "latest_data": {
+                    "candidate_unavailable": {
+                        "count": 2,
+                        "sample": ["XRP/USDT:USDT", "ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 2,
+                        "sample": ["XRP/USDT:USDT", "ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+                "latest_ids": {"cycle_id": "cy_ema_2"},
+            },
+        ],
+    }
+
+
 def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

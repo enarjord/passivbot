@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added grouped problem-event summaries to `passivbot tool live-smoke-report`
+  so repeated structured degradation can be inspected by bot, event type,
+  reason, and hard/non-hard status without reading every event sample.
 - Added live-event trace summary and order-trace sections to
   `passivbot tool live-incident-bundle` event reports, with
   `--no-trace-report` for compact bundles.
