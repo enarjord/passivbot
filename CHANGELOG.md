@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-smoke-report --brief` for top-level VPS smoke
+  counters without event groups or log match details.
+- Added periodic console status lines for coin-mode HSL positions, including
+  distance to RED, drawdown, slot budget, realized PnL peak, and unrealized PnL.
 - Added `passivbot tool live-smoke-report --summary` for concise smoke evidence
   that keeps high-signal process, log, problem-event, risk, repository, and
   remote-call health fields without emitting the full verbose report.

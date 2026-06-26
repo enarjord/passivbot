@@ -3090,6 +3090,40 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
             last_red_ts = state["last_stop_event"].get("stop_event_timestamp_ms")
         if last_red_ts is None:
             last_red_ts = state["pending_red_since_ms"]
+        if self._equity_hard_stop_has_open_position_symbol(pside, symbol):
+            try:
+                logging.info(
+                    "[risk] HSL[%s:%s] status | tier=%s dist_to_red=%.6f drawdown_raw=%.6f "
+                    "drawdown_ema=%.6f drawdown_score=%.6f red_threshold=%.6f "
+                    "cooldown_remaining=%s last_red_ts=%s pending_red_since_ms=%s "
+                    "slot_budget=%.6f realized_pnl=%.6f peak_realized_pnl=%.6f upnl=%.6f",
+                    pside,
+                    symbol,
+                    metrics["tier"],
+                    dist_to_red,
+                    metrics["drawdown_raw"],
+                    metrics["drawdown_ema"],
+                    drawdown_score,
+                    red_threshold,
+                    cooldown_remaining if cooldown_remaining is not None else "none",
+                    last_red_ts if last_red_ts is not None else "none",
+                    (
+                        state["pending_red_since_ms"]
+                        if state["pending_red_since_ms"] is not None
+                        else "none"
+                    ),
+                    metrics["slot_budget"],
+                    metrics["realized_pnl"],
+                    metrics["peak_realized_pnl"],
+                    metrics["unrealized_pnl"],
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to log HSL coin status symbol=%s pside=%s: %s",
+                    symbol,
+                    pside,
+                    exc,
+                )
         _emit_hsl_event(
             self,
             "hsl.status",
