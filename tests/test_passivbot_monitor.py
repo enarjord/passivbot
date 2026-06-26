@@ -8,7 +8,7 @@ import numpy as np
 
 import pytest
 
-from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
 
 
 class RecorderPublisher:
@@ -700,6 +700,110 @@ def test_health_summary_event_emitter_records_payload():
     assert event.status == "succeeded"
     assert event.reason_code == "periodic_health_summary"
     assert event.data["rss_bytes"] == 123456
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_state_refresh_timing_event_emitter_records_payload():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_state_refresh_timing_event = (
+            pb_mod.Passivbot._emit_state_refresh_timing_event
+        )
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_state"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_state_refresh_timing_event(
+        plan={"open_orders", "balance"},
+        timings_ms={"balance": 25, "open_orders": 40},
+        wall_ms=45,
+        sum_ms=65,
+        max_surface_ms=40,
+        residual_ms=5,
+        pending_confirmations=True,
+        meaningful_change=True,
+        unusual_plan=False,
+        epoch_changed={"open_orders"},
+        level="info",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.STATE_REFRESH_TIMING
+    assert event.level == "info"
+    assert event.component == "state.refresh"
+    assert event.tags == ("state", "refresh", "account")
+    assert event.cycle_id == "cy_state"
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.STAGED_REFRESH_TIMING
+    assert event.data["plan"] == ["balance", "open_orders"]
+    assert event.data["timings_ms"] == {"balance": 25, "open_orders": 40}
+    assert event.data["wall_ms"] == 45
+    assert event.data["surface_sum_ms"] == 65
+    assert event.data["surface_max_ms"] == 40
+    assert event.data["residual_ms"] == 5
+    assert event.data["pending_confirmations"] is True
+    assert event.data["meaningful_change"] is True
+    assert event.data["unusual_plan"] is False
+    assert event.data["epoch_changed"] == ["open_orders"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_state_refresh_progress_event_emitter_records_payload():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_state_refresh_progress_event = (
+            pb_mod.Passivbot._emit_state_refresh_progress_event
+        )
+
+        def __init__(self):
+            self._live_event_current_cycle_id = "cy_progress"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_state_refresh_progress_event(
+        plan={"balance", "positions"},
+        pending=("positions",),
+        elapsed_ms=12_500,
+        completed_timings_ms={"balance": 120},
+        threshold_s=10.0,
+        repeated=True,
+        level="debug",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.STATE_REFRESH_PROGRESS
+    assert event.level == "debug"
+    assert event.component == "state.refresh"
+    assert event.tags == ("state", "refresh", "timeout")
+    assert event.cycle_id == "cy_progress"
+    assert event.status == "degraded"
+    assert event.reason_code == ReasonCodes.STAGED_REFRESH_PROGRESS
+    assert event.data["plan"] == ["balance", "positions"]
+    assert event.data["pending"] == ["positions"]
+    assert event.data["elapsed_ms"] == 12_500
+    assert event.data["completed_timings_ms"] == {"balance": 120}
+    assert event.data["threshold_s"] == 10.0
+    assert event.data["repeated"] is True
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

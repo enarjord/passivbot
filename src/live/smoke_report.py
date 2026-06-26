@@ -86,6 +86,14 @@ PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
         "unavailable",
         "unavailable_reasons",
     ),
+    EventTypes.STATE_REFRESH_PROGRESS: (
+        "plan",
+        "pending",
+        "elapsed_ms",
+        "completed_timings_ms",
+        "threshold_s",
+        "repeated",
+    ),
 }
 PROBLEM_EVENT_DATA_MAX_DEPTH = 4
 PROBLEM_EVENT_DATA_MAX_ITEMS = 8

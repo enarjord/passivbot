@@ -771,6 +771,180 @@ def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug("[event] failed to emit health summary event: %s", exc)
 
 
+def _safe_int_map(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, raw in sorted(value.items(), key=lambda item: str(item[0])):
+        number = _safe_int(raw)
+        if number is None:
+            continue
+        out[str(key)] = max(0, int(number))
+    return out
+
+
+def _sorted_str_list(value: Any) -> list[str]:
+    try:
+        return sorted(str(item) for item in value)
+    except Exception:
+        return []
+
+
+def _emit_state_refresh_timing_event_unchecked(
+    bot: Any,
+    *,
+    plan: Any,
+    timings_ms: dict[str, int],
+    wall_ms: int,
+    sum_ms: int,
+    max_surface_ms: int,
+    residual_ms: int,
+    pending_confirmations: bool,
+    meaningful_change: bool,
+    unusual_plan: bool,
+    epoch_changed: Any = None,
+    level: str = "debug",
+) -> None:
+    data = {
+        "plan": _sorted_str_list(plan),
+        "timings_ms": _safe_int_map(timings_ms),
+        "wall_ms": max(0, int(_safe_int(wall_ms) or 0)),
+        "surface_sum_ms": max(0, int(_safe_int(sum_ms) or 0)),
+        "surface_max_ms": max(0, int(_safe_int(max_surface_ms) or 0)),
+        "residual_ms": max(0, int(_safe_int(residual_ms) or 0)),
+        "parallel": len(timings_ms or {}) > 1,
+        "pending_confirmations": bool(pending_confirmations),
+        "meaningful_change": bool(meaningful_change),
+        "unusual_plan": bool(unusual_plan),
+        "epoch_changed": _sorted_str_list(epoch_changed or []),
+    }
+    _safe_emit(
+        bot,
+        EventTypes.STATE_REFRESH_TIMING,
+        level=str(level or "debug"),
+        component="state.refresh",
+        tags=(EventTags.STATE, EventTags.REFRESH, EventTags.ACCOUNT),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code=ReasonCodes.STAGED_REFRESH_TIMING,
+        data=data,
+    )
+
+
+def emit_state_refresh_timing_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_state_refresh_timing_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit state refresh timing event: %s", exc)
+
+
+def _stat_summary_payload(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    count = max(0, int(_safe_int(value.get("count")) or 0))
+    total = max(0, int(_safe_int(value.get("sum")) or 0))
+    mean = int(round(total / max(1, count))) if count else 0
+    return {
+        "count": count,
+        "min": max(0, int(_safe_int(value.get("min")) or 0)),
+        "mean": max(0, mean),
+        "max": max(0, int(_safe_int(value.get("max")) or 0)),
+    }
+
+
+def _emit_state_refresh_timing_summary_event_unchecked(
+    bot: Any,
+    *,
+    plan: Any,
+    count: int,
+    since_ms: int,
+    wall: dict[str, int],
+    surface_sum: dict[str, int],
+    surface_max: dict[str, int],
+    residual: dict[str, int],
+    surfaces: dict[str, dict[str, int]],
+) -> None:
+    data = {
+        "summary": True,
+        "plan": _sorted_str_list(plan),
+        "count": max(0, int(_safe_int(count) or 0)),
+        "since_ms": max(0, int(_safe_int(since_ms) or 0)),
+        "wall_ms": _stat_summary_payload(wall),
+        "surface_sum_ms": _stat_summary_payload(surface_sum),
+        "surface_max_ms": _stat_summary_payload(surface_max),
+        "residual_ms": _stat_summary_payload(residual),
+        "surfaces_ms": {
+            str(surface): _stat_summary_payload(stats)
+            for surface, stats in sorted(
+                (surfaces or {}).items(), key=lambda item: str(item[0])
+            )
+        },
+    }
+    _safe_emit(
+        bot,
+        EventTypes.STATE_REFRESH_TIMING,
+        level="info",
+        component="state.refresh",
+        tags=(EventTags.STATE, EventTags.REFRESH, EventTags.ACCOUNT, EventTags.SUMMARY),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="succeeded",
+        reason_code=ReasonCodes.STAGED_REFRESH_TIMING,
+        data=data,
+    )
+
+
+def emit_state_refresh_timing_summary_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> None:
+    try:
+        _emit_state_refresh_timing_summary_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit state refresh timing summary event: %s", exc
+        )
+
+
+def _emit_state_refresh_progress_event_unchecked(
+    bot: Any,
+    *,
+    plan: Any,
+    pending: Any,
+    elapsed_ms: int,
+    completed_timings_ms: dict[str, int] | None = None,
+    threshold_s: float | None = None,
+    repeated: bool = False,
+    level: str = "info",
+) -> None:
+    data: dict[str, Any] = {
+        "plan": _sorted_str_list(plan),
+        "pending": _sorted_str_list(pending),
+        "elapsed_ms": max(0, int(_safe_int(elapsed_ms) or 0)),
+        "completed_timings_ms": _safe_int_map(completed_timings_ms or {}),
+        "repeated": bool(repeated),
+    }
+    threshold = _safe_float(threshold_s)
+    if threshold is not None:
+        data["threshold_s"] = max(0.0, float(threshold))
+    _safe_emit(
+        bot,
+        EventTypes.STATE_REFRESH_PROGRESS,
+        level=str(level or "info"),
+        component="state.refresh",
+        tags=(EventTags.STATE, EventTags.REFRESH, EventTags.TIMEOUT),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="degraded",
+        reason_code=ReasonCodes.STAGED_REFRESH_PROGRESS,
+        data=data,
+    )
+
+
+def emit_state_refresh_progress_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_state_refresh_progress_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit state refresh progress event: %s", exc)
+
+
 def _emit_execution_loop_error_burst_event_unchecked(
     bot: Any,
     *,

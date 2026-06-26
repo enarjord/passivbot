@@ -925,6 +925,49 @@ def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_pat
     }
 
 
+def test_live_smoke_report_problem_events_include_state_refresh_progress(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="state.refresh_progress",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="info",
+                reason_code="staged_refresh_progress",
+                ids={"cycle_id": "cy_refresh"},
+                data={
+                    "plan": ["balance", "open_orders", "positions"],
+                    "pending": ["positions"],
+                    "elapsed_ms": 12_500,
+                    "completed_timings_ms": {
+                        "balance": 120,
+                        "open_orders": 300,
+                    },
+                    "threshold_s": 10.0,
+                    "repeated": False,
+                    "secret": "api_key=SECRET",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    event = report["problem_events"][0]
+    assert event["event_type"] == "state.refresh_progress"
+    assert event["latest_data"] == {
+        "completed_timings_ms": {"balance": 120, "open_orders": 300},
+        "elapsed_ms": 12_500,
+        "pending": ["positions"],
+        "plan": ["balance", "open_orders", "positions"],
+        "repeated": False,
+        "threshold_s": 10.0,
+    }
+
+
 def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

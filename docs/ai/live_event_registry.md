@@ -82,6 +82,8 @@ across time.
 - `pipeline_closing`
 - `snapshot_symbol_state`
 - `startup_phase_ready`
+- `staged_refresh_progress`
+- `staged_refresh_timing`
 - `state_change_detected`
 - `submitted_to_exchange`
 - `warmup_cache_decision`

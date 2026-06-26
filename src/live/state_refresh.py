@@ -368,6 +368,21 @@ def log_staged_refresh_timings(
             max_surface_ms,
             residual_ms,
         )
+    if log_level >= logging.INFO:
+        event_emitters.emit_state_refresh_timing_event(
+            bot,
+            plan=plan,
+            timings_ms=timings_ms,
+            wall_ms=wall_ms,
+            sum_ms=sum_ms,
+            max_surface_ms=max_surface_ms,
+            residual_ms=residual_ms,
+            pending_confirmations=pending_confirmations,
+            meaningful_change=meaningful_change,
+            unusual_plan=unusual_plan,
+            epoch_changed=epoch_changed,
+            level="info",
+        )
     logging.log(
         log_level,
         "[state] staged refresh timings | plan=%s | wall=%dms | surface_sum=%dms | surface_max=%dms | parallel=%s | %s%s",
@@ -440,6 +455,17 @@ def record_staged_refresh_timing_summary(
     surface_parts = [
         f"{surface}={format_stats(stats)}" for surface, stats in sorted(surfaces.items())
     ]
+    event_emitters.emit_state_refresh_timing_summary_event(
+        bot,
+        plan=plan,
+        count=count,
+        since_ms=first_ms,
+        wall=summary["wall"],
+        surface_sum=summary["surface_sum"],
+        surface_max=summary["surface_max"],
+        residual=summary["residual"],
+        surfaces=surfaces,
+    )
     logging.info(
         "[state] staged refresh timing summary | plan=%s | count=%d since=%s | wall=%s | surface_sum=%s | surface_max=%s | residual=%s | %s",
         plan_key,
@@ -492,7 +518,22 @@ async def log_staged_refresh_progress_until(
             )
             key = pending
             level = logging.INFO if key not in logged_pending else logging.DEBUG
+            repeated = key in logged_pending
             logged_pending.add(key)
+            event_emitters.emit_state_refresh_progress_event(
+                bot,
+                plan=plan,
+                pending=pending,
+                elapsed_ms=elapsed_ms,
+                completed_timings_ms={
+                    surface: timings_ms[surface]
+                    for surface in sorted(timings_ms)
+                    if surface not in pending
+                },
+                threshold_s=threshold_s,
+                repeated=repeated,
+                level="info" if level >= logging.INFO else "debug",
+            )
             logging.log(
                 level,
                 "[state] staged refresh still waiting | plan=%s | pending=%s | elapsed=%dms%s",
