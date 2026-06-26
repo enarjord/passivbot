@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool hsl-startup-preview` for read-only offline HSL
+  startup previews from config and local monitor events, with explicit
+  unavailable fields for current drawdown and panic-order prediction.
 - Added `passivbot tool live-config-preflight` for read-only offline summaries
   of risk-relevant live config facts before startup.
 - Added shutdown-event summaries to `passivbot tool live-smoke-report`, including

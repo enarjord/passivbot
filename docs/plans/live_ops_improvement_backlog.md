@@ -162,12 +162,22 @@ Related detailed plans:
    trading decisions.
 
 8. [ ] HSL dry-run preview for startup.
-   Status: open.
+   Status: partial. `passivbot tool hsl-startup-preview` now emits a read-only
+   offline JSON report for one config plus optional local monitor event
+   artifacts. It reports configured HSL settings, latest observed local HSL
+   status/cooldown/drawdown-to-red fields when present, and explicitly marks
+   fresh current drawdown and startup panic-order prediction unavailable instead
+   of fabricating them.
 
    Add a non-trading preview that reconstructs current HSL state and reports
    which symbols are green/yellow/red, cooldown status, current drawdown to red,
    and whether startup would emit panic orders. This would make risky restarts
    with changed HSL configs easier to reason about before live execution.
+
+   Work log:
+   - 2026-06-26: Added first-slice local/offline `hsl-startup-preview` tool.
+     Remaining gap: safe full startup replay from local fill/account artifacts
+     without exchange access.
 
 9. [ ] Reason-code registry.
    Status: partial. Initial registry slice merged in PR #645.

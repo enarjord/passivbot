@@ -138,6 +138,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool live-config-preflight` emits a read-only offline JSON report for one live
   config, summarizing identity hints, HSL settings, universe counts, forager slots/staleness,
   and cache-related live settings without contacting exchanges.
+- `passivbot tool hsl-startup-preview` emits a read-only offline JSON preview for one live
+  config plus optional local monitor events. It reports configured HSL settings and latest
+  local HSL status/cooldown observations when present, while explicitly marking current
+  drawdown and startup panic-order prediction unavailable unless a future slice adds safe
+  local replay inputs.
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
