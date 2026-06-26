@@ -42,6 +42,15 @@ LOG_LINE_TS_PATTERN = re.compile(
 STARTUP_TIMING_BASELINE_WINDOW = 20
 DEFAULT_PROCESS_MATCH = "passivbot live"
 REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
+RISK_EVENT_GROUP_LIMIT = 20
+RISK_EVENT_TYPES = {
+    EventTypes.RISK_MODE_CHANGED,
+    EventTypes.HSL_TRANSITION,
+    EventTypes.HSL_STATUS,
+    EventTypes.HSL_RED_TRIGGERED,
+    EventTypes.HSL_COOLDOWN_STARTED,
+    EventTypes.HSL_COOLDOWN_ENDED,
+}
 PROCESS_REPORT_FIELDS = {
     "pid",
     "age_s",
@@ -234,6 +243,136 @@ def _summarize_remote_call_failures(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > REMOTE_CALL_FAILURE_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _risk_event_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    latest_data = {
+        key: payload.get(key)
+        for key in (
+            "signal_mode",
+            "tier",
+            "previous_tier",
+            "action",
+            "mode",
+            "previous_mode",
+            "drawdown_score",
+            "drawdown_raw",
+            "drawdown_ema",
+            "dist_to_red",
+            "red_threshold",
+            "cooldown_until_ms",
+            "cooldown_remaining",
+            "cooldown_remaining_seconds",
+            "last_red_ts",
+            "pending_red_since_ms",
+        )
+        if payload.get(key) is not None
+    }
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "symbol": live_event.get("symbol") or row.get("symbol"),
+        "pside": live_event.get("pside") or row.get("pside"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_data": latest_data,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_risk_event_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("event_type"),
+        group.get("symbol"),
+        group.get("pside"),
+        group.get("reason_code"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "status",
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_risk_events(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("event_type") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:RISK_EVENT_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > RISK_EVENT_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
         "groups": compact_groups,
     }
 
@@ -713,6 +852,8 @@ def _scan_events(
     invalid_window_ts = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    risk_event_type_counts: Counter[str] = Counter()
 
     for path in files:
         try:
@@ -760,6 +901,18 @@ def _scan_events(
                         _merge_remote_call_failure_group(
                             remote_call_failure_groups,
                             _remote_call_failure_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
+                    if event_type in RISK_EVENT_TYPES:
+                        risk_event_type_counts[str(event_type)] += 1
+                        _merge_risk_event_group(
+                            risk_event_groups,
+                            _risk_event_group(
                                 bot_key=bot_key,
                                 row=row,
                                 live_event=live_event,
@@ -823,6 +976,10 @@ def _scan_events(
         "startup_timings": _summarize_startup_timings(startup_timing_records),
         "remote_call_failures": _summarize_remote_call_failures(
             remote_call_failure_groups
+        ),
+        "risk_events": _summarize_risk_events(
+            risk_event_groups,
+            risk_event_type_counts,
         ),
         "event_window": _event_window_report(
             since_ms=since_ms,
@@ -1035,6 +1192,12 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "risk_events": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "groups": [],
+            },
             "event_window": _event_window_report(
                 since_ms=since_ms,
                 until_ms=until_ms,
@@ -1088,6 +1251,7 @@ def build_live_smoke_report(
         "bots": event_scan["bots"],
         "startup_timings": event_scan["startup_timings"],
         "remote_call_failures": event_scan["remote_call_failures"],
+        "risk_events": event_scan["risk_events"],
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
