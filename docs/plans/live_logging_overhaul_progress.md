@@ -19,11 +19,11 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `734c2de0` merge of PR #668, `Summarize cache families in cache doctor`.
+- `34f63799` merge of PR #671, `Avoid traceback prose smoke false positives`.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #668 at `734c2de0`.
+- Repository pulled through PR #671 at `34f63799`.
 - Bots were restarted from `/root/bots_vps5.yaml` and left running. Four bots
   exited promptly after Ctrl-C; Kucoin took about 105 seconds before the old
   process disappeared.
@@ -36,6 +36,11 @@ VPS5 deployment status:
 - A wider post-restart smoke saw a real GateIO HSL ZEC long RED finalization
   during startup/replay and one non-hard Kucoin candle `RequestTimeout`; the
   narrower settled-window smoke confirmed no continuing hard failures.
+- PRs #670 and #671 were pulled to VPS5 without bot restart because they only
+  changed read-only smoke-report tooling. A later smoke with text logs enabled
+  and `--recent-minutes 2 --supervisor-config /root/bots_vps5.yaml` reported
+  `ok=true`, `hard_failures=0`, `hard_problem_event_count=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, and `missing_expected=[]`.
 
 ## Phase Checklist
 
@@ -404,6 +409,31 @@ VPS5 deployment status:
   a warm cache.
 - VPS5 evidence: deployed to VPS5 at `734c2de0`. A settled 2-minute smoke after
   restart reported all five configured bots running and no hard problem events.
+
+### PR #670: Smoke Report Timestamped Log Window
+
+- Branch: `codex/v8-smoke-report-log-window`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` applies `since_ms`/`until_ms` and
+  `--recent-minutes` windows to parseable ISO-UTC text log lines as well as
+  structured monitor events. Unparseable log lines remain visible and are
+  counted in `logs.window.unparsed_ts`.
+- VPS5 evidence: deployed to VPS5 at `b74d12be` without bot restart. Smoke
+  showed `logs.window.lines_skipped_before=2000`, proving stale parseable log
+  lines were excluded, while two current Kucoin websocket warning lines were
+  still false-classified as hard due the older traceback matcher.
+
+### PR #671: Smoke Report Traceback Prose Filter
+
+- Branch: `codex/v8-smoke-report-traceback-pattern`.
+- Scope: operator smoke tooling.
+- Result: smoke-report text-log matching now treats only real Python traceback
+  headers (`Traceback (most recent call last):`) as traceback signals, avoiding
+  hard/attention matches for operational prose such as "suppressing callback
+  traceback".
+- VPS5 evidence: deployed to VPS5 at `34f63799` without bot restart. A
+  2-minute smoke with text logs enabled reported all five configured bots
+  running, `logs.hard_matches=0`, and no hard problem events.
 
 ## Current Next Steps
 
