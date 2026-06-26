@@ -18,6 +18,7 @@ def _monitor_row(
     level: str = "info",
     reason_code: str = "test",
     symbol: str | None = None,
+    pside: str | None = None,
     ids: dict | None = None,
     data: dict | None = None,
 ) -> dict:
@@ -31,6 +32,7 @@ def _monitor_row(
         "exchange": "binance",
         "user": "binance_01",
         "symbol": symbol,
+        "pside": pside,
         "status": status,
         "reason_code": reason_code,
         "data": dict(data or {"seq": seq}),
@@ -267,6 +269,131 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     latest_details = report["startup_timings"][0]["phases"]["startup"]["latest_details"]
     assert "AKIA123" not in latest_details
     assert "TOKEN123" not in latest_details
+
+
+def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "bybit" / "bybit_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                reason_code="green",
+                data={
+                    "signal_mode": "coin",
+                    "tier": "green",
+                    "dist_to_red": 0.09,
+                    "drawdown_score": 0.01,
+                    "red_threshold": 0.10,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.status",
+                seq=2,
+                ts=2000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                reason_code="yellow",
+                ids={"cycle_id": "cy_risk_1"},
+                data={
+                    "signal_mode": "coin",
+                    "tier": "yellow",
+                    "dist_to_red": 0.04,
+                    "drawdown_score": 0.06,
+                    "red_threshold": 0.10,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.status",
+                seq=3,
+                ts=3000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                reason_code="yellow",
+                ids={"cycle_id": "cy_risk_2"},
+                data={
+                    "signal_mode": "coin",
+                    "tier": "yellow",
+                    "dist_to_red": 0.02,
+                    "drawdown_score": 0.08,
+                    "red_threshold": 0.10,
+                },
+            ),
+            _monitor_row(
+                event_type="risk.mode_changed",
+                seq=4,
+                ts=4000,
+                pside="long",
+                reason_code="hsl_runtime_forced_modes",
+                ids={"cycle_id": "cy_risk_3"},
+                data={
+                    "action": "forced_modes",
+                    "previous_mode": "normal",
+                    "mode": "panic",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        since_ms=1500,
+    )
+
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert report["risk_events"] == {
+        "total": 3,
+        "groups_truncated": False,
+        "event_types": {
+            "hsl.status": 2,
+            "risk.mode_changed": 1,
+        },
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "risk.mode_changed",
+                "reason_code": "hsl_runtime_forced_modes",
+                "status": "succeeded",
+                "level": "info",
+                "pside": "long",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 4000,
+                "latest_data": {
+                    "action": "forced_modes",
+                    "mode": "panic",
+                    "previous_mode": "normal",
+                },
+                "latest_ids": {"cycle_id": "cy_risk_3"},
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "hsl.status",
+                "reason_code": "yellow",
+                "status": "succeeded",
+                "level": "info",
+                "symbol": "ZEC/USDT:USDT",
+                "pside": "long",
+                "component": "test",
+                "count": 2,
+                "latest_ts": 3000,
+                "latest_data": {
+                    "signal_mode": "coin",
+                    "tier": "yellow",
+                    "drawdown_score": 0.08,
+                    "dist_to_red": 0.02,
+                    "red_threshold": 0.10,
+                },
+                "latest_ids": {"cycle_id": "cy_risk_2"},
+            },
+        ],
+    }
 
 
 def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
