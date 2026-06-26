@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `51ba92a3f` merge of PR #712, `Add smoke-report supervisor process diagnostics`.
+- `7b12d4b2d` merge of PR #715, `Summarize shutdown events in live smoke reports`.
 
 Current review gate:
 
@@ -276,6 +276,21 @@ VPS5 deployment status:
   `tmux_pane_ownership=not_available_from_process_table`,
   `duplicate_configured_command_matches_count=0`, and
   `extra_passivbot_live_processes_count=0`.
+- PRs #714 and #715 were merged under the low-risk tooling/docs degraded gate
+  after repeated Claude absence. Hermes had approved the PRs before the final
+  current-base rebases, CI was green on the rebased heads, and local focused
+  tests passed after conflict resolution. They were pulled to VPS5 without bot
+  restart because they only changed read-only operator tooling and docs. A
+  settled 5-minute `--brief` smoke at `7b12d4b2` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `repository.dirty=false`, and zero
+  duplicate/extra live process matches. A bounded summary showed only known
+  non-hard EMA readiness, HSL cooldown, and staged-readiness attention. The new
+  `shutdown_events` section was present with `total=0` because no bot restart
+  occurred. A read-only `live-config-preflight` smoke against
+  `configs/forager_3pos_hsl_2026-06-26.json` returned `ok=true` with one
+  warning for missing short-side bot config, and did not contact exchanges.
 
 ## Phase Checklist
 
@@ -288,7 +303,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode, `live-config-preflight` offline config summaries | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -1050,12 +1065,52 @@ VPS5 deployment status:
   matches, all five configured bots running, no failed remote calls, no failed
   account-critical remote calls, and zero duplicate/extra live process matches.
 
+### PR #714: Live Config Preflight Tool
+
+- Branch: `codex/v8-live-config-preflight`.
+- Scope: adjacent operator tooling.
+- Result: added `passivbot tool live-config-preflight`, a read-only offline JSON
+  report for one live config covering identity hints, HSL settings, approved and
+  ignored universe counts with bounded samples, forager slots/staleness, and
+  cache-related live settings. The tool does not load credentials, contact
+  exchanges, or enforce startup policy.
+- Review evidence: Hermes approved the original head `b2557db0`; after PR #713
+  merged, the branch was rebased to `b51a15a2` with the same tool code plus
+  resolved progress-doc context. CI was green, local focused preflight tests
+  passed, and `git diff --check` passed. Claude did not return during repeated
+  polls, so this read-only tooling slice used the degraded gate.
+- VPS5 evidence: pulled to VPS5 at `7b12d4b2` without bot restart. A
+  `live-config-preflight --compact` smoke against
+  `configs/forager_3pos_hsl_2026-06-26.json` returned `ok=true`, reported
+  bounded approved/ignored coin samples and HSL/forager/cache settings, and
+  surfaced one warning for missing short-side bot config.
+
+### PR #715: Shutdown Event Smoke Summary
+
+- Branch: `codex/v8-smoke-shutdown-summary`.
+- Scope: operator smoke tooling.
+- Result: existing `bot.stopping`, `bot.shutdown.stage`, and `bot.stopped`
+  structured events are now summarized as `shutdown_events` in the full,
+  `--summary`, and `--brief` smoke-report projections. The change is passive and
+  does not add shutdown control, process signaling, or trading behavior.
+- Review evidence: Hermes approved heads `01574b4d` and `7dfa6c4a`; after
+  PR #714 merged, the branch was rebased to `befade50d` with only current-base
+  changelog/tool-doc context added underneath. CI was green, local
+  smoke-report/incident-bundle tests and compileall passed, and `git diff
+  --check` passed. Claude did not return during repeated polls, so this
+  read-only tooling slice used the degraded gate.
+- VPS5 evidence: pulled to VPS5 at `7b12d4b2` without bot restart. A settled
+  5-minute brief/summary smoke reported no hard failures, no log hard matches,
+  all five configured bots running, no failed remote/account-critical calls,
+  clean tracked repository state, and `shutdown_events.total=0` because no
+  restart occurred.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
-   are exchange-call debug profiles, config preflight/HSL preview, or more
-   order/risk transition coverage.
+   are exchange-call debug profiles, HSL preview, or more order/risk transition
+   coverage.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. Remaining useful
