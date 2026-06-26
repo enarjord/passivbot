@@ -119,16 +119,20 @@ Related detailed plans:
    `RequestTimeout`, with websocket ping timeouts and one timestamp/nonce
    recovery in the same period. Subsequent PR #688/#690 smokes surfaced
    slow-but-successful remote-call categories even when no terminal failures
-   occurred.
+   occurred. PR #701 added active `ticker-endpoint-probe`
+   `account_critical_health` summaries for balance, positions, and open-orders
+   outcomes without adding exchange calls beyond the existing read-only probe.
+   A VPS5 one-repeat authenticated probe on `binance_01` validated the summary
+   shape and showed a follow-up: Binance `fetch_open_orders()` without a symbol
+   fails as `ExchangeError`, so lower-impact/account-only probing should use
+   exchange-aware open-orders shape.
 
-   Add explicit read-only probes for each configured exchange/account before or
-   during smoke: balance/positions/open-orders fetch, clock skew, rate-limit
-   behavior, fill pagination coverage, candle freshness, and basic endpoint
-   latency. The passive smoke report now also exposes top-level remote-call
-   health success/failure/throttle totals and a filtered
-   `account_critical_remote_call_health` summary for a quick operator scan, but
-   these are still derived from already-emitted events rather than active
-   endpoint probes.
+   Add/refine explicit read-only probes for each configured exchange/account
+   before or during smoke: low-impact balance/positions/open-orders fetches,
+   clock skew, rate-limit behavior, fill pagination coverage, candle freshness,
+   and basic endpoint latency. The passive smoke report now also exposes
+   top-level remote-call health success/failure/throttle totals and a filtered
+   `account_critical_remote_call_health` summary for a quick operator scan.
 
 7. [ ] Live config preflight/linter.
    Status: open.
@@ -284,6 +288,7 @@ Related detailed plans:
 | 2026-06-26 | #3 Live restart/smoke automation | PR #696 / `f1efbe45` | Added `live-smoke-report --summary`, a concise high-signal projection of smoke health, process/repository state, problem groups, remote-call/account-critical health, and risk events; VPS5 compact summary smoke on `d850daf5` returned `ok=true`, no hard failures, all five bots matched, and account-critical total=58, succeeded=58 | Safe pull/stop/start orchestration remains open; optional row-limit/brief summary mode could reduce chat-facing output further |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #698 / `7c7368f3` | Redacted common user/home prefixes from smoke-report `repository.root` while preserving real git cwd use; incident-bundle `smoke_report.json` inherits the safer display field | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #699 / `4e2fcee7` | Surfaced dropped contextless unparsed attention/hard counters under `--log-window-unparsed-policy drop`; dropped attention now makes smoke `attention=true` without making stale tail fragments hard failures; VPS5 settled smoke on `d5639813` returned `ok=true`, no hard failures, all five bots matched | Safe pull/stop/start orchestration still open |
+| 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
