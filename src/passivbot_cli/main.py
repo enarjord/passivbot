@@ -106,6 +106,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_incident_bundle",
         "collect local live incident evidence into a tarball",
     ),
+    "live-config-preflight": CommandSpec(
+        "tools.live_config_preflight",
+        "read-only offline live config preflight report",
+    ),
     "live-smoke-report": CommandSpec(
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",
