@@ -14,7 +14,13 @@ from unittest.mock import AsyncMock, MagicMock
 import numpy as np
 import pytest
 from passivbot_exceptions import FatalBotException
-from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+from live.event_bus import (
+    EventTags,
+    EventTypes,
+    ListEventSink,
+    LiveEventPipeline,
+    ReasonCodes,
+)
 
 # Stub passivbot_rust before importing passivbot to avoid native dependency during unit test.
 sys.modules.setdefault(
@@ -7500,6 +7506,62 @@ def test_execution_loop_error_burst_summarizes_repeated_endpoints(caplog, monkey
     assert "count=3" in messages[0]
     assert "top=account-overview:3" in messages[0]
     assert "action=restart_backoff_continues" in messages[0]
+
+
+def test_execution_loop_error_burst_emits_structured_health_event(caplog, monkeypatch):
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.user = "kucoin_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_error"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    now = {"value": 1_000_000}
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now["value"])
+
+    fields = {
+        "error_type": "RequestTimeout",
+        "status": "-",
+        "code": "-",
+        "error": (
+            "kucoinfutures GET https://api-futures.kucoin.com/api/v1/"
+            "account-overview?api_key=SECRET&signature=SIG"
+        ),
+    }
+
+    with caplog.at_level(logging.WARNING):
+        bot._log_execution_loop_error_burst(fields)
+        bot._log_execution_loop_error_burst(fields)
+        bot._log_execution_loop_error_burst(fields)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = sink.events
+    assert len(events) == 1
+    event = events[0]
+    assert event.event_type == EventTypes.HEALTH_SUMMARY
+    assert event.level == "warning"
+    assert event.component == "execution_loop"
+    assert event.tags == (
+        EventTags.HEALTH,
+        EventTags.EXECUTION,
+        EventTags.SUMMARY,
+    )
+    assert event.cycle_id == "cy_error"
+    assert event.status == "degraded"
+    assert event.reason_code == ReasonCodes.EXECUTION_LOOP_ERROR_BURST
+    assert event.data["count"] == 3
+    assert event.data["window_s"] == 1
+    assert event.data["top_endpoints"] == [
+        {"endpoint": "account-overview", "count": 3}
+    ]
+    assert event.data["latest_error_type"] == "RequestTimeout"
+    assert "SECRET" not in event.data["latest_error"]
+    assert "SIG" not in event.data["latest_error"]
+    assert "[redacted]" in event.data["latest_error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def test_staged_refresh_timing_summary_aggregates_routine_fast_refreshes(

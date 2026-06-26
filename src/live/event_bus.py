@@ -148,6 +148,7 @@ class ReasonCodes:
     EMA_FALLBACK_USED = "ema_fallback_used"
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
     EXCHANGE_EXCEPTION = "exchange_exception"
+    EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
     LENGTH_MISMATCH = "length_mismatch"
     LOW_BALANCE = "low_balance"
     NEW_FILL = "new_fill"

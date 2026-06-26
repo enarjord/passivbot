@@ -64,6 +64,7 @@ across time.
 - `ema_fallback_used`
 - `exchange_acknowledged`
 - `exchange_exception`
+- `execution_loop_error_burst`
 - `length_mismatch`
 - `low_balance`
 - `new_fill`
