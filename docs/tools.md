@@ -107,7 +107,7 @@ passivbot tool iterative-history-plot backtests/.../fills.csv
 - `passivbot tool pad-historical-daily` – Ensures daily OHLCV shards are present for the downloader when new coins are added.
 - `passivbot tool verify-hlcvs-data` – Validates prepared HLCV datasets and coverage metadata before long optimizations/backtests.
 - `passivbot tool streamline-json` – Normalizes/compacts JSON configs (`passivbot tool streamline-json configs/examples/default_trailing_martingale_long_npos4.json`).
-- `passivbot tool cache-integrity-doctor` – Read-only local cache smoke report for missing roots, file counts/sizes, and empty or corrupt JSON/NDJSON/NPY artifacts.
+- `passivbot tool cache-integrity-doctor` – Read-only local cache smoke report for missing roots, file counts/sizes, cache-family summaries, and empty or corrupt JSON/NDJSON/NPY artifacts.
 - `passivbot tool candle-doctor` – Audits legacy `caches/ohlcv/...` shards for corruption, stale index entries, and legacy-format issues; add `--fix` to apply automatic repairs before importing into the v2 store.
 - `passivbot tool migrate-historical-data` – Converts legacy `historical_data/ohlcvs_<exchange>/...` shards into the current `caches/ohlcv/...` layout.
 

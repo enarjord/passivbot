@@ -37,6 +37,35 @@ def test_cache_integrity_report_counts_files_and_flags_corrupt_artifacts(tmp_pat
     assert ("npy_load_failed", str(root / "corrupt.npy")) in issues
 
 
+def test_cache_integrity_report_summarizes_cache_families(tmp_path):
+    root = tmp_path / "caches"
+    (root / "okx" / "ohlcvs_1m").mkdir(parents=True)
+    np.save(root / "okx" / "ohlcvs_1m" / "BTC.npy", np.array([1.0, 2.0]))
+    (root / "okx" / "ohlcvs_1m" / "ETH.npy").write_bytes(b"not numpy")
+    (root / "fills" / "binance").mkdir(parents=True)
+    (root / "fills" / "binance" / "events.ndjson").write_text(
+        json.dumps({"id": 1}) + "\n",
+        encoding="utf-8",
+    )
+    (root / "markets.json").write_text(json.dumps({"BTC": {}}), encoding="utf-8")
+    (root / "tmp.npy.lock").write_text("locked", encoding="utf-8")
+
+    report = build_cache_integrity_report([root])
+
+    families = report["summary"]["by_family"]
+    assert families["candles"]["file_count"] == 2
+    assert families["candles"]["by_extension"] == {".npy": 2}
+    assert families["candles"]["issue_count"] == 1
+    assert families["fills"]["file_count"] == 1
+    assert families["fills"]["by_extension"] == {".ndjson": 1}
+    assert families["markets"]["file_count"] == 1
+    assert families["locks"]["file_count"] == 1
+    root_families = report["roots"][0]["by_family"]
+    assert root_families == families
+    issue = next(item for item in report["issues"] if item["code"] == "npy_load_failed")
+    assert issue["family"] == "candles"
+
+
 def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
     missing = tmp_path / "missing"
 
@@ -44,6 +73,7 @@ def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
 
     assert report["ok"] is True
     assert report["summary"]["by_severity"] == {"warning": 1}
+    assert report["issues"][0]["family"] == "root"
     assert report["issues"][0]["code"] == "root_missing"
 
 
