@@ -5,7 +5,11 @@ import json
 import pytest
 
 import live.smoke_report as smoke_report_module
-from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor
+from live.smoke_report import (
+    build_live_smoke_report,
+    default_logs_root_for_monitor,
+    summarize_live_smoke_report,
+)
 from tools import live_smoke_report
 
 
@@ -645,6 +649,90 @@ def test_live_smoke_report_account_critical_remote_call_health_subset(tmp_path):
     assert account_health["throttled_pct"] == 0
     group_surfaces = {group.get("surface") for group in account_health["groups"]}
     assert group_surfaces == {"balance", "positions", "open_orders"}
+
+
+def test_live_smoke_report_summary_projects_high_signal_fields(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="warning",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rca_1",
+                    "remote_call_group_id": "cy_1:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 5000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_2"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                },
+            ),
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "kucoin_01.log").write_text(
+        "2026-06-25T00:00:00Z ERROR exchange timeout\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        log_tail_lines=10,
+    )
+    summary = summarize_live_smoke_report(report, max_groups=1)
+
+    assert summary["ok"] is True
+    assert summary["attention"] is True
+    assert summary["hard_failures"] == 0
+    assert summary["attention_count"] == 3
+    assert summary["monitor"]["live_events"] == 2
+    assert summary["logs"]["attention_matches"] == 1
+    assert summary["logs"]["matches_truncated"] is False
+    assert len(summary["logs"]["matches"]) == 1
+    assert summary["problem_events"]["total"] == 2
+    assert summary["problem_events"]["hard"] == 0
+    assert summary["problem_events"]["groups_truncated"] is True
+    assert len(summary["problem_events"]["groups"]) == 1
+    assert summary["problem_events"]["groups"][0]["event_type"] in {
+        "ema.unavailable",
+        "remote_call.failed",
+    }
+    assert summary["account_critical_remote_calls"]["total"] == 1
+    assert summary["account_critical_remote_calls"]["failed"] == 1
+    assert summary["remote_calls"]["groups"][0]["surface"] == "balance"
+    assert "bots" not in summary
+    assert "problem_event_groups" not in summary
 
 
 def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
@@ -1780,6 +1868,52 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
     assert report["logs"]["files_scanned"] == 0
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
+
+
+def test_live_smoke_report_cli_can_emit_concise_summary(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "okx_faisal.log").write_text(
+        "2026-06-25T00:00:00Z ERROR exchange timeout\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        live_smoke_report.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                str(logs_dir),
+                "--log-tail-lines",
+                "10",
+                "--summary",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["ok"] is True
+    assert summary["attention"] is True
+    assert summary["logs"]["attention_matches"] == 1
+    assert summary["monitor"]["live_events"] == 1
+    assert "remote_calls" in summary
+    assert "account_critical_remote_calls" in summary
+    assert "bots" not in summary
+    assert "problem_events" in summary
 
 
 def test_live_smoke_report_cli_can_drop_unparseable_window_log_lines(

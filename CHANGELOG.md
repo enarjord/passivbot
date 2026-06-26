@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `passivbot tool live-smoke-report --summary` for concise smoke evidence
+  that keeps high-signal process, log, problem-event, risk, repository, and
+  remote-call health fields without emitting the full verbose report.
 - Added account-critical remote-call health summaries to
   `passivbot tool live-smoke-report`, isolating balance, position, and
   open-order endpoint health from broader candle/fill traffic.

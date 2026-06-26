@@ -15,6 +15,7 @@ from live.smoke_report import (  # noqa: E402
     LOG_WINDOW_UNPARSED_POLICIES,
     build_live_smoke_report,
     default_logs_root_for_monitor,
+    summarize_live_smoke_report,
 )
 
 
@@ -134,6 +135,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit compact single-line JSON.",
     )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Emit concise smoke-test summary JSON instead of the full report.",
+    )
     return parser
 
 
@@ -171,7 +177,8 @@ def main(argv: list[str] | None = None) -> int:
         max_log_matches=int(args.max_log_matches),
         log_window_unparsed_policy=str(args.log_window_unparsed_policy),
     )
-    print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
+    output = summarize_live_smoke_report(report) if args.summary else report
+    print(json.dumps(output, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
 
