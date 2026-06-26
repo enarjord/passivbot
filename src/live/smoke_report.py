@@ -47,6 +47,7 @@ REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
+SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 ACCOUNT_CRITICAL_REMOTE_CALL_KIND = "authoritative_state_fetch"
 ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
     {
@@ -2099,4 +2100,139 @@ def build_live_smoke_report(
         "logs": log_scan,
         "processes": process_report,
         "repository": repository_report,
+    }
+
+
+def _summary_limited_groups(
+    summary: dict[str, Any],
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        groups = []
+    limit = max(0, int(limit))
+    return {
+        key: value
+        for key, value in {
+            "total": summary.get("total"),
+            "succeeded": summary.get("succeeded"),
+            "failed": summary.get("failed"),
+            "throttled": summary.get("throttled"),
+            "failure_pct": summary.get("failure_pct"),
+            "throttled_pct": summary.get("throttled_pct"),
+            "event_types": summary.get("event_types"),
+            "groups_truncated": bool(summary.get("groups_truncated"))
+            or len(groups) > limit,
+            "groups": groups[:limit],
+        }.items()
+        if value is not None
+    }
+
+
+def summarize_live_smoke_report(
+    report: dict[str, Any],
+    *,
+    max_groups: int = SMOKE_REPORT_SUMMARY_GROUP_LIMIT,
+) -> dict[str, Any]:
+    """Project a full smoke report into concise operator/debugging evidence."""
+
+    max_groups = max(0, int(max_groups))
+    logs = report.get("logs") if isinstance(report.get("logs"), dict) else {}
+    matches = logs.get("matches") if isinstance(logs.get("matches"), list) else []
+    processes = (
+        report.get("processes") if isinstance(report.get("processes"), dict) else {}
+    )
+    repository = (
+        report.get("repository") if isinstance(report.get("repository"), dict) else {}
+    )
+    monitor = report.get("monitor") if isinstance(report.get("monitor"), dict) else {}
+    problem_groups = (
+        report.get("problem_event_groups")
+        if isinstance(report.get("problem_event_groups"), dict)
+        else {}
+    )
+    problem_group_rows = (
+        problem_groups.get("groups")
+        if isinstance(problem_groups.get("groups"), list)
+        else []
+    )
+    risk_events = (
+        report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+
+    return {
+        "ok": bool(report.get("ok", False)),
+        "attention": bool(report.get("attention", False)),
+        "hard_failures": int(report.get("hard_failures") or 0),
+        "attention_count": int(report.get("attention_count") or 0),
+        "repository": {
+            key: repository.get(key)
+            for key in (
+                "branch",
+                "head",
+                "dirty",
+                "tracked_changes",
+                "error",
+            )
+            if key in repository
+        },
+        "monitor": {
+            key: monitor.get(key)
+            for key in (
+                "root",
+                "files_scanned",
+                "records_total",
+                "live_events",
+                "legacy_events",
+                "error_count",
+                "warning_count",
+            )
+            if key in monitor
+        },
+        "event_window": report.get("event_window"),
+        "processes": {
+            key: processes.get(key)
+            for key in (
+                "enabled",
+                "ok",
+                "hard_failures",
+                "expected_total",
+                "matched_expected",
+                "running_live_total",
+                "scan_error",
+            )
+            if key in processes
+        }
+        | {
+            "missing_expected_count": len(processes.get("missing_expected") or []),
+            "unexpected_running_count": len(processes.get("unexpected_running") or []),
+            "missing_expected": (processes.get("missing_expected") or [])[:max_groups],
+            "unexpected_running": (processes.get("unexpected_running") or [])[:max_groups],
+        },
+        "logs": {
+            "root": logs.get("root"),
+            "files_scanned": int(logs.get("files_scanned") or 0),
+            "hard_matches": int(logs.get("hard_matches") or 0),
+            "attention_matches": int(logs.get("attention_matches") or 0),
+            "matches_truncated": len(matches) > max_groups,
+            "matches": matches[:max_groups],
+            "window": logs.get("window"),
+        },
+        "problem_events": {
+            "total": int(report.get("problem_event_count") or 0),
+            "hard": int(report.get("hard_problem_event_count") or 0),
+            "groups_truncated": bool(problem_groups.get("groups_truncated"))
+            or len(problem_group_rows) > max_groups,
+            "groups": problem_group_rows[:max_groups],
+        },
+        "remote_calls": _summary_limited_groups(
+            report.get("remote_call_health") or {},
+            limit=max_groups,
+        ),
+        "account_critical_remote_calls": _summary_limited_groups(
+            report.get("account_critical_remote_call_health") or {},
+            limit=max_groups,
+        ),
+        "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
     }
