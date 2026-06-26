@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `998d7c9cd` merge of PR #682, `Group smoke problem events`.
+- `dff400014` merge of PR #684, `Drop contextless stale traceback smoke matches`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #682 at `998d7c9cd`.
+- Repository pulled through PR #684 at `dff40001`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -94,6 +94,17 @@ VPS5 deployment status:
   `problem_event_groups` section grouped the remaining known non-hard
   EMA/cycle/HSL attention without requiring inspection of individual event
   samples.
+- PR #683 was pulled to VPS5 without bot restart because it only updated
+  progress docs.
+- PR #684 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. The pre-fix smoke showed the tool could still
+  hard-fail on a stale Kucoin traceback header when the tailed log slice started
+  in the middle of an old traceback with no timestamp context. After PR #684, a
+  1-minute smoke with `--log-window-unparsed-policy drop`, text logs enabled,
+  and `/root/bots_vps5.yaml` process matching reported `ok=true`,
+  `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `remote_call_failures.total=0`,
+  `matched_expected=5`, and `missing_expected=[]`.
 
 ## Phase Checklist
 
@@ -599,11 +610,41 @@ VPS5 deployment status:
   failures, and grouped the remaining known non-hard EMA/cycle/HSL attention in
   `problem_event_groups`.
 
+### PR #683: Smoke Grouping Progress Update
+
+- Branch: `codex/v8-progress-after-smoke-grouping`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #682 merged and VPS5 smoke confirmed grouped problem-event summaries.
+- Review evidence: Hermes approved head `3fa8d819`; CI was green; `git diff
+  --check` passed before merge. Claude did not return during repeated polls, and
+  Composer had been retired, so this docs-only slice used the degraded gate.
+
+### PR #684: Contextless Traceback Smoke Filter
+
+- Branch: `codex/v8-smoke-drop-contextless-traceback`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report --log-window-unparsed-policy drop`
+  now skips unparseable log lines without in-window timestamp context, avoiding
+  stale hard failures when the inspected log tail begins in the middle of an old
+  traceback. The direct smoke-report and incident-bundle help text now describes
+  the context-based drop behavior.
+- Review evidence: Hermes approved original head `f01996ec` with one minor
+  help-text mismatch, then approved the fixed head `04ca717`; CI was green;
+  focused smoke-report tests, compileall, and `git diff --check` passed before
+  merge. Claude did not return during repeated polls, and Composer had been
+  retired, so this read-only tooling slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `dff40001` without bot restart. A
+  1-minute smoke with `--log-window-unparsed-policy drop` and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no hard problem events, no log hard or attention
+  matches, and no remote-call failures.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
-   runtime staged-refresh event producer slice; Hermes and CI are already green
-   on the rebased head.
+   runtime staged-refresh event producer slice. Hermes and CI are already green
+   on rebased head `d38bfc72f`, but Claude has not reviewed that head.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
