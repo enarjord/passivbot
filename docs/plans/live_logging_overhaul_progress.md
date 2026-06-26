@@ -19,7 +19,8 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `11f7d142` merge of PR #688, `Summarize remote call timings in smoke report`.
+- `b150176fe` merge of PR #690, `Add remote call health rollups to live smoke
+  report`.
 
 Current review gate:
 
@@ -30,7 +31,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #688 at `11f7d142`.
+- Repository pulled through PR #690 at `b150176f`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -119,6 +120,17 @@ VPS5 deployment status:
   `remote_call_timings.total=637`, `matched_expected=5`, and
   `missing_expected=[]`. The new timing groups surfaced slow-but-successful
   candle remote fetches, including Kucoin `M/USDT:USDT` p95/max 48047ms.
+- PR #690 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. A 5-minute smoke with text logs,
+  `--log-window-unparsed-policy drop`, and `/root/bots_vps5.yaml` process
+  matching reported `ok=true`, `hard_failures=0`,
+  `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `remote_call_failures.total=0`,
+  `remote_call_health.total=445`, `matched_expected=5`, and
+  `missing_expected=[]`. The new health groups showed the highest-volume
+  terminal remote-call categories by bot/component/kind/surface, including
+  slow-but-successful Binance authoritative fill fetches and candle fetch
+  groups.
 
 ## Phase Checklist
 
@@ -131,7 +143,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -674,13 +686,54 @@ VPS5 deployment status:
   repeated authoritative balance/positions/open-orders `RequestTimeout` events
   with 98-140s staged refresh wall times and websocket ping timeouts.
 
+### PR #688: Remote-Call Timing Smoke Summary
+
+- Branch: `codex/v8-smoke-remote-call-timings`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes bounded
+  `remote_call_timings` groups for terminal remote calls that expose elapsed
+  median, p95, min, max, latest ids, and latest elapsed time. The section is
+  observational only and does not affect `ok`, `attention`, or trading
+  behavior.
+- Review evidence: Hermes approved head `9945a3d3`; CI was green; focused
+  smoke-report and incident-bundle tests, compileall, and `git diff --check`
+  passed before merge. Claude did not return during repeated polls, and
+  Composer had been retired, so this read-only tooling slice used the degraded
+  gate.
+- VPS5 evidence: deployed to VPS5 at `11f7d142` without bot restart. A
+  5-minute smoke with text logs and `/root/bots_vps5.yaml` process matching
+  reported all five configured bots running, no hard failures, no hard problem
+  events, no log hard or attention matches, no remote-call failures, and
+  `remote_call_timings.total=637`.
+
+### PR #690: Remote-Call Health Smoke Summary
+
+- Branch: `codex/v8-smoke-remote-call-health`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now includes bounded
+  `remote_call_health` groups that roll up terminal remote calls by
+  bot/component/kind/surface, with success/failure/throttle counts, failure and
+  throttle percentages, latency summaries, reason/error counts, and bounded
+  affected-symbol samples. Throttled terminal buckets are derived from
+  `event_type`, while differing raw statuses remain auxiliary context.
+- Review evidence: Hermes first found that `remote_call.throttled` events with
+  raw `status="deferred"` were not counted as throttles, then approved fixed
+  head `dc99378a`; CI was green; focused smoke-report and incident-bundle
+  tests, compileall, and `git diff --check` passed before merge. Claude did
+  not return during repeated polls, and Composer had been retired, so this
+  read-only tooling slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `b150176f` without bot restart. A
+  5-minute smoke with text logs, `--log-window-unparsed-policy drop`, and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no hard problem events, no log hard or attention
+  matches, no remote-call failures, and `remote_call_health.total=445`.
+
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
-   runtime staged-refresh event producer slice. Hermes and CI were green on
-   rebased head `74483de1`, but `v8` moved again with PR #688, so rebase #681
-   before any final merge decision. Claude has not reviewed the current runtime
-   head.
+   runtime staged-refresh event producer slice. CI is green on rebased head
+   `bfde8bfdb`, but Hermes and Claude have not reviewed that head yet. Claude
+   has not reviewed the current runtime head.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
@@ -689,9 +742,9 @@ VPS5 deployment status:
    to inspect by surfacing bounded latest event data and aggregate groups.
 4. Add read-only exchange health probes for account-critical endpoint timeouts.
    VPS5 Kucoin now repeatedly shows authoritative state fetch `RequestTimeout`
-   events and long refresh wall times, and PR #688 shows slow candle endpoint
-   calls even when they eventually succeed, so this item has enough evidence to
-   justify a focused probe/diagnostic slice.
+   events and long refresh wall times. PRs #688 and #690 show slow endpoint
+   calls even when they eventually succeed, grouped by timing and health, so
+   this item has enough evidence to justify a focused probe/diagnostic slice.
 5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 6. Continue cache-doctor refinements in separate adjacent PRs: cache-family
