@@ -295,7 +295,7 @@ def test_live_incident_bundle_cli_passes_log_window_unparsed_policy(
         "\n".join(
             [
                 "1970-01-01T00:00:03Z ERROR fresh in window",
-                "ERROR old unparseable line dropped",
+                "old unparseable noise dropped",
             ]
         )
         + "\n",

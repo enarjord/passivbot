@@ -185,8 +185,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
         help=(
             "When the embedded smoke-report log window is active, keep "
-            "unparseable text log lines visible by default, or drop them when "
-            "the target logs are known to be consistently timestamped."
+            "unparseable text log lines visible by default, or drop non-signal "
+            "unparseable lines."
         ),
     )
     parser.add_argument("--compact", action="store_true", help="Emit compact single-line JSON.")

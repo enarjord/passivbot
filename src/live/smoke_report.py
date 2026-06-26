@@ -1127,10 +1127,11 @@ def _scan_logs(
     for path in files:
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
             line_ts = _parse_log_line_ts_ms(line)
+            attention = bool(ATTENTION_LOG_PATTERN.search(line))
             if window_enabled:
                 if line_ts is None:
                     unparsed_ts += 1
-                    if unparsed_policy == "drop":
+                    if unparsed_policy == "drop" and not attention:
                         lines_skipped_unparsed += 1
                         continue
                 else:
@@ -1141,7 +1142,7 @@ def _scan_logs(
                         lines_skipped_after += 1
                         continue
             lines_considered += 1
-            if not ATTENTION_LOG_PATTERN.search(line):
+            if not attention:
                 continue
             attention_matches += 1
             hard = bool(HARD_LOG_PATTERN.search(line))
