@@ -345,6 +345,61 @@ def emit_authoritative_remote_call_event(
         return remote_call_id
 
 
+def _emit_exchange_time_sync_event_unchecked(
+    bot: Any,
+    *,
+    source: str,
+    error: BaseException,
+    synced_clients: list[str] | tuple[str, ...],
+    failed_clients: list[str] | tuple[str, ...],
+    hook_available: bool,
+) -> None:
+    synced = [str(item) for item in list(synced_clients or [])[:8]]
+    failed = [str(item) for item in list(failed_clients or [])[:8]]
+    recovered = bool(synced)
+    if not hook_available:
+        status = "skipped"
+        reason_code = ReasonCodes.EXCHANGE_TIME_SYNC_UNAVAILABLE
+        level = "warning"
+    elif recovered and not failed:
+        status = "succeeded"
+        reason_code = ReasonCodes.EXCHANGE_TIME_SYNC
+        level = "debug"
+    else:
+        status = "degraded"
+        reason_code = ReasonCodes.EXCHANGE_TIME_SYNC
+        level = "warning"
+    _safe_emit(
+        bot,
+        EventTypes.EXCHANGE_TIME_SYNC,
+        level=level,
+        component="exchange.time_sync",
+        tags=(EventTags.EXCHANGE, EventTags.TIME_SYNC),
+        cycle_id=current_live_event_cycle_id(bot),
+        status=status,
+        reason_code=reason_code,
+        data={
+            "source": str(source or "unknown"),
+            "error_type": type(error).__name__,
+            "error": _sanitize_remote_text(error, max_len=500),
+            "hook_available": bool(hook_available),
+            "recovered": recovered,
+            "synced_clients": synced,
+            "failed_clients": failed,
+            "synced_count": len(synced_clients or []),
+            "failed_count": len(failed_clients or []),
+        },
+    )
+
+
+def emit_exchange_time_sync_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    """Best-effort structured visibility for CCXT timestamp/nonce recovery."""
+    try:
+        _emit_exchange_time_sync_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit exchange time-sync event: %s", exc)
+
+
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
     bot._live_event_cycle_seq = int(getattr(bot, "_live_event_cycle_seq", 0) or 0) + 1
     cycle_id = f"cy_{int(bot._live_event_cycle_seq)}"

@@ -54,6 +54,7 @@ class EventTypes:
     CACHE_LOAD_COMPLETED = "cache.load.completed"
     CACHE_FLUSH_COMPLETED = "cache.flush.completed"
     CACHE_WARMUP_DECISION = "cache.warmup_decision"
+    EXCHANGE_TIME_SYNC = "exchange.time_sync"
     REMOTE_CALL_STARTED = "remote_call.started"
     REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
     REMOTE_CALL_FAILED = "remote_call.failed"
@@ -111,6 +112,7 @@ class EventTags:
     DEGRADED = "degraded"
     EMA = "ema"
     EXECUTION = "execution"
+    EXCHANGE = "exchange"
     FALLBACK = "fallback"
     FILL = "fill"
     FILLS = "fills"
@@ -136,6 +138,7 @@ class EventTags:
     SUMMARY = "summary"
     TAIL = "tail"
     TIMEOUT = "timeout"
+    TIME_SYNC = "time_sync"
     UNAVAILABLE = "unavailable"
     WARMUP = "warmup"
     WAVE = "wave"
@@ -150,6 +153,8 @@ class ReasonCodes:
     EMA_FALLBACK_USED = "ema_fallback_used"
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
     EXCHANGE_EXCEPTION = "exchange_exception"
+    EXCHANGE_TIME_SYNC = "exchange_time_sync"
+    EXCHANGE_TIME_SYNC_UNAVAILABLE = "exchange_time_sync_unavailable"
     EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
     FILL_CACHE_READY = "fill_cache_ready"
     LENGTH_MISMATCH = "length_mismatch"
@@ -211,6 +216,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.CACHE_LOAD_COMPLETED,
     EventTypes.CACHE_FLUSH_COMPLETED,
     EventTypes.CACHE_WARMUP_DECISION,
+    EventTypes.EXCHANGE_TIME_SYNC,
     EventTypes.REMOTE_CALL_STARTED,
     EventTypes.REMOTE_CALL_SUCCEEDED,
     EventTypes.REMOTE_CALL_FAILED,
@@ -499,6 +505,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_FLUSH_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_WARMUP_DECISION: EventRoute(console=False, text=False),
+    EventTypes.EXCHANGE_TIME_SYNC: EventRoute(console=False, text=False),
     EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_FAILED: EventRoute(console=False),

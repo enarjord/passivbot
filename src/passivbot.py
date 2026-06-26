@@ -667,6 +667,7 @@ class Passivbot:
     _emit_execution_loop_error_burst_event = (
         live_event_emitters.emit_execution_loop_error_burst_event
     )
+    _emit_exchange_time_sync_event = live_event_emitters.emit_exchange_time_sync_event
     _emit_state_refresh_timing_event = (
         live_event_emitters.emit_state_refresh_timing_event
     )
@@ -2890,6 +2891,13 @@ class Passivbot:
                 type(exc).__name__,
                 str(exc),
             )
+            self._emit_exchange_time_sync_event(
+                source=source,
+                error=exc,
+                synced_clients=synced_clients,
+                failed_clients=failed_clients,
+                hook_available=False,
+            )
             return False
         now_ms = utc_ms()
         last_ms = int(getattr(self, "_exchange_time_sync_last_log_ms", 0) or 0)
@@ -2903,6 +2911,13 @@ class Passivbot:
             ",".join(failed_clients) if failed_clients else "-",
             type(exc).__name__,
             str(exc),
+        )
+        self._emit_exchange_time_sync_event(
+            source=source,
+            error=exc,
+            synced_clients=synced_clients,
+            failed_clients=failed_clients,
+            hook_available=True,
         )
         return bool(synced_clients)
 

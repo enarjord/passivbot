@@ -7565,6 +7565,13 @@ async def test_run_execution_loop_treats_shutdown_cancelled_error_as_clean_stop(
 async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     bot = Passivbot.__new__(Passivbot)
     bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
     bot.cca = SimpleNamespace(
         options={"timeDifference": 10},
         load_time_difference=AsyncMock(
@@ -7592,6 +7599,59 @@ async def test_exchange_time_sync_recovery_refreshes_ccxt_clients(caplog):
     assert bot.cca.options["timeDifference"] == 25
     assert bot.ccp.options["timeDifference"] == 30
     assert any("[time] refreshed exchange clock offset" in r.message for r in caplog.records)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.event_type == EventTypes.EXCHANGE_TIME_SYNC
+    assert event.component == "exchange.time_sync"
+    assert event.tags == (EventTags.EXCHANGE, EventTags.TIME_SYNC)
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.EXCHANGE_TIME_SYNC
+    assert event.data["source"] == "test"
+    assert event.data["error_type"] == "RuntimeError"
+    assert event.data["hook_available"] is True
+    assert event.data["recovered"] is True
+    assert event.data["synced_clients"] == ["cca:10->25", "ccp:-5->30"]
+    assert event.data["failed_clients"] == []
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_exchange_time_sync_no_hook_emits_unavailable_event(caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot.exchange = "kucoin"
+    bot.user = "kucoin_01"
+    bot.bot_id = "bot_1"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot.cca = SimpleNamespace(options={})
+    bot.ccp = None
+
+    exc = RuntimeError("Invalid nonce apiKey=supersecret")
+    with caplog.at_level(logging.WARNING):
+        recovered = await bot._maybe_recover_exchange_time_sync(
+            exc, source="fetch_balance"
+        )
+
+    assert recovered is False
+    assert any("no CCXT time-sync hook" in r.message for r in caplog.records)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.event_type == EventTypes.EXCHANGE_TIME_SYNC
+    assert event.status == "skipped"
+    assert event.reason_code == ReasonCodes.EXCHANGE_TIME_SYNC_UNAVAILABLE
+    assert event.data["source"] == "fetch_balance"
+    assert event.data["hook_available"] is False
+    assert event.data["recovered"] is False
+    assert event.data["synced_count"] == 0
+    assert event.data["failed_count"] == 0
+    assert "supersecret" not in event.data["error"]
+    assert "[redacted]" in event.data["error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
