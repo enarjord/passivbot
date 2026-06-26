@@ -125,13 +125,16 @@ Related detailed plans:
    A VPS5 one-repeat authenticated probe on `binance_01` validated the summary
    shape and showed a follow-up: Binance `fetch_open_orders()` without a symbol
    fails as `ExchangeError`, so lower-impact/account-only probing should use
-   exchange-aware open-orders shape.
+   exchange-aware open-orders shape. PR #703 added `--account-only`,
+   `--skip-my-trades`, and an open-orders symbol fallback; a VPS5 account-only
+   Binance probe validated `account_critical_health` success for all three
+   account-critical surfaces.
 
    Add/refine explicit read-only probes for each configured exchange/account
-   before or during smoke: low-impact balance/positions/open-orders fetches,
-   clock skew, rate-limit behavior, fill pagination coverage, candle freshness,
-   and basic endpoint latency. The passive smoke report now also exposes
-   top-level remote-call health success/failure/throttle totals and a filtered
+   before or during smoke: clock skew, rate-limit behavior, fill pagination
+   coverage, candle freshness, and basic endpoint latency. The passive smoke
+   report now also exposes top-level remote-call health
+   success/failure/throttle totals and a filtered
    `account_critical_remote_call_health` summary for a quick operator scan.
 
 7. [ ] Live config preflight/linter.
@@ -289,6 +292,7 @@ Related detailed plans:
 | 2026-06-26 | #3 Live restart/smoke automation | PR #698 / `7c7368f3` | Redacted common user/home prefixes from smoke-report `repository.root` while preserving real git cwd use; incident-bundle `smoke_report.json` inherits the safer display field | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #699 / `4e2fcee7` | Surfaced dropped contextless unparsed attention/hard counters under `--log-window-unparsed-policy drop`; dropped attention now makes smoke `attention=true` without making stale tail fragments hard failures; VPS5 settled smoke on `d5639813` returned `ok=true`, no hard failures, all five bots matched | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
+| 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
