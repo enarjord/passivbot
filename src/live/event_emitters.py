@@ -771,6 +771,52 @@ def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug("[event] failed to emit health summary event: %s", exc)
 
 
+def _emit_execution_loop_error_burst_event_unchecked(
+    bot: Any,
+    *,
+    count: int,
+    window_s: int,
+    endpoints: Any,
+    latest_fields: dict[str, Any],
+) -> None:
+    try:
+        top_endpoints = [
+            {"endpoint": str(name), "count": int(n)}
+            for name, n in endpoints.most_common(5)
+        ]
+    except Exception:
+        top_endpoints = []
+    latest = dict(latest_fields or {})
+    data: dict[str, Any] = {
+        "count": max(0, int(count)),
+        "window_s": max(0, int(window_s)),
+        "top_endpoints": top_endpoints,
+        "latest_error_type": str(latest.get("error_type") or "-"),
+        "latest_status": str(latest.get("status") or "-"),
+        "latest_code": str(latest.get("code") or "-"),
+    }
+    if latest.get("error") is not None:
+        data["latest_error"] = _sanitize_remote_text(latest.get("error"), max_len=500)
+    _safe_emit(
+        bot,
+        EventTypes.HEALTH_SUMMARY,
+        level="warning",
+        component="execution_loop",
+        tags=(EventTags.HEALTH, EventTags.EXECUTION, EventTags.SUMMARY),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="degraded",
+        reason_code=ReasonCodes.EXECUTION_LOOP_ERROR_BURST,
+        data=data,
+    )
+
+
+def emit_execution_loop_error_burst_event(bot: Any, *args: Any, **kwargs: Any) -> None:
+    try:
+        _emit_execution_loop_error_burst_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit execution loop error burst event: %s", exc)
+
+
 def _symbol_sample(symbols: Any, *, limit: int = 12) -> dict[str, Any]:
     if symbols is None:
         values = []

@@ -663,6 +663,9 @@ class Passivbot:
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _emit_health_summary_event = live_event_emitters.emit_health_summary_event
+    _emit_execution_loop_error_burst_event = (
+        live_event_emitters.emit_execution_loop_error_burst_event
+    )
     _handle_candle_remote_fetch_event = live_event_emitters.emit_candle_remote_fetch_event
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
@@ -5624,6 +5627,12 @@ class Passivbot:
         state["last_log_ms"] = now
         top = ",".join(f"{name}:{n}" for name, n in endpoints.most_common(5))
         window_s = max(1, int((now - int(state["first_ms"])) / 1000))
+        self._emit_execution_loop_error_burst_event(
+            count=count,
+            window_s=window_s,
+            endpoints=endpoints,
+            latest_fields=fields,
+        )
         logging.warning(
             "[health] execution loop error burst | count=%d window=%ds top=%s latest_type=%s status=%s code=%s action=restart_backoff_continues",
             count,

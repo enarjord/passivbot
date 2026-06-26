@@ -77,6 +77,7 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
 
     assert ReasonCodes.REQUIRED_EMA_UNAVAILABLE == "required_ema_unavailable"
     assert ReasonCodes.EXCHANGE_ACKNOWLEDGED == "exchange_acknowledged"
+    assert ReasonCodes.EXECUTION_LOOP_ERROR_BURST == "execution_loop_error_burst"
     assert ReasonCodes.WARMUP_CACHE_DECISION == "warmup_cache_decision"
     assert authoritative_reason_code("balance") == "authoritative_balance"
     assert sink_failed_reason_code("monitor") == "monitor_sink_failed"
