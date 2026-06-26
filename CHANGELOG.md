@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added remote-call health rollups to `passivbot tool live-smoke-report`,
+  grouping successes, failures, throttles, latency, and affected symbols by
+  bot/component/kind/surface.
 - Added remote-call elapsed-time summaries to `passivbot tool live-smoke-report`
   so slow exchange/API calls can be inspected even when they eventually succeed.
 - Added repository branch/head metadata to `passivbot tool live-smoke-report`
