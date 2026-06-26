@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ff714b61` merge of PR #679, `Surface smoke problem event context`.
+- `998d7c9cd` merge of PR #682, `Group smoke problem events`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #679 at `ff714b61`.
+- Repository pulled through PR #682 at `998d7c9cd`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -80,6 +80,20 @@ VPS5 deployment status:
   `problem_events.latest_data` for persistent non-hard `ema.unavailable` and
   `cycle.degraded` groups, and stale unparseable traceback/header fragments are
   filtered by timestamp context instead of causing false recent-window matches.
+- PR #680 was pulled to VPS5 without bot restart because it only updated
+  progress docs.
+- PR #682 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. The first smoke after deploy surfaced a real
+  transient Kucoin authoritative account-refresh `RequestTimeout` as one hard
+  problem group. A later settled 2-minute smoke with
+  `--log-window-unparsed-policy drop`, text logs enabled, and
+  `/root/bots_vps5.yaml` process matching reported `ok=true`,
+  `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `remote_call_failures.total=0`,
+  `matched_expected=5`, and `missing_expected=[]`. The new
+  `problem_event_groups` section grouped the remaining known non-hard
+  EMA/cycle/HSL attention without requiring inspection of individual event
+  samples.
 
 ## Phase Checklist
 
@@ -559,17 +573,46 @@ VPS5 deployment status:
   attention matches, and exposed useful `latest_data` for the remaining
   non-hard EMA/cycle readiness groups.
 
+### PR #680: Smoke Problem Context Progress
+
+- Branch: `codex/v8-progress-after-smoke-problem-context`.
+- Scope: process tracking.
+- Result: updated this progress ledger and the live operations backlog after
+  PR #679 merged and VPS5 smoke confirmed the bounded problem-event context.
+
+### PR #682: Smoke Problem Event Groups
+
+- Branch: `codex/v8-smoke-problem-event-groups`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` now reports top-level
+  `problem_event_count` and bounded `problem_event_groups` aggregates grouped
+  by bot, event type, reason code, status, hard flag, symbol, and position
+  side. Existing bounded `problem_events` samples remain available for detail.
+- Review evidence: Hermes approved head `048e8595c`; CI was green; focused
+  smoke-report tests, compileall, and `git diff --check` passed before merge.
+  Claude did not return during repeated polls, and Composer had been retired,
+  so this read-only tooling slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `998d7c9c` without bot restart. The first
+  smoke surfaced a real transient Kucoin authoritative account-refresh timeout;
+  a later settled 2-minute smoke reported all five configured bots running, no
+  hard failures, no hard problem events, no log matches, no remote-call
+  failures, and grouped the remaining known non-hard EMA/cycle/HSL attention in
+  `problem_event_groups`.
+
 ## Current Next Steps
 
-1. Continue Phase 5 by migrating one high-value stdlib text log family to
+1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
+   runtime staged-refresh event producer slice; Hermes and CI are already green
+   on the rebased head.
+2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
-2. Use the persistent non-hard EMA readiness / staged-execution degradation
+3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
-   diagnostics or a narrow fix. PR #679 made the problem groups easier to
-   inspect by surfacing bounded latest event data.
-3. Add read-only exchange health probes for account-critical endpoint timeouts
+   diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
+   to inspect by surfacing bounded latest event data and aggregate groups.
+4. Add read-only exchange health probes for account-critical endpoint timeouts
    if passive event summaries are insufficient.
-4. Start the live restart/smoke automation slice if operational workflow speed
+5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-5. Continue cache-doctor refinements in separate adjacent PRs: cache-family
+6. Continue cache-doctor refinements in separate adjacent PRs: cache-family
    metadata, coverage windows, suspicious gaps, and warm-cache readiness.
