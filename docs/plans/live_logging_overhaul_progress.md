@@ -15,24 +15,27 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-25.
+Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `45b0cf9e` merge of PR #663, `Summarize remote call failures in smoke report`.
+- `734c2de0` merge of PR #668, `Summarize cache families in cache doctor`.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #663 at `45b0cf9e`.
-- Bots were left running after the pull; PR #663 was a read-only tooling slice
-  and did not require bot restart.
-- VPS5 process-status smoke with `/root/bots_vps5.yaml` reported
-  `expected_total=5`, `matched_expected=5`, `missing_expected=[]`,
-  and `scan_error=null`.
-- Overall smoke still returned attention/hard failure because current monitor
-  events include Kucoin authoritative state `RequestTimeout` failures. The new
-  `remote_call_failures` summary grouped them as positions=9,
-  open_orders=7, and balance=7. The process-status check itself was green.
+- Repository pulled through PR #668 at `734c2de0`.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Four bots
+  exited promptly after Ctrl-C; Kucoin took about 105 seconds before the old
+  process disappeared.
+- `tmuxp load` returned a nonzero attach error because SSH had no terminal, but
+  it created the `passivbot` session and all five configured bot processes.
+- VPS5 post-restart smoke with text logs disabled and
+  `--recent-minutes 2 --supervisor-config /root/bots_vps5.yaml` reported
+  `ok=true`, `hard_failures=0`, `hard_problem_event_count=0`,
+  `expected_total=5`, `matched_expected=5`, and `missing_expected=[]`.
+- A wider post-restart smoke saw a real GateIO HSL ZEC long RED finalization
+  during startup/replay and one non-hard Kucoin candle `RequestTimeout`; the
+  narrower settled-window smoke confirmed no continuing hard failures.
 
 ## Phase Checklist
 
@@ -45,8 +48,8 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, `live-smoke-report` startup baselines, process liveness, and remote-call failure summaries, incident bundle trace/process reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
-| Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/time windows, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
 
@@ -363,6 +366,44 @@ VPS5 deployment status:
   `/root/bots_vps5.yaml` still matched all five expected bots and now exposed
   Kucoin authoritative endpoint timeouts directly in the smoke output:
   positions=9, open_orders=7, balance=7.
+
+### PR #665: Live Smoke Report Time Window
+
+- Branch: `codex/v8-smoke-report-time-window`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` can scope structured monitor
+  events with `--since-ms`, `--until-ms`, or `--recent-minutes`, and reports
+  explicit event-window counters. Incident bundles pass the same window into
+  embedded smoke reports. Text-log scanning remains intentionally unchanged.
+
+### PR #666: Create Filter/Defer Events
+
+- Branch: `codex/v8-execution-defer-events`.
+- Scope: execution/order lifecycle observability.
+- Result: create-order pre-exchange filter/defer decisions now emit bounded
+  structured events after the existing gates decide. The execution gates remain
+  authoritative, event emission is best-effort, and the new routes stay off the
+  default console/text projection.
+
+### PR #667: Live Event Query Time Window
+
+- Branch: `codex/v8-event-query-time-window`.
+- Scope: operator query tooling.
+- Result: `passivbot tool live-event-query` can scope matched structured events
+  with `--since-ms`, `--until-ms`, or `--recent-minutes`. The same scoped event
+  set feeds query output, timeline, trace summary, order trace, and cycle trace
+  views, with explicit event-window counters.
+
+### PR #668: Cache Doctor Family Summary
+
+- Branch: `codex/v8-cache-doctor-family-summary`.
+- Scope: adjacent operations tooling.
+- Result: `passivbot tool cache-integrity-doctor` now includes per-root and
+  aggregate cache-family summaries plus family tags on reported issues. This is
+  still read-only diagnostics and does not decide whether live trading may reuse
+  a warm cache.
+- VPS5 evidence: deployed to VPS5 at `734c2de0`. A settled 2-minute smoke after
+  restart reported all five configured bots running and no hard problem events.
 
 ## Current Next Steps
 

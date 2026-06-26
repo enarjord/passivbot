@@ -45,8 +45,9 @@ Related detailed plans:
    now supports event discovery, compact JSON output, current-vs-rotated segment
    selection, terse timeline rendering, and filters for event type/kind, cycle
    id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
-   action id, symbol, pside, reason code, and status. It also supports
-   aggregate trace summaries over matched events and order waves, plus a
+   action id, symbol, pside, reason code, status, and event time window. It
+   also supports aggregate trace summaries over matched events and order waves,
+   plus a
    dedicated order-trace reconstruction view for order waves/actions and a
    cycle-trace reconstruction view with nested order traces. Incident bundles
    now embed the existing trace-summary/order-trace reports and cycle traces
@@ -57,7 +58,8 @@ Related detailed plans:
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
    compare running `passivbot live` processes against a tmuxp-style supervisor
-   config, but the safe restart orchestration contract is not implemented.
+   config and scope structured monitor events to a requested time window, but
+   the safe restart orchestration contract is not implemented.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
@@ -163,6 +165,8 @@ Related detailed plans:
       summaries, and nested order traces.
     - 2026-06-25: Added incident-bundle integration for trace-summary,
       order-trace, and cycle-trace reports.
+    - 2026-06-26: Added structured create-filter/defer events for existing
+      pre-exchange create-order gates without changing gate behavior.
 
     Remaining refinements: keep tightening producer coverage as nearby event
     surfaces are touched.
@@ -176,7 +180,8 @@ Related detailed plans:
     issue.
 
 13. [ ] Cache integrity doctor.
-    Status: partial. Initial read-only local cache smoke doctor merged.
+    Status: partial. Initial read-only local cache smoke doctor and
+    cache-family summaries merged.
 
     Add a read-only doctor for candle/fill/HSL caches that reports coverage,
     metadata compatibility, corrupted shards, suspicious gaps, synthetic/no-trade
@@ -187,10 +192,12 @@ Related detailed plans:
     - 2026-06-25: Added `passivbot tool cache-integrity-doctor`, which reports
       local cache root presence, aggregate file/size counts, and empty/corrupt
       JSON, NDJSON, and NPY artifacts without writing or touching live behavior.
+    - 2026-06-26: Added per-root and aggregate cache-family summaries plus
+      family tags on cache-doctor issues.
 
-    Remaining refinements: add cache-family awareness, candle/fill/HSL metadata
-    compatibility checks, coverage windows, suspicious gap summaries, and
-    warm-cache reuse readiness without making trading decisions.
+    Remaining refinements: add candle/fill/HSL metadata compatibility checks,
+    coverage windows, suspicious gap summaries, and warm-cache reuse readiness
+    without making trading decisions.
 
 14. [ ] Supervisor/process model.
     Status: partial. `live-smoke-report --supervisor-config` now reports
@@ -223,6 +230,10 @@ Related detailed plans:
 | 2026-06-25 | #1/#2/#11 Incident bundle trace integration | PR #659 / `27931c81` | Embedded trace-summary and order-trace reports into incident bundles by default, plus cycle-trace when scoped to `--cycle-id`; VPS5 bundle smoke verified trace sections | Cross-bot incident workflow and supervisor/process context |
 | 2026-06-25 | #1/#3/#14 Smoke process status | PR #661 / `72b3d931` | Added optional read-only process liveness to `live-smoke-report` and incident bundles; VPS5 smoke matched all five `/root/bots_vps5.yaml` bots | Safe restart orchestration and richer supervisor model remain open |
 | 2026-06-25 | #6 Exchange health and contract probes | PR #663 / `45b0cf9e` | Added passive `remote_call.failed` summaries to `live-smoke-report`; VPS5 smoke grouped Kucoin timeouts by balance/positions/open_orders | Active read-only exchange endpoint probes remain open |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #665 / `37c29359` | Added structured-event time windows to `live-smoke-report` and threaded them into incident-bundle smoke reports; VPS5 smoke used the window to separate pre-deploy failures from settled post-restart behavior | Safe pull/stop/start orchestration still open |
+| 2026-06-26 | #11 Order lifecycle trace completeness | PR #666 / `fa90623d` | Added structured create-filter/defer events for pre-exchange create-order gates, best-effort and off default console | Continue producer coverage as nearby execution surfaces are touched |
+| 2026-06-26 | #2 Event query and timeline CLI extensions | PR #667 / `e5771cfa` | Added event time-window filters to `live-event-query`; query, timeline, trace-summary, order-trace, and cycle-trace views use the same scoped event set | Cross-bot incident workflow |
+| 2026-06-26 | #13 Cache integrity doctor | PR #668 / `734c2de0` | Added cache-family summaries and issue family tags to the read-only cache doctor | Coverage windows, suspicious gaps, metadata compatibility, and warm-cache readiness |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
