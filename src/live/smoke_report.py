@@ -14,12 +14,17 @@ from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes
 from live.event_query import build_event_report, discover_event_files
 
 
+PYTHON_TRACEBACK_HEADER_PATTERN = r"\bTraceback\s+\(most recent call last\):"
 HARD_LOG_PATTERN = re.compile(
-    r"\bTraceback\b|(?:^|\s|\[)CRITICAL(?:\s|\]|:|$)|\blevel=critical\b|\bfatal\b|\buncaught\b",
+    rf"{PYTHON_TRACEBACK_HEADER_PATTERN}|"
+    r"(?:^|\s|\[)CRITICAL(?:\s|\]|:|$)|"
+    r"\blevel=critical\b|\bfatal\b|\buncaught\b",
     re.IGNORECASE,
 )
 ATTENTION_LOG_PATTERN = re.compile(
-    r"\bTraceback\b|(?:^|\s|\[)(?:CRITICAL|ERROR)(?:\s|\]|:|$)|\blevel=(?:critical|error)\b|\bfatal\b|\buncaught\b",
+    rf"{PYTHON_TRACEBACK_HEADER_PATTERN}|"
+    r"(?:^|\s|\[)(?:CRITICAL|ERROR)(?:\s|\]|:|$)|"
+    r"\blevel=(?:critical|error)\b|\bfatal\b|\buncaught\b",
     re.IGNORECASE,
 )
 SENSITIVE_LOG_HEADER_PATTERN = re.compile(

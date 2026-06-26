@@ -525,6 +525,50 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
     assert "future hard skipped" not in json.dumps(report["logs"]["matches"])
 
 
+def test_live_smoke_report_log_scan_ignores_traceback_prose(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "kucoin_01.log").write_text(
+        "\n".join(
+            [
+                (
+                    "2026-06-26T02:31:46Z WARNING [kucoin] [ws] "
+                    "websocket callback ping timeout; suppressing callback "
+                    "traceback and relying on reconnect"
+                ),
+                "Traceback (most recent call last):",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        log_tail_lines=10,
+    )
+
+    assert report["ok"] is False
+    assert report["logs"]["attention_matches"] == 1
+    assert report["logs"]["hard_matches"] == 1
+    assert [match["text"] for match in report["logs"]["matches"]] == [
+        "Traceback (most recent call last):"
+    ]
+
+
 def test_live_smoke_report_default_logs_root_follows_monitor_root(tmp_path, capsys):
     bot_root = tmp_path / "bot"
     events_dir = bot_root / "monitor" / "gateio" / "gateio_01" / "events"
