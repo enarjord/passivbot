@@ -1016,6 +1016,60 @@ def test_live_smoke_report_log_window_drops_stale_traceback_with_context(tmp_pat
     }
 
 
+def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "kucoin_01.log").write_text(
+        "\n".join(
+            [
+                "1970-01-01T00:00:01Z ERROR old exchange call failed",
+                "old stack line before tail",
+                "Traceback (most recent call last):",
+                "  File \"/tmp/passivbot.py\", line 1, in run",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        since_ms=2000,
+        until_ms=4000,
+        log_tail_lines=2,
+        log_window_unparsed_policy="drop",
+    )
+
+    assert report["ok"] is True
+    assert report["logs"]["attention_matches"] == 0
+    assert report["logs"]["hard_matches"] == 0
+    assert report["logs"]["matches"] == []
+    assert report["logs"]["window"] == {
+        "enabled": True,
+        "since_ms": 2000,
+        "until_ms": 4000,
+        "lines_considered": 0,
+        "lines_skipped_before": 0,
+        "lines_skipped_after": 0,
+        "unparsed_ts": 2,
+        "unparsed_policy": "drop",
+        "lines_skipped_unparsed": 2,
+    }
+
+
 def test_live_smoke_report_log_scan_ignores_traceback_prose(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(

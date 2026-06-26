@@ -1341,7 +1341,9 @@ def _scan_logs(
                         if until_ms is not None and log_context_ts_ms > until_ms:
                             lines_skipped_after += 1
                             continue
-                    if unparsed_policy == "drop" and not attention:
+                    if unparsed_policy == "drop" and (
+                        log_context_ts_ms is None or not attention
+                    ):
                         lines_skipped_unparsed += 1
                         continue
                 else:
