@@ -85,6 +85,11 @@ Related detailed plans:
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
+   2026-06-26 VPS5 deploy evidence: after PR #709, one Ctrl+C round stopped
+   Binance but Kucoin, GateIO, OKX, and Hyperliquid remained as orphaned live
+   processes after two Ctrl+C rounds and required SIGTERM before reload. This
+   reinforces that restart orchestration needs per-bot shutdown timing, orphan
+   detection, and an explicit escalation ladder.
 
 4. [ ] Startup phase budget tracking.
    Status: partial. Startup timing and warmup cache decision events exist, and
@@ -300,6 +305,7 @@ Related detailed plans:
 | 2026-06-26 | #3 Live restart/smoke automation | PR #696 / `f1efbe45` | Added `live-smoke-report --summary`, a concise high-signal projection of smoke health, process/repository state, problem groups, remote-call/account-critical health, and risk events; VPS5 compact summary smoke on `d850daf5` returned `ok=true`, no hard failures, all five bots matched, and account-critical total=58, succeeded=58 | Safe pull/stop/start orchestration remains open; optional row-limit/brief summary mode could reduce chat-facing output further |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #698 / `7c7368f3` | Redacted common user/home prefixes from smoke-report `repository.root` while preserving real git cwd use; incident-bundle `smoke_report.json` inherits the safer display field | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #699 / `4e2fcee7` | Surfaced dropped contextless unparsed attention/hard counters under `--log-window-unparsed-policy drop`; dropped attention now makes smoke `attention=true` without making stale tail fragments hard failures; VPS5 settled smoke on `d5639813` returned `ok=true`, no hard failures, all five bots matched | Safe pull/stop/start orchestration still open |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #709 / `71479c61` deploy evidence | VPS5 restart smoke after the fill-cache event slice returned `ok=true`, no hard failures, all five bots matched; the restart exposed four orphaned live processes after two Ctrl+C rounds, cleared by SIGTERM before reload | Safe pull/stop/start orchestration should include shutdown timing, orphan detection, and escalation policy |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |

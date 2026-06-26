@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f384edbee` merge of PR #707, `Log coin HSL status for active positions`.
+- `71479c619` merge of PR #709, `Emit fill cache ready event`.
 
 Current review gate:
 
@@ -242,6 +242,20 @@ VPS5 deployment status:
   non-hard Hyperliquid tradfi EMA/staged readiness events. No `hsl.status`
   risk events occurred in the 5-minute smoke window, so the new coin-HSL console
   projection was not exercised on VPS5 yet.
+- PR #709 was merged after current-head Claude + Hermes approval and green CI,
+  then pulled to VPS5 and deployed with a bot restart because it adds startup
+  fill-cache structured events. The first Ctrl+C round stopped Binance, but
+  Kucoin, GateIO, OKX, and Hyperliquid remained as orphaned live processes after
+  two Ctrl+C rounds; SIGTERM cleared them before reload. `tmuxp load -d
+  /root/bots_vps5.yaml` then started all five configured bots. A settled
+  5-minute `--brief` smoke at `71479c61` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `repository.dirty=false`,
+  `remote_calls.total=186`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.total=30`, and
+  `account_critical_remote_calls.failed=0`. Direct monitor-file checks found
+  `fills.refresh_summary` `fill_cache_ready` events for all five bots. Remaining
+  attention came from known non-hard Hyperliquid tradfi EMA/candle readiness.
 
 ## Phase Checklist
 
@@ -252,7 +266,7 @@ VPS5 deployment status:
 | Phase 2: data gatherer events | Mostly done | Account remote-call cohorts, candle tail/coverage, fill refresh summaries, cache load/flush, warmup/startup timing | Not every exchange/network call is instrumented; richer remote-call payload summaries remain incremental |
 | Phase 3: Rust planning and payload refs | Partially done | Rust orchestrator called/returned events, redacted error hardening, action/planning summaries | Full raw-ref retention/debug policy still limited |
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
-| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
+| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy/brief smoke counters, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
@@ -963,9 +977,27 @@ VPS5 deployment status:
   account-critical calls `total=81`, `succeeded=81`, and all terminal remote
   calls `total=230`, `succeeded=230`.
 
+### PR #709: Fill Cache Ready Event
+
+- Branch: `codex/v8-fills-cache-ready-event`.
+- Scope: Phase 5 startup fill-cache observability.
+- Result: startup fill-cache readiness now emits a structured
+  `fills.refresh_summary` event with reason code `fill_cache_ready`, source
+  `startup`, refresh mode `cache_load`, elapsed time, event count, and optional
+  history scope. The existing console line remains unchanged and the structured
+  event route stays off console/text.
+- Review evidence: current-head Claude and Hermes approved head `f5838dfea`,
+  and CI was green. Focused live-event, fill-cache init/update, monitor emitter,
+  compileall, and `git diff --check` checks passed before merge.
+- VPS5 evidence: deployed to VPS5 at `71479c61` with a bot restart. A settled
+  5-minute brief smoke reported `ok=true`, no hard failures, no log hard
+  matches, all five configured bots running, no failed remote calls, and no
+  failed account-critical remote calls. Direct monitor-file checks found
+  `fill_cache_ready` events for Binance, GateIO, Hyperliquid, Kucoin, and OKX.
+
 ## Current Next Steps
 
-1. Continue Phase 5 by migrating one high-value stdlib text log family to
+1. Continue Phase 5 by migrating another high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
