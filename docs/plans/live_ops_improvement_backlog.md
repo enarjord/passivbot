@@ -58,7 +58,8 @@ Related detailed plans:
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
    compare running `passivbot live` processes against a tmuxp-style supervisor
-   config and scope structured monitor events to a requested time window, but
+   config, scope structured monitor events and parseable timestamped text logs
+   to a requested time window, and avoid traceback-prose false positives, but
    the safe restart orchestration contract is not implemented.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
@@ -234,6 +235,8 @@ Related detailed plans:
 | 2026-06-26 | #11 Order lifecycle trace completeness | PR #666 / `fa90623d` | Added structured create-filter/defer events for pre-exchange create-order gates, best-effort and off default console | Continue producer coverage as nearby execution surfaces are touched |
 | 2026-06-26 | #2 Event query and timeline CLI extensions | PR #667 / `e5771cfa` | Added event time-window filters to `live-event-query`; query, timeline, trace-summary, order-trace, and cycle-trace views use the same scoped event set | Cross-bot incident workflow |
 | 2026-06-26 | #13 Cache integrity doctor | PR #668 / `734c2de0` | Added cache-family summaries and issue family tags to the read-only cache doctor | Coverage windows, suspicious gaps, metadata compatibility, and warm-cache readiness |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #670 / `b74d12be` | Extended `live-smoke-report` time windows to parseable timestamped text log lines; VPS5 smoke proved stale log lines were skipped via `logs.window.lines_skipped_before` | Safe pull/stop/start orchestration still open |
+| 2026-06-26 | #3 Live restart/smoke automation | PR #671 / `34f63799` | Narrowed traceback log matching to real Python traceback headers; VPS5 smoke with logs enabled returned `ok=true`, `logs.hard_matches=0`, and all five bots matched | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
