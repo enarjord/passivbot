@@ -473,3 +473,97 @@ async def test_probe_exchange_ticker_endpoints_redacts_stored_endpoint_errors():
     assert out["account_critical_health"]["surfaces"]["balance"]["error_types"] == {
         "RuntimeError": 1
     }
+
+
+@pytest.mark.asyncio
+async def test_account_only_probe_skips_public_and_uses_open_orders_symbol_fallback():
+    class FakeExchange:
+        id = "fake"
+        has = {
+            "fetchBalance": True,
+            "fetchBidsAsks": True,
+            "fetchMyTrades": True,
+            "fetchOpenOrders": True,
+            "fetchPositions": True,
+            "fetchTicker": True,
+            "fetchTickers": True,
+        }
+
+        def __init__(self):
+            self.open_order_symbols = []
+            self.my_trades_called = False
+
+        async def load_markets(self):
+            return {
+                "BTC/USDT:USDT": {
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                }
+            }
+
+        async def fetch_tickers(self, symbols=None):
+            raise AssertionError("account-only probe must not fetch tickers")
+
+        async def fetch_bids_asks(self, symbols=None):
+            raise AssertionError("account-only probe must not fetch bids/asks")
+
+        async def fetch_ticker(self, symbol):
+            raise AssertionError("account-only probe must not fetch ticker")
+
+        async def fetch_order_book(self, symbol, limit=None):
+            raise AssertionError("account-only probe must not fetch order book")
+
+        async def fetch_ohlcv(self, symbol, timeframe="1m", limit=None):
+            raise AssertionError("account-only probe must not fetch OHLCV")
+
+        async def fetch_balance(self):
+            return {"USDT": {"total": 100.0}}
+
+        async def fetch_positions(self):
+            return [{"symbol": "BTC/USDT:USDT"}]
+
+        async def fetch_open_orders(self, symbol=None):
+            self.open_order_symbols.append(symbol)
+            if symbol is None:
+                raise RuntimeError("symbol required apiKey=SECRET")
+            return []
+
+        async def fetch_my_trades(self, symbol=None, since=None, limit=None):
+            self.my_trades_called = True
+            raise AssertionError("account-only probe must not fetch my trades")
+
+    exchange = FakeExchange()
+
+    out = await probe_exchange_ticker_endpoints(
+        exchange,
+        user="fake_user",
+        user_info={"quote": "USDT"},
+        symbols=[],
+        coins=[],
+        quote=None,
+        max_symbols=1,
+        repeats=1,
+        sleep_between_seconds=0.0,
+        include_public=False,
+        include_order_book=False,
+        include_ohlcv=False,
+        include_my_trades=False,
+    )
+
+    repeat = out["repeats"][0]
+    assert out["symbols"] == ["BTC/USDT:USDT"]
+    assert out["include_public"] is False
+    assert out["include_my_trades"] is False
+    assert "fetch_tickers_all" not in repeat
+    assert "fetch_my_trades_first_symbol" not in repeat
+    assert repeat["fetch_open_orders_all"]["ok"] is True
+    assert repeat["fetch_open_orders_all"]["mode"] == "symbol_fallback"
+    assert repeat["fetch_open_orders_all"]["fallback_symbol"] == "BTC/USDT:USDT"
+    assert "SECRET" not in repeat["fetch_open_orders_all"]["attempts"]["all_symbols"]["error"]
+    assert exchange.open_order_symbols == [None, "BTC/USDT:USDT"]
+    assert exchange.my_trades_called is False
+    assert out["account_critical_health"]["succeeded"] == 3
+    assert out["account_critical_health"]["failed"] == 0

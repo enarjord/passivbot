@@ -377,6 +377,63 @@ async def _timed_method(exchange, method_name: str, *args, summary=None) -> dict
     return outcome
 
 
+def _with_present_fields(out: dict[str, Any], **fields) -> dict[str, Any]:
+    for key, value in fields.items():
+        if value is not None:
+            out[key] = value
+    return out
+
+
+async def _fetch_open_orders_account_critical(exchange, symbols: list[str]) -> dict[str, Any]:
+    started_ms = utc_ms()
+    all_symbols_outcome = await _timed_method(
+        exchange, "fetch_open_orders", summary=summarize_collection
+    )
+    attempts: dict[str, Any] = {"all_symbols": all_symbols_outcome}
+    if all_symbols_outcome["ok"]:
+        return _with_present_fields(
+            dict(all_symbols_outcome),
+            mode="all_symbols",
+            attempts=attempts,
+        )
+    if not symbols:
+        return _with_present_fields(
+            dict(all_symbols_outcome),
+            mode="all_symbols_failed",
+            attempts=attempts,
+        )
+
+    fallback_symbol = symbols[0]
+    symbol_outcome = await _timed_method(
+        exchange,
+        "fetch_open_orders",
+        fallback_symbol,
+        summary=summarize_collection,
+    )
+    attempts["symbol"] = {"symbol": fallback_symbol, "outcome": symbol_outcome}
+    elapsed_ms = int(max(0, utc_ms() - started_ms))
+    if symbol_outcome["ok"]:
+        return {
+            "ok": True,
+            "elapsed_ms": elapsed_ms,
+            "mode": "symbol_fallback",
+            "fallback_symbol": fallback_symbol,
+            "attempts": attempts,
+            "value": symbol_outcome.get("value"),
+        }
+    return _with_present_fields(
+        {
+            "ok": False,
+            "elapsed_ms": elapsed_ms,
+            "mode": "all_symbols_and_symbol_failed",
+            "fallback_symbol": fallback_symbol,
+            "attempts": attempts,
+            "error_type": symbol_outcome.get("error_type") or all_symbols_outcome.get("error_type"),
+            "error": symbol_outcome.get("error") or all_symbols_outcome.get("error"),
+        }
+    )
+
+
 async def probe_exchange_ticker_endpoints(
     exchange,
     *,
@@ -389,8 +446,10 @@ async def probe_exchange_ticker_endpoints(
     repeats: int,
     sleep_between_seconds: float,
     include_private: bool = True,
+    include_public: bool = True,
     include_order_book: bool = True,
     include_ohlcv: bool = True,
+    include_my_trades: bool = True,
     progress: bool = False,
 ) -> dict[str, Any]:
     exchange_id = getattr(exchange, "id", str(user_info.get("exchange") or ""))
@@ -406,7 +465,7 @@ async def probe_exchange_ticker_endpoints(
         resolved_symbols = select_default_symbols(
             markets, quote=quote or user_info.get("quote"), max_symbols=max_symbols
         )
-    if not resolved_symbols:
+    if not resolved_symbols and (include_public or include_my_trades):
         raise ValueError(f"user {user!r}: no symbols resolved for ticker endpoint probe")
 
     out: dict[str, Any] = {
@@ -415,6 +474,8 @@ async def probe_exchange_ticker_endpoints(
         "quote": quote or user_info.get("quote"),
         "symbols": resolved_symbols,
         "include_private": bool(include_private),
+        "include_public": bool(include_public),
+        "include_my_trades": bool(include_my_trades),
         "market_count": len(markets) if isinstance(markets, dict) else None,
         "has": {
             "fetchBalance": bool(getattr(exchange, "has", {}).get("fetchBalance")),
@@ -446,70 +507,73 @@ async def probe_exchange_ticker_endpoints(
             "started_at": ts_to_date(utc_ms()),
         }
 
-        emit_progress(f"{repeat_label} fetch_tickers()", enabled=progress)
-        all_outcome = await _timed_call(exchange.fetch_tickers())
-        if all_outcome["ok"]:
-            all_outcome["value"] = summarize_tickers(all_outcome["value"], resolved_symbols)
-        repeat["fetch_tickers_all"] = all_outcome
-        emit_progress(
-            f"{repeat_label} fetch_tickers() {format_outcome(all_outcome)}",
-            enabled=progress,
-        )
+        if include_public:
+            emit_progress(f"{repeat_label} fetch_tickers()", enabled=progress)
+            all_outcome = await _timed_call(exchange.fetch_tickers())
+            if all_outcome["ok"]:
+                all_outcome["value"] = summarize_tickers(all_outcome["value"], resolved_symbols)
+            repeat["fetch_tickers_all"] = all_outcome
+            emit_progress(
+                f"{repeat_label} fetch_tickers() {format_outcome(all_outcome)}",
+                enabled=progress,
+            )
 
-        emit_progress(f"{repeat_label} fetch_tickers(symbols)", enabled=progress)
-        listed_outcome = await _timed_call(exchange.fetch_tickers(resolved_symbols))
-        if listed_outcome["ok"]:
-            listed_outcome["value"] = summarize_tickers(listed_outcome["value"], resolved_symbols)
-        repeat["fetch_tickers_symbols"] = listed_outcome
-        emit_progress(
-            f"{repeat_label} fetch_tickers(symbols) {format_outcome(listed_outcome)}",
-            enabled=progress,
-        )
+            emit_progress(f"{repeat_label} fetch_tickers(symbols)", enabled=progress)
+            listed_outcome = await _timed_call(exchange.fetch_tickers(resolved_symbols))
+            if listed_outcome["ok"]:
+                listed_outcome["value"] = summarize_tickers(
+                    listed_outcome["value"], resolved_symbols
+                )
+            repeat["fetch_tickers_symbols"] = listed_outcome
+            emit_progress(
+                f"{repeat_label} fetch_tickers(symbols) {format_outcome(listed_outcome)}",
+                enabled=progress,
+            )
 
-        emit_progress(f"{repeat_label} fetch_ticker sequential", enabled=progress)
-        repeat["fetch_ticker_sequential"] = await _fetch_ticker_sequential(
-            exchange, resolved_symbols
-        )
-        emit_progress(
-            f"{repeat_label} fetch_ticker sequential "
-            f"{format_outcome(repeat['fetch_ticker_sequential'])}",
-            enabled=progress,
-        )
-        emit_progress(f"{repeat_label} fetch_ticker concurrent", enabled=progress)
-        repeat["fetch_ticker_concurrent"] = await _fetch_ticker_concurrent(
-            exchange, resolved_symbols
-        )
-        emit_progress(
-            f"{repeat_label} fetch_ticker concurrent "
-            f"{format_outcome(repeat['fetch_ticker_concurrent'])}",
-            enabled=progress,
-        )
-        emit_progress(f"{repeat_label} fetch_bids_asks()", enabled=progress)
-        bids_asks_all = await _timed_method(
-            exchange,
-            "fetch_bids_asks",
-            summary=lambda value: summarize_tickers(value, resolved_symbols),
-        )
-        repeat["fetch_bids_asks_all"] = bids_asks_all
-        emit_progress(
-            f"{repeat_label} fetch_bids_asks() {format_outcome(bids_asks_all)}",
-            enabled=progress,
-        )
+            emit_progress(f"{repeat_label} fetch_ticker sequential", enabled=progress)
+            repeat["fetch_ticker_sequential"] = await _fetch_ticker_sequential(
+                exchange, resolved_symbols
+            )
+            emit_progress(
+                f"{repeat_label} fetch_ticker sequential "
+                f"{format_outcome(repeat['fetch_ticker_sequential'])}",
+                enabled=progress,
+            )
+            emit_progress(f"{repeat_label} fetch_ticker concurrent", enabled=progress)
+            repeat["fetch_ticker_concurrent"] = await _fetch_ticker_concurrent(
+                exchange, resolved_symbols
+            )
+            emit_progress(
+                f"{repeat_label} fetch_ticker concurrent "
+                f"{format_outcome(repeat['fetch_ticker_concurrent'])}",
+                enabled=progress,
+            )
+            emit_progress(f"{repeat_label} fetch_bids_asks()", enabled=progress)
+            bids_asks_all = await _timed_method(
+                exchange,
+                "fetch_bids_asks",
+                summary=lambda value: summarize_tickers(value, resolved_symbols),
+            )
+            repeat["fetch_bids_asks_all"] = bids_asks_all
+            emit_progress(
+                f"{repeat_label} fetch_bids_asks() {format_outcome(bids_asks_all)}",
+                enabled=progress,
+            )
 
-        emit_progress(f"{repeat_label} fetch_bids_asks(symbols)", enabled=progress)
-        bids_asks_symbols = await _timed_method(
-            exchange,
-            "fetch_bids_asks",
-            resolved_symbols,
-            summary=lambda value: summarize_tickers(value, resolved_symbols),
-        )
-        repeat["fetch_bids_asks_symbols"] = bids_asks_symbols
-        emit_progress(
-            f"{repeat_label} fetch_bids_asks(symbols) {format_outcome(bids_asks_symbols)}",
-            enabled=progress,
-        )
+            emit_progress(f"{repeat_label} fetch_bids_asks(symbols)", enabled=progress)
+            bids_asks_symbols = await _timed_method(
+                exchange,
+                "fetch_bids_asks",
+                resolved_symbols,
+                summary=lambda value: summarize_tickers(value, resolved_symbols),
+            )
+            repeat["fetch_bids_asks_symbols"] = bids_asks_symbols
+            emit_progress(
+                f"{repeat_label} fetch_bids_asks(symbols) {format_outcome(bids_asks_symbols)}",
+                enabled=progress,
+            )
 
-        if include_order_book:
+        if include_public and include_order_book:
             emit_progress(f"{repeat_label} fetch_order_book sequential", enabled=progress)
             repeat["fetch_order_book_sequential"] = await _fetch_order_books_sequential(
                 exchange, resolved_symbols
@@ -528,7 +592,7 @@ async def probe_exchange_ticker_endpoints(
                 f"{format_outcome(repeat['fetch_order_book_concurrent'])}",
                 enabled=progress,
             )
-        if include_ohlcv:
+        if include_public and include_ohlcv:
             emit_progress(f"{repeat_label} fetch_ohlcv 1m tail", enabled=progress)
             repeat["fetch_ohlcv_1m_tail"] = await _fetch_ohlcvs(exchange, resolved_symbols)
             emit_progress(
@@ -554,28 +618,29 @@ async def probe_exchange_ticker_endpoints(
                 enabled=progress,
             )
             emit_progress(f"{repeat_label} fetch_open_orders()", enabled=progress)
-            repeat["fetch_open_orders_all"] = await _timed_method(
-                exchange, "fetch_open_orders", summary=summarize_collection
+            repeat["fetch_open_orders_all"] = await _fetch_open_orders_account_critical(
+                exchange, resolved_symbols
             )
             emit_progress(
                 f"{repeat_label} fetch_open_orders() "
                 f"{format_outcome(repeat['fetch_open_orders_all'])}",
                 enabled=progress,
             )
-            emit_progress(f"{repeat_label} fetch_my_trades(first symbol)", enabled=progress)
-            repeat["fetch_my_trades_first_symbol"] = await _timed_method(
-                exchange,
-                "fetch_my_trades",
-                resolved_symbols[0],
-                None,
-                10,
-                summary=summarize_collection,
-            )
-            emit_progress(
-                f"{repeat_label} fetch_my_trades(first symbol) "
-                f"{format_outcome(repeat['fetch_my_trades_first_symbol'])}",
-                enabled=progress,
-            )
+            if include_my_trades:
+                emit_progress(f"{repeat_label} fetch_my_trades(first symbol)", enabled=progress)
+                repeat["fetch_my_trades_first_symbol"] = await _timed_method(
+                    exchange,
+                    "fetch_my_trades",
+                    resolved_symbols[0],
+                    None,
+                    10,
+                    summary=summarize_collection,
+                )
+                emit_progress(
+                    f"{repeat_label} fetch_my_trades(first symbol) "
+                    f"{format_outcome(repeat['fetch_my_trades_first_symbol'])}",
+                    enabled=progress,
+                )
         out["repeats"].append(repeat)
         emit_progress(f"{repeat_label} complete", enabled=progress)
         if idx + 1 < max(1, int(repeats)) and sleep_between_seconds > 0:
@@ -600,8 +665,10 @@ async def probe_user_ticker_endpoints(
     repeats: int,
     sleep_between_seconds: float,
     include_private: bool = True,
+    include_public: bool = True,
     include_order_book: bool = True,
     include_ohlcv: bool = True,
+    include_my_trades: bool = True,
     progress: bool = False,
 ) -> dict[str, Any]:
     emit_progress(f"[{user}] loading api key config", enabled=progress)
@@ -623,8 +690,10 @@ async def probe_user_ticker_endpoints(
             repeats=repeats,
             sleep_between_seconds=sleep_between_seconds,
             include_private=include_private,
+            include_public=include_public,
             include_order_book=include_order_book,
             include_ohlcv=include_ohlcv,
+            include_my_trades=include_my_trades,
             progress=progress,
         )
     finally:
@@ -654,8 +723,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip authenticated read-only account-state endpoint probes",
     )
+    parser.add_argument(
+        "--account-only",
+        action="store_true",
+        help="probe only authenticated balance, positions, and open-orders endpoints",
+    )
     parser.add_argument("--skip-order-book", action="store_true", help="skip order book probes")
     parser.add_argument("--skip-ohlcv", action="store_true", help="skip 1m OHLCV tail probes")
+    parser.add_argument(
+        "--skip-my-trades",
+        action="store_true",
+        help="skip authenticated fetch_my_trades probe",
+    )
     parser.add_argument("--quiet", action="store_true", help="suppress progress output")
     parser.add_argument("--out", help="output JSON path; default is tmp/ccxt_ticker_probe_<ts>.json")
     parser.add_argument("--json", action="store_true", help="also print JSON to stdout")
@@ -664,6 +743,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def async_main() -> int:
     args = build_parser().parse_args()
+    if args.public_only and args.account_only:
+        raise ValueError("--account-only cannot be combined with --public-only")
     users = split_csv(args.users)
     if not users:
         raise ValueError("provide at least one user via --users")
@@ -681,9 +762,12 @@ async def async_main() -> int:
         "max_symbols": int(args.max_symbols),
         "repeats": int(args.repeats),
         "sleep_between_seconds": float(args.sleep_between_seconds),
+        "account_only": bool(args.account_only),
         "include_private": not bool(args.public_only),
-        "include_order_book": not bool(args.skip_order_book),
-        "include_ohlcv": not bool(args.skip_ohlcv),
+        "include_public": not bool(args.account_only),
+        "include_order_book": not bool(args.skip_order_book) and not bool(args.account_only),
+        "include_ohlcv": not bool(args.skip_ohlcv) and not bool(args.account_only),
+        "include_my_trades": not bool(args.skip_my_trades) and not bool(args.account_only),
         "probes": [],
     }
     for user in users:
@@ -699,8 +783,10 @@ async def async_main() -> int:
                 repeats=int(args.repeats),
                 sleep_between_seconds=float(args.sleep_between_seconds),
                 include_private=not bool(args.public_only),
-                include_order_book=not bool(args.skip_order_book),
-                include_ohlcv=not bool(args.skip_ohlcv),
+                include_public=not bool(args.account_only),
+                include_order_book=not bool(args.skip_order_book) and not bool(args.account_only),
+                include_ohlcv=not bool(args.skip_ohlcv) and not bool(args.account_only),
+                include_my_trades=not bool(args.skip_my_trades) and not bool(args.account_only),
                 progress=not bool(args.quiet),
             )
         )
