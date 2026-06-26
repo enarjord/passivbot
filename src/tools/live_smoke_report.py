@@ -101,7 +101,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
         help=(
             "When a log time window is active, keep unparseable text log lines "
-            "visible by default, or drop non-signal unparseable lines."
+            "visible by default, or drop unparseable lines without in-window "
+            "timestamp context."
         ),
     )
     parser.add_argument(
