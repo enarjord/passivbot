@@ -103,11 +103,15 @@ Related detailed plans:
    Status: partial. VPS5 smoke on 2026-06-25 surfaced Kucoin authoritative
    balance/positions/open-orders `RequestTimeout` events. `live-smoke-report`
    now passively summarizes existing `remote_call.failed` events by
-   bot/reason/surface/error type, but explicit read-only exchange endpoint
-   probes are not implemented. A later VPS5 smoke on 2026-06-26 again surfaced
-   Kucoin authoritative REST timeouts after PR #686: balance/positions/open-order
-   fetches took roughly 98-140s before `RequestTimeout`, with websocket ping
-   timeouts and one timestamp/nonce recovery in the same period.
+   bot/reason/surface/error type, terminal remote-call elapsed-time groups, and
+   terminal remote-call health groups by bot/component/kind/surface. Explicit
+   read-only exchange endpoint probes are not implemented. A later VPS5 smoke on
+   2026-06-26 again surfaced Kucoin authoritative REST timeouts after PR #686:
+   balance/positions/open-order fetches took roughly 98-140s before
+   `RequestTimeout`, with websocket ping timeouts and one timestamp/nonce
+   recovery in the same period. Subsequent PR #688/#690 smokes surfaced
+   slow-but-successful remote-call categories even when no terminal failures
+   occurred.
 
    Add explicit read-only probes for each configured exchange/account before or
    during smoke: balance/positions/open-orders fetch, clock skew, rate-limit
@@ -263,6 +267,7 @@ Related detailed plans:
 | 2026-06-26 | #3 Live restart/smoke automation | PR #684 / `04ca7174` | Dropped contextless unparseable log lines under explicit `--log-window-unparsed-policy drop`, preventing stale mid-traceback tails from causing false hard smoke failures; VPS5 smoke after deploy returned `ok=true`, no hard problem events, no log hard/attention matches, no remote-call failures, and all five bots matched | Safe pull/stop/start orchestration still open |
 | 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #686 / `b03f4139` | Added branch/head/tracked-dirty repository metadata to `live-smoke-report`; VPS5 smoke verified `/root/passivbot` on `v8` head `9e898019`, dirty=false, all five bots matched | Kucoin authoritative endpoint timeout probes and safe pull/stop/start orchestration remain open |
 | 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #688 / `9945a3d3` | Added `remote_call_timings` elapsed-time groups to `live-smoke-report`; VPS5 smoke on `11f7d142` returned `ok=true`, no hard failures, all five bots matched, and surfaced slow-but-successful candle fetch groups | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
+| 2026-06-26 | #3/#6 Live restart/smoke automation and exchange probes | PR #690 / `dc99378a` | Added `remote_call_health` groups to `live-smoke-report`, rolling up terminal remote-call successes/failures/throttles, latency, reason/error counts, and affected symbols by bot/component/kind/surface; VPS5 smoke on `b150176f` returned `ok=true`, no hard failures, all five bots matched, and summarized 445 terminal remote calls | Explicit exchange endpoint probes and safe pull/stop/start orchestration remain open |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
