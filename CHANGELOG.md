@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 - Added `passivbot tool hsl-startup-preview` for read-only offline HSL
   startup previews from config and local monitor events, with explicit
   unavailable fields for current drawdown and panic-order prediction.
+- Added `logging.live_event_debug_profiles` and
+  `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` for opt-in structured live-event
+  enrichment, starting with bounded Rust orchestrator input/output samples.
 - Added `passivbot tool live-config-preflight` for read-only offline summaries
   of risk-relevant live config facts before startup.
 - Added shutdown-event summaries to `passivbot tool live-smoke-report`, including

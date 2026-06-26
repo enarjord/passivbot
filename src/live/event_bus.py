@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import queue
+import re
 import threading
 import time
 import uuid
@@ -25,6 +26,26 @@ LIVE_EVENT_ID_KEYS = (
     "remote_call_id",
     "remote_call_group_id",
 )
+LIVE_EVENT_DEBUG_PROFILE_ENV = "PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES"
+LIVE_EVENT_DEBUG_PROFILES = (
+    "candles",
+    "execution",
+    "fills",
+    "forager",
+    "hsl",
+    "remote_calls",
+    "rust",
+    "startup",
+    "state",
+)
+_LIVE_EVENT_DEBUG_PROFILE_SET = frozenset(LIVE_EVENT_DEBUG_PROFILES)
+_LIVE_EVENT_DEBUG_PROFILE_ALIASES = {
+    "candle": "candles",
+    "remote": "remote_calls",
+    "remote_call": "remote_calls",
+    "remote-call": "remote_calls",
+    "remote-calls": "remote_calls",
+}
 
 
 class EventTypes:
@@ -187,6 +208,63 @@ def authoritative_reason_code(surface: object) -> str:
 
 def sink_failed_reason_code(name: object) -> str:
     return f"{name}_sink_failed"
+
+
+def _split_debug_profile_string(value: str) -> list[str]:
+    return [part for part in re.split(r"[\s,;]+", value.strip()) if part]
+
+
+def normalize_live_event_debug_profiles(value: Any) -> tuple[str, ...]:
+    """Normalize live-event debug profile config/env values.
+
+    The special profile ``all`` expands to all currently known profiles. Empty,
+    false-like, or ``none`` values disable profile enrichment.
+    """
+    if value is None or value is False:
+        return ()
+    if value is True:
+        raw_values: list[Any] = ["all"]
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() in {"0", "false", "no", "none", "off"}:
+            return ()
+        raw_values = _split_debug_profile_string(stripped)
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_values = list(value)
+    else:
+        raw_values = [value]
+
+    normalized: list[str] = []
+    unknown: list[str] = []
+    for raw in raw_values:
+        item = str(raw).strip().lower().replace("-", "_")
+        if not item or item in {"0", "false", "no", "none", "off"}:
+            continue
+        if item == "all":
+            normalized.extend(LIVE_EVENT_DEBUG_PROFILES)
+            continue
+        item = _LIVE_EVENT_DEBUG_PROFILE_ALIASES.get(item, item)
+        if item not in _LIVE_EVENT_DEBUG_PROFILE_SET:
+            unknown.append(str(raw))
+            continue
+        normalized.append(item)
+    if unknown:
+        allowed = ", ".join((*LIVE_EVENT_DEBUG_PROFILES, "all"))
+        raise ValueError(
+            f"unknown live event debug profile(s): {', '.join(unknown)}; "
+            f"allowed values: {allowed}"
+        )
+    return tuple(sorted(set(normalized)))
+
+
+def live_event_debug_profile_enabled(holder: Any, profile: str) -> bool:
+    item = str(profile).strip().lower().replace("-", "_")
+    item = _LIVE_EVENT_DEBUG_PROFILE_ALIASES.get(item, item)
+    profiles = getattr(holder, "live_event_debug_profiles", None)
+    if profiles is None:
+        pipeline = getattr(holder, "_live_event_pipeline", None)
+        profiles = getattr(pipeline, "debug_profiles", ())
+    return item in set(profiles or ())
 
 
 PHASE1_EVENT_TYPES = {
@@ -854,6 +932,7 @@ class LiveEventPipeline:
         console_sink: LiveEventSink | None = None,
         text_sink: LiveEventSink | None = None,
         queue_maxsize: int = 10_000,
+        debug_profiles: Iterable[str] = (),
         start: bool = True,
     ):
         self.context = context or LiveEventContext()
@@ -864,6 +943,7 @@ class LiveEventPipeline:
         self.monitor_sinks = tuple(monitor_sinks)
         self.console_sink = console_sink
         self.text_sink = text_sink
+        self.debug_profiles = normalize_live_event_debug_profiles(debug_profiles)
         self.drop_counters: Counter[str] = Counter()
         self.sink_error_counters: Counter[str] = Counter()
         self.degraded_events: deque[LiveEvent] = deque(maxlen=1_000)
