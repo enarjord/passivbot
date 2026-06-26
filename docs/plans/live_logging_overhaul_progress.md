@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `9e898019` merge of PR #686, `Add smoke report repository metadata`.
+- `11f7d142` merge of PR #688, `Summarize remote call timings in smoke report`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Repository pulled through PR #686 at `9e898019`.
+- Repository pulled through PR #688 at `11f7d142`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
   reload.
@@ -111,6 +111,14 @@ VPS5 deployment status:
   `repository.dirty=false`, `tracked_changes=0`, and all five configured bots
   running. The same smoke surfaced repeated Kucoin authoritative REST
   `RequestTimeout` events unrelated to the tooling change.
+- PR #688 was pulled to VPS5 without bot restart because it only changed
+  read-only smoke-report tooling. A 5-minute smoke with text logs and
+  `/root/bots_vps5.yaml` process matching reported `ok=true`,
+  `hard_failures=0`, `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `remote_call_failures.total=0`,
+  `remote_call_timings.total=637`, `matched_expected=5`, and
+  `missing_expected=[]`. The new timing groups surfaced slow-but-successful
+  candle remote fetches, including Kucoin `M/USDT:USDT` p95/max 48047ms.
 
 ## Phase Checklist
 
@@ -669,8 +677,10 @@ VPS5 deployment status:
 ## Current Next Steps
 
 1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
-   runtime staged-refresh event producer slice. Hermes and CI are already green
-   on rebased head `91466a16`, but Claude has not reviewed that head.
+   runtime staged-refresh event producer slice. Hermes and CI were green on
+   rebased head `74483de1`, but `v8` moved again with PR #688, so rebase #681
+   before any final merge decision. Claude has not reviewed the current runtime
+   head.
 2. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
@@ -679,7 +689,8 @@ VPS5 deployment status:
    to inspect by surfacing bounded latest event data and aggregate groups.
 4. Add read-only exchange health probes for account-critical endpoint timeouts.
    VPS5 Kucoin now repeatedly shows authoritative state fetch `RequestTimeout`
-   events and long refresh wall times, so this item has enough evidence to
+   events and long refresh wall times, and PR #688 shows slow candle endpoint
+   calls even when they eventually succeed, so this item has enough evidence to
    justify a focused probe/diagnostic slice.
 5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
