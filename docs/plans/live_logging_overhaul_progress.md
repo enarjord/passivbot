@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `4e7520005` merge of PR #705, `Add brief live smoke report summary`.
+- `f384edbee` merge of PR #707, `Log coin HSL status for active positions`.
 
 Current review gate:
 
@@ -226,6 +226,22 @@ VPS5 deployment status:
   `account_critical_remote_calls.failed=0`. The single remote failure was a
   non-hard Kucoin candle timeout; no account-critical failure or hard problem
   event was present.
+- PR #706 was merged under the low-risk docs gate after Hermes approval and
+  green CI, then pulled to VPS5 without bot restart because it only updated
+  progress docs.
+- PR #707 was merged after current-head Claude + Hermes approval and green CI,
+  then pulled to VPS5 and deployed with a bot restart because it changed live
+  HSL console projection. The first Ctrl+C round stopped all five bot panes
+  cleanly within 20 seconds; `tmuxp load -d /root/bots_vps5.yaml` then started
+  all five configured bots. A settled 5-minute `--brief` smoke at `f384edbe`
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, `repository.dirty=false`,
+  `remote_calls.total=329`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.total=57`, and
+  `account_critical_remote_calls.failed=0`. Remaining attention came from known
+  non-hard Hyperliquid tradfi EMA/staged readiness events. No `hsl.status`
+  risk events occurred in the 5-minute smoke window, so the new coin-HSL console
+  projection was not exercised on VPS5 yet.
 
 ## Phase Checklist
 
@@ -236,7 +252,7 @@ VPS5 deployment status:
 | Phase 2: data gatherer events | Mostly done | Account remote-call cohorts, candle tail/coverage, fill refresh summaries, cache load/flush, warmup/startup timing | Not every exchange/network call is instrumented; richer remote-call payload summaries remain incremental |
 | Phase 3: Rust planning and payload refs | Partially done | Rust orchestrator called/returned events, redacted error hardening, action/planning summaries | Full raw-ref retention/debug policy still limited |
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
-| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
+| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy/brief smoke counters, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
