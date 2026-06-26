@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d850daf55` merge of PR #696, `Add concise live smoke summary output`.
+- `d5639813a` merge of PR #699, `Surface dropped unparsed smoke log signals`.
 
 Current review gate:
 
@@ -158,6 +158,28 @@ VPS5 deployment status:
   `account_critical_remote_calls.succeeded=58`. Remaining `attention=true`
   came from known non-hard EMA readiness / staged-execution / HSL cooldown
   groups.
+- PR #681 was merged after Claude + Hermes approval and green CI, then deployed
+  to VPS5 with a bot restart because it added live state-refresh event
+  producers. The final rebase changed only progress-doc context relative to
+  Claude's reviewed code. The restart left all five configured bots running;
+  Kucoin needed a second Ctrl+C before exit. A settled 2-minute smoke reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `account_critical_remote_calls.total=35`, `succeeded=35`,
+  `remote_calls.total=321`, `succeeded=321`, `matched_expected=5`, and
+  `missing_expected=[]`. A direct event query confirmed
+  `state.refresh_timing` and `state.refresh_progress` events on VPS5. A wider
+  smoke also surfaced a real GateIO ZEC long HSL RED finalization during
+  startup/replay, unrelated to the state-refresh event slice.
+- PRs #698 and #699 were merged after current-head Claude + Hermes approval and
+  green CI, then pulled to VPS5 without bot restart because they only changed
+  read-only smoke-report tooling. Immediate post-pull smokes caught real
+  transient Kucoin authoritative `RequestTimeout` bursts at 13:16Z and 13:19Z;
+  a later settled 2-minute compact summary smoke on `d5639813` reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `logs.attention_matches=0`, `matched_expected=5`, `missing_expected=[]`,
+  `account_critical_remote_calls.total=81`, `succeeded=81`,
+  `remote_calls.total=230`, and `succeeded=230`. Remaining attention came from
+  known non-hard EMA/staged readiness and GateIO ZEC HSL cooldown groups.
 
 ## Phase Checklist
 
@@ -823,24 +845,75 @@ VPS5 deployment status:
   `succeeded=58`, and all terminal remote calls `total=169`,
   `succeeded=169`.
 
+### PR #681: Staged Refresh Timing Events
+
+- Branch: `codex/v8-staged-refresh-events`.
+- Scope: state refresh observability.
+- Result: staged refresh timing and progress logs now emit structured
+  `state.refresh_timing` and `state.refresh_progress` events with bounded
+  timing, plan, residual, and pending-surface data. Emission is best-effort and
+  does not change refresh behavior or console log text.
+- Review evidence: Claude approved code-identical head `bddf5a4c`, Hermes
+  approved rebased head `4be87ce7`, and CI was green; focused
+  state-refresh/smoke tests, compileall, and `git diff --check` passed before
+  merge.
+- VPS5 evidence: deployed to VPS5 at `9a52d3a9` with a bot restart. A settled
+  2-minute smoke reported `ok=true`, no hard failures, no log hard/attention
+  matches, all five configured bots running, and all account-critical/terminal
+  remote calls succeeding. A direct event query confirmed
+  `state.refresh_timing` and `state.refresh_progress` events. A wider smoke
+  surfaced a real GateIO ZEC HSL RED finalization during startup/replay,
+  unrelated to the event slice.
+
+### PR #698: Smoke Repository Root Redaction
+
+- Branch: `codex/v8-smoke-report-redact-repo-root`.
+- Scope: operator smoke tooling privacy.
+- Result: `live-smoke-report` now redacts current-home, `/root`,
+  `/home/<user>`, and `/Users/<user>` prefixes from the serialized
+  `repository.root` field while continuing to run git commands against the real
+  resolved repository path. Incident-bundle `smoke_report.json` inherits the
+  same safer display field.
+- Review evidence: current-head Claude and Hermes approved head `7c7368f3`;
+  CI was green; focused smoke-report/incident-bundle tests, compileall, and
+  `git diff --check` passed before merge.
+- VPS5 evidence: deployed to VPS5 as part of the later `d5639813` pull without
+  bot restart. The settled smoke reported clean repository state on `v8`, all
+  five configured bots running, and no hard failures.
+
+### PR #699: Dropped Unparsed Smoke Log Signal Counters
+
+- Branch: `codex/v8-smoke-report-dropped-unparsed-counters`.
+- Scope: operator smoke tooling.
+- Result: when `--log-window-unparsed-policy drop` suppresses a contextless
+  unparseable log line that still matches attention/hard patterns, smoke
+  reports now expose dropped attention/hard counters and include dropped
+  attention signals in `attention_count`. Dropped contextless fragments remain
+  excluded from `hard_failures`, preserving the stale-tail false-positive
+  suppression from PR #684.
+- Review evidence: current-head Claude and Hermes approved rebased head
+  `4e2fcee7`; CI was green; full smoke-report and incident-bundle tests,
+  compileall, and `git diff --check` passed before merge.
+- VPS5 evidence: deployed to VPS5 at `d5639813` without bot restart. Two
+  immediate smokes caught real Kucoin authoritative `RequestTimeout` bursts; a
+  later settled 2-minute compact summary smoke reported `ok=true`, no hard
+  failures, no log hard/attention matches, all five configured bots running,
+  account-critical calls `total=81`, `succeeded=81`, and all terminal remote
+  calls `total=230`, `succeeded=230`.
+
 ## Current Next Steps
 
-1. Wait for the normal Claude + Hermes + CI gate on PR #681 before merging the
-   runtime staged-refresh event producer slice. CI is green on rebased head
-   `bddf5a4c2`; current-head Claude and Hermes reviews are still pending after
-   the PR #696 rebase. Composer has been retired from the gate.
-2. Continue Phase 5 by migrating one high-value stdlib text log family to
+1. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
+2. Add active read-only exchange health probes for account-critical endpoint
+   timeouts. VPS5 Kucoin repeatedly shows authoritative state fetch
+   `RequestTimeout` bursts, and the passive smoke report now has enough summary
+   data to choose probe surfaces precisely.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
    to inspect by surfacing bounded latest event data and aggregate groups.
-4. Add active read-only exchange health probes for account-critical endpoint
-   timeouts. VPS5 Kucoin now repeatedly shows authoritative state fetch
-   `RequestTimeout` events and long refresh wall times. PRs #688, #690, #692,
-   and #694 expose passive timing/health summaries from already-emitted events;
-   explicit pre-smoke endpoint probes remain open.
-5. Start the live restart/smoke automation slice if operational workflow speed
+4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-6. Continue cache-doctor refinements in separate adjacent PRs: cache-family
+5. Continue cache-doctor refinements in separate adjacent PRs: cache-family
    metadata, coverage windows, suspicious gaps, and warm-cache readiness.
