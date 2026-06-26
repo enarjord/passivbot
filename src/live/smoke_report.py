@@ -502,6 +502,14 @@ def _summarize_remote_call_health(
     groups: dict[tuple[Any, ...], dict[str, Any]]
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_remote_call_health_sort_key)
+    status_totals: Counter[str] = Counter()
+    for group in groups.values():
+        statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        status_totals.update(statuses)
+    total = sum(int(group.get("count", 0)) for group in groups.values())
+    total_succeeded_count = int(status_totals.get("succeeded", 0))
+    total_failed_count = int(status_totals.get("failed", 0))
+    total_throttled_count = int(status_totals.get("throttled", 0))
     compact_groups = []
     for group in ordered[:REMOTE_CALL_HEALTH_GROUP_LIMIT]:
         statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
@@ -520,8 +528,8 @@ def _summarize_remote_call_health(
         )
         symbols = group.get("symbols") if isinstance(group.get("symbols"), Counter) else Counter()
         count = int(group.get("count", 0))
-        failed_count = int(statuses.get("failed", 0))
-        throttled_count = int(statuses.get("throttled", 0))
+        group_failed_count = int(statuses.get("failed", 0))
+        group_throttled_count = int(statuses.get("throttled", 0))
         compact = {
             "bot": group.get("bot"),
             "component": group.get("component"),
@@ -529,10 +537,10 @@ def _summarize_remote_call_health(
             "surface": group.get("surface"),
             "count": count,
             "succeeded": int(statuses.get("succeeded", 0)),
-            "failed": failed_count,
-            "throttled": throttled_count,
-            "failure_pct": _usage_pct(failed_count, count),
-            "throttled_pct": _usage_pct(throttled_count, count),
+            "failed": group_failed_count,
+            "throttled": group_throttled_count,
+            "failure_pct": _usage_pct(group_failed_count, count),
+            "throttled_pct": _usage_pct(group_throttled_count, count),
             "statuses": _top_counter_values(
                 statuses,
                 limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
@@ -578,7 +586,12 @@ def _summarize_remote_call_health(
             }
         )
     return {
-        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "total": total,
+        "succeeded": total_succeeded_count,
+        "failed": total_failed_count,
+        "throttled": total_throttled_count,
+        "failure_pct": _usage_pct(total_failed_count, total),
+        "throttled_pct": _usage_pct(total_throttled_count, total),
         "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
@@ -1961,6 +1974,11 @@ def build_live_smoke_report(
             },
             "remote_call_health": {
                 "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "throttled": 0,
+                "failure_pct": None,
+                "throttled_pct": None,
                 "groups_truncated": False,
                 "groups": [],
             },

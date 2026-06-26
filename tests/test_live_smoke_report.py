@@ -166,6 +166,11 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
     }
     assert report["remote_call_health"] == {
         "total": 1,
+        "succeeded": 0,
+        "failed": 1,
+        "throttled": 0,
+        "failure_pct": 100,
+        "throttled_pct": 0,
         "groups_truncated": False,
         "groups": [
             {
@@ -304,6 +309,11 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
     }
     assert report["remote_call_health"] == {
         "total": 3,
+        "succeeded": 3,
+        "failed": 0,
+        "throttled": 0,
+        "failure_pct": 0,
+        "throttled_pct": 0,
         "groups_truncated": False,
         "groups": [
             {
@@ -420,6 +430,110 @@ def test_live_smoke_report_summarizes_remote_call_timings(tmp_path):
     }
 
 
+def test_live_smoke_report_remote_call_health_totals_mixed_groups(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="warning",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rca_1",
+                    "remote_call_group_id": "cy_1:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 5000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="warning",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 7000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            *[
+                _monitor_row(
+                    event_type="remote_call.succeeded",
+                    seq=3 + idx,
+                    ts=3000 + idx,
+                    level="debug",
+                    reason_code="authoritative_open_orders",
+                    ids={
+                        "cycle_id": f"cy_{3 + idx}",
+                        "remote_call_id": f"rca_{3 + idx}",
+                        "remote_call_group_id": f"cy_{3 + idx}:authoritative",
+                    },
+                    data={
+                        "kind": "authoritative_state_fetch",
+                        "surface": "open_orders",
+                        "elapsed_ms": 100 + idx,
+                    },
+                )
+                for idx in range(8)
+            ],
+            _monitor_row(
+                event_type="remote_call.throttled",
+                seq=11,
+                ts=4000,
+                status="deferred",
+                level="debug",
+                reason_code="rate_limited",
+                ids={
+                    "cycle_id": "cy_11",
+                    "remote_call_id": "rct_11",
+                    "remote_call_group_id": "cy_11:candles",
+                },
+                data={
+                    "kind": "ccxt_fetch_ohlcv",
+                    "elapsed_ms": 250,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    health = report["remote_call_health"]
+    assert health["total"] == 11
+    assert health["succeeded"] == 8
+    assert health["failed"] == 2
+    assert health["throttled"] == 1
+    assert health["failure_pct"] == 18
+    assert health["throttled_pct"] == 9
+    groups_by_surface = {
+        (group.get("kind"), group.get("surface")): group for group in health["groups"]
+    }
+    assert groups_by_surface[
+        ("authoritative_state_fetch", "balance")
+    ]["failed"] == 2
+    assert groups_by_surface[
+        ("authoritative_state_fetch", "open_orders")
+    ]["succeeded"] == 8
+    assert groups_by_surface[("ccxt_fetch_ohlcv", None)]["throttled"] == 1
+
+
 def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(
@@ -451,6 +565,11 @@ def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
     assert report["ok"] is True
     assert report["remote_call_health"] == {
         "total": 1,
+        "succeeded": 0,
+        "failed": 0,
+        "throttled": 1,
+        "failure_pct": 0,
+        "throttled_pct": 100,
         "groups_truncated": False,
         "groups": [
             {
@@ -1097,6 +1216,11 @@ def test_live_smoke_report_time_window_filters_structured_problem_events(tmp_pat
     }
     assert report["remote_call_health"] == {
         "total": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "throttled": 0,
+        "failure_pct": None,
+        "throttled_pct": None,
         "groups_truncated": False,
         "groups": [],
     }
