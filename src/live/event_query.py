@@ -140,10 +140,16 @@ def _filter_report(
     psides: set[str],
     reason_codes: set[str],
     statuses: set[str],
+    since_ms: int | None = None,
+    until_ms: int | None = None,
 ) -> dict[str, Any]:
     filters: dict[str, Any] = {}
     if cycle_id is not None:
         filters["cycle_id"] = str(cycle_id)
+    if since_ms is not None:
+        filters["since_ms"] = int(since_ms)
+    if until_ms is not None:
+        filters["until_ms"] = int(until_ms)
     if event_types:
         filters["event_types"] = sorted(event_types)
     if bot_ids:
@@ -800,6 +806,8 @@ def build_event_report(
     pside: str | Iterable[str] | None = None,
     reason_code: str | Iterable[str] | None = None,
     status: str | Iterable[str] | None = None,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
     limit: int = 200,
     include_data: bool = False,
     include_rotated: bool = False,
@@ -808,6 +816,19 @@ def build_event_report(
     order_trace: bool = False,
     cycle_trace: bool = False,
 ) -> dict[str, Any]:
+    since_filter = int(since_ms) if since_ms is not None else None
+    until_filter = int(until_ms) if until_ms is not None else None
+    if (
+        since_filter is not None
+        and until_filter is not None
+        and since_filter > until_filter
+    ):
+        raise ValueError("since_ms must be <= until_ms")
+    window_enabled = since_filter is not None or until_filter is not None
+    window_considered = 0
+    window_skipped_before = 0
+    window_skipped_after = 0
+    window_invalid_ts = 0
     issues: list[EventIssue] = []
     try:
         files = discover_event_files(root, include_rotated=include_rotated)
@@ -878,9 +899,10 @@ def build_event_report(
             status_filter,
         )
     )
-    has_query_filter = has_non_cycle_filter or bool(
+    trace_without_cycle = (
         (timeline or trace_summary or order_trace or cycle_trace) and cycle_id is None
     )
+    has_query_filter = has_non_cycle_filter or window_enabled or trace_without_cycle
 
     for path in files:
         try:
@@ -920,6 +942,18 @@ def build_event_report(
                         legacy_events += 1
                         continue
                     live_events += 1
+                    if window_enabled:
+                        record_ts = _record_ts(row)
+                        if record_ts is None:
+                            window_invalid_ts += 1
+                            continue
+                        if since_filter is not None and record_ts < since_filter:
+                            window_skipped_before += 1
+                            continue
+                        if until_filter is not None and record_ts > until_filter:
+                            window_skipped_after += 1
+                            continue
+                        window_considered += 1
 
                     record_event_type = live_event.get("event_type") or row.get("kind")
                     if not record_event_type:
@@ -1126,6 +1160,8 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            since_ms=since_filter,
+            until_ms=until_filter,
         )
         report["query"] = {
             "filters": query_filters,
@@ -1158,6 +1194,8 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            since_ms=since_filter,
+            until_ms=until_filter,
         )
         report["cycle"] = {
             "cycle_id": str(cycle_id),
@@ -1179,4 +1217,14 @@ def build_event_report(
             report["cycle"]["cycle_trace"] = cycle_cycle_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
+    if window_enabled:
+        report["event_window"] = {
+            "enabled": True,
+            "since_ms": since_filter,
+            "until_ms": until_filter,
+            "events_considered": window_considered,
+            "events_skipped_before": window_skipped_before,
+            "events_skipped_after": window_skipped_after,
+            "invalid_window_ts": window_invalid_ts,
+        }
     return report

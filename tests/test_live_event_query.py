@@ -3,6 +3,8 @@ from __future__ import annotations
 import gzip
 import json
 
+import pytest
+
 from live.event_query import build_event_report, discover_event_files
 from tools import live_event_query
 
@@ -492,6 +494,92 @@ def test_event_query_filters_by_remaining_event_ids(tmp_path):
     }
 
 
+def test_event_query_filters_by_inclusive_time_window(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    invalid_ts = _monitor_row(
+        event_type="cycle.completed",
+        cycle_id="cy_bad",
+        seq=6,
+        ts=2600,
+    )
+    invalid_ts["ts"] = "bad"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_1",
+                seq=1,
+                ts=900,
+            ),
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_2",
+                seq=2,
+                ts=1000,
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1500,
+                reason_code="request_timeout",
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_3",
+                seq=4,
+                ts=2000,
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_4",
+                seq=5,
+                ts=2500,
+            ),
+            invalid_ts,
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        since_ms=1000,
+        until_ms=2000,
+        timeline=True,
+    )
+
+    assert report["ok"] is True
+    assert report["records_total"] == 6
+    assert report["live_events"] == 6
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 1000,
+        "until_ms": 2000,
+        "events_considered": 3,
+        "events_skipped_before": 1,
+        "events_skipped_after": 1,
+        "invalid_window_ts": 1,
+    }
+    assert report["event_types"] == {
+        "cycle.completed": 1,
+        "cycle.started": 1,
+        "remote_call.failed": 1,
+    }
+    assert report["query"]["filters"] == {
+        "since_ms": 1000,
+        "until_ms": 2000,
+    }
+    assert report["query"]["matched_events"] == 3
+    assert report["query"]["timeline"] == [
+        "1000 seq=2 cycle.started status=succeeded reason_code=test ids=cycle_id=cy_2",
+        (
+            "1500 seq=3 remote_call.failed status=succeeded "
+            "reason_code=request_timeout ids=cycle_id=cy_2"
+        ),
+        "2000 seq=4 cycle.completed status=succeeded reason_code=test ids=cycle_id=cy_3",
+    ]
+
+
 def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(
@@ -695,6 +783,95 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
             "ids=cycle_id=cy_9,order_wave_id=ow_9"
         )
     ]
+
+
+def test_live_event_query_cli_accepts_time_window(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.cancel_failed",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                reason_code="exchange_exception",
+            ),
+            _monitor_row(
+                event_type="execution.cancel_succeeded",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1200,
+                reason_code="exchange_acknowledged",
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--since-ms",
+                "1100",
+                "--until-ms",
+                "1300",
+                "--timeline",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["event_window"]["events_considered"] == 1
+    assert report["event_window"]["events_skipped_before"] == 1
+    assert report["query"]["filters"] == {"since_ms": 1100, "until_ms": 1300}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["seq"] == 2
+
+
+def test_live_event_query_cli_accepts_recent_minutes(tmp_path, capsys, monkeypatch):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    now_ms = 1_700_000_000_000
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.cancel_failed",
+                cycle_id="cy_9",
+                seq=1,
+                ts=now_ms - 60_001,
+            ),
+            _monitor_row(
+                event_type="execution.cancel_succeeded",
+                cycle_id="cy_9",
+                seq=2,
+                ts=now_ms - 60_000,
+            ),
+        ],
+    )
+    monkeypatch.setattr(live_event_query.time, "time", lambda: now_ms / 1000)
+
+    assert (
+        live_event_query.main(
+            [str(tmp_path / "monitor"), "--recent-minutes", "1", "--timeline"]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {"since_ms": now_ms - 60_000}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["seq"] == 2
+
+
+def test_live_event_query_cli_rejects_invalid_time_window(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_event_query.main(
+            [str(tmp_path), "--since-ms", "20", "--until-ms", "10"]
+        )
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "must be <= --until-ms" in err
 
 
 def test_live_event_query_cli_accepts_additional_id_scopes(tmp_path, capsys):
