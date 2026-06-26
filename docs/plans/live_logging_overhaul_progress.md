@@ -19,7 +19,7 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d5639813a` merge of PR #699, `Surface dropped unparsed smoke log signals`.
+- `91d5db9fb` merge of PR #701, `Summarize account-critical probe health`.
 
 Current review gate:
 
@@ -180,6 +180,18 @@ VPS5 deployment status:
   `account_critical_remote_calls.total=81`, `succeeded=81`,
   `remote_calls.total=230`, and `succeeded=230`. Remaining attention came from
   known non-hard EMA/staged readiness and GateIO ZEC HSL cooldown groups.
+- PR #701 was merged after current-head Claude + Hermes approval and green CI,
+  then pulled to VPS5 without bot restart because it only changed read-only
+  probe tooling and docs. The pull left all five configured bots running and
+  repository state clean at `91d5db9f`. Immediate smoke was red from real,
+  unrelated Kucoin live issues: authoritative balance/positions/open-orders
+  timeouts, a timestamp/nonce recovery, and a later fill-refresh timeout. The
+  new probe summary was exercised with a one-repeat authenticated
+  `ticker-endpoint-probe` on `binance_01`; it produced
+  `account_critical_health.total=3`, `succeeded=2`, `failed=1`, with balance
+  and positions successful and `fetch_open_orders()` failing as `ExchangeError`.
+  This validates the summary projection and exposes a follow-up for
+  lower-impact/account-only probing and exchange-specific open-orders shape.
 
 ## Phase Checklist
 
@@ -192,7 +204,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries | Cross-bot incident workflow, safe restart orchestration, lower-impact active probe modes |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -905,10 +917,11 @@ VPS5 deployment status:
 
 1. Continue Phase 5 by migrating one high-value stdlib text log family to
    structured-event projection without increasing default console noise.
-2. Add active read-only exchange health probes for account-critical endpoint
-   timeouts. VPS5 Kucoin repeatedly shows authoritative state fetch
-   `RequestTimeout` bursts, and the passive smoke report now has enough summary
-   data to choose probe surfaces precisely.
+2. Refine active read-only exchange health probes. PR #701 added
+   account-critical health summaries to `ticker-endpoint-probe`; the next useful
+   slice is a lower-impact/account-only mode and exchange-aware open-orders
+   probing after the VPS5 Binance probe showed `fetch_open_orders()` without a
+   symbol fails as `ExchangeError`.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
