@@ -19,11 +19,11 @@ Last updated: 2026-06-26.
 
 Current `origin/v8` logging-overhaul head:
 
-- `2697ff48` merge of PR #673, `Summarize risk events in live smoke report`.
+- `3aa1e7a7` merge of PR #675, `Add smoke log unparsed window policy`.
 
 VPS5 deployment status:
 
-- Repository pulled through PR #673 at `2697ff48`.
+- Repository pulled through PR #675 at `3aa1e7a7`.
 - Bots were restarted from `/root/bots_vps5.yaml` and left running. Four bots
   exited promptly after Ctrl-C; Kucoin took about 105 seconds before the old
   process disappeared.
@@ -47,6 +47,12 @@ VPS5 deployment status:
   `remote_call_failures.total=0`, `matched_expected=5`, and
   `missing_expected=[]`. The new `risk_events` section surfaced GateIO ZEC long
   HSL RED cooldown directly as `hsl.status` `cooldown_active`.
+- PR #675 was pulled to VPS5 without bot restart. A 2-minute smoke with
+  `--log-window-unparsed-policy drop` and `/root/bots_vps5.yaml` process
+  matching reported `ok=true`, `hard_failures=0`,
+  `hard_problem_event_count=0`, `logs.hard_matches=0`,
+  `remote_call_failures.total=0`, `matched_expected=5`, and
+  `missing_expected=[]`.
 
 ## Phase Checklist
 
@@ -59,7 +65,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/risk-events/time windows, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/risk-events/time windows/unparseable-log policy, incident bundle trace/process/time-window reports, ID filters | Cross-bot incident workflow and safe restart orchestration |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -455,6 +461,22 @@ VPS5 deployment status:
   reported all five configured bots running, no hard failures, no log hard
   matches, and exposed GateIO ZEC long HSL RED cooldown in `risk_events`.
 
+### PR #675: Smoke Log Unparsed Policy
+
+- Branch: `codex/v8-smoke-log-unparsed-policy`.
+- Scope: operator smoke tooling.
+- Result: `passivbot tool live-smoke-report` and embedded incident-bundle smoke
+  reports now accept `--log-window-unparsed-policy keep|drop`. The default
+  `keep` preserves prior behavior; opt-in `drop` suppresses only non-signal
+  unparseable text-log lines when a log window is active. Signal-bearing
+  unparseable lines, including Python traceback headers, remain visible and can
+  still make smoke hard-fail.
+- VPS5 evidence: deployed to VPS5 at `3aa1e7a7` without bot restart. A
+  2-minute smoke with `--log-window-unparsed-policy drop` and
+  `/root/bots_vps5.yaml` process matching reported all five configured bots
+  running, no hard failures, no log matches, no remote-call failures, and
+  `logs.window.unparsed_policy=drop`.
+
 ## Current Next Steps
 
 1. Continue Phase 5 by migrating one high-value stdlib text log family to
@@ -465,6 +487,3 @@ VPS5 deployment status:
    becomes the higher leverage next step.
 4. Continue cache-doctor refinements in separate adjacent PRs: cache-family
    metadata, coverage windows, suspicious gaps, and warm-cache readiness.
-5. Consider a log-window refinement for unparseable text lines: local smoke data
-   showed old unparseable log lines can still appear in recent windows because
-   they cannot be timestamp-filtered safely.
