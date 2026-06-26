@@ -10,6 +10,10 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.incident_bundle import build_live_incident_bundle  # noqa: E402
+from live.smoke_report import (  # noqa: E402
+    DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    LOG_WINDOW_UNPARSED_POLICIES,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -175,6 +179,16 @@ def build_parser() -> argparse.ArgumentParser:
         default=100,
         help="Maximum matching log lines to include in the smoke report.",
     )
+    parser.add_argument(
+        "--log-window-unparsed-policy",
+        choices=sorted(LOG_WINDOW_UNPARSED_POLICIES),
+        default=DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+        help=(
+            "When the embedded smoke-report log window is active, keep "
+            "unparseable text log lines visible by default, or drop them when "
+            "the target logs are known to be consistently timestamped."
+        ),
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact single-line JSON.")
     return parser
 
@@ -208,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         max_log_files=int(args.max_log_files),
         log_tail_lines=int(args.log_tail_lines),
         max_log_matches=int(args.max_log_matches),
+        log_window_unparsed_policy=str(args.log_window_unparsed_policy),
         max_snapshot_files=int(args.max_snapshot_files),
         max_snapshot_file_bytes=int(args.max_snapshot_file_bytes),
         max_event_segment_bytes=int(args.max_event_segment_bytes),

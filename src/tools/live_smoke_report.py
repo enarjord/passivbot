@@ -10,7 +10,12 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from live.smoke_report import build_live_smoke_report, default_logs_root_for_monitor  # noqa: E402
+from live.smoke_report import (  # noqa: E402
+    DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    LOG_WINDOW_UNPARSED_POLICIES,
+    build_live_smoke_report,
+    default_logs_root_for_monitor,
+)
 
 
 def _since_ms_from_recent_minutes(value: float | None) -> int | None:
@@ -91,6 +96,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--log-window-unparsed-policy",
+        choices=sorted(LOG_WINDOW_UNPARSED_POLICIES),
+        default=DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+        help=(
+            "When a log time window is active, keep unparseable text log lines "
+            "visible by default, or drop them when the target logs are known to "
+            "be consistently timestamped."
+        ),
+    )
+    parser.add_argument(
         "--max-problem-events",
         type=int,
         default=50,
@@ -154,6 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         max_log_files=int(args.max_log_files),
         log_tail_lines=int(args.log_tail_lines),
         max_log_matches=int(args.max_log_matches),
+        log_window_unparsed_policy=str(args.log_window_unparsed_policy),
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
