@@ -47,6 +47,19 @@ REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
+ACCOUNT_CRITICAL_REMOTE_CALL_KIND = "authoritative_state_fetch"
+ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
+    {
+        "balance",
+        "positions",
+        "open_orders",
+        # Hyperliquid state refresh splits account-critical position/balance
+        # surfaces more finely than the standard staged refresh path.
+        "positions_balance",
+        "core_positions",
+        "hip3_positions",
+    }
+)
 RISK_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
@@ -594,6 +607,17 @@ def _summarize_remote_call_health(
         "throttled_pct": _usage_pct(total_throttled_count, total),
         "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
+    }
+
+
+def _account_critical_remote_call_health_groups(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[tuple[Any, ...], dict[str, Any]]:
+    return {
+        key: group
+        for key, group in groups.items()
+        if group.get("kind") == ACCOUNT_CRITICAL_REMOTE_CALL_KIND
+        and group.get("surface") in ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES
     }
 
 
@@ -1712,6 +1736,9 @@ def _scan_events(
             remote_call_failure_groups
         ),
         "remote_call_health": _summarize_remote_call_health(remote_call_health_groups),
+        "account_critical_remote_call_health": _summarize_remote_call_health(
+            _account_critical_remote_call_health_groups(remote_call_health_groups)
+        ),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
@@ -1982,6 +2009,16 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "account_critical_remote_call_health": {
+                "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+                "throttled": 0,
+                "failure_pct": None,
+                "throttled_pct": None,
+                "groups_truncated": False,
+                "groups": [],
+            },
             "remote_call_timings": {
                 "total": 0,
                 "groups_truncated": False,
@@ -2049,6 +2086,9 @@ def build_live_smoke_report(
         "startup_timings": event_scan["startup_timings"],
         "remote_call_failures": event_scan["remote_call_failures"],
         "remote_call_health": event_scan["remote_call_health"],
+        "account_critical_remote_call_health": event_scan[
+            "account_critical_remote_call_health"
+        ],
         "remote_call_timings": event_scan["remote_call_timings"],
         "risk_events": event_scan["risk_events"],
         "event_window": event_scan["event_window"],

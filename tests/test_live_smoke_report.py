@@ -534,6 +534,119 @@ def test_live_smoke_report_remote_call_health_totals_mixed_groups(tmp_path):
     assert groups_by_surface[("ccxt_fetch_ohlcv", None)]["throttled"] == 1
 
 
+def test_live_smoke_report_account_critical_remote_call_health_subset(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="warning",
+                reason_code="authoritative_balance",
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rca_1",
+                    "remote_call_group_id": "cy_1:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 5000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=2,
+                ts=2000,
+                status="succeeded",
+                level="debug",
+                reason_code="authoritative_positions",
+                ids={
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rca_2",
+                    "remote_call_group_id": "cy_2:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "positions",
+                    "elapsed_ms": 600,
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=3,
+                ts=3000,
+                status="succeeded",
+                level="debug",
+                reason_code="authoritative_open_orders",
+                ids={
+                    "cycle_id": "cy_3",
+                    "remote_call_id": "rca_3",
+                    "remote_call_group_id": "cy_3:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "open_orders",
+                    "elapsed_ms": 300,
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=4,
+                ts=4000,
+                status="failed",
+                level="warning",
+                reason_code="authoritative_fills",
+                ids={
+                    "cycle_id": "cy_4",
+                    "remote_call_id": "rca_4",
+                    "remote_call_group_id": "cy_4:authoritative",
+                },
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "fills",
+                    "elapsed_ms": 1200,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="remote_call.throttled",
+                seq=5,
+                ts=5000,
+                status="deferred",
+                level="debug",
+                reason_code="rate_limited",
+                ids={
+                    "cycle_id": "cy_5",
+                    "remote_call_id": "rcc_5",
+                    "remote_call_group_id": "cy_5:candles",
+                },
+                data={
+                    "kind": "ccxt_fetch_ohlcv",
+                    "elapsed_ms": 250,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["remote_call_health"]["total"] == 5
+    account_health = report["account_critical_remote_call_health"]
+    assert account_health["total"] == 3
+    assert account_health["succeeded"] == 2
+    assert account_health["failed"] == 1
+    assert account_health["throttled"] == 0
+    assert account_health["failure_pct"] == 33
+    assert account_health["throttled_pct"] == 0
+    group_surfaces = {group.get("surface") for group in account_health["groups"]}
+    assert group_surfaces == {"balance", "positions", "open_orders"}
+
+
 def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     _write_ndjson(
