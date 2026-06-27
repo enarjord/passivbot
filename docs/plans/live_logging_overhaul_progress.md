@@ -19,7 +19,8 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b789e146` merge of PR #769, `Summarize smoke report verdict sources`.
+- `54a909b` after PR #773, `Clarify cache doctor candle boundary gaps`, and
+  PR #774, `Emit structured unstuck live events`.
 
 Current review gate:
 
@@ -1835,19 +1836,107 @@ VPS5 deployment status:
   `attention_sources.problem_events=101`, with non-hard EMA readiness and HSL
   status events visible in the existing summaries.
 
+### PR #772: Live Config Cache Readiness Preflight
+
+- Branch: `codex/v8-live-config-cache-readiness`.
+- Scope: read-only config preflight tooling.
+- Result: `passivbot tool live-config-preflight` now includes config-only
+  cache readiness/root-hint reporting for candles, fills, and HSL/risk surfaces,
+  plus bounded compare deltas. The report explicitly marks cache artifacts as
+  not scanned and startup policy as not enforced, so it does not claim coverage,
+  touch local caches, contact exchanges, or change live startup/trading
+  behavior.
+- Review evidence: Claude and Hermes approved; CI was green; targeted
+  `tests/test_live_config_preflight.py`, py_compile/compileall, a compact CLI
+  smoke, and `git diff --check` passed.
+- VPS5 evidence: deployed at `5fcb39cd` without bot restart because this is
+  read-only preflight tooling. A 5-minute summary smoke reported `ok=true`,
+  `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `logs.attention_matches=0`, all five expected bots
+  matched, clean tracked repository state, no failed remote calls, and no
+  failed account-critical remote calls. Remaining attention came from known
+  non-hard EMA readiness and HSL cooldown/status groups.
+
+### PR #775: Event Pipeline Health Aggregation Regression
+
+- Branch: `codex/v8-fake-live-observability-test`.
+- Scope: offline regression test and backlog ledger only.
+- Result: `tests/test_live_smoke_report.py` now covers multi-bot
+  `event_pipeline_health` aggregation from existing `health.summary` events,
+  including queue depth, dropped events, sink errors, degraded counts, and
+  worker-liveness. The PR changed no production runtime files and does not alter
+  event routing, live bots, exchange calls, or trading behavior.
+- Review evidence: Claude and Hermes approved; CI was green; full
+  `tests/test_live_smoke_report.py`, targeted event-pipeline aggregation tests,
+  py_compile/compileall, and `git diff --check` passed.
+- VPS5 evidence: not deployed or smoke-tested separately because the merged
+  slice changed only tests and `docs/plans/live_ops_improvement_backlog.md`.
+  The latest runtime-bearing deploy/smoke evidence remains PR #772 at
+  `5fcb39cd`.
+
+### PR #773: Cache Doctor Candle Boundary Gap Summary
+
+- Branch: `codex/v8-cache-doctor-boundary-summary`.
+- Scope: read-only cache-integrity tooling and tests.
+- Result: `passivbot tool cache-integrity-doctor` now exposes bounded candle
+  boundary-gap summaries so operators can distinguish full coverage from
+  edge-window gaps without opening cache metadata manually. The slice does not
+  change live trading behavior, candle loading behavior, or exchange calls.
+- Review evidence: Claude and Hermes approved after the boundary summary fix;
+  CI was green.
+- VPS5 evidence: deployed as part of merged `v8` `54a909b`. Bots were
+  restarted and left running. A 5-minute compact smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, no failed remote or
+  account-critical remote calls, `matched_expected=5`, and
+  `missing_expected=[]`.
+
+### PR #774: Structured Unstuck Events
+
+- Branch: `codex/v8-unstuck-events`.
+- Scope: live event producers for unstuck state transitions and tests.
+- Result: unstuck-related live state now emits structured events through the
+  event pipeline, preserving best-effort observability semantics and avoiding
+  trading-behavior changes. Smoke-report value-safety was fixed before merge.
+- Review evidence: Claude and Hermes approved after the value-safety fix; CI
+  was green.
+- VPS5 evidence: deployed as part of merged `v8` `54a909b`. The same
+  post-restart smoke showed all five configured bots running with no hard
+  failures, no text-log hard matches, and no failed account-critical remote
+  calls. Shutdown/restart events from the deployment were visible through the
+  structured smoke summaries.
+
+### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
+
+- Discovery: Binance VPS5 startup on 2026-06-26 showed coin-mode HSL history
+  reconstruction loading `symbols=24 pairs=24 rows=43201 fills=2704` at
+  `16:19:33Z`, then completing at `16:46:37Z` after applying `985965` rows in
+  `1623.4s`. The XLM protective panic close was not posted until `16:48:06Z`.
+- Current code shape: coin-mode startup blocks before bot READY, builds a dense
+  all-symbol minute timeline, then serially replays that timeline once per
+  `coin+pside` pair. This makes a held coin wait behind unrelated coins and
+  scales roughly as `timeline_minutes * pairs`.
+- Priority: this is now the highest-value live safety item outside the logging
+  overhaul. The next trading-path PR should preserve exact HSL semantics while
+  making currently held positions protective-ready before broad/full replay
+  finishes. Fresh initial entries may remain blocked until full replay is
+  complete.
+
 ## Current Next Steps
 
-1. Continue collecting smoke evidence with the new source breakdown and
+1. Prioritize a separate trading-path PR for coin-HSL startup replay latency:
+   held-position protective readiness must be bounded, exact where data is
+   available, and observable before full historical replay of unrelated coins.
+2. Continue collecting smoke evidence with the new source breakdown and
    risk-vs-general log-match counters before changing any verdict policy. If
    future HSL RED/cooldown episodes make smoke red, the report can now show
    whether the red state came from structured hard events, risk/HSL log lines,
    non-risk software log failures, monitor parse/row failures, or process
    health.
-2. Continue Phase 5/6 by adding the next high-value event producer or debug
+3. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
    are more order/risk transition coverage or focused profile refinements only
    when live diagnostics need deeper evidence.
-3. Continue active read-only exchange health probes beyond account-critical
+4. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. PR #741 added
    clock-skew health. PR #743 added candle freshness health. PR #745 added
@@ -1858,11 +1947,11 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-4. Continue monitoring staged-readiness summaries after PR #762. The first
+5. Continue monitoring staged-readiness summaries after PR #762. The first
    post-restart smokes showed `staged_readiness.total=0`; if the signal returns,
    inspect whether it is a real current-epoch account surface delay or a new
    completed-candle readiness shape.
-5. Start the live restart/smoke automation slice if operational workflow speed
+6. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-6. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
+7. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
    compatibility checks and synthetic/no-trade assumptions.
