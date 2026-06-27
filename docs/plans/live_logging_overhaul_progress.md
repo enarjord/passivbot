@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b789e146` merge of PR #769, `Summarize smoke report verdict sources`.
+- `1b6fbb3` merge of PR #775, `Cover smoke report event pipeline aggregation`.
 
 Current review gate:
 
@@ -1834,6 +1834,44 @@ VPS5 deployment status:
   The remaining attention was explicitly attributed to
   `attention_sources.problem_events=101`, with non-hard EMA readiness and HSL
   status events visible in the existing summaries.
+
+### PR #772: Live Config Cache Readiness Preflight
+
+- Branch: `codex/v8-live-config-cache-readiness`.
+- Scope: read-only config preflight tooling.
+- Result: `passivbot tool live-config-preflight` now includes config-only
+  cache readiness/root-hint reporting for candles, fills, and HSL/risk surfaces,
+  plus bounded compare deltas. The report explicitly marks cache artifacts as
+  not scanned and startup policy as not enforced, so it does not claim coverage,
+  touch local caches, contact exchanges, or change live startup/trading
+  behavior.
+- Review evidence: Claude and Hermes approved; CI was green; targeted
+  `tests/test_live_config_preflight.py`, py_compile/compileall, a compact CLI
+  smoke, and `git diff --check` passed.
+- VPS5 evidence: deployed at `5fcb39cd` without bot restart because this is
+  read-only preflight tooling. A 5-minute summary smoke reported `ok=true`,
+  `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `logs.attention_matches=0`, all five expected bots
+  matched, clean tracked repository state, no failed remote calls, and no
+  failed account-critical remote calls. Remaining attention came from known
+  non-hard EMA readiness and HSL cooldown/status groups.
+
+### PR #775: Event Pipeline Health Aggregation Regression
+
+- Branch: `codex/v8-fake-live-observability-test`.
+- Scope: offline regression test and backlog ledger only.
+- Result: `tests/test_live_smoke_report.py` now covers multi-bot
+  `event_pipeline_health` aggregation from existing `health.summary` events,
+  including queue depth, dropped events, sink errors, degraded counts, and
+  worker-liveness. The PR changed no production runtime files and does not alter
+  event routing, live bots, exchange calls, or trading behavior.
+- Review evidence: Claude and Hermes approved; CI was green; full
+  `tests/test_live_smoke_report.py`, targeted event-pipeline aggregation tests,
+  py_compile/compileall, and `git diff --check` passed.
+- VPS5 evidence: not deployed or smoke-tested separately because the merged
+  slice changed only tests and `docs/plans/live_ops_improvement_backlog.md`.
+  The latest runtime-bearing deploy/smoke evidence remains PR #772 at
+  `5fcb39cd`.
 
 ## Current Next Steps
 
