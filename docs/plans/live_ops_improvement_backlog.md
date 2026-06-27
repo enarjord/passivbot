@@ -165,13 +165,14 @@ Related detailed plans:
    `candle_freshness_health`, derived from the existing OHLCV tail probe
    results without adding exchange calls. PR #745 adds `fill_history_health`,
    derived from the existing first-symbol `fetch_my_trades` sample without raw
-   trade/order ids or extra pagination calls. Branch
-   `codex/v8-ticker-probe-fill-pagination-sample` adds an opt-in bounded
-   `--fill-history-pages` sample while keeping the default one-call behavior.
+   trade/order ids or extra pagination calls. PR #747 added
+   `rate_limit_health` request-pressure estimates. PR #749 added an opt-in
+   bounded `--fill-history-pages` sample while keeping the default one-call
+   behavior.
 
    Add/refine explicit read-only probes for each configured exchange/account
-   before or during smoke: deeper bounded fill-pagination samples,
-   and basic endpoint latency. The passive smoke report now also exposes top-level
+   before or during smoke: basic endpoint latency and deeper exchange-specific
+   coverage checks. The passive smoke report now also exposes top-level
    remote-call health
    success/failure/throttle totals and a filtered
    `account_critical_remote_call_health` summary for a quick operator scan.
@@ -465,6 +466,7 @@ Related detailed plans:
 | 2026-06-27 | #6 Exchange health and contract probes | PR #743 / `1fe1292b` | Added `ticker-endpoint-probe` `candle_freshness_health` summaries from existing 1m OHLCV tail results, including worst-symbol age and current-incomplete counts without extra exchange calls | Rate-limit/fill-pagination probes |
 | 2026-06-27 | #6 Exchange health and contract probes | PR #745 / `4130155e` | Added `ticker-endpoint-probe` `fill_history_health` summaries from the existing first-symbol `fetch_my_trades` sample, including success/failure, latency, trade count, newest timestamp, and shape without raw trade/order ids or extra pagination calls; VPS5 authenticated Binance probe validated total=1, succeeded=1, failed=0 | Rate-limit/full fill-pagination coverage probes |
 | 2026-06-27 | #6 Exchange health and contract probes | PR #747 / `74270454` | Added `ticker-endpoint-probe` `rate_limit_health` request-pressure estimates from existing probe outcomes and CCXT rate-limit metadata, without adding exchange calls or enforcing throttles; VPS5 authenticated Binance probe validated observed_call_count=12, private=5, public=6, concurrent=1 | Full fill-pagination coverage probes |
+| 2026-06-27 | #6 Exchange health and contract probes | PR #749 / `16c25149` | Added opt-in bounded first-symbol `fetch_my_trades` pagination sampling to `ticker-endpoint-probe`, keeping default one-call behavior; VPS5 authenticated Binance probe validated pages=2/limit=2 request shape, short-page stop, call_count=1, and rate-limit accounting | Basic endpoint latency and deeper exchange-specific coverage checks |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
