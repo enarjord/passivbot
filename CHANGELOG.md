@@ -66,6 +66,10 @@ All notable user-facing changes will be documented in this file.
 - Added report-only warm-cache readiness evidence to
   `passivbot tool cache-integrity-doctor`, derived from already-scanned local
   candle, fill, and HSL/risk cache metadata.
+- Added interior/boundary candle gap summaries to
+  `passivbot tool cache-integrity-doctor` and its report-only warm-cache
+  readiness projection, clarifying leading missing rows and trailing shortfall
+  gaps without repair or startup enforcement.
 - Added fill-cache and HSL/risk-state metadata summaries to
   `passivbot tool cache-integrity-doctor`, including local fill
   `pnl_contract` compatibility counts and coverage timestamps.

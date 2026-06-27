@@ -86,12 +86,19 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     assert coverage["row_count"] == expected_rows
     assert coverage["expected_row_count"] == expected_rows
     assert coverage["valid_row_count"] == 4
-    assert coverage["gap_count"] == 1
+    assert coverage["gap_count"] == 2
+    assert coverage["interior_gap_count"] == 1
+    assert coverage["boundary_gap_count"] == 1
+    assert coverage["leading_missing_artifact_count"] == 1
+    assert coverage["leading_missing_rows"] == 1
+    assert coverage["trailing_shortfall_rows"] == 0
     assert coverage["max_gap_rows"] == 2
     assert coverage["first_valid_date"] == "2026-01-01T00:01:00+00:00"
     assert coverage["last_valid_date"] == "2026-01-01T00:06:00+00:00"
     assert coverage["artifact_samples"][0]["symbol"] == "BTC_USDT"
-    assert coverage["artifact_samples"][0]["gap_count"] == 1
+    assert coverage["artifact_samples"][0]["gap_count"] == 2
+    assert coverage["artifact_samples"][0]["interior_gap_count"] == 1
+    assert coverage["artifact_samples"][0]["leading_missing_rows"] == 1
     assert coverage["gap_samples"] == [
         {
             "path": str(month_dir / "01.valid.npy"),
@@ -104,7 +111,20 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
             "end_date": "2026-01-01T00:04:00+00:00",
             "rows": 2,
             "duration_ms": 120000,
-        }
+        },
+        {
+            "path": str(month_dir / "01.valid.npy"),
+            "exchange": "binance",
+            "timeframe": "1m",
+            "symbol": "BTC_USDT",
+            "start_ms": 1767225600000,
+            "end_ms": 1767225600000,
+            "start_date": "2026-01-01T00:00:00+00:00",
+            "end_date": "2026-01-01T00:00:00+00:00",
+            "rows": 1,
+            "duration_ms": 60000,
+            "boundary": "leading_missing",
+        },
     ]
 
 
@@ -179,6 +199,50 @@ def test_cache_integrity_report_marks_candle_gaps_without_no_trade_evidence(tmp_
     assert "candle_synthetic_no_trade_evidence_unproven" in readiness["reasons"]
 
 
+def test_cache_integrity_report_marks_leading_only_candle_gaps(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    expected_rows = 44_640
+    valid = np.ones(expected_rows, dtype=bool)
+    valid[:10] = False
+    np.save(month_dir / "01.valid.npy", valid)
+
+    report = build_cache_integrity_report([root])
+
+    coverage = report["summary"]["by_family"]["candles"]["coverage"]
+    assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
+    assert coverage["gap_count"] == 1
+    assert coverage["interior_gap_count"] == 0
+    assert coverage["boundary_gap_count"] == 1
+    assert coverage["leading_missing_artifact_count"] == 1
+    assert coverage["leading_missing_rows"] == 10
+    assert coverage["max_gap_rows"] == 10
+    assert coverage["gap_samples"] == [
+        {
+            "path": str(month_dir / "01.valid.npy"),
+            "exchange": "binance",
+            "timeframe": "1m",
+            "symbol": "BTC_USDT",
+            "start_ms": 1767225600000,
+            "end_ms": 1767226140000,
+            "start_date": "2026-01-01T00:00:00+00:00",
+            "end_date": "2026-01-01T00:09:00+00:00",
+            "rows": 10,
+            "duration_ms": 600000,
+            "boundary": "leading_missing",
+        }
+    ]
+    readiness = report["summary"]["warm_cache_readiness"]["families"]["candles"]
+    assert readiness["readiness"] == "attention"
+    assert readiness["evidence"] == "coverage_with_gaps"
+    assert readiness["boundary_gap_count"] == 1
+    assert readiness["leading_missing_rows"] == 10
+    assert "candle_boundary_gaps_present" in readiness["reasons"]
+    assert "candle_leading_missing_rows_present" in readiness["reasons"]
+    assert "candles" in report["summary"]["warm_cache_readiness"]["attention_families"]
+
+
 def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "okx" / "1h" / "ETH_USDT" / "2026"
@@ -214,6 +278,11 @@ def test_cache_integrity_report_flags_truncated_candle_coverage_masks(tmp_path):
     assert coverage["row_count"] == 8
     assert coverage["expected_row_count"] == 44_640
     assert coverage["gap_count"] == 1
+    assert coverage["interior_gap_count"] == 0
+    assert coverage["boundary_gap_count"] == 1
+    assert coverage["trailing_shortfall_gap_count"] == 1
+    assert coverage["leading_missing_rows"] == 0
+    assert coverage["trailing_shortfall_rows"] == 44_632
     assert coverage["gap_samples"][0]["boundary"] == "trailing_shortfall"
     assert coverage["gap_samples"][0]["rows"] == 44_632
     assert coverage["artifact_samples"][0]["length_mismatch"] is True
@@ -221,6 +290,10 @@ def test_cache_integrity_report_flags_truncated_candle_coverage_masks(tmp_path):
     assert issue["severity"] == "warning"
     assert issue["code"] == "coverage_length_mismatch"
     assert issue["family"] == "candles"
+    readiness = report["summary"]["warm_cache_readiness"]["families"]["candles"]
+    assert readiness["boundary_gap_count"] == 1
+    assert readiness["trailing_shortfall_rows"] == 44_632
+    assert "candle_boundary_gaps_present" in readiness["reasons"]
 
 
 def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_coverage(tmp_path):
@@ -393,6 +466,10 @@ def test_cache_integrity_report_derives_warm_cache_readiness(tmp_path):
     assert readiness["attention_families"] == []
     assert readiness["suspicious_gap_count"] == 0
     assert readiness["families"]["candles"]["readiness"] == "observed"
+    assert readiness["families"]["candles"]["interior_gap_count"] == 0
+    assert readiness["families"]["candles"]["boundary_gap_count"] == 0
+    assert readiness["families"]["candles"]["leading_missing_rows"] == 0
+    assert readiness["families"]["candles"]["trailing_shortfall_rows"] == 0
     assert readiness["families"]["fills"]["readiness"] == "observed"
     assert readiness["families"]["fills"]["covered_start_date"] == "2026-01-01T00:00:00+00:00"
     assert readiness["families"]["risk"]["readiness"] == "missing_optional"

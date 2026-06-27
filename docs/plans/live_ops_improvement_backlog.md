@@ -388,6 +388,10 @@ Related detailed plans:
       no-trade reason counts, fill current-contract coverage proof labels, and
       HSL artifact/timestamp compatibility fields without repair or startup
       enforcement.
+    - 2026-06-27: Added report-only candle boundary-gap clarity to
+      cache-integrity-doctor, splitting interior gaps from boundary gaps,
+      leading missing rows, and trailing shortfall rows in coverage summaries
+      and warm-cache readiness without repair or startup enforcement.
 
     Remaining refinements: add deeper candle/fill/HSL metadata compatibility
     checks and synthetic/no-trade assumptions without making trading decisions.
