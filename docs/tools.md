@@ -168,6 +168,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.
+- `passivbot tool live-performance-report` summarizes local live monitor event timings for
+  operator performance analysis. It is read-only and does not contact exchanges. Use
+  `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and
+  `--bot EXCHANGE/USER`, `--exchange EXCHANGE`, or `--user USER` to focus one account or
+  exchange.
 
 ## Exchange Helpers
 

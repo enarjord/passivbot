@@ -14,6 +14,7 @@ from live.smoke_report import _user_safe_display_path
 
 
 GROUP_LIMIT = 80
+SUMMARY_GROUP_LIMIT = 12
 
 
 def _open_text(path: Path):
@@ -41,6 +42,31 @@ def _bot_key(row: dict[str, Any], live_event: dict[str, Any]) -> str:
     exchange = live_event.get("exchange") or row.get("exchange") or "-"
     user = live_event.get("user") or row.get("user") or "-"
     return f"{exchange}/{user}"
+
+
+def _string_filter(values: list[str] | tuple[str, ...] | set[str] | None) -> set[str]:
+    if not values:
+        return set()
+    return {str(value) for value in values if str(value)}
+
+
+def _matches_filters(
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    *,
+    bot_filters: set[str],
+    exchange_filters: set[str],
+    user_filters: set[str],
+) -> bool:
+    if bot_filters and _bot_key(row, live_event) not in bot_filters:
+        return False
+    exchange = str(live_event.get("exchange") or row.get("exchange") or "")
+    if exchange_filters and exchange not in exchange_filters:
+        return False
+    user = str(live_event.get("user") or row.get("user") or "")
+    if user_filters and user not in user_filters:
+        return False
+    return True
 
 
 def _finite_float(value: Any) -> float | None:
@@ -390,6 +416,9 @@ def build_live_performance_report(
     until_ms: int | None = None,
     include_rotated: bool = False,
     group_limit: int = GROUP_LIMIT,
+    bot_filters: list[str] | tuple[str, ...] | set[str] | None = None,
+    exchange_filters: list[str] | tuple[str, ...] | set[str] | None = None,
+    user_filters: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any]:
     since_filter = int(since_ms) if since_ms is not None else None
     until_filter = int(until_ms) if until_ms is not None else None
@@ -408,6 +437,16 @@ def build_live_performance_report(
         "events_skipped_before": 0,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
+    }
+    bot_filter_set = _string_filter(bot_filters)
+    exchange_filter_set = _string_filter(exchange_filters)
+    user_filter_set = _string_filter(user_filters)
+    filters = {
+        "enabled": bool(bot_filter_set or exchange_filter_set or user_filter_set),
+        "bots": sorted(bot_filter_set),
+        "exchanges": sorted(exchange_filter_set),
+        "users": sorted(user_filter_set),
+        "events_skipped": 0,
     }
     issues: list[dict[str, Any]] = []
     try:
@@ -476,6 +515,15 @@ def build_live_performance_report(
                     if live_event is None:
                         legacy_events += 1
                         continue
+                    if not _matches_filters(
+                        row,
+                        live_event,
+                        bot_filters=bot_filter_set,
+                        exchange_filters=exchange_filter_set,
+                        user_filters=user_filter_set,
+                    ):
+                        filters["events_skipped"] += 1
+                        continue
                     live_events += 1
                     if window_enabled:
                         record_ts = _record_ts(row)
@@ -531,4 +579,40 @@ def build_live_performance_report(
     }
     if window_enabled:
         report["event_window"] = event_window
+    if filters["enabled"]:
+        report["filters"] = filters
     return report
+
+
+def summarize_live_performance_report(
+    report: dict[str, Any],
+    *,
+    group_limit: int = SUMMARY_GROUP_LIMIT,
+) -> dict[str, Any]:
+    performance = report.get("performance") if isinstance(report.get("performance"), dict) else {}
+    groups = performance.get("groups") if isinstance(performance.get("groups"), list) else []
+    summary = {
+        "ok": bool(report.get("ok")),
+        "root": report.get("root"),
+        "include_rotated": bool(report.get("include_rotated")),
+        "files_scanned": int(report.get("files_scanned") or 0),
+        "records_total": int(report.get("records_total") or 0),
+        "live_events": int(report.get("live_events") or 0),
+        "legacy_events": int(report.get("legacy_events") or 0),
+        "error_count": int(report.get("error_count") or 0),
+        "warning_count": int(report.get("warning_count") or 0),
+        "bots": report.get("bots") or [],
+        "performance": {
+            "total_groups": int(performance.get("total_groups") or 0),
+            "groups_truncated": bool(performance.get("groups_truncated")),
+            "trading_impact_counts": performance.get("trading_impact_counts") or {},
+            "groups": groups[: max(0, int(group_limit))],
+        },
+    }
+    if report.get("event_window") is not None:
+        summary["event_window"] = report.get("event_window")
+    if report.get("filters") is not None:
+        summary["filters"] = report.get("filters")
+    if report.get("issues"):
+        summary["issues"] = report.get("issues")
+    return summary

@@ -48,15 +48,17 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
      were `balance=7121ms`, `positions=7210ms`, `open_orders=7233ms`,
      `fills=9585ms`.
 
-4. Existing observability has the pieces but not yet a single performance
-   report.
+4. Existing observability now has an initial performance report, but not yet
+   all decision-boundary and input-staleness metrics.
    - Useful inputs already exist: `cycle.completed.timings_ms`,
      `state.refresh_timing`, `remote_call.* elapsed_ms`,
      `hsl.replay.* elapsed_s`, startup timing events, monitor health loop
      duration, and exchange probe endpoint latency summaries.
-   - Missing piece: one operator-facing report that aggregates min/mean/max
-     and p95 by bot, phase, endpoint, and readiness surface, then explains
-     likely trading impact.
+   - First slice added `passivbot tool live-performance-report` with timing
+     groups, trading-impact labels, summary projection, and bot/user/exchange
+     filters.
+   - Missing pieces: decision-boundary lag, input staleness at decision time,
+     and complete coverage for every order/write/shutdown stage.
 
 ## Performance Checklist
 
@@ -145,8 +147,9 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
 
 ### P1: General Live Performance Report
 
-- [ ] Add `passivbot tool live-performance-report`.
-  - It should read local monitor event streams and text logs only.
+- [x] Add `passivbot tool live-performance-report`.
+  - It reads local monitor event streams only; text-log scraping is not used
+    for structured timing metrics.
   - It should not contact exchanges, mutate caches, or depend on live bot
     availability.
   - It should support `--recent-minutes`, `--include-rotated`, `--summary`,

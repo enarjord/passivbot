@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 
 import live.performance_report as performance_report_module
-from live.performance_report import build_live_performance_report
+from live.performance_report import build_live_performance_report, summarize_live_performance_report
 from tools import live_performance_report
 
 
@@ -208,6 +208,99 @@ def test_live_performance_report_time_window_and_group_limit(tmp_path):
     assert report["performance"]["groups"] == []
 
 
+def test_live_performance_report_filters_by_bot_exchange_and_user(tmp_path):
+    events_dir = tmp_path / "monitor" / "mixed" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                exchange="binance",
+                user="binance_01",
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                exchange="okx",
+                user="okx_faisal",
+                data={"elapsed_ms": 2000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=3000,
+                exchange="gateio",
+                user="gateio_01",
+                data={"elapsed_ms": 3000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        bot_filters=["okx/okx_faisal"],
+    )
+
+    assert report["live_events"] == 1
+    assert report["filters"] == {
+        "enabled": True,
+        "bots": ["okx/okx_faisal"],
+        "exchanges": [],
+        "users": [],
+        "events_skipped": 2,
+    }
+    assert report["bots"] == [{"bot": "okx/okx_faisal", "events": 1}]
+    groups = _groups_by_operation(report)
+    assert groups["cycle.elapsed"]["max_ms"] == 2000
+
+    exchange_user_report = build_live_performance_report(
+        tmp_path / "monitor",
+        exchange_filters=["gateio"],
+        user_filters=["gateio_01"],
+    )
+
+    assert exchange_user_report["live_events"] == 1
+    assert exchange_user_report["filters"]["events_skipped"] == 2
+    assert exchange_user_report["bots"] == [{"bot": "gateio/gateio_01", "events": 1}]
+
+
+def test_live_performance_report_summary_projection_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={
+                    "elapsed_ms": 1000,
+                    "timings_ms": {"execute": 600, "monitor_flush": 50},
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        group_limit=10,
+        user_filters=["binance_01"],
+    )
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert summary["ok"] is True
+    assert summary["files_scanned"] == 1
+    assert summary["filters"]["users"] == ["binance_01"]
+    assert summary["performance"]["total_groups"] == 3
+    assert len(summary["performance"]["groups"]) == 1
+    assert "files" not in summary
+    assert "event_types" not in summary
+
+
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -228,6 +321,51 @@ def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True
     assert out["performance"]["groups"][0]["operation"] == "cycle.elapsed"
+
+
+def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                exchange="binance",
+                user="binance_01",
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                exchange="okx",
+                user="okx_faisal",
+                data={"elapsed_ms": 2000},
+            ),
+        ],
+    )
+
+    rc = live_performance_report.main(
+        [
+            str(tmp_path / "monitor"),
+            "--summary",
+            "--compact",
+            "--exchange",
+            "okx",
+            "--group-limit",
+            "1",
+        ]
+    )
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["live_events"] == 1
+    assert out["filters"]["exchanges"] == ["okx"]
+    assert out["filters"]["events_skipped"] == 1
+    assert len(out["performance"]["groups"]) == 1
+    assert "files" not in out
 
 
 def test_live_performance_report_redacts_missing_root_paths():

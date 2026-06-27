@@ -10,7 +10,10 @@ SRC_ROOT = Path(__file__).resolve().parents[1]
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from live.performance_report import build_live_performance_report  # noqa: E402
+from live.performance_report import (  # noqa: E402
+    build_live_performance_report,
+    summarize_live_performance_report,
+)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -56,6 +59,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum performance timing groups to include.",
     )
     parser.add_argument(
+        "--bot",
+        action="append",
+        default=[],
+        help="Only include one bot key, formatted as exchange/user. May be repeated.",
+    )
+    parser.add_argument(
+        "--exchange",
+        action="append",
+        default=[],
+        help="Only include one exchange name. May be repeated.",
+    )
+    parser.add_argument(
+        "--user",
+        action="append",
+        default=[],
+        help="Only include one user/account name. May be repeated.",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Emit a bounded operator summary instead of the full report.",
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -83,7 +109,12 @@ def main(argv: list[str] | None = None) -> int:
         until_ms=args.until_ms,
         include_rotated=bool(args.include_rotated),
         group_limit=int(args.group_limit),
+        bot_filters=args.bot,
+        exchange_filters=args.exchange,
+        user_filters=args.user,
     )
+    if args.summary:
+        report = summarize_live_performance_report(report, group_limit=int(args.group_limit))
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
