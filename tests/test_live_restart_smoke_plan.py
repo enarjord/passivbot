@@ -6,7 +6,7 @@ import sys
 
 import pytest
 
-from live.restart_smoke_plan import build_live_restart_smoke_plan
+from live.restart_smoke_plan import _display_path, build_live_restart_smoke_plan
 from passivbot_cli import main as cli_main
 from tools import live_restart_smoke_plan
 
@@ -89,6 +89,12 @@ def test_live_restart_smoke_plan_redacts_and_bounds_configured_commands(tmp_path
     assert len(command_key) <= len("...<truncated>") + 400
 
 
+def test_live_restart_smoke_plan_display_path_collapses_user_prefixes():
+    assert _display_path("/root/bots_vps5.yaml") == "~/bots_vps5.yaml"
+    assert _display_path("/Users/alice/passivbot/monitor") == "~/passivbot/monitor"
+    assert _display_path(None) is None
+
+
 def test_live_restart_smoke_plan_reports_missing_supervisor_config(tmp_path):
     report = build_live_restart_smoke_plan(tmp_path / "missing.yaml")
 
@@ -117,7 +123,7 @@ def test_live_restart_smoke_plan_reports_malformed_supervisor_config(tmp_path):
     assert report["ok"] is False
     assert report["bots"] == []
     assert report["supervisor_config"] == {
-        "path": str(supervisor_config),
+        "path": report["inputs"]["supervisor_config"],
         "exists": True,
         "error": None,
         "expected_live_commands": 0,

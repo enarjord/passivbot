@@ -65,7 +65,6 @@ from live.event_bus import (
     LiveEventPipeline,
     MonitorEventSink,
     ReasonCodes,
-    live_event_debug_profile_enabled,
     normalize_live_event_debug_profiles,
     payload_hash_raw,
 )
@@ -15348,7 +15347,6 @@ class Passivbot:
         tradable_count = sum(
             1 for item in input_dict["symbols"] if bool(item.get("tradable", False))
         )
-        rust_debug_profile_enabled = live_event_debug_profile_enabled(self, "rust")
         self._emit_rust_orchestrator_called_event(
             rust_call_id=rust_call_id,
             input_hash=input_hash,
@@ -15358,14 +15356,8 @@ class Passivbot:
             trailing_unavailable_count=len(trailing_unavailable_symbols),
             hedge_mode=bool(effective_hedge_mode),
             strategy_kind=strategy_kind,
-            input_symbol_sample=(
-                live_event_emitters.rust_input_symbol_debug_sample(
-                    input_dict.get("symbols"),
-                    idx_to_symbol=idx_to_symbol,
-                )
-                if rust_debug_profile_enabled
-                else None
-            ),
+            input_symbols=input_dict.get("symbols"),
+            idx_to_symbol=idx_to_symbol,
         )
         try:
             out_json = pbr.compute_ideal_orders_json(input_json)
@@ -15404,14 +15396,8 @@ class Passivbot:
             elapsed_ms=int(elapsed_ms),
             order_count=len(orders),
             diagnostics=diagnostics,
-            output_order_sample=(
-                live_event_emitters.rust_output_order_debug_sample(
-                    orders,
-                    idx_to_symbol=idx_to_symbol,
-                )
-                if rust_debug_profile_enabled
-                else None
-            ),
+            orders=orders,
+            idx_to_symbol=idx_to_symbol,
         )
         Passivbot._emit_action_planned_event(
             self,

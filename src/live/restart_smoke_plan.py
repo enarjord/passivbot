@@ -3,7 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from live.smoke_report import parse_tmuxp_live_commands
+from live.smoke_report import parse_tmuxp_live_commands, _user_safe_display_path
 
 
 DEFAULT_SHUTDOWN_TIMEOUT_S = 90
@@ -23,7 +23,7 @@ def _positive_int(value: int, *, field: str) -> int:
 def _display_path(value: str | Path | None) -> str | None:
     if value is None:
         return None
-    return str(Path(value).expanduser())
+    return _user_safe_display_path(value)
 
 
 def _shell_join(args: list[str]) -> str:
@@ -254,7 +254,7 @@ def build_live_restart_smoke_plan(
             "smoke_window_minutes": smoke_window_minutes,
         },
         "supervisor_config": {
-            "path": supervisor.get("path"),
+            "path": _display_path(supervisor.get("path")),
             "exists": supervisor.get("exists"),
             "error": supervisor.get("error"),
             "expected_live_commands": len(bots),

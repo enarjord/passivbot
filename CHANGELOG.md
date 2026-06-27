@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 - Added fill-cache and HSL/risk-state metadata summaries to
   `passivbot tool cache-integrity-doctor`, including local fill
   `pnl_contract` compatibility counts and coverage timestamps.
+- Hardened recent live-ops tooling and debug-profile diagnostics by redacting
+  shareable path fields consistently, keeping Rust debug sample construction
+  best-effort, and scoping EMA debug enrichment to the `ema` profile only.
 - Added v2 candle coverage windows and suspicious interior gap samples to
   `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
   cache artifacts.

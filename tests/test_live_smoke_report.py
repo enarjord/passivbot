@@ -26,6 +26,7 @@ def _monitor_row(
     pside: str | None = None,
     ids: dict | None = None,
     data: dict | None = None,
+    message: str | None = None,
 ) -> dict:
     live_event = {
         "schema_version": 1,
@@ -43,6 +44,8 @@ def _monitor_row(
         "data": dict(data or {"seq": seq}),
         "ids": dict(ids or {}),
     }
+    if message is not None:
+        live_event["message"] = message
     return {
         "exchange": "binance",
         "user": "binance_01",
@@ -1183,6 +1186,7 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
                 status="degraded",
                 level="warning",
                 reason_code="maintainers_timeout",
+                message="shutdown delayed in /Users/alice/passivbot for alice_01",
                 data={
                     "stage": "maintainers_timeout",
                     "elapsed_s": 6.25,
@@ -1226,6 +1230,8 @@ def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
     assert stage_group["latest_data"]["task_count"] == 4
     assert "AKIA123" not in stage_group["latest_data"]["error"]
     assert "TOKEN123" not in stage_group["latest_data"]["error"]
+    assert "latest_message" not in stage_group
+    assert "alice" not in json.dumps(report["shutdown_events"], sort_keys=True)
     assert summary["shutdown_events"]["total"] == 3
     assert summary["shutdown_events"]["groups_truncated"] is True
     assert len(summary["shutdown_events"]["groups"]) == 2

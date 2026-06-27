@@ -1095,7 +1095,6 @@ def _shutdown_event_group(
     line_no: int,
 ) -> dict[str, Any]:
     ids = _event_ids(live_event)
-    message = live_event.get("message")
     return {
         "bot": bot_key,
         "event_type": live_event.get("event_type") or row.get("kind"),
@@ -1108,11 +1107,6 @@ def _shutdown_event_group(
         "latest_seq": row.get("seq"),
         "latest_path": str(path),
         "latest_line": int(line_no),
-        "latest_message": (
-            _redact_log_text(str(message), max_len=240)
-            if message not in (None, "")
-            else None
-        ),
         "latest_data": _compact_shutdown_event_data(live_event),
         "latest_ids": {
             key: ids.get(key)

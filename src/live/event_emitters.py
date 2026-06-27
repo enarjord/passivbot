@@ -965,6 +965,30 @@ def rust_output_order_debug_sample(
     }
 
 
+def _best_effort_rust_input_symbol_debug_sample(
+    input_symbols: Any,
+    *,
+    idx_to_symbol: dict[int, str] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return rust_input_symbol_debug_sample(input_symbols, idx_to_symbol=idx_to_symbol)
+    except Exception as exc:
+        logging.debug("[event] failed to build rust input debug sample: %s", exc)
+        return None
+
+
+def _best_effort_rust_output_order_debug_sample(
+    orders: Any,
+    *,
+    idx_to_symbol: dict[int, str] | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return rust_output_order_debug_sample(orders, idx_to_symbol=idx_to_symbol)
+    except Exception as exc:
+        logging.debug("[event] failed to build rust output debug sample: %s", exc)
+        return None
+
+
 def _emit_startup_timing_event_unchecked(
     bot: Any,
     *,
@@ -1517,6 +1541,8 @@ def _emit_rust_orchestrator_called_event_unchecked(
     hedge_mode: bool,
     strategy_kind: str | None,
     input_symbol_sample: dict[str, Any] | None = None,
+    input_symbols: Any = None,
+    idx_to_symbol: dict[int, str] | None = None,
 ) -> None:
     data = {
         "symbol_count": int(symbol_count),
@@ -1527,6 +1553,11 @@ def _emit_rust_orchestrator_called_event_unchecked(
         "strategy_kind": strategy_kind,
         "input_hash": str(input_hash),
     }
+    if input_symbol_sample is None and live_event_debug_profile_enabled(bot, "rust"):
+        input_symbol_sample = _best_effort_rust_input_symbol_debug_sample(
+            input_symbols,
+            idx_to_symbol=idx_to_symbol,
+        )
     if input_symbol_sample is not None:
         data["debug_profile"] = "rust"
         data["input_symbol_sample"] = input_symbol_sample
@@ -1566,6 +1597,8 @@ def _emit_rust_orchestrator_returned_event_unchecked(
     diagnostics: Any = None,
     error: BaseException | None = None,
     output_order_sample: dict[str, Any] | None = None,
+    orders: Any = None,
+    idx_to_symbol: dict[int, str] | None = None,
 ) -> None:
     event_status = str(status or "succeeded").lower()
     failed = event_status == "failed" or error is not None
@@ -1595,6 +1628,11 @@ def _emit_rust_orchestrator_returned_event_unchecked(
         data["diagnostic_keys"] = (
             sorted(diagnostics) if isinstance(diagnostics, dict) else []
         )
+        if output_order_sample is None and live_event_debug_profile_enabled(bot, "rust"):
+            output_order_sample = _best_effort_rust_output_order_debug_sample(
+                orders,
+                idx_to_symbol=idx_to_symbol,
+            )
         if output_order_sample is not None:
             data["debug_profile"] = "rust"
             data["output_order_sample"] = output_order_sample
@@ -2277,9 +2315,7 @@ def _emit_ema_unavailable_event_unchecked(
         "unavailable": _symbol_sample(unavailable_symbols),
         "unavailable_reasons": _reason_symbol_summary(ema_unavailable_reasons),
     }
-    if live_event_debug_profile_enabled(bot, "ema") or live_event_debug_profile_enabled(
-        bot, "candles"
-    ):
+    if live_event_debug_profile_enabled(bot, "ema"):
         data["debug_profile"] = "ema"
         data["debug"] = _ema_unavailable_debug_summary(
             candidate_ema_unavailable_details,
