@@ -1,5 +1,6 @@
 import pytest
 
+import tools.probe_ccxt_ticker_endpoints as ticker_endpoint_probe
 from tools.probe_ticker_capabilities import (
     create_exchange,
     probe_ticker_capabilities,
@@ -11,6 +12,9 @@ from tools.probe_ticker_capabilities import (
 from tools.probe_ccxt_ticker_endpoints import (
     probe_exchange_ticker_endpoints,
     select_default_symbols,
+    summarize_candle_freshness_probe_collection,
+    summarize_candle_freshness_probe_health,
+    summarize_ohlcvs,
     summarize_account_critical_probe_collection,
     summarize_account_critical_probe_health,
     summarize_time_sync_probe_collection,
@@ -57,6 +61,24 @@ def test_summarize_order_book_reports_top_of_book():
     assert out["has_ask"] is True
     assert out["bid"] == 99.0
     assert out["ask"] == 101.0
+
+
+def test_summarize_ohlcvs_reports_bounded_tail_freshness(monkeypatch):
+    monkeypatch.setattr(ticker_endpoint_probe, "utc_ms", lambda: 1_180_000)
+
+    out = summarize_ohlcvs(
+        [
+            [1_000_000, 9.0, 11.0, 8.0, 10.0, 100.0],
+            [1_120_000, 10.0, 12.0, 9.0, 11.0, 101.0],
+        ]
+    )
+
+    assert out["count"] == 2
+    assert out["observed_at_ms"] == 1_180_000
+    assert out["last_timestamp"] == 1_120_000
+    assert out["last_age_ms"] == 60_000
+    assert out["last_age_minutes"] == 1.0
+    assert out["last_is_current_incomplete_minute"] is False
 
 
 @pytest.mark.asyncio
@@ -319,6 +341,11 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert out["time_sync_health"]["total"] == 1
     assert out["time_sync_health"]["succeeded"] == 1
     assert out["time_sync_health"]["failed"] == 0
+    assert out["candle_freshness_health"]["enabled"] is True
+    assert out["candle_freshness_health"]["total_symbols"] == 2
+    assert out["candle_freshness_health"]["succeeded_symbols"] == 2
+    assert out["candle_freshness_health"]["failed_symbols"] == 0
+    assert out["candle_freshness_health"]["last_age_ms"]["count"] == 2
     assert out["account_critical_health"]["enabled"] is True
     assert out["account_critical_health"]["total"] == 3
     assert out["account_critical_health"]["succeeded"] == 3
@@ -497,6 +524,130 @@ def test_time_sync_probe_collection_aggregates_user_summaries():
     assert collection["clock_skew_ms"]["max_abs"] == 42.0
     assert collection["users"][0]["latest_clock_skew_ms"] == 42.0
     assert collection["users"][1]["unsupported"] == 1
+
+
+def test_candle_freshness_probe_health_summarizes_symbol_tail_ages():
+    summary = summarize_candle_freshness_probe_health(
+        {
+            "include_public": True,
+            "include_ohlcv": True,
+            "repeats": [
+                {
+                    "fetch_ohlcv_1m_tail": {
+                        "ok": False,
+                        "elapsed_ms": 12.0,
+                        "symbols": {
+                            "BTC/USDT:USDT": {
+                                "ok": True,
+                                "elapsed_ms": 4.5,
+                                "value": {
+                                    "last_timestamp": 1_000_000,
+                                    "last_datetime": "1970-01-01T00:16:40",
+                                    "last_age_ms": 60_000,
+                                    "last_is_current_incomplete_minute": False,
+                                },
+                            },
+                            "ETH/USDT:USDT": {
+                                "ok": True,
+                                "elapsed_ms": 5.5,
+                                "value": {
+                                    "last_timestamp": 1_060_000,
+                                    "last_datetime": "1970-01-01T00:17:40",
+                                    "last_age_ms": 10_000,
+                                    "last_is_current_incomplete_minute": True,
+                                },
+                            },
+                            "XRP/USDT:USDT": {
+                                "ok": False,
+                                "elapsed_ms": 6.5,
+                                "error_type": "RequestTimeout",
+                                "error": "raw exchange error should not appear",
+                            },
+                        },
+                    }
+                }
+            ],
+        }
+    )
+
+    assert summary["enabled"] is True
+    assert summary["total_symbols"] == 3
+    assert summary["succeeded_symbols"] == 2
+    assert summary["failed_symbols"] == 1
+    assert summary["failure_pct"] == pytest.approx(33.333)
+    assert summary["current_incomplete_symbols"] == 1
+    assert summary["missing_timestamp_symbols"] == 0
+    assert summary["last_age_ms"]["max"] == 60_000.0
+    assert summary["worst"]["symbol"] == "BTC/USDT:USDT"
+    assert summary["error_types"] == {"RequestTimeout": 1}
+    assert "raw exchange error" not in str(summary)
+
+
+def test_candle_freshness_probe_collection_aggregates_users():
+    probes = [
+        {
+            "user": "binance_01",
+            "exchange": "binance",
+            "include_public": True,
+            "include_ohlcv": True,
+            "repeats": [
+                {
+                    "fetch_ohlcv_1m_tail": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {
+                                "ok": True,
+                                "value": {
+                                    "last_age_ms": 30_000,
+                                    "last_datetime": "fresh",
+                                    "last_is_current_incomplete_minute": True,
+                                },
+                            }
+                        }
+                    }
+                }
+            ],
+        },
+        {
+            "user": "okx_faisal",
+            "exchange": "okx",
+            "include_public": True,
+            "include_ohlcv": True,
+            "repeats": [
+                {
+                    "fetch_ohlcv_1m_tail": {
+                        "symbols": {
+                            "ETH/USDT:USDT": {
+                                "ok": True,
+                                "value": {
+                                    "last_age_ms": 120_000,
+                                    "last_datetime": "stale",
+                                    "last_is_current_incomplete_minute": False,
+                                },
+                            }
+                        }
+                    }
+                }
+            ],
+        },
+    ]
+
+    collection = summarize_candle_freshness_probe_collection(probes)
+
+    assert collection["total_symbols"] == 2
+    assert collection["succeeded_symbols"] == 2
+    assert collection["failed_symbols"] == 0
+    assert collection["current_incomplete_symbols"] == 1
+    assert collection["last_age_ms"]["max"] == 120_000.0
+    assert collection["worst"] == {
+        "user": "okx_faisal",
+        "exchange": "okx",
+        "symbol": "ETH/USDT:USDT",
+        "last_age_ms": 120_000.0,
+        "last_datetime": "stale",
+        "last_is_current_incomplete_minute": False,
+    }
+    assert collection["users"][0]["max_last_age_ms"] == 30_000.0
+    assert collection["users"][1]["worst_symbol"] == "ETH/USDT:USDT"
 
 
 @pytest.mark.asyncio
@@ -736,3 +887,5 @@ async def test_account_only_probe_skips_public_and_uses_open_orders_symbol_fallb
     assert exchange.my_trades_called is False
     assert out["account_critical_health"]["succeeded"] == 3
     assert out["account_critical_health"]["failed"] == 0
+    assert out["candle_freshness_health"]["enabled"] is False
+    assert out["candle_freshness_health"]["total_symbols"] == 0

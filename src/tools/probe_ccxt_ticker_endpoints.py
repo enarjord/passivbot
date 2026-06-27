@@ -81,7 +81,8 @@ def summarize_market(market: Any) -> dict[str, Any]:
 def summarize_ohlcvs(ohlcvs: Any) -> dict[str, Any]:
     if not isinstance(ohlcvs, list):
         return {"type": type(ohlcvs).__name__, "count": None, "valid": False}
-    current_minute_open = int(utc_ms() // 60_000 * 60_000)
+    observed_at_ms = int(utc_ms())
+    current_minute_open = int(observed_at_ms // 60_000 * 60_000)
     rows = []
     for row in ohlcvs[-3:]:
         if not isinstance(row, (list, tuple)) or len(row) < 6:
@@ -104,10 +105,17 @@ def summarize_ohlcvs(ohlcvs: Any) -> dict[str, Any]:
             }
         )
     last_ts = rows[-1].get("timestamp") if rows and rows[-1].get("valid", True) else None
+    last_age_ms = None
+    if last_ts is not None:
+        last_age_ms = max(0, int(observed_at_ms) - int(last_ts))
     return {
         "count": len(ohlcvs),
+        "observed_at_ms": observed_at_ms,
+        "observed_at": ts_to_date(observed_at_ms),
         "last_timestamp": last_ts,
         "last_datetime": ts_to_date(last_ts) if last_ts is not None else None,
+        "last_age_ms": last_age_ms,
+        "last_age_minutes": round(last_age_ms / 60_000.0, 3) if last_age_ms is not None else None,
         "last_is_current_incomplete_minute": last_ts == current_minute_open,
         "sample_tail": rows,
     }
@@ -419,6 +427,190 @@ def summarize_time_sync_probe_collection(probes: list[dict[str, Any]]) -> dict[s
     }
 
 
+def _freshness_summary(values: list[float]) -> dict[str, Any]:
+    return _latency_summary(values)
+
+
+def summarize_candle_freshness_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize existing 1m OHLCV tail probe freshness without extra exchange calls."""
+    include_public = bool(probe.get("include_public", True))
+    include_ohlcv = bool(probe.get("include_ohlcv", True))
+    enabled = include_public and include_ohlcv
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    total_symbols = 0
+    succeeded_symbols = 0
+    failed_symbols = 0
+    missing_timestamp_symbols = 0
+    current_incomplete_symbols = 0
+    latencies = []
+    last_ages = []
+    error_types: Counter[str] = Counter()
+    worst: dict[str, Any] | None = None
+    latest: dict[str, Any] | None = None
+    for repeat in repeats:
+        outcome = repeat.get("fetch_ohlcv_1m_tail") if isinstance(repeat, dict) else None
+        if outcome is None:
+            continue
+        symbols = outcome.get("symbols") if isinstance(outcome, dict) else None
+        if not isinstance(symbols, dict):
+            total_symbols += 1
+            failed_symbols += 1
+            error_types["missing_symbols"] += 1
+            latest = {"ok": False, "error_type": "missing_symbols"}
+            continue
+        for symbol, symbol_outcome in sorted(symbols.items()):
+            total_symbols += 1
+            elapsed_ms = _elapsed_ms(symbol_outcome)
+            if elapsed_ms is not None:
+                latencies.append(elapsed_ms)
+            if not isinstance(symbol_outcome, dict) or not symbol_outcome.get("ok"):
+                failed_symbols += 1
+                error_type = (
+                    str(symbol_outcome.get("error_type") or "unknown")
+                    if isinstance(symbol_outcome, dict)
+                    else "missing_outcome"
+                )
+                error_types[error_type] += 1
+                latest = {
+                    "ok": False,
+                    "symbol": str(symbol),
+                    "elapsed_ms": elapsed_ms,
+                    "error_type": error_type,
+                }
+                continue
+            value = symbol_outcome.get("value")
+            if not isinstance(value, dict):
+                failed_symbols += 1
+                error_types["missing_value"] += 1
+                latest = {
+                    "ok": False,
+                    "symbol": str(symbol),
+                    "elapsed_ms": elapsed_ms,
+                    "error_type": "missing_value",
+                }
+                continue
+            succeeded_symbols += 1
+            last_age_ms = _round_ms_value(value.get("last_age_ms"))
+            last_ts = value.get("last_timestamp")
+            if last_ts is None:
+                missing_timestamp_symbols += 1
+            if bool(value.get("last_is_current_incomplete_minute")):
+                current_incomplete_symbols += 1
+            if last_age_ms is not None:
+                last_ages.append(last_age_ms)
+                candidate = {
+                    "symbol": str(symbol),
+                    "last_age_ms": last_age_ms,
+                    "last_datetime": value.get("last_datetime"),
+                    "last_is_current_incomplete_minute": bool(
+                        value.get("last_is_current_incomplete_minute")
+                    ),
+                }
+                if worst is None or last_age_ms > float(worst.get("last_age_ms") or -1.0):
+                    worst = candidate
+                latest = {"ok": True, **candidate}
+            else:
+                latest = {
+                    "ok": True,
+                    "symbol": str(symbol),
+                    "last_age_ms": None,
+                    "last_datetime": value.get("last_datetime"),
+                    "last_is_current_incomplete_minute": bool(
+                        value.get("last_is_current_incomplete_minute")
+                    ),
+                }
+    return {
+        "enabled": enabled,
+        "total_symbols": total_symbols,
+        "succeeded_symbols": succeeded_symbols,
+        "failed_symbols": failed_symbols,
+        "failure_pct": _pct(failed_symbols, total_symbols),
+        "missing_timestamp_symbols": missing_timestamp_symbols,
+        "current_incomplete_symbols": current_incomplete_symbols,
+        "latency_ms": _latency_summary(latencies),
+        "last_age_ms": _freshness_summary(last_ages),
+        "error_types": dict(sorted(error_types.items())),
+        "worst": worst,
+        "latest": latest,
+    }
+
+
+def summarize_candle_freshness_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    total_symbols = 0
+    succeeded_symbols = 0
+    failed_symbols = 0
+    missing_timestamp_symbols = 0
+    current_incomplete_symbols = 0
+    last_ages = []
+    worst: dict[str, Any] | None = None
+    for probe in probes:
+        summary = probe.get("candle_freshness_health")
+        if not isinstance(summary, dict):
+            summary = summarize_candle_freshness_probe_health(probe)
+        summary_worst = summary.get("worst") if isinstance(summary.get("worst"), dict) else None
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "enabled": bool(summary.get("enabled")),
+            "total_symbols": int(summary.get("total_symbols") or 0),
+            "succeeded_symbols": int(summary.get("succeeded_symbols") or 0),
+            "failed_symbols": int(summary.get("failed_symbols") or 0),
+            "failure_pct": summary.get("failure_pct"),
+            "missing_timestamp_symbols": int(summary.get("missing_timestamp_symbols") or 0),
+            "current_incomplete_symbols": int(summary.get("current_incomplete_symbols") or 0),
+            "max_last_age_ms": (
+                summary["last_age_ms"].get("max")
+                if isinstance(summary.get("last_age_ms"), dict)
+                else None
+            ),
+            "worst_symbol": summary_worst.get("symbol") if summary_worst else None,
+        }
+        users.append(user_summary)
+        total_symbols += user_summary["total_symbols"]
+        succeeded_symbols += user_summary["succeeded_symbols"]
+        failed_symbols += user_summary["failed_symbols"]
+        missing_timestamp_symbols += user_summary["missing_timestamp_symbols"]
+        current_incomplete_symbols += user_summary["current_incomplete_symbols"]
+        repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+        for repeat in repeats:
+            outcome = repeat.get("fetch_ohlcv_1m_tail") if isinstance(repeat, dict) else None
+            symbols = outcome.get("symbols") if isinstance(outcome, dict) else None
+            if not isinstance(symbols, dict):
+                continue
+            for symbol, symbol_outcome in sorted(symbols.items()):
+                value = symbol_outcome.get("value") if isinstance(symbol_outcome, dict) else None
+                if not isinstance(value, dict):
+                    continue
+                last_age_ms = _round_ms_value(value.get("last_age_ms"))
+                if last_age_ms is None:
+                    continue
+                last_ages.append(last_age_ms)
+                candidate = {
+                    "user": probe.get("user"),
+                    "exchange": probe.get("exchange"),
+                    "symbol": str(symbol),
+                    "last_age_ms": last_age_ms,
+                    "last_datetime": value.get("last_datetime"),
+                    "last_is_current_incomplete_minute": bool(
+                        value.get("last_is_current_incomplete_minute")
+                    ),
+                }
+                if worst is None or last_age_ms > float(worst.get("last_age_ms") or -1.0):
+                    worst = candidate
+    return {
+        "users": users,
+        "total_symbols": total_symbols,
+        "succeeded_symbols": succeeded_symbols,
+        "failed_symbols": failed_symbols,
+        "failure_pct": _pct(failed_symbols, total_symbols),
+        "missing_timestamp_symbols": missing_timestamp_symbols,
+        "current_incomplete_symbols": current_incomplete_symbols,
+        "last_age_ms": _freshness_summary(last_ages),
+        "worst": worst,
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -663,6 +855,7 @@ async def probe_exchange_ticker_endpoints(
         "symbols": resolved_symbols,
         "include_private": bool(include_private),
         "include_public": bool(include_public),
+        "include_ohlcv": bool(include_ohlcv),
         "include_my_trades": bool(include_my_trades),
         "include_time_sync": bool(include_time_sync),
         "market_count": len(markets) if isinstance(markets, dict) else None,
@@ -850,6 +1043,7 @@ async def probe_exchange_ticker_endpoints(
 
     out["account_critical_health"] = summarize_account_critical_probe_health(out)
     out["time_sync_health"] = summarize_time_sync_probe_health(out)
+    out["candle_freshness_health"] = summarize_candle_freshness_probe_health(out)
     return out
 
 
@@ -1004,6 +1198,9 @@ async def async_main() -> int:
         result["probes"]
     )
     result["time_sync_health"] = summarize_time_sync_probe_collection(result["probes"])
+    result["candle_freshness_health"] = summarize_candle_freshness_probe_collection(
+        result["probes"]
+    )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str) + "\n")

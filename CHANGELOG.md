@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added no-extra-call 1m candle freshness health summaries to
+  `passivbot tool ticker-endpoint-probe`, derived from the existing OHLCV tail
+  probe results.
 - Added read-only `fetch_time` clock-skew health summaries to
   `passivbot tool ticker-endpoint-probe`, with `--skip-time-sync` for operators
   who want to omit the extra time-sync call.
