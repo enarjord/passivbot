@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
@@ -2720,6 +2721,76 @@ def test_log_new_fill_events_emits_fill_ingested_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_fill_ingested_debug_profile_adds_bounded_shape_without_source_id_leak():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_fill_ingested_event = pb_mod.Passivbot._emit_fill_ingested_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("fills",)
+            self._live_event_current_cycle_id = "cy_fill_debug"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    source_ids = ["trade-secret-a", "trade-secret-b"]
+    event = SimpleNamespace(
+        id="+".join(source_ids),
+        timestamp=1_782_271_234_000,
+        symbol="ETH/USDT:USDT",
+        side="sell",
+        position_side="long",
+        qty=0.5,
+        price=2500.0,
+        pnl=12.0,
+        fee=-0.5,
+        fee_paid=-0.5,
+        pb_order_type="close_grid_normal_long",
+        client_order_id="client-abcdef123456",
+        source_ids=source_ids,
+        pnl_status="complete",
+    )
+    payload = {
+        "symbol": "ETH/USDT:USDT",
+        "side": "sell",
+        "source_id": "trade-secret-a",
+        "raw_secret": "apiKey=secret",
+    }
+    bot = FakeBot()
+
+    bot._emit_fill_ingested_event(event, payload=payload)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    live_event = sink.events[-1]
+    assert live_event.event_type == EventTypes.FILL_INGESTED
+    assert live_event.data["debug_profile"] == "fills"
+    assert live_event.data["debug"]["payload_keys"] == [
+        "raw_secret",
+        "side",
+        "source_id",
+        "symbol",
+    ]
+    assert live_event.data["debug"]["payload_key_count"] == 4
+    assert live_event.data["debug"]["source_ids_count"] == 2
+    assert live_event.data["debug"]["has_client_order_id"] is True
+    assert live_event.data["debug"]["has_fee_paid"] is True
+    assert live_event.data["debug"]["pnl_status"] == "complete"
+    rendered = json.dumps(live_event.data, sort_keys=True)
+    assert "trade-secret-a" not in rendered
+    assert "trade-secret-b" not in rendered
+    assert "apiKey=secret" not in rendered
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console():
     import passivbot as pb_mod
 
@@ -2782,6 +2853,92 @@ def test_emit_fills_refresh_summary_event_sanitizes_error_and_stays_off_console(
     assert event.data["error_type"] == "RuntimeError"
     assert "secret-token" not in event.data["error"]
     assert "[redacted]" in event.data["error"]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_fills_refresh_debug_profile_adds_bounded_coverage_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_fills_refresh_summary_event = (
+            pb_mod.Passivbot._emit_fills_refresh_summary_event
+        )
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("fills",)
+            self._live_event_current_cycle_id = "cy_fills_debug"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_fills_refresh_summary_event(
+        source="staged_blocking",
+        refresh_mode="lookback_bootstrap",
+        status="succeeded",
+        reason_code="fills_refresh_succeeded",
+        elapsed_ms=321,
+        lookback=30.0,
+        history_scope="window",
+        event_count_before=3,
+        event_count_after=7,
+        new_count=2,
+        enriched_count=1,
+        pending_pnl_count=0,
+        coverage_before={
+            "ready": False,
+            "reason": "window_coverage_not_proven",
+            "history_scope": "window",
+            "covered_start_ms": 100,
+        },
+        coverage_after={
+            "ready": True,
+            "reason": "window_covered",
+            "history_scope": "window",
+            "covered_start_ms": 50,
+            "oldest_event_ts": 40,
+        },
+        level="debug",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    assert event.data["debug_profile"] == "fills"
+    assert event.data["debug"] == {
+        "coverage_before_keys": [
+            "covered_start_ms",
+            "history_scope",
+            "ready",
+            "reason",
+        ],
+        "coverage_after_keys": [
+            "covered_start_ms",
+            "history_scope",
+            "oldest_event_ts",
+            "ready",
+            "reason",
+        ],
+        "event_count_before": 3,
+        "event_count_after": 7,
+        "new_count": 2,
+        "enriched_count": 1,
+        "pending_pnl_count": 0,
+        "event_count_delta": 4,
+        "coverage_before_ready": False,
+        "coverage_before_reason": "window_coverage_not_proven",
+        "coverage_after_ready": True,
+        "coverage_after_reason": "window_covered",
+        "coverage_ready_transition": "False->True",
+    }
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

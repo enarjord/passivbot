@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `09ae3773a` merge of PR #723, `Add remote-call live event debug profile`.
+- `419612662` merge of PR #726, `Address live logging reviewer follow-ups`.
 
 Current review gate:
 
@@ -1221,15 +1221,34 @@ VPS5 deployment status:
   tracked repository state, no failed remote calls, and no failed
   account-critical remote calls.
 
-### Pending PR: Reviewer Follow-Ups
+### PR #726: Reviewer Follow-Ups
 
 - Branch: `codex/v8-reviewer-followups`.
 - Scope: Claude retrospective follow-up for already-merged low-risk
   observability/tooling slices.
-- Planned result: redacts shareable live-ops path fields consistently, removes
+- Result: redacted shareable live-ops path fields consistently, removed
   shutdown event message echo from smoke summaries, scopes EMA debug enrichment
   to the `ema` profile only, and keeps Rust debug sample construction
   best-effort inside the event-emitter path.
+- Review evidence: Claude and Hermes approved head `8f4465a9`, CI was green,
+  and local focused tests plus the broader live-event/monitor/smoke/preflight
+  suite, compileall, `git diff --check`, and touched-file silent-handling audit
+  passed before merge.
+- VPS5 evidence: deployed to VPS5 at `41961266` without bot restart because the
+  slice is observability/tooling-only. A 10-minute brief smoke reported
+  `ok=true`, no hard failures, all five expected bots matched, clean tracked
+  repository state, no failed remote calls, and no failed account-critical
+  remote calls. Remaining attention came from known non-hard EMA/staged
+  readiness and HSL status/cooldown events.
+
+### Pending PR: Fills Debug Profile
+
+- Branch: `codex/v8-fills-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Planned result: add `fills` debug-profile enrichment to existing
+  `fills.refresh_summary` and `fill.ingested` events with bounded coverage,
+  count, and key-shape metadata. Default events and console output stay
+  unchanged, and no raw fill IDs, source IDs, or payload values are emitted.
 
 ## Current Next Steps
 
