@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added report-only startup phase budget projections to
+  `passivbot tool live-smoke-report`, comparing latest startup timings with
+  prior local p95 baselines from existing monitor events.
 - Added optional `--compare` diff reporting to
   `passivbot tool live-config-preflight` for local, read-only HSL, universe,
   forager, identity, and cache-setting changes between two configs.

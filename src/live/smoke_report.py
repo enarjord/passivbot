@@ -1700,6 +1700,44 @@ def _usage_pct(value: int | None, budget: int | None) -> int | None:
     return int(round(float(value) * 100.0 / float(budget)))
 
 
+def _startup_budget_projection(
+    *,
+    latest_ms: int | None,
+    baseline_values: list[int],
+) -> dict[str, int | str | None]:
+    if latest_ms is None:
+        return {
+            "status": "unavailable",
+            "latest_ms": None,
+            "budget_ms": None,
+            "baseline_samples": len(baseline_values),
+            "usage_pct": None,
+            "over_budget_by_ms": None,
+            "source": "prior_p95_ms",
+        }
+    if not baseline_values:
+        return {
+            "status": "no_baseline",
+            "latest_ms": latest_ms,
+            "budget_ms": None,
+            "baseline_samples": 0,
+            "usage_pct": None,
+            "over_budget_by_ms": None,
+            "source": "prior_p95_ms",
+        }
+    budget_ms = _nearest_rank(baseline_values, 95.0)
+    over_budget_by_ms = max(0, latest_ms - budget_ms)
+    return {
+        "status": "over_budget" if over_budget_by_ms > 0 else "within_budget",
+        "latest_ms": latest_ms,
+        "budget_ms": budget_ms,
+        "baseline_samples": len(baseline_values),
+        "usage_pct": _usage_pct(latest_ms, budget_ms),
+        "over_budget_by_ms": over_budget_by_ms,
+        "source": "prior_p95_ms",
+    }
+
+
 def _startup_timing_record(
     *,
     row: dict[str, Any],
@@ -1768,6 +1806,12 @@ def _summarize_startup_timings(
             phase_summary = _ms_summary(phase_values)
             latest_elapsed = latest.get("elapsed_ms")
             latest_phase = latest.get("since_previous_ms")
+            elapsed_budget_values = (
+                elapsed_values[:-1] if latest_elapsed is not None else elapsed_values
+            )
+            phase_budget_values = (
+                phase_values[:-1] if latest_phase is not None else phase_values
+            )
             phase_summaries[phase] = {
                 "samples": len(window),
                 "latest_ts": latest.get("ts"),
@@ -1775,6 +1819,14 @@ def _summarize_startup_timings(
                 "latest_since_previous_ms": latest_phase,
                 "elapsed_baseline": elapsed_summary,
                 "phase_baseline": phase_summary,
+                "elapsed_budget": _startup_budget_projection(
+                    latest_ms=latest_elapsed,
+                    baseline_values=elapsed_budget_values,
+                ),
+                "phase_budget": _startup_budget_projection(
+                    latest_ms=latest_phase,
+                    baseline_values=phase_budget_values,
+                ),
                 "latest_elapsed_vs_p95_pct": _usage_pct(
                     latest_elapsed, elapsed_summary["p95_ms"]
                 ),

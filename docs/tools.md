@@ -148,6 +148,8 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
+  Startup timing summaries include report-only budget projections from prior local p95
+  phase baselines when enough monitor evidence exists.
   Existing structured shutdown events are also summarized as `shutdown_events`,
   so recent Ctrl+C/restart behavior can be inspected from the same smoke output.
   With `--supervisor-config`, the read-only process section compares configured

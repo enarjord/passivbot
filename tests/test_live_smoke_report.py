@@ -1132,6 +1132,24 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "min_ms": 2000,
                         "max_ms": 3000,
                     },
+                    "elapsed_budget": {
+                        "status": "over_budget",
+                        "latest_ms": 3000,
+                        "budget_ms": 2000,
+                        "baseline_samples": 1,
+                        "usage_pct": 150,
+                        "over_budget_by_ms": 1000,
+                        "source": "prior_p95_ms",
+                    },
+                    "phase_budget": {
+                        "status": "over_budget",
+                        "latest_ms": 3000,
+                        "budget_ms": 2000,
+                        "baseline_samples": 1,
+                        "usage_pct": 150,
+                        "over_budget_by_ms": 1000,
+                        "source": "prior_p95_ms",
+                    },
                     "latest_elapsed_vs_p95_pct": 100,
                     "latest_phase_vs_p95_pct": 100,
                 },
@@ -1152,6 +1170,24 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
                         "min_ms": 6000,
                         "max_ms": 7000,
                     },
+                    "elapsed_budget": {
+                        "status": "over_budget",
+                        "latest_ms": 10000,
+                        "budget_ms": 8000,
+                        "baseline_samples": 1,
+                        "usage_pct": 125,
+                        "over_budget_by_ms": 2000,
+                        "source": "prior_p95_ms",
+                    },
+                    "phase_budget": {
+                        "status": "over_budget",
+                        "latest_ms": 7000,
+                        "budget_ms": 6000,
+                        "baseline_samples": 1,
+                        "usage_pct": 117,
+                        "over_budget_by_ms": 1000,
+                        "source": "prior_p95_ms",
+                    },
                     "latest_elapsed_vs_p95_pct": 100,
                     "latest_phase_vs_p95_pct": 100,
                     "latest_details": (
@@ -1164,6 +1200,41 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     latest_details = report["startup_timings"][0]["phases"]["startup"]["latest_details"]
     assert "AKIA123" not in latest_details
     assert "TOKEN123" not in latest_details
+
+
+def test_live_smoke_report_startup_budget_no_baseline(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="startup_phase_ready",
+                data={
+                    "phase": "account",
+                    "elapsed_ms": 2000,
+                    "since_previous_ms": 2000,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    phase = report["startup_timings"][0]["phases"]["account"]
+
+    assert phase["elapsed_budget"] == {
+        "status": "no_baseline",
+        "latest_ms": 2000,
+        "budget_ms": None,
+        "baseline_samples": 0,
+        "usage_pct": None,
+        "over_budget_by_ms": None,
+        "source": "prior_p95_ms",
+    }
+    assert phase["phase_budget"]["status"] == "no_baseline"
 
 
 def test_live_smoke_report_summarizes_shutdown_events(tmp_path):
