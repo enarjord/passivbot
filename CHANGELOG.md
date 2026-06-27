@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added event-pipeline health summaries to
+  `passivbot tool live-smoke-report`, projecting existing `health.summary`
+  queue/drop/sink-error counters into full, summary, and brief reports.
 - Added bounded staged-readiness health summaries to
   `passivbot tool live-smoke-report`, projecting existing staged
   `cycle.degraded` events into latest missing/invalid surface counts and

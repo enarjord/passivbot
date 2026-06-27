@@ -1127,6 +1127,103 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "cy_health_1"},
+                data={
+                    "event_queue_depth": 1,
+                    "event_queue_maxsize": 5000,
+                    "event_queue_unfinished_tasks": 2,
+                    "event_dropped_total": 0,
+                    "event_drop_counts": {},
+                    "event_sink_error_total": 0,
+                    "event_sink_error_counts": {},
+                    "event_degraded_count": 0,
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "cy_health_2"},
+                data={
+                    "event_queue_depth": 3,
+                    "event_queue_maxsize": 5000,
+                    "event_queue_unfinished_tasks": 4,
+                    "event_dropped_total": 2,
+                    "event_drop_counts": {"health.summary": 2},
+                    "event_sink_error_total": 1,
+                    "event_sink_error_counts": {"monitor": 1},
+                    "event_degraded_count": 3,
+                    "event_pipeline_stopping": True,
+                    "event_pipeline_worker_alive": False,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=3,
+                ts=3000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "cy_ignored"},
+                data={"process_rss_mb": 125},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    health = report["event_pipeline_health"]
+    assert health["total"] == 2
+    assert health["bots"] == 1
+    assert health["latest_queue_depth_total"] == 3
+    assert health["latest_queue_unfinished_total"] == 4
+    assert health["latest_dropped_total"] == 2
+    assert health["latest_sink_error_total"] == 1
+    assert health["latest_degraded_total"] == 3
+    assert health["latest_worker_not_alive_count"] == 1
+    assert health["latest_stopping_count"] == 1
+    assert health["event_types"] == {"health.summary": 2}
+    assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_health_2"}
+    assert health["groups"][0]["latest_drop_counts"] == {"health.summary": 2}
+    assert health["groups"][0]["latest_sink_error_counts"] == {"monitor": 1}
+    assert health["groups"][0]["latest_worker_alive"] is False
+    assert health["groups"][0]["latest_pipeline_stopping"] is True
+    assert report["ok"] is True
+    assert report["hard_failures"] == 0
+    assert summary["event_pipeline_health"]["total"] == 2
+    assert summary["event_pipeline_health"]["groups"][0]["latest_ids"] == {
+        "cycle_id": "cy_health_2"
+    }
+    assert brief["event_pipeline"] == {
+        "total": 2,
+        "bots": 1,
+        "latest_queue_depth_total": 3,
+        "latest_queue_unfinished_total": 4,
+        "latest_dropped_total": 2,
+        "latest_sink_error_total": 1,
+        "latest_degraded_total": 3,
+        "latest_worker_not_alive_count": 1,
+        "latest_stopping_count": 1,
+        "event_types": {"health.summary": 2},
+    }
+
+
 def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_path):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
