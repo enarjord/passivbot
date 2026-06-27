@@ -15,11 +15,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-26.
+Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7b12d4b2d` merge of PR #715, `Summarize shutdown events in live smoke reports`.
+- `27f597bec` merge of PR #720, `Add EMA live event debug profile`.
 
 Current review gate:
 
@@ -291,6 +291,23 @@ VPS5 deployment status:
   occurred. A read-only `live-config-preflight` smoke against
   `configs/forager_3pos_hsl_2026-06-26.json` returned `ok=true` with one
   warning for missing short-side bot config, and did not contact exchanges.
+- PRs #719 and #720 were merged under the low-risk tooling/observability
+  degraded gate after Hermes approval, green CI, and local focused validation.
+  Claude did not return before merge. #719 added a plan-only restart-smoke
+  planner and #720 added the opt-in `ema` live-event debug profile. Both were
+  deployed to VPS5 by fast-forward pull without bot restart because #719 is
+  read-only operator planning and #720 is opt-in structured event enrichment.
+  A 10-minute brief smoke at `27f597be` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `repository.dirty=false`, and no
+  duplicate/extra live process matches. Remaining attention came from existing
+  non-hard structured problem events and HSL status. A VPS5 dry-run
+  `live-restart-smoke-plan` against `/root/bots_vps5.yaml` reported `ok=true`,
+  `dry_run=true`, `execution_available=false`, five planned bots, no issues,
+  and rejected operations including SSH, tmux signaling, process signaling, git
+  checkout/pull/fetch, `passivbot live`, exchange/API calls, and credential
+  loading.
 
 ## Phase Checklist
 
@@ -1104,6 +1121,48 @@ VPS5 deployment status:
   all five configured bots running, no failed remote/account-critical calls,
   clean tracked repository state, and `shutdown_events.total=0` because no
   restart occurred.
+
+### PR #719: Live Restart Smoke Plan Tool
+
+- Branch: `codex/v8-live-restart-smoke-plan`.
+- Scope: adjacent operator restart/smoke tooling.
+- Result: added `passivbot tool live-restart-smoke-plan`, a read-only dry-run
+  planner for the repeated live restart/smoke routine. The tool parses a
+  tmuxp-style supervisor config through the existing sanitized smoke-report
+  parser and emits structured plan metadata, per-bot phases, repo checks, smoke
+  command wiring, timeout/escalation guidance, and explicit non-execution
+  policy. `--execute` is rejected; the tool does not SSH, invoke tmux, signal
+  processes, pull code, start bots, contact exchanges, or load credentials.
+- Review evidence: Hermes approved head `c7c4ec09`; CI was green; local
+  focused restart-plan, smoke-report, CLI dispatch, compileall, and `git diff
+  --check` validation passed before merge. Claude did not return before merge,
+  so this plan-only tooling slice used the degraded gate.
+- VPS5 evidence: pulled to VPS5 at `27f597be` without bot restart as part of
+  the PR #719/#720 deploy. A dry-run plan against `/root/bots_vps5.yaml`
+  reported `ok=true`, `dry_run=true`, `execution_available=false`, five planned
+  bots, no issues, and the expected rejected operations.
+
+### PR #720: EMA Live Event Debug Profile
+
+- Branch: `codex/v8-ema-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Result: added `ema` as a `logging.live_event_debug_profiles` /
+  `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` profile, including `ema-readiness`
+  aliases. When `ema` or `candles` is enabled, existing `ema.unavailable`
+  events include bounded parsed EMA type, span, and inner reason summaries.
+  Default events remain compact, console output is unchanged, and no
+  exchange/order/risk behavior changed.
+- Review evidence: Hermes approved original head `1a9a53218`; after PR #719
+  merged, the branch was rebased to `b8be04654` with the same code delta, CI was
+  green, and local `tests/test_live_event_bus.py`,
+  `tests/test_passivbot_monitor.py`, compileall, and `git diff --check`
+  validation passed. Claude did not return before merge, so this opt-in
+  observability slice used the degraded gate.
+- VPS5 evidence: pulled to VPS5 at `27f597be` without bot restart because the
+  profile is opt-in and no VPS config enabled it. A 10-minute brief smoke
+  reported all five configured bots running, no hard failures, no log hard
+  matches, no failed remote calls, no failed account-critical remote calls, and
+  clean tracked repository state.
 
 ## Current Next Steps
 
