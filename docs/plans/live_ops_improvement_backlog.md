@@ -107,7 +107,8 @@ Related detailed plans:
 4. [ ] Startup phase budget tracking.
    Status: partial. Startup timing and warmup cache decision events exist, and
    `live-smoke-report` now summarizes latest startup phase timings with rolling
-   median/p95 baselines from local monitor events. Explicit durable phase budget
+   median/p95 baselines from local monitor events plus report-only budget
+   projections against prior p95 phase baselines. Explicit durable phase budget
    configuration/events are not implemented.
 
    Startup currently has timing events, but the next step is durable budget
@@ -115,6 +116,12 @@ Related detailed plans:
    candle readiness, forager warmup, HSL replay, Rust planning, and READY.
    Store both current timings and rolling baselines so regressions stand out
    after short-downtime restarts.
+
+   Work log:
+   - 2026-06-27: Added report-only startup budget projections to
+     `live-smoke-report` phase summaries, comparing latest elapsed/phase
+     timings against prior local p95 baselines without changing startup
+     behavior or adding new runtime events.
 
 5. [x] Resource pressure telemetry.
    Status: initial implementation merged. `health.summary` events now include
@@ -410,6 +417,7 @@ Related detailed plans:
 | 2026-06-27 | #13 Cache integrity doctor | PR #725 / `1ed9c466` | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
 | 2026-06-27 | #13 Cache integrity doctor | PR #727 / `d8dd7246` | Added report-only warm-cache readiness evidence from already-scanned candle/fill/HSL cache metadata | Deeper metadata compatibility and synthetic/no-trade assumptions |
 | 2026-06-27 | #7 Live config preflight/linter | PR #731 / `3cc2d229` | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
+| 2026-06-27 | #4 Startup phase budget tracking | pending PR | Added report-only startup budget projections to `live-smoke-report` phase summaries using prior local p95 baselines from existing monitor events | Explicit durable budget config/events |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
