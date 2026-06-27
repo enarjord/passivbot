@@ -13,6 +13,8 @@ from tools.probe_ccxt_ticker_endpoints import (
     select_default_symbols,
     summarize_account_critical_probe_collection,
     summarize_account_critical_probe_health,
+    summarize_time_sync_probe_collection,
+    summarize_time_sync_probe_health,
 )
 
 
@@ -219,6 +221,7 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
             "fetchOpenOrders": True,
             "fetchOrderBook": True,
             "fetchPositions": True,
+            "fetchTime": True,
             "fetchTicker": True,
             "fetchTickers": True,
         }
@@ -243,6 +246,9 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
                     "linear": True,
                 },
             }
+
+        async def fetch_time(self):
+            return 1_767_225_600_000
 
         async def fetch_tickers(self, symbols=None):
             self.fetch_tickers_calls.append(symbols)
@@ -306,6 +312,13 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert repeat["fetch_positions"]["ok"] is True
     assert repeat["fetch_open_orders_all"]["ok"] is True
     assert repeat["fetch_my_trades_first_symbol"]["ok"] is True
+    assert repeat["fetch_time"]["ok"] is True
+    assert repeat["fetch_time"]["supported"] is True
+    assert isinstance(repeat["fetch_time"]["clock_skew_ms"], int)
+    assert out["time_sync_health"]["enabled"] is True
+    assert out["time_sync_health"]["total"] == 1
+    assert out["time_sync_health"]["succeeded"] == 1
+    assert out["time_sync_health"]["failed"] == 0
     assert out["account_critical_health"]["enabled"] is True
     assert out["account_critical_health"]["total"] == 3
     assert out["account_critical_health"]["succeeded"] == 3
@@ -396,6 +409,162 @@ def test_account_critical_probe_collection_aggregates_user_summaries():
         "failed": 0,
         "failure_pct": None,
     }
+
+
+def test_time_sync_probe_health_summarizes_success_failure_and_unsupported():
+    summary = summarize_time_sync_probe_health(
+        {
+            "include_time_sync": True,
+            "repeats": [
+                {
+                    "fetch_time": {
+                        "ok": True,
+                        "supported": True,
+                        "elapsed_ms": 2.5,
+                        "clock_skew_ms": -125,
+                    }
+                },
+                {
+                    "fetch_time": {
+                        "ok": False,
+                        "supported": True,
+                        "elapsed_ms": 3.75,
+                        "error_type": "RequestTimeout",
+                        "error": "raw exchange error should not be summarized",
+                    }
+                },
+                {
+                    "fetch_time": {
+                        "ok": False,
+                        "supported": False,
+                        "skipped": True,
+                        "error_type": "UnsupportedEndpoint",
+                    }
+                },
+            ],
+        }
+    )
+
+    assert summary["enabled"] is True
+    assert summary["total"] == 2
+    assert summary["succeeded"] == 1
+    assert summary["failed"] == 1
+    assert summary["unsupported"] == 1
+    assert summary["failure_pct"] == pytest.approx(50.0)
+    assert summary["clock_skew_ms"]["max_abs"] == 125.0
+    assert summary["error_types"] == {"RequestTimeout": 1}
+    assert "raw exchange error" not in str(summary)
+
+
+def test_time_sync_probe_collection_aggregates_user_summaries():
+    collection = summarize_time_sync_probe_collection(
+        [
+            {
+                "user": "okx_faisal",
+                "exchange": "okx",
+                "time_sync_health": {
+                    "enabled": True,
+                    "total": 1,
+                    "succeeded": 1,
+                    "failed": 0,
+                    "unsupported": 0,
+                    "failure_pct": 0.0,
+                    "clock_skew_ms": {"max_abs": 42.0},
+                    "latest": {"ok": True, "clock_skew_ms": 42.0},
+                },
+            },
+            {
+                "user": "legacy_01",
+                "exchange": "legacy",
+                "time_sync_health": {
+                    "enabled": True,
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "unsupported": 1,
+                    "failure_pct": None,
+                    "clock_skew_ms": {"max_abs": None},
+                    "latest": {"ok": False, "supported": False, "skipped": True},
+                },
+            },
+        ]
+    )
+
+    assert collection["total"] == 1
+    assert collection["succeeded"] == 1
+    assert collection["failed"] == 0
+    assert collection["unsupported"] == 1
+    assert collection["clock_skew_ms"]["max_abs"] == 42.0
+    assert collection["users"][0]["latest_clock_skew_ms"] == 42.0
+    assert collection["users"][1]["unsupported"] == 1
+
+
+@pytest.mark.asyncio
+async def test_time_sync_probe_uses_ccxt_capability_flag_for_unsupported_method():
+    class FakeExchange:
+        id = "fake"
+        has = {
+            "fetchBalance": True,
+            "fetchBidsAsks": True,
+            "fetchMyTrades": True,
+            "fetchOpenOrders": True,
+            "fetchPositions": True,
+            "fetchTime": False,
+            "fetchTicker": True,
+            "fetchTickers": True,
+        }
+
+        def __init__(self):
+            self.fetch_time_called = False
+
+        async def load_markets(self):
+            return {
+                "BTC/USDT:USDT": {
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                }
+            }
+
+        async def fetch_time(self):
+            self.fetch_time_called = True
+            raise RuntimeError("should not be called when has.fetchTime is false")
+
+        async def fetch_balance(self):
+            return {"USDT": {"total": 100.0}}
+
+        async def fetch_positions(self):
+            return []
+
+        async def fetch_open_orders(self, symbol=None):
+            return []
+
+    exchange = FakeExchange()
+
+    out = await probe_exchange_ticker_endpoints(
+        exchange,
+        user="fake_user",
+        user_info={"quote": "USDT"},
+        symbols=["BTC/USDT:USDT"],
+        coins=[],
+        quote=None,
+        max_symbols=1,
+        repeats=1,
+        sleep_between_seconds=0.0,
+        include_public=False,
+        include_order_book=False,
+        include_ohlcv=False,
+        include_my_trades=False,
+    )
+
+    assert exchange.fetch_time_called is False
+    assert out["repeats"][0]["fetch_time"]["supported"] is False
+    assert out["repeats"][0]["fetch_time"]["skipped"] is True
+    assert out["time_sync_health"]["total"] == 0
+    assert out["time_sync_health"]["failed"] == 0
+    assert out["time_sync_health"]["unsupported"] == 1
 
 
 @pytest.mark.asyncio

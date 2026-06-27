@@ -178,8 +178,9 @@ Ticker probes inspect CCXT ticker support and latency without placing orders:
   summary for the read-only balance, positions, and open-orders endpoints required before live
   exchange actions. Use `--account-only` for the lower-impact balance/positions/open-orders probe,
   which still loads markets to resolve an open-orders fallback symbol, or `--skip-my-trades` to
-  omit the fill-history endpoint. Keep authenticated runs low-rate when a live bot is using the
-  same account.
+  omit the fill-history endpoint. The probe also includes `time_sync_health` from read-only
+  `fetch_time` clock-skew checks when the exchange supports it; use `--skip-time-sync` to omit that
+  call. Keep authenticated runs low-rate when a live bot is using the same account.
 
 ## Hyperliquid live probes
 
