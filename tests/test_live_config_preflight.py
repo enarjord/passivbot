@@ -99,6 +99,40 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert "api_key" not in rendered
 
 
+def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
+    config = _sample_config()
+    config["bot"]["long"] = {
+        "n_positions": 3,
+        "forager_volume_drop_pct": 0.02,
+        "hsl_enabled": True,
+        "hsl_red_threshold": 0.05,
+        "hsl_cooldown_minutes_after_red": 60,
+        "hsl_no_restart_drawdown_threshold": 0.08,
+        "hsl_ema_span_minutes": 120,
+        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+        "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+        "hsl_panic_close_order_type": "limit",
+    }
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+
+    assert report["ok"] is True
+    assert report["hsl"]["sides"]["long"]["present"] is True
+    assert report["hsl"]["sides"]["long"]["enabled"] is True
+    assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
+    assert report["hsl"]["sides"]["long"]["tier_ratios"] == {
+        "yellow": 0.5,
+        "orange": 0.75,
+    }
+    assert report["forager"]["sides"]["long"]["n_positions"] == 3
+    assert report["forager"]["sides"]["long"]["forager_present"] is True
+    assert report["forager"]["sides"]["long"]["settings"] == {
+        "volume_drop_pct": 0.02
+    }
+
+
 def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
     baseline = _sample_config()
     target = _sample_config()
@@ -160,6 +194,43 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
     assert "super-secret-api-key" not in rendered
     assert "new-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_config_preflight_compare_resolves_flat_shared_bot_keys(tmp_path):
+    baseline = _sample_config()
+    target = _sample_config()
+    target["bot"]["short"] = {
+        "n_positions": 2,
+        "hsl_enabled": True,
+    }
+    baseline_path = tmp_path / "baseline.json"
+    target_path = tmp_path / "target.json"
+    _write_config(baseline_path, baseline)
+    _write_config(target_path, target)
+
+    report = live_config_preflight.build_live_config_preflight_report(
+        target_path,
+        compare_config_path=baseline_path,
+    )
+    changes = {change["field"]: change for change in report["diff"]["changes"]}
+
+    assert report["ok"] is True
+    assert changes["bot.short.hsl.enabled"]["before"] == {
+        "present": True,
+        "value": False,
+    }
+    assert changes["bot.short.hsl.enabled"]["after"] == {
+        "present": True,
+        "value": True,
+    }
+    assert changes["bot.short.risk.n_positions"]["before"] == {
+        "present": True,
+        "value": 1,
+    }
+    assert changes["bot.short.risk.n_positions"]["after"] == {
+        "present": True,
+        "value": 2,
+    }
 
 
 def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):

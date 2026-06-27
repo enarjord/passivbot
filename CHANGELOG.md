@@ -16,6 +16,9 @@ All notable user-facing changes will be documented in this file.
 - Hardened recent live-ops tooling and debug-profile diagnostics by redacting
   shareable path fields consistently, keeping Rust debug sample construction
   best-effort, and scoping EMA debug enrichment to the `ema` profile only.
+- Hardened read-only live-ops tools so `live-config-preflight` and
+  `hsl-startup-preview` resolve both grouped and flat bot-side config keys, and
+  HSL preview output keeps allowlisted event details scalar-only.
 - Added a `fills` live-event debug profile with bounded fill refresh and fill
   ingestion shape metadata, without raw fill/source payloads or default console
   changes.
