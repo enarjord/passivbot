@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `bc6e7f1d` after PR #789, `Add live performance resource pressure report`.
+- `a04bc1ed` after PR #791, `Add live performance shutdown latency report`.
 
 Current review gate:
 
@@ -2143,6 +2143,28 @@ VPS5 deployment status:
   `missing_expected=[]`. A focused performance summary showed
   `resource_pressure` populated for GateIO and Hyperliquid with RSS, load
   average, loop duration, event queue, sink-error, and worker-state fields.
+
+### PR #791: Live Performance Shutdown Latency Report
+
+- Branch: `codex/v8-live-performance-shutdown-latency`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `shutdown_latency`, derived only from existing `bot.stopping`,
+  `bot.shutdown.stage`, and `bot.stopped` events. The section summarizes
+  per-stage cumulative shutdown elapsed time and final total shutdown duration
+  while keeping the data out of trading blocker rankings and without copying
+  shutdown error text.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, silent-handling audit, and a compact
+  CLI performance-report smoke.
+- VPS5 evidence: deployed at `a04bc1ed` without bot restart because this is
+  read-only report tooling. A compact smoke reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused performance summary showed
+  `shutdown_latency` present; it was empty in the recent window because no
+  shutdown lifecycle events occurred during that window.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
