@@ -59,6 +59,10 @@ All notable user-facing changes will be documented in this file.
 - Added optional `--compare` diff reporting to
   `passivbot tool live-config-preflight` for local, read-only HSL, universe,
   forager, identity, and cache-setting changes between two configs.
+- Added config-only cache readiness/root-hint reporting to
+  `passivbot tool live-config-preflight`, including derived compare-mode
+  readiness deltas without scanning cache artifacts or enforcing startup
+  policy.
 - Added report-only warm-cache readiness evidence to
   `passivbot tool cache-integrity-doctor`, derived from already-scanned local
   candle, fill, and HSL/risk cache metadata.

@@ -217,6 +217,11 @@ Related detailed plans:
      two-config preflights, covering HSL signal/enabled changes, approved and
      ignored universe count/sample deltas, forager slots/staleness, identity
      hints, and cache live settings without credentials or exchange contact.
+   - 2026-06-27: Added config-only cache readiness/root-hint reporting to
+     `live-config-preflight`, including candle/fill/HSL setting attention,
+     explicit artifact-not-scanned notes, and derived compare-mode readiness
+     deltas without cache scans, credentials, exchange contact, or startup
+     enforcement.
 
 8. [ ] HSL dry-run preview for startup.
    Status: partial. `passivbot tool hsl-startup-preview` now emits a read-only

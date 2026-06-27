@@ -95,8 +95,72 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert report["forager"]["sides"]["long"]["n_positions"] == 3
     assert report["forager"]["total_configured_n_positions"] == 4.0
     assert report["cache"]["live_settings"]["pnls_max_lookback_days"] == 7
+    assert report["cache"]["readiness"]["status"] == "attention"
+    assert report["cache"]["readiness"]["summary"] == {
+        "attention_count": 7,
+        "disabled_surface_count": 0,
+        "not_proven_count": 3,
+    }
+    assert report["cache"]["readiness"]["root_hints"]["fill_events_root"] == {
+        "available": True,
+        "path": "caches/fill_events/binance/binance_01",
+    }
+    assert {
+        item["code"]
+        for item in report["cache"]["readiness"]["surfaces"]["candles"]["attention"]
+    } == {
+        "defer_broad_candle_warmup_missing",
+        "max_active_candle_tail_gap_minutes_missing",
+        "max_disk_candles_per_symbol_per_tf_missing",
+        "max_memory_candles_per_symbol_missing",
+        "warmup_ratio_missing",
+    }
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(tmp_path):
+    config = _sample_config()
+    config["live"].update(
+        {
+            "defer_broad_candle_warmup": True,
+            "enable_archive_candle_fetch": False,
+            "fills_confirmation_overlap_minutes": 60,
+            "fills_recent_overlap_minutes": 10,
+            "max_active_candle_tail_gap_minutes": 10,
+            "max_disk_candles_per_symbol_per_tf": 2_000_000,
+            "max_memory_candles_per_symbol": 200_000,
+            "warmup_ratio": 0.3,
+        }
+    )
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+    readiness = report["cache"]["readiness"]
+
+    assert report["ok"] is True
+    assert readiness["status"] == "settings_compatible_artifacts_not_checked"
+    assert readiness["summary"] == {
+        "attention_count": 0,
+        "disabled_surface_count": 0,
+        "not_proven_count": 3,
+    }
+    assert readiness["surfaces"]["candles"]["not_proven"] == [
+        {
+            "code": "local_candle_artifacts_not_scanned",
+            "message": (
+                "preflight inspects config only; run cache-integrity-doctor "
+                "to prove local candle coverage"
+            ),
+        }
+    ]
+    assert readiness["surfaces"]["fills"]["not_proven"][0]["code"] == (
+        "local_fill_artifacts_not_scanned"
+    )
+    assert readiness["surfaces"]["hsl"]["not_proven"][0]["code"] == (
+        "local_hsl_artifacts_not_scanned"
+    )
 
 
 def test_live_config_preflight_reports_flat_shared_bot_keys(tmp_path):
@@ -184,6 +248,13 @@ def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp
         "present": True,
         "value": 45,
     }
+    assert changes["cache.readiness.summary"]["category"] == "cache"
+    assert changes["cache.readiness.summary"]["before"]["value"][
+        "disabled_surface_count"
+    ] == 0
+    assert changes["cache.readiness.summary"]["after"]["value"][
+        "disabled_surface_count"
+    ] == 1
     assert changes["live.approved_coins.long"]["added_count"] == 2
     assert changes["live.approved_coins.long"]["removed_count"] == 1
     assert changes["live.approved_coins.long"]["added_sample"] == ["ADA"]
@@ -354,6 +425,13 @@ def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
     )
     report = json.loads(capsys.readouterr().out)
 
-    assert report["diff"]["summary"]["change_count"] == 1
-    assert report["diff"]["changes"][0]["field"] == "live.force_cold_startup"
-    assert report["diff"]["changes"][0]["after"] == {"present": True, "value": True}
+    changes = {change["field"]: change for change in report["diff"]["changes"]}
+
+    assert report["diff"]["summary"]["change_count"] == 2
+    assert changes["live.force_cold_startup"]["after"] == {
+        "present": True,
+        "value": True,
+    }
+    assert changes["cache.readiness.summary"]["after"]["value"][
+        "attention_count"
+    ] == 8
