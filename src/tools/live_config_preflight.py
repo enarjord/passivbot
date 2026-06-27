@@ -29,6 +29,19 @@ CACHE_LIVE_KEYS = (
     "warmup_jitter_seconds",
     "warmup_ratio",
 )
+CACHE_SETTING_CHECK_KEYS = (
+    "defer_broad_candle_warmup",
+    "enable_archive_candle_fetch",
+    "fills_confirmation_overlap_minutes",
+    "fills_recent_overlap_minutes",
+    "force_cold_startup",
+    "max_active_candle_tail_gap_minutes",
+    "max_disk_candles_per_symbol_per_tf",
+    "max_memory_candles_per_symbol",
+    "max_warmup_minutes",
+    "pnls_max_lookback_days",
+    "warmup_ratio",
+)
 FORAGER_LIVE_KEYS = (
     "forager_score_hysteresis_pct",
     "max_forager_candle_refresh_seconds",
@@ -106,6 +119,14 @@ def _display_value(value: Any) -> dict[str, Any]:
     if value is _MISSING:
         return {"present": False}
     return {"present": True, "value": value}
+
+
+def _setting_value(section: dict[str, Any], key: str) -> Any:
+    return section[key] if key in section else _MISSING
+
+
+def _setting_display(section: dict[str, Any], key: str) -> dict[str, Any]:
+    return _display_value(_setting_value(section, key))
 
 
 def _path_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
@@ -323,6 +344,302 @@ def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, 
     }
 
 
+def _numeric_status(value: Any, *, allow_zero: bool = False, allow_all: bool = False) -> str:
+    if value is _MISSING:
+        return "missing"
+    if allow_all and isinstance(value, str) and value.lower() == "all":
+        return "all"
+    if isinstance(value, bool):
+        return "invalid_bool"
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return "invalid"
+    if number < 0:
+        return "negative"
+    if number == 0 and not allow_zero:
+        return "zero"
+    return "present"
+
+
+def _bool_status(value: Any) -> str:
+    if value is _MISSING:
+        return "missing"
+    if isinstance(value, bool):
+        return "present"
+    return "invalid"
+
+
+def _surface_report(name: str) -> dict[str, Any]:
+    return {
+        "surface": name,
+        "status": "settings_compatible",
+        "evidence": [],
+        "attention": [],
+        "not_proven": [],
+    }
+
+
+def _append_attention(surface: dict[str, Any], code: str, message: str) -> None:
+    surface["attention"].append({"code": code, "message": message})
+
+
+def _append_not_proven(surface: dict[str, Any], code: str, message: str) -> None:
+    surface["not_proven"].append({"code": code, "message": message})
+
+
+def _finalize_surface(surface: dict[str, Any]) -> dict[str, Any]:
+    if surface["attention"]:
+        surface["status"] = "attention"
+    elif surface["not_proven"]:
+        surface["status"] = "settings_compatible_artifacts_not_checked"
+    return surface
+
+
+def _any_hsl_enabled(hsl_sides: dict[str, dict[str, Any]]) -> bool:
+    return any(side_report.get("enabled") is True for side_report in hsl_sides.values())
+
+
+def _bot_side_config(config: dict[str, Any], side: str) -> dict[str, Any]:
+    bot = config.get("bot")
+    if not isinstance(bot, dict):
+        return {}
+    side_config = bot.get(side)
+    return side_config if isinstance(side_config, dict) else {}
+
+
+def _cache_root_hints(identity: dict[str, Any]) -> dict[str, Any]:
+    exchange = identity.get("exchange") or identity.get("user_exchange_hint")
+    user = identity.get("user")
+    fill_root: dict[str, Any] = {"available": False}
+    if isinstance(exchange, str) and exchange and isinstance(user, str) and user:
+        fill_root = {
+            "available": True,
+            "path": f"caches/fill_events/{exchange}/{user}",
+        }
+    else:
+        fill_root["reason"] = "live.user or exchange hint unavailable"
+    return {
+        "default_cache_root": "caches",
+        "candle_v2_root": "caches/ohlcvs",
+        "fill_events_root": fill_root,
+        "cache_integrity_doctor_root_argument": "caches",
+    }
+
+
+def _cache_readiness_report(
+    live: dict[str, Any],
+    *,
+    identity: dict[str, Any],
+    hsl_sides: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    checks = {
+        key: _setting_display(live, key)
+        for key in CACHE_SETTING_CHECK_KEYS
+    }
+    candles = _surface_report("candles")
+    fills = _surface_report("fills")
+    hsl = _surface_report("hsl")
+
+    if live.get("force_cold_startup") is True:
+        _append_attention(
+            candles,
+            "force_cold_startup_enabled",
+            "live.force_cold_startup=true disables warm-cache startup reuse",
+        )
+    force_status = _bool_status(_setting_value(live, "force_cold_startup"))
+    if force_status == "missing":
+        _append_attention(
+            candles,
+            "force_cold_startup_missing",
+            "live.force_cold_startup is missing; startup cache intent is implicit",
+        )
+    elif force_status == "invalid":
+        _append_attention(
+            candles,
+            "force_cold_startup_invalid",
+            "live.force_cold_startup should be boolean when present",
+        )
+
+    defer_status = _bool_status(_setting_value(live, "defer_broad_candle_warmup"))
+    if defer_status == "missing":
+        _append_attention(
+            candles,
+            "defer_broad_candle_warmup_missing",
+            "live.defer_broad_candle_warmup is missing; broad warmup behavior is implicit",
+        )
+    elif defer_status == "invalid":
+        _append_attention(
+            candles,
+            "defer_broad_candle_warmup_invalid",
+            "live.defer_broad_candle_warmup should be boolean when present",
+        )
+    elif live.get("defer_broad_candle_warmup") is False:
+        _append_attention(
+            candles,
+            "broad_candle_warmup_blocking",
+            "live.defer_broad_candle_warmup=false keeps broad candle warmup on the startup path",
+        )
+
+    for key in (
+        "max_warmup_minutes",
+        "max_active_candle_tail_gap_minutes",
+        "max_disk_candles_per_symbol_per_tf",
+        "max_memory_candles_per_symbol",
+    ):
+        status = _numeric_status(_setting_value(live, key), allow_zero=key == "max_warmup_minutes")
+        if status == "missing":
+            _append_attention(
+                candles,
+                f"{key}_missing",
+                f"live.{key} is missing; candle cache sizing/readiness intent is implicit",
+            )
+        elif status != "present":
+            _append_attention(
+                candles,
+                f"{key}_{status}",
+                f"live.{key} is {status}; candle cache readiness may be degraded",
+            )
+
+    warmup_ratio_status = _numeric_status(_setting_value(live, "warmup_ratio"), allow_zero=True)
+    if warmup_ratio_status == "missing":
+        _append_attention(
+            candles,
+            "warmup_ratio_missing",
+            "live.warmup_ratio is missing; EMA warmup buffer intent is implicit",
+        )
+    elif warmup_ratio_status != "present":
+        _append_attention(
+            candles,
+            f"warmup_ratio_{warmup_ratio_status}",
+            f"live.warmup_ratio is {warmup_ratio_status}; EMA warmup buffer is suspicious",
+        )
+
+    archive_status = _bool_status(_setting_value(live, "enable_archive_candle_fetch"))
+    if archive_status == "missing":
+        candles["evidence"].append(
+            {
+                "code": "archive_candle_fetch_default",
+                "message": (
+                    "live.enable_archive_candle_fetch is missing; archive fetch "
+                    "remains defaulted by runtime"
+                ),
+            }
+        )
+    elif archive_status == "invalid":
+        _append_attention(
+            candles,
+            "enable_archive_candle_fetch_invalid",
+            "live.enable_archive_candle_fetch should be boolean when present",
+        )
+    else:
+        candles["evidence"].append(
+            {
+                "code": "archive_candle_fetch_configured",
+                "value": bool(live.get("enable_archive_candle_fetch")),
+            }
+        )
+    _append_not_proven(
+        candles,
+        "local_candle_artifacts_not_scanned",
+        "preflight inspects config only; run cache-integrity-doctor to prove local candle coverage",
+    )
+
+    lookback_status = _numeric_status(
+        _setting_value(live, "pnls_max_lookback_days"),
+        allow_all=True,
+    )
+    if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
+        _append_attention(
+            fills,
+            f"pnls_max_lookback_days_{lookback_status}",
+            "live.pnls_max_lookback_days must be positive or 'all' for fill/PnL lookback consumers",
+        )
+    else:
+        fills["evidence"].append(
+            {
+                "code": "pnls_max_lookback_days_configured",
+                "value": live.get("pnls_max_lookback_days"),
+            }
+        )
+    for key in ("fills_recent_overlap_minutes", "fills_confirmation_overlap_minutes"):
+        status = _numeric_status(_setting_value(live, key), allow_zero=True)
+        if status == "missing":
+            _append_attention(
+                fills,
+                f"{key}_missing",
+                f"live.{key} is missing; fill-cache overlap intent is implicit",
+            )
+        elif status != "present":
+            _append_attention(
+                fills,
+                f"{key}_{status}",
+                f"live.{key} is {status}; fill-cache overlap setting is suspicious",
+            )
+    _append_not_proven(
+        fills,
+        "local_fill_artifacts_not_scanned",
+        "preflight inspects config only; it does not prove fill-cache coverage or contract metadata",
+    )
+
+    if _any_hsl_enabled(hsl_sides):
+        hsl["evidence"].append(
+            {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
+        )
+        if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
+            _append_attention(
+                hsl,
+                "hsl_fill_lookback_unready",
+                "HSL is enabled but live.pnls_max_lookback_days is not a usable positive/'all' value",
+            )
+        _append_not_proven(
+            hsl,
+            "local_hsl_artifacts_not_scanned",
+            (
+                "preflight cannot prove local HSL status/cooldown artifacts; "
+                "use hsl-startup-preview for monitor-derived HSL observations"
+            ),
+        )
+    else:
+        hsl["status"] = "disabled"
+        hsl["evidence"].append(
+            {"code": "hsl_disabled", "message": "no HSL side is enabled in config"}
+        )
+
+    surfaces = {
+        "candles": _finalize_surface(candles),
+        "fills": _finalize_surface(fills),
+        "hsl": _finalize_surface(hsl),
+    }
+    attention_count = sum(len(surface["attention"]) for surface in surfaces.values())
+    not_proven_count = sum(len(surface["not_proven"]) for surface in surfaces.values())
+    status = (
+        "attention"
+        if attention_count
+        else "settings_compatible_artifacts_not_checked"
+        if not_proven_count
+        else "settings_compatible"
+    )
+    return {
+        "status": status,
+        "checks": checks,
+        "root_hints": _cache_root_hints(identity),
+        "surfaces": surfaces,
+        "summary": {
+            "attention_count": attention_count,
+            "not_proven_count": not_proven_count,
+            "disabled_surface_count": sum(
+                1 for surface in surfaces.values() if surface["status"] == "disabled"
+            ),
+        },
+        "notes": [
+            "config_only_cache_readiness",
+            "does_not_scan_cache_artifacts",
+            "does_not_enforce_startup_policy",
+        ],
+    }
+
+
 def _coin_value_for_side(config: dict[str, Any], group_name: str, side: str) -> Any:
     live = config["live"] if isinstance(config.get("live"), dict) else {}
     group = (
@@ -420,6 +737,46 @@ def build_live_config_diff_report(
     changes.extend(
         _universe_diff_changes(baseline, target, sample_size=sample_size)
     )
+    baseline_live = baseline["live"] if isinstance(baseline.get("live"), dict) else {}
+    target_live = target["live"] if isinstance(target.get("live"), dict) else {}
+    baseline_hsl_sides = {
+        side: _hsl_side_report(_bot_side_config(baseline, side))
+        for side in SIDES
+    }
+    target_hsl_sides = {
+        side: _hsl_side_report(_bot_side_config(target, side))
+        for side in SIDES
+    }
+    baseline_identity = _identity_report(baseline, baseline_live)
+    target_identity = _identity_report(target, target_live)
+    baseline_readiness = _cache_readiness_report(
+        baseline_live,
+        identity=baseline_identity,
+        hsl_sides=baseline_hsl_sides,
+    )
+    target_readiness = _cache_readiness_report(
+        target_live,
+        identity=target_identity,
+        hsl_sides=target_hsl_sides,
+    )
+    if baseline_readiness["status"] != target_readiness["status"]:
+        changes.append(
+            {
+                "category": "cache",
+                "field": "cache.readiness.status",
+                "before": {"present": True, "value": baseline_readiness["status"]},
+                "after": {"present": True, "value": target_readiness["status"]},
+            }
+        )
+    if baseline_readiness["summary"] != target_readiness["summary"]:
+        changes.append(
+            {
+                "category": "cache",
+                "field": "cache.readiness.summary",
+                "before": {"present": True, "value": baseline_readiness["summary"]},
+                "after": {"present": True, "value": target_readiness["summary"]},
+            }
+        )
     category_counts = Counter(change["category"] for change in changes)
     return {
         "ok": True,
@@ -542,18 +899,20 @@ def build_live_config_preflight_report(
         if isinstance(value, (int, float))
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
+    identity_report = _identity_report(parsed, live)
+    hsl_sides = {
+        side: _hsl_side_report(side_config)
+        for side, side_config in side_configs.items()
+    }
     report = {
         "ok": "error" not in severity_counts,
         "config_path": display_path,
         "config_version": parsed.get("config_version"),
-        "identity": _identity_report(parsed, live),
+        "identity": identity_report,
         "hsl": {
             "signal_mode": live.get("hsl_signal_mode"),
             "cooldown_position_policy": live.get("hsl_position_during_cooldown_policy"),
-            "sides": {
-                side: _hsl_side_report(side_config)
-                for side, side_config in side_configs.items()
-            },
+            "sides": hsl_sides,
         },
         "universe": {
             "approved_coins": approved,
@@ -566,6 +925,11 @@ def build_live_config_preflight_report(
         },
         "cache": {
             "live_settings": _selected_values(live, CACHE_LIVE_KEYS),
+            "readiness": _cache_readiness_report(
+                live,
+                identity=identity_report,
+                hsl_sides=hsl_sides,
+            ),
         },
         "issues": issues,
         "summary": {
