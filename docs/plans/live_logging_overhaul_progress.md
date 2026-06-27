@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b07d5166` merge of PR #767, `Classify risk log matches in smoke report`.
+- `b789e146` merge of PR #769, `Summarize smoke report verdict sources`.
 
 Current review gate:
 
@@ -1812,13 +1812,37 @@ VPS5 deployment status:
   calls, and no failed account-critical remote calls. Remaining attention was
   non-hard EMA readiness and HSL status.
 
+### PR #769: Live Smoke Verdict Source Breakdown
+
+- Branch: `codex/v8-smoke-source-breakdown`.
+- Scope: read-only smoke-report tooling.
+- Result: `passivbot tool live-smoke-report` now exposes
+  `hard_failure_sources` and `attention_sources` in full, summary, and brief
+  reports. The source maps identify monitor parse errors, invalid event rows,
+  structured hard/problem events, text-log matches, dropped unparsed attention
+  matches, and process hard failures. Smoke verdict logic is unchanged:
+  `hard_failures`, `attention_count`, and `ok` use the same accounting as
+  before.
+- Review evidence: Claude and Hermes approved; CI was green; full
+  `tests/test_live_smoke_report.py`, compileall, `git diff --check`, and the
+  touched-file silent-handling audit passed locally.
+- VPS5 evidence: deployed at `b789e146` without bot restart because this is
+  read-only smoke-report tooling. A 5-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `hard_failure_sources.total=0`, all five expected bots
+  matched, clean tracked repository state, no failed remote calls, no failed
+  account-critical remote calls, and no text-log attention or hard matches.
+  The remaining attention was explicitly attributed to
+  `attention_sources.problem_events=101`, with non-hard EMA readiness and HSL
+  status events visible in the existing summaries.
+
 ## Current Next Steps
 
-1. Continue collecting smoke evidence with the new risk-vs-general log-match
-   counters before changing any verdict policy. If future HSL RED/cooldown
-   episodes make smoke red, the report can now show whether the red state came
-   from risk/HSL log lines, non-risk software failures, structured problem
-   events, or process/repository health.
+1. Continue collecting smoke evidence with the new source breakdown and
+   risk-vs-general log-match counters before changing any verdict policy. If
+   future HSL RED/cooldown episodes make smoke red, the report can now show
+   whether the red state came from structured hard events, risk/HSL log lines,
+   non-risk software log failures, monitor parse/row failures, or process
+   health.
 2. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
    are more order/risk transition coverage or focused profile refinements only

@@ -1698,9 +1698,17 @@ def save_coins_hlcvs_to_cache(
             )
     raise_if_backtest_cancel_requested("cache save start")
     logging.info(f"Dumping cache...")
-    tmp_cache_dir = cache_dir.parent / f".{cache_dir.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    tmp_cache_dir = (
+        cache_dir.parent / f".{cache_dir.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    )
+    backup_cache_dir = (
+        cache_dir.parent
+        / f".{cache_dir.name}.backup-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    )
     if tmp_cache_dir.exists():
         shutil.rmtree(tmp_cache_dir)
+    if backup_cache_dir.exists():
+        shutil.rmtree(backup_cache_dir)
     tmp_cache_dir.mkdir(parents=True)
     published = False
     try:
@@ -1721,12 +1729,19 @@ def save_coins_hlcvs_to_cache(
         )
         raise_if_backtest_cancel_requested("cache publish")
         if cache_dir.exists():
-            shutil.rmtree(cache_dir)
-        os.replace(tmp_cache_dir, cache_dir)
+            os.replace(cache_dir, backup_cache_dir)
+        try:
+            os.replace(tmp_cache_dir, cache_dir)
+        except BaseException:
+            if backup_cache_dir.exists() and not cache_dir.exists():
+                os.replace(backup_cache_dir, cache_dir)
+            raise
         published = True
     finally:
         if not published and tmp_cache_dir.exists():
             shutil.rmtree(tmp_cache_dir, ignore_errors=True)
+        if backup_cache_dir.exists():
+            shutil.rmtree(backup_cache_dir, ignore_errors=True)
     return cache_dir
 
 

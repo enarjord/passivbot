@@ -3089,11 +3089,29 @@ def build_live_smoke_report(
         + int(log_scan["attention_matches"])
         + int(log_scan.get("dropped_unparsed_attention_matches", 0))
     )
+    hard_failure_sources = {
+        "monitor_errors": int(event_report["error_count"]),
+        "invalid_event_rows": int(event_scan["invalid_rows"]),
+        "hard_problem_events": int(event_scan["hard_problem_event_count"]),
+        "log_hard_matches": int(log_scan["hard_matches"]),
+        "process_hard_failures": int(process_report["hard_failures"]),
+        "total": int(hard_failures),
+    }
+    attention_sources = {
+        "problem_events": int(event_scan["problem_event_count"]),
+        "log_attention_matches": int(log_scan["attention_matches"]),
+        "dropped_unparsed_attention_matches": int(
+            log_scan.get("dropped_unparsed_attention_matches", 0)
+        ),
+        "total": int(attention_count),
+    }
     return {
         "ok": hard_failures == 0,
         "attention": attention_count > 0,
         "hard_failures": hard_failures,
         "attention_count": attention_count,
+        "hard_failure_sources": hard_failure_sources,
+        "attention_sources": attention_sources,
         "monitor": {
             "root": event_report.get("root"),
             "include_rotated": event_report.get("include_rotated"),
@@ -3233,6 +3251,8 @@ def summarize_live_smoke_report(
         "attention": bool(report.get("attention", False)),
         "hard_failures": int(report.get("hard_failures") or 0),
         "attention_count": int(report.get("attention_count") or 0),
+        "hard_failure_sources": dict(report.get("hard_failure_sources") or {}),
+        "attention_sources": dict(report.get("attention_sources") or {}),
         "repository": {
             key: repository.get(key)
             for key in (
@@ -3413,6 +3433,14 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "attention": bool(report.get("attention")),
         "hard_failures": _count_value(report.get("hard_failures")),
         "attention_count": _count_value(report.get("attention_count")),
+        "hard_failure_sources": {
+            key: _count_value(value)
+            for key, value in (report.get("hard_failure_sources") or {}).items()
+        },
+        "attention_sources": {
+            key: _count_value(value)
+            for key, value in (report.get("attention_sources") or {}).items()
+        },
         "repository": {
             key: repository.get(key)
             for key in ("branch", "head", "dirty", "tracked_changes")

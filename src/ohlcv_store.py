@@ -259,6 +259,11 @@ class OhlcvStore:
                     offsets = ((ts_arr[idx_arr] - month_start) // interval_ms).astype(
                         np.int64, copy=False
                     )
+                    if np.any((ts_arr[idx_arr] - month_start) % interval_ms != 0):
+                        raise ValueError(
+                            f"timestamps are not aligned to {timeframe} "
+                            f"for {year:04d}-{month:02d}"
+                        )
                     max_rows = rows_in_month(year, month, timeframe)
                     if np.any(offsets < 0) or np.any(offsets >= max_rows):
                         raise ValueError(
