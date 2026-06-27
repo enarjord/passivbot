@@ -1310,6 +1310,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[6].reason_code == "late_open_tail_projection"
     assert events[6].data["latest_expected_ts"] == 180_000
     assert events[6].data["tail_gap_age_ms"] == 60_000
+    assert "debug" not in events[6].data
     assert events[7].component == "candle.coverage"
     assert events[7].symbol == "ETH/USDT:USDT"
     assert events[7].status == "degraded"
@@ -1320,6 +1321,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[7].data["missing_spans_preview"] == [
         {"start_ts": 180_000, "end_ts": 240_000, "candles": 2}
     ]
+    assert "debug" not in events[7].data
     assert events[8].component == "cache.candles"
     assert events[8].symbol == "ETH/USDT:USDT"
     assert events[8].reason_code == "candle_disk_load_completed"
@@ -1361,6 +1363,100 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "warm_cache_accepted": 1,
     }
     assert events[10].data["window_max_candles"] == 260
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_candle_events_debug_profile_adds_bounded_tail_and_coverage_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_candle_tail_projected_event = (
+            pb_mod.Passivbot._emit_candle_tail_projected_event
+        )
+        _emit_candle_coverage_checked_event = (
+            pb_mod.Passivbot._emit_candle_coverage_checked_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("candles",)
+            self._live_event_current_cycle_id = "cy_12"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_candle_tail_projected_event(
+        symbol="NEAR/USDT:USDT",
+        context={
+            "timeframe": "1m",
+            "latest_expected_ts": 300_000,
+            "last_cached_ts": 180_000,
+            "tail_gap_age_ms": 120_000,
+            "tail_gap_candles": 2,
+            "missing_candles": 2,
+            "max_tail_gap_ms": 180_000,
+            "reason": "open_tail_gap_projection",
+            "internal_notes": "not serialized as value in debug",
+        },
+    )
+    bot._emit_candle_coverage_checked_event(
+        symbol="NEAR/USDT:USDT",
+        timeframe="1m",
+        start_ts=120_000,
+        end_ts=300_000,
+        report={
+            "ok": False,
+            "timeframe": "1m",
+            "missing_spans": [(180_000, 240_000), (300_000, 300_000)],
+            "missing_candles": 3,
+            "loaded_rows": 2,
+            "raw_rows": [1, 2, 3],
+        },
+        context="required_disk_audit",
+        required=True,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    tail, coverage = sink.events
+    assert tail.data["debug_profile"] == "candles"
+    assert coverage.data["debug_profile"] == "candles"
+    assert tail.data["debug"]["context_keys"] == [
+        "internal_notes",
+        "last_cached_ts",
+        "latest_expected_ts",
+        "max_tail_gap_ms",
+        "missing_candles",
+        "reason",
+        "tail_gap_age_ms",
+        "tail_gap_candles",
+        "timeframe",
+    ]
+    assert tail.data["debug"]["tail_gap_age_ms"] == 120_000
+    assert tail.data["debug"]["tail_gap_candles"] == 2
+    assert "not serialized" not in str(tail.data["debug"])
+    assert coverage.data["debug"]["report_keys"] == [
+        "loaded_rows",
+        "missing_candles",
+        "missing_spans",
+        "ok",
+        "raw_rows",
+        "timeframe",
+    ]
+    assert coverage.data["debug"]["timeframe_ms"] == 60_000
+    assert coverage.data["debug"]["window_ms"] == 180_000
+    assert coverage.data["debug"]["coverage_ok"] is False
+    assert coverage.data["debug"]["missing_span_count"] == 2
+    assert coverage.data["debug"]["raw_missing_span_count"] == 2
+    assert "raw_rows" in coverage.data["debug"]["report_keys"]
+    assert "[1, 2, 3]" not in str(coverage.data["debug"])
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

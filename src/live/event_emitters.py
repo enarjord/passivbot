@@ -110,6 +110,47 @@ def _mapping_key_sample(value: Any, *, limit: int = 32) -> list[str]:
     return sorted(str(key) for key in value)[:limit]
 
 
+def _candle_debug_payload(
+    data: dict[str, Any],
+    *,
+    context: dict[str, Any] | None = None,
+    report: dict[str, Any] | None = None,
+    timeframe_ms: int | None = None,
+    limit: int = 32,
+) -> dict[str, Any]:
+    debug: dict[str, Any] = {"data_keys": _mapping_key_sample(data, limit=limit)}
+    if isinstance(context, dict):
+        debug["context_keys"] = _mapping_key_sample(context, limit=limit)
+    if isinstance(report, dict):
+        debug["report_keys"] = _mapping_key_sample(report, limit=limit)
+    if timeframe_ms is not None:
+        debug["timeframe_ms"] = int(max(1, int(timeframe_ms)))
+    for key in (
+        "context",
+        "timeframe",
+        "coverage_ok",
+        "missing_span_count",
+        "missing_candles",
+        "loaded_rows",
+        "tail_gap_age_ms",
+        "tail_gap_candles",
+        "max_tail_gap_ms",
+    ):
+        if key in data:
+            debug[key] = data.get(key)
+    start_ts = _safe_int(data.get("start_ts"))
+    end_ts = _safe_int(data.get("end_ts"))
+    if start_ts is not None and end_ts is not None:
+        debug["window_ms"] = int(max(0, int(end_ts) - int(start_ts)))
+    if isinstance(report, dict):
+        raw_spans = report.get("missing_spans") or []
+        try:
+            debug["raw_missing_span_count"] = len(raw_spans)
+        except TypeError:
+            debug["raw_missing_span_count"] = 0
+    return debug
+
+
 def _remote_call_debug_payload(
     data: dict[str, Any],
     *,
@@ -1730,6 +1771,9 @@ def _emit_candle_tail_projected_event_unchecked(
     reason = ctx.get("reason")
     if reason is not None:
         data["projection_reason"] = str(reason)
+    if live_event_debug_profile_enabled(bot, "candles"):
+        data["debug_profile"] = "candles"
+        data["debug"] = _candle_debug_payload(data, context=ctx)
     _safe_emit(
         bot,
         EventTypes.CANDLE_TAIL_PROJECTED,
@@ -1844,6 +1888,13 @@ def _emit_candle_coverage_checked_event_unchecked(
         safe = _safe_int(value)
         if safe is not None:
             data[key] = int(safe)
+    if live_event_debug_profile_enabled(bot, "candles"):
+        data["debug_profile"] = "candles"
+        data["debug"] = _candle_debug_payload(
+            data,
+            report=report_in,
+            timeframe_ms=tf_ms,
+        )
     _safe_emit(
         bot,
         EventTypes.CANDLE_COVERAGE_CHECKED,
