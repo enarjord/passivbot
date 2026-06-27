@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d4c28058e` merge of PR #741, `Add ticker probe time sync health`.
+- `1fe1292bf` merge of PR #743, `Add ticker probe candle freshness health`.
 
 Current review gate:
 
@@ -353,6 +353,16 @@ VPS5 deployment status:
   state. A one-repeat `ticker-endpoint-probe --account-only` on `binance_01`
   validated the new `time_sync_health` output with `total=1`, `succeeded=1`,
   `failed=0`, `unsupported=0`, and `max_abs_clock_skew_ms=14`.
+- PR #743 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only changes read-only active probe
+  projections and docs. A 5-minute compact smoke at `1fe1292b` reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and clean tracked repository
+  state. A one-repeat public-only `ticker-endpoint-probe` on `binance_01` for
+  `BTC/USDT:USDT` validated `candle_freshness_health.total_symbols=1`,
+  `succeeded_symbols=1`, `failed_symbols=0`, `current_incomplete_symbols=1`,
+  and `worst_symbol=BTC/USDT:USDT`.
 
 ## Phase Checklist
 
@@ -365,7 +375,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical health summaries and account-only mode, `live-config-preflight` offline config summaries | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond account-critical endpoints |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness health summaries and account-only mode, `live-config-preflight` offline config summaries | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -1461,6 +1471,27 @@ VPS5 deployment status:
   `--account-only` probe produced `time_sync_health.total=1`,
   `succeeded=1`, `failed=0`, `unsupported=0`, and `max_abs_clock_skew_ms=14`.
 
+### PR #743: Ticker Probe Candle Freshness Health
+
+- Branch: `codex/v8-ticker-probe-candle-freshness`.
+- Scope: read-only active exchange health probe.
+- Result: `passivbot tool ticker-endpoint-probe` now derives
+  `candle_freshness_health` from the existing 1m OHLCV tail probe results. The
+  summary reports symbol success/failure counts, current-incomplete candle
+  counts, last-candle age statistics, and the worst-age symbol without making
+  additional exchange calls.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  ticker-probe tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A compact smoke at `1fe1292b` reported all five expected bots
+  running, no hard failures, no log hard matches, no failed remote calls, no
+  failed account-critical remote calls, and clean tracked repository state. A
+  real Binance public-only probe for `BTC/USDT:USDT` produced
+  `candle_freshness_health.total_symbols=1`, `succeeded_symbols=1`,
+  `failed_symbols=0`, `current_incomplete_symbols=1`, and
+  `worst_symbol=BTC/USDT:USDT`.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1470,8 +1501,8 @@ VPS5 deployment status:
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. PR #741 added
-   clock-skew health. Remaining useful slices include rate-limit behavior, fill
-   pagination coverage, and candle freshness probes.
+   clock-skew health. PR #743 added candle freshness health. Remaining useful
+   slices include rate-limit behavior and fill pagination coverage.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
