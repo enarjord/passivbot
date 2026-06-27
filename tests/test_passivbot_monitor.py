@@ -2713,6 +2713,124 @@ def test_risk_mode_changed_event_emits_structured_summary():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_unstuck_status_event_emits_structured_summary():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_unstuck_status_event = pb_mod.Passivbot._emit_unstuck_status_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_unstuck_status"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_unstuck_status_event(
+        side_statuses={
+            "long": {
+                "status": "ok",
+                "allowance": -12.3,
+                "peak": 1000.0,
+                "pct_from_peak": -1.2,
+                "loss_allowance_pct": 0.01,
+                "override_loss_allowance_pcts": {
+                    "ETH/USDT:USDT": 0.004,
+                    "BTC/USDT:USDT": 0.005,
+                },
+                "override_allowances": {
+                    "ETH/USDT:USDT": -3.0,
+                    "BTC/USDT:USDT": -5.0,
+                },
+            },
+            "short": {"status": "disabled"},
+        },
+        changed=True,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.UNSTUCK_STATUS
+    assert event.cycle_id == "cy_unstuck_status"
+    assert event.reason_code == "unstuck_status"
+    assert event.component == "risk.unstuck.status"
+    assert event.tags == ("risk", "unstuck", "summary")
+    assert event.data["changed"] is True
+    assert event.data["status_counts"] == {"disabled": 1, "ok": 1}
+    assert event.data["over_budget_sides"] == ["long"]
+    long = event.data["sides"]["long"]
+    assert long["allowance"] == pytest.approx(-12.3)
+    assert long["over_budget"] is True
+    assert long["override_loss_allowance_pct_count"] == 2
+    assert long["override_loss_allowance_pcts"] == {
+        "BTC/USDT:USDT": pytest.approx(0.005),
+        "ETH/USDT:USDT": pytest.approx(0.004),
+    }
+    assert long["override_allowance_count"] == 2
+    assert long["override_allowances"] == {
+        "BTC/USDT:USDT": pytest.approx(-5.0),
+        "ETH/USDT:USDT": pytest.approx(-3.0),
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_unstuck_selection_event_emits_structured_summary():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_unstuck_selection_event = pb_mod.Passivbot._emit_unstuck_selection_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_unstuck_selection"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_unstuck_selection_event(
+        symbol="SUI/USDT:USDT",
+        pside="long",
+        entry_price=1.0,
+        current_price=1.1,
+        allowance=-12.3,
+        changed=True,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.UNSTUCK_SELECTION
+    assert event.cycle_id == "cy_unstuck_selection"
+    assert event.symbol == "SUI/USDT:USDT"
+    assert event.pside == "long"
+    assert event.reason_code == "unstuck_selection"
+    assert event.component == "risk.unstuck.selection"
+    assert event.tags == ("risk", "unstuck", "selection")
+    assert event.data["changed"] is True
+    assert event.data["entry_price"] == pytest.approx(1.0)
+    assert event.data["current_price"] == pytest.approx(1.1)
+    assert event.data["price_diff_pct"] == pytest.approx(10.0)
+    assert event.data["allowance"] == pytest.approx(-12.3)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_log_new_fill_events_emits_fill_ingested_event():
     import passivbot as pb_mod
 

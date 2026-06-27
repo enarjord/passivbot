@@ -53,6 +53,7 @@ across time.
 - `timeout`
 - `time_sync`
 - `unavailable`
+- `unstuck`
 - `warmup`
 - `wave`
 
@@ -91,6 +92,8 @@ across time.
 - `staged_refresh_timing`
 - `state_change_detected`
 - `submitted_to_exchange`
+- `unstuck_selection`
+- `unstuck_status`
 - `warmup_cache_decision`
 
 Dynamic helpers are part of the same contract:

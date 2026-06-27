@@ -2989,6 +2989,136 @@ def emit_risk_mode_changed_event(
         )
 
 
+def _unstuck_status_side_summary(
+    info: dict[str, Any],
+    *,
+    override_limit: int = 8,
+) -> dict[str, Any]:
+    status = str(info.get("status") or "unknown")
+    out: dict[str, Any] = {"status": status}
+    for key in ("allowance", "peak", "pct_from_peak", "loss_allowance_pct"):
+        value = _safe_float(info.get(key))
+        if value is not None:
+            out[key] = value
+    allowance = _safe_float(info.get("allowance"))
+    if allowance is not None:
+        out["over_budget"] = allowance < 0.0
+    override_pcts = info.get("override_loss_allowance_pcts")
+    if isinstance(override_pcts, dict):
+        items = sorted(
+            (str(symbol), _safe_float(pct)) for symbol, pct in override_pcts.items()
+        )
+        clean_items = [(symbol, pct) for symbol, pct in items if pct is not None]
+        if clean_items:
+            out["override_loss_allowance_pct_count"] = len(clean_items)
+            out["override_loss_allowance_pcts"] = {
+                symbol: pct for symbol, pct in clean_items[:override_limit]
+            }
+            out["override_loss_allowance_pcts_truncated"] = max(
+                0, len(clean_items) - override_limit
+            )
+    override_allowances = info.get("override_allowances")
+    if isinstance(override_allowances, dict):
+        items = sorted(
+            (str(symbol), _safe_float(allowance))
+            for symbol, allowance in override_allowances.items()
+        )
+        clean_items = [
+            (symbol, allowance) for symbol, allowance in items if allowance is not None
+        ]
+        if clean_items:
+            out["override_allowance_count"] = len(clean_items)
+            out["override_allowances"] = {
+                symbol: allowance for symbol, allowance in clean_items[:override_limit]
+            }
+            out["override_allowances_truncated"] = max(0, len(clean_items) - override_limit)
+    return out
+
+
+def emit_unstuck_status_event(
+    bot: Any,
+    *,
+    side_statuses: dict[str, dict[str, Any]],
+    changed: bool,
+) -> None:
+    try:
+        sides = {
+            str(pside): _unstuck_status_side_summary(dict(info or {}))
+            for pside, info in sorted((side_statuses or {}).items())
+        }
+        status_counts = dict(
+            sorted(
+                Counter(
+                    str(info.get("status") or "unknown") for info in sides.values()
+                ).items()
+            )
+        )
+        over_budget_sides = sorted(
+            pside for pside, info in sides.items() if bool(info.get("over_budget"))
+        )
+        bot._emit_live_event(
+            EventTypes.UNSTUCK_STATUS,
+            level="info",
+            component="risk.unstuck.status",
+            tags=(EventTags.RISK, EventTags.UNSTUCK, EventTags.SUMMARY),
+            cycle_id=bot._current_live_event_cycle_id(),
+            status="succeeded",
+            reason_code=ReasonCodes.UNSTUCK_STATUS,
+            data={
+                "changed": bool(changed),
+                "status_counts": status_counts,
+                "over_budget_sides": over_budget_sides,
+                "sides": sides,
+            },
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit unstuck status event: %s", exc)
+
+
+def emit_unstuck_selection_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    entry_price: float,
+    current_price: float,
+    allowance: float,
+    changed: bool,
+) -> None:
+    try:
+        entry = _safe_float(entry_price)
+        current = _safe_float(current_price)
+        price_diff_pct = None
+        if entry is not None and current is not None and entry > 0.0 and current > 0.0:
+            price_diff_pct = (current / entry - 1.0) * 100.0
+        data = {
+            "changed": bool(changed),
+            "entry_price": entry,
+            "current_price": current,
+            "price_diff_pct": price_diff_pct,
+            "allowance": _safe_float(allowance),
+        }
+        bot._emit_live_event(
+            EventTypes.UNSTUCK_SELECTION,
+            level="info",
+            component="risk.unstuck.selection",
+            tags=(EventTags.RISK, EventTags.UNSTUCK, EventTags.SELECTION),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=str(symbol),
+            pside=str(pside),
+            status="succeeded",
+            reason_code=ReasonCodes.UNSTUCK_SELECTION,
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit unstuck selection event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def emit_balance_changed_event(
     bot: Any,
     *,

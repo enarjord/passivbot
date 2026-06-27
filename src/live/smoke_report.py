@@ -78,6 +78,8 @@ RISK_EVENT_TYPES = {
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
+    EventTypes.UNSTUCK_STATUS,
+    EventTypes.UNSTUCK_SELECTION,
 }
 SHUTDOWN_EVENT_TYPES = {
     EventTypes.BOT_STOPPING,
@@ -1480,6 +1482,10 @@ def _risk_event_group(
             "cooldown_remaining_seconds",
             "last_red_ts",
             "pending_red_since_ms",
+            "changed",
+            "price_diff_pct",
+            "status_counts",
+            "over_budget_sides",
         )
         if payload.get(key) is not None
     }

@@ -1923,6 +1923,20 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "mode": "panic",
                 },
             ),
+            _monitor_row(
+                event_type="unstuck.selection",
+                seq=5,
+                ts=5000,
+                symbol="SUI/USDT:USDT",
+                pside="long",
+                reason_code="unstuck_selection",
+                ids={"cycle_id": "cy_risk_4"},
+                data={
+                    "allowance": -12.3,
+                    "price_diff_pct": 10.0,
+                    "changed": True,
+                },
+            ),
         ],
     )
 
@@ -1935,13 +1949,31 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert report["ok"] is True
     assert report["attention"] is False
     assert report["risk_events"] == {
-        "total": 3,
+        "total": 4,
         "groups_truncated": False,
         "event_types": {
             "hsl.status": 2,
             "risk.mode_changed": 1,
+            "unstuck.selection": 1,
         },
         "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "unstuck.selection",
+                "reason_code": "unstuck_selection",
+                "status": "succeeded",
+                "level": "info",
+                "symbol": "SUI/USDT:USDT",
+                "pside": "long",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 5000,
+                "latest_data": {
+                    "changed": True,
+                    "price_diff_pct": 10.0,
+                },
+                "latest_ids": {"cycle_id": "cy_risk_4"},
+            },
             {
                 "bot": "binance/binance_01",
                 "event_type": "risk.mode_changed",

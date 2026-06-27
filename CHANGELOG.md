@@ -195,6 +195,9 @@ All notable user-facing changes will be documented in this file.
   disk-cache write summaries.
 - Added structured `risk.mode_changed` live events for HSL runtime forced-mode
   changes such as panic, graceful-stop, tp-only, and clear transitions.
+- Added off-console structured `unstuck.status` and `unstuck.selection` live
+  events alongside existing `[unstuck]` logs, and included them in
+  `live-smoke-report` risk-event summaries.
 - Added structured `hsl.red_triggered` live events for HSL stop finalization
   paths that reconstruct or finalize RED state without a fresh threshold-crossing
   sample.

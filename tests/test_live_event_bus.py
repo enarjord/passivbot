@@ -227,6 +227,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_COOLDOWN_STARTED,
         EventTypes.HSL_COOLDOWN_ENDED,
+        EventTypes.UNSTUCK_STATUS,
+        EventTypes.UNSTUCK_SELECTION,
     ):
         assert DEFAULT_ROUTES[event_type].structured is True
         assert DEFAULT_ROUTES[event_type].monitor is True

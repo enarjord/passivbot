@@ -118,6 +118,8 @@ class EventTypes:
     HSL_RED_TRIGGERED = "hsl.red_triggered"
     HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
+    UNSTUCK_STATUS = "unstuck.status"
+    UNSTUCK_SELECTION = "unstuck.selection"
     SINK_DEGRADED = "sink.degraded"
 
 
@@ -165,6 +167,7 @@ class EventTags:
     TIMEOUT = "timeout"
     TIME_SYNC = "time_sync"
     UNAVAILABLE = "unavailable"
+    UNSTUCK = "unstuck"
     WARMUP = "warmup"
     WAVE = "wave"
 
@@ -203,6 +206,8 @@ class ReasonCodes:
     STAGED_REFRESH_TIMING = "staged_refresh_timing"
     STATE_CHANGE_DETECTED = "state_change_detected"
     SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
+    UNSTUCK_SELECTION = "unstuck_selection"
+    UNSTUCK_STATUS = "unstuck_status"
     WARMUP_CACHE_DECISION = "warmup_cache_decision"
 
 
@@ -335,6 +340,8 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
+    EventTypes.UNSTUCK_STATUS,
+    EventTypes.UNSTUCK_SELECTION,
     EventTypes.SINK_DEGRADED,
 }
 
@@ -626,6 +633,8 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_RED_TRIGGERED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
+    EventTypes.UNSTUCK_STATUS: EventRoute(console=False, text=False),
+    EventTypes.UNSTUCK_SELECTION: EventRoute(console=False, text=False),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 
