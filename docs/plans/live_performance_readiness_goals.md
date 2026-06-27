@@ -16,6 +16,21 @@ compatibility. If proof is missing, the bot should perform the smallest exact
 repair needed for the affected order class instead of falling back to broad
 blocking reconstruction.
 
+## How To Use This Checklist
+
+This document is the action list for live performance and readiness work. Each
+item should end in one of three outcomes:
+
+- a measured baseline in `passivbot tool live-performance-report`;
+- a behavior-preserving optimization with before/after timing evidence; or
+- a documented readiness contract with tests proving that fast startup does not
+  weaken trading correctness.
+
+Any optimization that changes which order classes are allowed to proceed must
+state the readiness contract explicitly. Speedups are acceptable only when they
+preserve the existing trading decision semantics or when the contract is
+deliberately changed and reviewed.
+
 ## Current Evidence
 
 Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
@@ -86,6 +101,33 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
    - These fields make the next optimization measurable, but they do not yet
      split protective readiness from full replay.
 
+## Outcome Targets
+
+- [ ] A held position should reach exact protective readiness in seconds, not
+  minutes, after process start.
+  - Initial target on the VPS5 1-vCPU profile: under `60s` for held-position
+    protective HSL readiness when required cache/fill/candle proof is present.
+  - Stretch target after optimized replay/checkpointing: under `10s` for warm
+    restart with valid proof.
+
+- [ ] A broad full-HSL replay should stop being a critical-path startup blocker.
+  - Initial target: full replay for `25-30` pairs over the configured lookback
+    completes in under `5m` on VPS5-class hardware.
+  - Stretch target: warm restart with a valid checkpoint resumes in under `60s`
+    and continues exact background repair/replay when needed.
+
+- [ ] Every performance claim should have a local/offline reproduction path.
+  - Prefer copied monitor/cache fixtures and deterministic synthetic fixtures
+    before relying on live exchange access.
+  - VPS smoke should validate integration and real endpoint behavior, not be
+    the only profiling environment.
+
+- [ ] Operators should be able to answer "what delayed this trade?" from one
+  report.
+  - The report should connect startup readiness, input staleness,
+    decision-boundary lag, Rust planning, Python filtering/gating, exchange
+    writes, confirmation, and monitor/event-pipeline overhead.
+
 ## Performance Checklist
 
 ### P0: Readiness Contract
@@ -155,6 +197,9 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     states that have values on that row, or per-pair sparse series built once.
   - Avoid repeated nested dict scans and repeated full fill-list scans per
     symbol.
+  - Preserve current RED/green/current-drawdown semantics: a historical RED
+    crossing must not cause a panic now if current replay state is no longer in
+    the red zone.
 
 - [ ] Identify the current bottleneck with a focused profile.
   - Measure time spent in fill indexing, candle/timeline construction, pair
@@ -164,6 +209,8 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     optimization does not require live exchange access.
   - Report rows/s and held-pair protective elapsed time before and after each
     optimization.
+  - Report whether the bottleneck is CPU-bound Python, disk/cache IO, event
+    emission, or exchange/cache backfill.
 
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
@@ -190,6 +237,8 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     minutes, on the VPS5 1-vCPU profile.
   - Full replay should be optimized enough that 25-30 pairs over 30 days is no
     longer a 20-40 minute operation.
+  - Add regression protection for rows/s or elapsed-time regressions with a
+    deterministic offline fixture.
 
 ### P1: HSL Checkpointing
 
@@ -264,6 +313,13 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Group by exchange/user/bot so VPS-class regressions are visible before a
     panic incident.
 
+- [ ] Add a "slowest blockers" view.
+  - Rank operations by elapsed time and trading impact.
+  - Separate "delayed protective action", "delayed fresh entry", "delayed
+    diagnostics only", and "not on critical path".
+  - Include enough event IDs/timestamps to jump from the summary into the
+    structured event stream.
+
 ### P1: Runtime Cycle Speed
 
 - [ ] Keep normal no-op cycles lean.
@@ -298,6 +354,9 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     proves coverage.
   - Cache proof failures should be explicit and targeted, not broad blocking
     repairs by default.
+  - If the bot was down only briefly and coverage proof still matches config
+    and exchange state, startup should consume the existing cache/checkpoint
+    before scheduling broad backfill.
 
 - [ ] Add warm-restart acceptance fixtures.
   - Restart after a short downtime with complete cache proof should skip broad
@@ -323,6 +382,25 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - HSL coin replay over 30 days and 30 pairs.
   - EMA readiness over a high-cardinality forager universe.
   - Monitor event ingestion and smoke-report scan over large NDJSON segments.
+
+### P2: Shutdown Latency
+
+- [ ] Measure shutdown by stage.
+  - Track signal received, exit flag set, task cancellation requested, remote
+    calls cancelled or completed, monitor flush finished, and process exit.
+  - Report slowest pending tasks at shutdown without logging secrets or raw
+    exchange payloads.
+
+- [ ] Make long non-critical work interruptible.
+  - Big candle fetches, broad background replay, monitor scans, and forager
+    refresh work should observe shutdown promptly.
+  - Protective cleanup and final monitor flush may run briefly, but shutdown
+    should not wait for fresh-entry-only background work.
+
+- [ ] Add shutdown smoke expectations.
+  - Repeated Ctrl+C should not be required for the normal path.
+  - If a second interrupt is needed, the logs/events should identify the
+    blocking task and stage.
 
 ## Target State
 

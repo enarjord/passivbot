@@ -540,6 +540,135 @@ class _InputStalenessAccumulator:
         }
 
 
+def _startup_elapsed_ms(data: dict[str, Any]) -> int | None:
+    value_ms = _non_negative_ms(data.get("elapsed_ms"))
+    if value_ms is not None:
+        return value_ms
+    return _elapsed_s_to_ms(data.get("elapsed_s"))
+
+
+class _StartupReadinessAccumulator:
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+
+    def _bot_state(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> dict[str, Any]:
+        bot = _bot_key(row, live_event)
+        state = self.bots.get(bot)
+        if state is None:
+            state = {
+                "bot": bot,
+                "startup_phases_ms": {},
+                "latest_ts": None,
+            }
+            self.bots[bot] = state
+        ts = _record_ts(row)
+        if ts is not None and (
+            state.get("latest_ts") is None or int(ts) > int(state["latest_ts"])
+        ):
+            state["latest_ts"] = int(ts)
+        return state
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        ts = _record_ts(row)
+        if event_type == "bot.started":
+            state = self._bot_state(row=row, live_event=live_event)
+            bot = str(state["bot"])
+            state.clear()
+            state.update(
+                {
+                    "bot": bot,
+                    "startup_phases_ms": {},
+                    "latest_ts": int(ts) if ts is not None else None,
+                }
+            )
+            if ts is not None:
+                state["bot_started_ts"] = int(ts)
+            state["lifecycle_status"] = "started"
+            return
+        if event_type == "bot.ready":
+            state = self._bot_state(row=row, live_event=live_event)
+            if ts is not None:
+                state["bot_ready_ts"] = int(ts)
+            state["lifecycle_status"] = "ready"
+            return
+        if event_type == "bot.startup_timing":
+            state = self._bot_state(row=row, live_event=live_event)
+            stage = data.get("stage") or data.get("phase") or "startup"
+            elapsed_ms = _startup_elapsed_ms(data)
+            if elapsed_ms is not None:
+                state["startup_phases_ms"][str(stage)] = int(elapsed_ms)
+            return
+        if event_type.startswith("hsl.replay."):
+            state = self._bot_state(row=row, live_event=live_event)
+            hsl_state = state.get("hsl_replay")
+            if not isinstance(hsl_state, dict):
+                hsl_state = {}
+                state["hsl_replay"] = hsl_state
+            if ts is not None:
+                hsl_state["latest_ts"] = int(ts)
+            hsl_state["event_type"] = event_type
+            hsl_state["status"] = live_event.get("status")
+            hsl_state["reason_code"] = live_event.get("reason_code")
+            for key in (
+                "signal_mode",
+                "stage",
+                "pairs",
+                "held_pairs",
+                "cooldown_pairs",
+                "required_pairs",
+                "timeline_rows",
+                "applied_rows",
+                "total_applied_rows",
+                "skipped_pairs",
+                "rows_per_second",
+                "elapsed_s",
+                "full_elapsed_s",
+                "startup_blocking_elapsed_s",
+            ):
+                if key in data:
+                    hsl_state[key] = data[key]
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        bot_items = []
+        ready_count = 0
+        hsl_active_count = 0
+        limit = max(0, int(group_limit))
+        for bot, state in sorted(self.bots.items()):
+            phases = dict(sorted(state.get("startup_phases_ms", {}).items()))
+            item = {
+                "bot": bot,
+                "latest_ts": state.get("latest_ts"),
+                "lifecycle_status": state.get("lifecycle_status"),
+                "startup_phases_ms": dict(list(phases.items())[:limit]),
+            }
+            if len(phases) > limit:
+                item["startup_phases_truncated"] = True
+            if state.get("bot_started_ts") is not None:
+                item["bot_started_ts"] = int(state["bot_started_ts"])
+            if state.get("bot_ready_ts") is not None:
+                item["bot_ready_ts"] = int(state["bot_ready_ts"])
+                ready_count += 1
+            if isinstance(state.get("hsl_replay"), dict):
+                hsl_state = {
+                    key: value
+                    for key, value in state["hsl_replay"].items()
+                    if value is not None
+                }
+                item["hsl_replay"] = hsl_state
+                if hsl_state.get("status") not in ("succeeded", "failed"):
+                    hsl_active_count += 1
+            bot_items.append({key: value for key, value in item.items() if value not in (None, {})})
+        return {
+            "bot_count": len(bot_items),
+            "ready_count": int(ready_count),
+            "hsl_replay_active_count": int(hsl_active_count),
+            "bots_truncated": len(bot_items) > limit,
+            "bots": bot_items[:limit],
+        }
+
+
 def _timings_map(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
@@ -778,6 +907,7 @@ def build_live_performance_report(
     accumulator = _PerformanceAccumulator()
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
+    startup_readiness = _StartupReadinessAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -861,6 +991,7 @@ def build_live_performance_report(
                         live_event=live_event,
                         cycle_scope=cycle_scope,
                     )
+                    startup_readiness.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -894,6 +1025,7 @@ def build_live_performance_report(
         "performance": accumulator.to_dict(group_limit=group_limit),
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
+        "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
     }
     if window_enabled:
         report["event_window"] = event_window
@@ -960,6 +1092,17 @@ def summarize_live_performance_report(
             "groups_truncated": bool(input_staleness.get("groups_truncated")),
             "groups": staleness_groups[: max(0, int(group_limit))],
         }
+    if isinstance(report.get("startup_readiness"), dict):
+        startup_readiness = dict(report["startup_readiness"])
+        startup_bots = (
+            startup_readiness.get("bots")
+            if isinstance(startup_readiness.get("bots"), list)
+            else []
+        )
+        startup_readiness["bots"] = startup_bots[: max(0, int(group_limit))]
+        if len(startup_bots) > max(0, int(group_limit)):
+            startup_readiness["bots_truncated"] = True
+        summary["startup_readiness"] = startup_readiness
     if report.get("event_window") is not None:
         summary["event_window"] = report.get("event_window")
     if report.get("filters") is not None:

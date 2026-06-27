@@ -608,6 +608,232 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert len(summary["input_staleness"]["groups"]) == 1
 
 
+def test_live_performance_report_startup_readiness_summary(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                component="bot.startup",
+                data={"stage": "account", "elapsed_ms": 900},
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=3,
+                ts=3000,
+                component="bot.startup",
+                data={"stage": "hsl", "elapsed_s": 2.5},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=4,
+                ts=4000,
+                component="risk.hsl",
+                status="started",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "pair_replay",
+                    "pairs": 26,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 20,
+                    "timeline_rows": 43201,
+                    "applied_rows": 3000,
+                    "total_applied_rows": 4425,
+                    "rows_per_second": 289.4,
+                    "elapsed_s": 15.2,
+                },
+            ),
+            _monitor_row(event_type="bot.ready", seq=5, ts=5000),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+
+    assert startup["bot_count"] == 1
+    assert startup["ready_count"] == 1
+    assert startup["hsl_replay_active_count"] == 1
+    bot = startup["bots"][0]
+    assert bot["bot"] == "binance/binance_01"
+    assert bot["lifecycle_status"] == "ready"
+    assert bot["bot_started_ts"] == 1000
+    assert bot["bot_ready_ts"] == 5000
+    assert bot["startup_phases_ms"] == {"account": 900, "hsl": 2500}
+    assert bot["hsl_replay"]["stage"] == "pair_replay"
+    assert bot["hsl_replay"]["pairs"] == 26
+    assert bot["hsl_replay"]["held_pairs"] == 1
+    assert bot["hsl_replay"]["rows_per_second"] == 289.4
+
+
+def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=2,
+                ts=2000,
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "pairs": 2,
+                    "skipped_pairs": 1,
+                    "full_elapsed_s": 12.3,
+                    "startup_blocking_elapsed_s": 12.3,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+
+    assert startup["ready_count"] == 0
+    assert startup["hsl_replay_active_count"] == 0
+    assert startup["bots"][0]["hsl_replay"]["status"] == "succeeded"
+    assert startup["bots"][0]["hsl_replay"]["skipped_pairs"] == 1
+
+
+def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=1100,
+                data={"stage": "account", "elapsed_ms": 300},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=3,
+                ts=1200,
+                status="succeeded",
+                data={"stage": "full_replay", "pairs": 2, "full_elapsed_s": 1.5},
+            ),
+            _monitor_row(event_type="bot.ready", seq=4, ts=1300),
+            _monitor_row(event_type="bot.started", seq=5, ts=2000),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+
+    assert startup["ready_count"] == 0
+    assert startup["hsl_replay_active_count"] == 0
+    bot = startup["bots"][0]
+    assert bot["lifecycle_status"] == "started"
+    assert bot["bot_started_ts"] == 2000
+    assert "bot_ready_ts" not in bot
+    assert "startup_phases_ms" not in bot
+    assert "hsl_replay" not in bot
+
+
+def test_live_performance_report_startup_readiness_is_bounded(tmp_path):
+    for index in range(3):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="bot.started",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                ),
+                _monitor_row(
+                    event_type="bot.startup_timing",
+                    seq=index + 10,
+                    ts=1100 + index,
+                    user=f"user_{index}",
+                    data={"stage": "account", "elapsed_ms": 100},
+                ),
+                _monitor_row(
+                    event_type="bot.startup_timing",
+                    seq=index + 20,
+                    ts=1200 + index,
+                    user=f"user_{index}",
+                    data={"stage": "hsl", "elapsed_ms": 200},
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor", group_limit=1)
+    startup = report["startup_readiness"]
+
+    assert startup["bot_count"] == 3
+    assert startup["bots_truncated"] is True
+    assert len(startup["bots"]) == 1
+    assert startup["bots"][0]["startup_phases_truncated"] is True
+    assert list(startup["bots"][0]["startup_phases_ms"]) == ["account"]
+
+
+def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=2,
+                ts=2000,
+                status="started",
+                data={
+                    "stage": "pair_replay",
+                    "pairs": 1,
+                    "equity": 12345.0,
+                    "balance": 6789.0,
+                    "raw_payload": {"secret": "nope"},
+                    "price": 42.0,
+                    "drawdown": 0.12,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    hsl_replay = report["startup_readiness"]["bots"][0]["hsl_replay"]
+
+    assert hsl_replay == {
+        "latest_ts": 2000,
+        "event_type": "hsl.replay.progress",
+        "status": "started",
+        "reason_code": "test",
+        "stage": "pair_replay",
+        "pairs": 1,
+    }
+
+
+def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(event_type="bot.ready", seq=2, ts=2000),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report)
+
+    assert summary["startup_readiness"]["bot_count"] == 1
+    assert summary["startup_readiness"]["ready_count"] == 1
+
+
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
