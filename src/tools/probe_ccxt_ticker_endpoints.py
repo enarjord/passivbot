@@ -129,6 +129,73 @@ def summarize_collection(value: Any) -> dict[str, Any]:
     return {"type": type(value).__name__, "count": None}
 
 
+def _int_timestamp(value: Any) -> int | None:
+    if isinstance(value, bool):
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def summarize_my_trades(trades: Any) -> dict[str, Any]:
+    """Summarize fill-history sample shape without raw trade/order ids."""
+    if not isinstance(trades, list):
+        return {"type": type(trades).__name__, "count": None, "valid": False}
+    timestamps = []
+    symbols = set()
+    side_counts: Counter[str] = Counter()
+    id_present_count = 0
+    order_present_count = 0
+    dict_count = 0
+    for trade in trades:
+        if not isinstance(trade, dict):
+            continue
+        dict_count += 1
+        ts = _int_timestamp(trade.get("timestamp"))
+        if ts is not None:
+            timestamps.append(ts)
+        symbol = trade.get("symbol")
+        if symbol is not None:
+            symbols.add(str(symbol))
+        side = trade.get("side")
+        if side is not None:
+            side_counts[str(side)] += 1
+        if trade.get("id") is not None:
+            id_present_count += 1
+        if trade.get("order") is not None or trade.get("orderId") is not None:
+            order_present_count += 1
+    timestamps.sort()
+    first_ts = timestamps[0] if timestamps else None
+    last_ts = timestamps[-1] if timestamps else None
+    return {
+        "type": "list",
+        "count": len(trades),
+        "dict_count": dict_count,
+        "timestamp_count": len(timestamps),
+        "missing_timestamp_count": max(0, len(trades) - len(timestamps)),
+        "first_timestamp": first_ts,
+        "first_datetime": ts_to_date(first_ts) if first_ts is not None else None,
+        "last_timestamp": last_ts,
+        "last_datetime": ts_to_date(last_ts) if last_ts is not None else None,
+        "symbol_count": len(symbols),
+        "symbols_sample": sorted(symbols)[:8],
+        "symbols_truncated": max(0, len(symbols) - 8),
+        "side_counts": dict(sorted(side_counts.items())),
+        "id_present_count": id_present_count,
+        "order_present_count": order_present_count,
+        "top_level_keys_sample": sorted(
+            {
+                str(key)
+                for trade in trades
+                if isinstance(trade, dict)
+                for key in trade.keys()
+            }
+        )[:24],
+    }
+
+
 def emit_progress(message: str, *, enabled: bool) -> None:
     if enabled:
         print(message, flush=True)
@@ -611,6 +678,165 @@ def summarize_candle_freshness_probe_collection(probes: list[dict[str, Any]]) ->
     }
 
 
+def summarize_fill_history_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize existing fetch_my_trades probe results without raw fill payloads."""
+    enabled = bool(probe.get("include_private", True)) and bool(
+        probe.get("include_my_trades", True)
+    )
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    total = 0
+    succeeded = 0
+    failed = 0
+    latencies = []
+    trade_counts = []
+    error_types: Counter[str] = Counter()
+    latest: dict[str, Any] | None = None
+    newest_trade: dict[str, Any] | None = None
+    for repeat in repeats:
+        outcome = (
+            repeat.get("fetch_my_trades_first_symbol")
+            if isinstance(repeat, dict)
+            else None
+        )
+        if outcome is None:
+            continue
+        total += 1
+        elapsed_ms = _elapsed_ms(outcome)
+        if elapsed_ms is not None:
+            latencies.append(elapsed_ms)
+        if not isinstance(outcome, dict) or not outcome.get("ok"):
+            failed += 1
+            error_type = (
+                str(outcome.get("error_type") or "unknown")
+                if isinstance(outcome, dict)
+                else "missing_outcome"
+            )
+            error_types[error_type] += 1
+            latest = {
+                "ok": False,
+                "symbol": outcome.get("symbol") if isinstance(outcome, dict) else None,
+                "elapsed_ms": elapsed_ms,
+                "error_type": error_type,
+            }
+            continue
+        value = outcome.get("value")
+        if not isinstance(value, dict):
+            failed += 1
+            error_types["missing_value"] += 1
+            latest = {
+                "ok": False,
+                "symbol": outcome.get("symbol"),
+                "elapsed_ms": elapsed_ms,
+                "error_type": "missing_value",
+            }
+            continue
+        succeeded += 1
+        trade_count = int(value.get("count") or 0)
+        trade_counts.append(float(trade_count))
+        last_ts = _int_timestamp(value.get("last_timestamp"))
+        candidate = {
+            "ok": True,
+            "symbol": outcome.get("symbol"),
+            "elapsed_ms": elapsed_ms,
+            "trade_count": trade_count,
+            "timestamp_count": int(value.get("timestamp_count") or 0),
+            "missing_timestamp_count": int(value.get("missing_timestamp_count") or 0),
+            "first_timestamp": _int_timestamp(value.get("first_timestamp")),
+            "first_datetime": value.get("first_datetime"),
+            "last_timestamp": last_ts,
+            "last_datetime": value.get("last_datetime"),
+            "symbol_count": int(value.get("symbol_count") or 0),
+            "side_counts": (
+                value.get("side_counts") if isinstance(value.get("side_counts"), dict) else {}
+            ),
+            "id_present_count": int(value.get("id_present_count") or 0),
+            "order_present_count": int(value.get("order_present_count") or 0),
+        }
+        latest = candidate
+        if last_ts is not None and (
+            newest_trade is None
+            or last_ts > int(newest_trade.get("last_timestamp") or -1)
+        ):
+            newest_trade = candidate
+    return {
+        "enabled": enabled,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "latency_ms": _latency_summary(latencies),
+        "trade_count": _latency_summary(trade_counts),
+        "error_types": dict(sorted(error_types.items())),
+        "latest": latest,
+        "newest_trade": newest_trade,
+    }
+
+
+def summarize_fill_history_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    total = 0
+    succeeded = 0
+    failed = 0
+    trade_counts = []
+    newest_trade: dict[str, Any] | None = None
+    for probe in probes:
+        summary = probe.get("fill_history_health")
+        if not isinstance(summary, dict):
+            summary = summarize_fill_history_probe_health(probe)
+        latest = summary.get("latest") if isinstance(summary.get("latest"), dict) else {}
+        summary_newest = (
+            summary.get("newest_trade")
+            if isinstance(summary.get("newest_trade"), dict)
+            else None
+        )
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "enabled": bool(summary.get("enabled")),
+            "total": int(summary.get("total") or 0),
+            "succeeded": int(summary.get("succeeded") or 0),
+            "failed": int(summary.get("failed") or 0),
+            "failure_pct": summary.get("failure_pct"),
+            "latest_symbol": latest.get("symbol"),
+            "latest_trade_count": int(latest.get("trade_count") or 0),
+            "newest_trade_timestamp": (
+                summary_newest.get("last_timestamp") if summary_newest else None
+            ),
+            "newest_trade_datetime": (
+                summary_newest.get("last_datetime") if summary_newest else None
+            ),
+        }
+        users.append(user_summary)
+        total += user_summary["total"]
+        succeeded += user_summary["succeeded"]
+        failed += user_summary["failed"]
+        if user_summary["total"] > 0 and latest:
+            trade_counts.append(float(user_summary["latest_trade_count"]))
+        if summary_newest is not None:
+            ts = _int_timestamp(summary_newest.get("last_timestamp"))
+            if ts is not None and (
+                newest_trade is None
+                or ts > int(newest_trade.get("last_timestamp") or -1)
+            ):
+                newest_trade = {
+                    "user": probe.get("user"),
+                    "exchange": probe.get("exchange"),
+                    "symbol": summary_newest.get("symbol"),
+                    "last_timestamp": ts,
+                    "last_datetime": summary_newest.get("last_datetime"),
+                    "trade_count": int(summary_newest.get("trade_count") or 0),
+                }
+    return {
+        "users": users,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "trade_count": _latency_summary(trade_counts),
+        "newest_trade": newest_trade,
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -1025,8 +1251,9 @@ async def probe_exchange_ticker_endpoints(
                     resolved_symbols[0],
                     None,
                     10,
-                    summary=summarize_collection,
+                    summary=summarize_my_trades,
                 )
+                repeat["fetch_my_trades_first_symbol"]["symbol"] = resolved_symbols[0]
                 emit_progress(
                     f"{repeat_label} fetch_my_trades(first symbol) "
                     f"{format_outcome(repeat['fetch_my_trades_first_symbol'])}",
@@ -1044,6 +1271,7 @@ async def probe_exchange_ticker_endpoints(
     out["account_critical_health"] = summarize_account_critical_probe_health(out)
     out["time_sync_health"] = summarize_time_sync_probe_health(out)
     out["candle_freshness_health"] = summarize_candle_freshness_probe_health(out)
+    out["fill_history_health"] = summarize_fill_history_probe_health(out)
     return out
 
 
@@ -1199,6 +1427,9 @@ async def async_main() -> int:
     )
     result["time_sync_health"] = summarize_time_sync_probe_collection(result["probes"])
     result["candle_freshness_health"] = summarize_candle_freshness_probe_collection(
+        result["probes"]
+    )
+    result["fill_history_health"] = summarize_fill_history_probe_collection(
         result["probes"]
     )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
