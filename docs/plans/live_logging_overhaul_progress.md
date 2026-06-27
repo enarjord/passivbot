@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `16c25149` merge of PR #749, `Add fill-history pagination sample to ticker probe`.
+- `4eef3572` merge of PR #751, `Add endpoint latency health to ticker probe`.
 
 Current review gate:
 
@@ -1590,13 +1590,10 @@ VPS5 deployment status:
    `--account-only` plus symbol fallback for open-orders. PR #741 added
    clock-skew health. PR #743 added candle freshness health. PR #745 added
    fill-history sample health. PR #747 added rate-limit pressure estimates.
-   PR #749 added opt-in bounded fill pagination sampling. Remaining useful
-   slices include basic endpoint latency and deeper exchange-specific coverage
-   checks.
-   Branch `codex/v8-ticker-probe-endpoint-latency-health` adds
+   PR #749 added opt-in bounded fill pagination sampling. PR #751 added
    `endpoint_latency_health` summaries from existing probe outcomes, including
-   open-orders fallback attempts and fill-history pages, without adding exchange
-   calls.
+   open-orders fallback attempts and fill-history pages. Remaining useful
+   slices include deeper exchange-specific coverage checks.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
