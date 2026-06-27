@@ -26,6 +26,34 @@ _BLOCKING_SCOPE_BY_IMPACT = {
     "blocks_next_cycle": "delays_next_cycle",
     "exchange_io": "exchange_io",
 }
+_RESOURCE_PRESSURE_FIELDS = (
+    "rss_bytes",
+    "memory_percent",
+    "open_fds",
+    "loadavg_1m",
+    "loadavg_5m",
+    "loadavg_15m",
+    "cpu_count",
+    "uptime_ms",
+    "last_loop_duration_ms",
+    "errors_last_hour",
+    "ws_reconnects",
+    "rate_limits",
+    "event_queue_depth",
+    "event_queue_maxsize",
+    "event_queue_unfinished_tasks",
+    "event_dropped_total",
+    "event_sink_error_total",
+    "event_degraded_count",
+)
+_RESOURCE_PRESSURE_COUNTER_FIELDS = (
+    "event_drop_counts",
+    "event_sink_error_counts",
+)
+_RESOURCE_PRESSURE_BOOL_FIELDS = (
+    "event_pipeline_stopping",
+    "event_pipeline_worker_alive",
+)
 
 
 def _open_text(path: Path):
@@ -95,6 +123,26 @@ def _non_negative_ms(value: Any) -> int | None:
     if number is None or number < 0:
         return None
     return int(round(number))
+
+
+def _non_negative_number(value: Any) -> float | int | None:
+    number = _finite_float(value)
+    if number is None or number < 0:
+        return None
+    if float(number).is_integer():
+        return int(number)
+    return float(number)
+
+
+def _safe_counter_mapping(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, raw in value.items():
+        number = _finite_float(raw)
+        if number is not None and number >= 0:
+            out[str(key)] = int(number)
+    return out
 
 
 def _elapsed_s_to_ms(value: Any) -> int | None:
@@ -689,6 +737,133 @@ class _StartupReadinessAccumulator:
         }
 
 
+class _ResourcePressureAccumulator:
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type != "health.summary":
+            return
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        observed_values = {}
+        for key in _RESOURCE_PRESSURE_FIELDS:
+            value = _non_negative_number(data.get(key))
+            if value is not None:
+                observed_values[key] = value
+        observed_counters = {}
+        for key in _RESOURCE_PRESSURE_COUNTER_FIELDS:
+            counters = _safe_counter_mapping(data.get(key))
+            if counters:
+                observed_counters[key] = counters
+        observed_bools = {
+            key: bool(data.get(key))
+            for key in _RESOURCE_PRESSURE_BOOL_FIELDS
+            if key in data
+        }
+        if not observed_values and not observed_counters and not observed_bools:
+            return
+        bot = _bot_key(row, live_event)
+        state = self.bots.get(bot)
+        if state is None:
+            state = {
+                "bot": bot,
+                "count": 0,
+                "latest_ts": None,
+                "values": {key: [] for key in _RESOURCE_PRESSURE_FIELDS},
+                "latest": {},
+                "latest_counters": {},
+            }
+            self.bots[bot] = state
+        state["count"] = int(state["count"]) + 1
+        ts = _record_ts(row)
+        latest_changed = ts is None or state.get("latest_ts") is None
+        if ts is not None and state.get("latest_ts") is not None:
+            latest_changed = int(ts) >= int(state["latest_ts"])
+        if ts is not None and latest_changed:
+            state["latest_ts"] = int(ts)
+        for key, value in observed_values.items():
+            state["values"][key].append(value)
+            if latest_changed:
+                state["latest"][key] = value
+        if latest_changed:
+            state["latest"].update(observed_bools)
+            state["latest_counters"] = observed_counters
+        self.event_types[event_type] += 1
+
+    @staticmethod
+    def _field_stats(values: list[float | int], latest: Any) -> dict[str, Any]:
+        numeric = [float(value) for value in values]
+        if not numeric:
+            return {}
+        out: dict[str, Any] = {
+            "latest": latest,
+            "min": min(numeric),
+            "max": max(numeric),
+            "mean": statistics.fmean(numeric),
+        }
+        return {
+            key: int(value) if isinstance(value, float) and value.is_integer() else value
+            for key, value in out.items()
+        }
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = []
+        for bot, state in self.bots.items():
+            latest = state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            fields = {}
+            for key in _RESOURCE_PRESSURE_FIELDS:
+                values = state["values"].get(key) if isinstance(state.get("values"), dict) else []
+                stats = self._field_stats(values or [], latest.get(key))
+                if stats:
+                    fields[key] = stats
+            latest_counters = (
+                state.get("latest_counters")
+                if isinstance(state.get("latest_counters"), dict)
+                else {}
+            )
+            group = {
+                "bot": bot,
+                "count": int(state.get("count") or 0),
+                "latest_ts": state.get("latest_ts"),
+                "fields": fields,
+                "latest_event_pipeline_stopping": latest.get("event_pipeline_stopping"),
+                "latest_event_pipeline_worker_alive": latest.get(
+                    "event_pipeline_worker_alive"
+                ),
+                "latest_event_drop_counts": latest_counters.get("event_drop_counts"),
+                "latest_event_sink_error_counts": latest_counters.get(
+                    "event_sink_error_counts"
+                ),
+            }
+            groups.append(
+                {key: value for key, value in group.items() if value not in (None, {}, [])}
+            )
+        groups = sorted(
+            groups,
+            key=lambda item: (
+                -int(item.get("fields", {}).get("event_dropped_total", {}).get("latest", 0) or 0),
+                -int(
+                    item.get("fields", {}).get("event_sink_error_total", {}).get("latest", 0)
+                    or 0
+                ),
+                -int(item.get("fields", {}).get("event_degraded_count", {}).get("latest", 0) or 0),
+                -int(item.get("fields", {}).get("event_queue_depth", {}).get("latest", 0) or 0),
+                -int(item.get("fields", {}).get("rss_bytes", {}).get("max", 0) or 0),
+                str(item.get("bot") or ""),
+            ),
+        )
+        limit = max(0, int(group_limit))
+        return {
+            "total": sum(int(group.get("count") or 0) for group in groups),
+            "bots": len(groups),
+            "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(groups) > limit,
+            "groups": groups[:limit],
+        }
+
+
 def _slowest_blockers(
     *,
     performance_groups: list[dict[str, Any]],
@@ -989,6 +1164,7 @@ def build_live_performance_report(
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
+    resource_pressure = _ResourcePressureAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -1073,6 +1249,7 @@ def build_live_performance_report(
                         cycle_scope=cycle_scope,
                     )
                     startup_readiness.add(row=row, live_event=live_event)
+                    resource_pressure.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -1110,6 +1287,7 @@ def build_live_performance_report(
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
+        "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "slowest_blockers": _slowest_blockers(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
@@ -1193,6 +1371,17 @@ def summarize_live_performance_report(
         if len(startup_bots) > max(0, int(group_limit)):
             startup_readiness["bots_truncated"] = True
         summary["startup_readiness"] = startup_readiness
+    if isinstance(report.get("resource_pressure"), dict):
+        resource_pressure = dict(report["resource_pressure"])
+        pressure_groups = (
+            resource_pressure.get("groups")
+            if isinstance(resource_pressure.get("groups"), list)
+            else []
+        )
+        resource_pressure["groups"] = pressure_groups[: max(0, int(group_limit))]
+        if len(pressure_groups) > max(0, int(group_limit)):
+            resource_pressure["groups_truncated"] = True
+        summary["resource_pressure"] = resource_pressure
     if isinstance(report.get("slowest_blockers"), dict):
         slowest_blockers = report["slowest_blockers"]
         blocker_groups = (

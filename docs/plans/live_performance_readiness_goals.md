@@ -31,6 +31,17 @@ state the readiness contract explicitly. Speedups are acceptable only when they
 preserve the existing trading decision semantics or when the contract is
 deliberately changed and reviewed.
 
+Use this as a living performance scorecard:
+
+- [ ] Each observed slow path has a named owner section below.
+- [ ] Each performance PR updates this file with baseline, target, and result.
+- [ ] Each optimization proves whether it affects protective action, fresh
+  entry, diagnostics only, or no trading behavior.
+- [ ] Each live smoke leaves enough structured evidence to compare against the
+  previous baseline.
+- [ ] If an item is delegated, the delegate works from one checked subsection,
+  opens a PR, and does not touch unrelated live behavior.
+
 ## Current Evidence
 
 Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
@@ -101,6 +112,48 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
    - These fields make the next optimization measurable, but they do not yet
      split protective readiness from full replay.
 
+## Required Performance Report Matrix
+
+The live performance report should become the canonical answer to "where did
+the time go?" for a live bot. Every row below should expose `count`, `min`,
+`mean`, `p50`, `p95`, `max`, latest timestamp, bot identity, and trading-impact
+classification when enough source events exist.
+
+- [ ] Startup: process start to account-critical ready.
+- [ ] Startup: process start to held-position protective HSL ready.
+- [ ] Startup: process start to fresh-entry ready.
+- [ ] Startup: process start to first planning cycle started/completed.
+- [ ] Startup: process start to first possible exchange write.
+- [ ] HSL: fill/cache load time, replay build time, held-pair protective
+  replay time, full replay time, checkpoint load time, checkpoint write time,
+  rows/s, symbols/pairs/held pairs/cooldown pairs.
+- [ ] Cache readiness: fill cache coverage proof, candle coverage proof,
+  checkpoint compatibility decision, repair scope, repair elapsed time.
+- [ ] Account state: balance, positions, open orders, fills, state-refresh wall
+  time, surface max/sum time, retry/degraded counts.
+- [ ] Market data: ticker/market price age, candle close age, EMA bundle age,
+  forager feature age, candle remote fetch latency, synthetic/no-trade gap
+  repair counts.
+- [ ] Decision boundary: whole-minute lag to cycle start, Rust input snapshot,
+  Rust output, Python gate/filter, first exchange write, confirmation refresh.
+- [ ] Cycle phases: market state, account state, Rust planning,
+  reconciliation/gating, execution, confirmation, monitor flush, event
+  pipeline overhead.
+- [ ] Exchange writes: create/cancel/close/panic write latency, exchange
+  response latency, ambiguous write rate, confirmation latency.
+- [ ] Resource pressure: CPU/load, RSS, memory percent, open FDs, event queue
+  depth, dropped event counters, sink errors, loop lag where available.
+- [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
+  final monitor flush, process exit.
+
+Trading-impact labels:
+
+- [ ] `protective_blocker`: can delay panic/reduce-only/risk protection.
+- [ ] `entry_blocker`: can delay fresh entries but not protective actions.
+- [ ] `cycle_delay`: delays the full loop after readiness is established.
+- [ ] `diagnostics_only`: affects logs/monitor/reporting only.
+- [ ] `unknown`: missing event data; should be treated as an observability gap.
+
 ## Outcome Targets
 
 - [ ] A held position should reach exact protective readiness in seconds, not
@@ -161,6 +214,17 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Full replay may continue after protective readiness, but fresh initial
     entries must remain blocked until cooldown/trading eligibility is known.
 
+- [ ] Define HSL startup states explicitly.
+  - `hsl_protective_unavailable`: required held-position proof is missing or
+    invalid; protective HSL cannot be evaluated yet.
+  - `hsl_protective_ready`: held positions have exact current HSL state and
+    panic/protective decisions may proceed.
+  - `hsl_entry_cooldown_unknown`: held positions are protected, but flat-symbol
+    cooldown reconstruction is incomplete, so fresh HSL-gated entries remain
+    blocked where affected.
+  - `hsl_full_ready`: cooldown and replay state are complete for the configured
+    HSL universe.
+
 - [ ] Coin mode must not make a held coin wait behind unrelated coins.
   - A currently held `coin+pside` pair should be classified before historical
     flat pairs.
@@ -201,6 +265,16 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     crossing must not cause a panic now if current replay state is no longer in
     the red zone.
 
+- [ ] Answer the current bottleneck question before broad rewrites.
+  - Is startup blocked on CPU-bound Python replay, disk/cache reads, exchange
+    backfill, monitor/event emission, or repeated data conversion?
+  - If all needed data is cached locally, explain why replay still takes
+    hundreds or thousands of seconds.
+  - Confirm whether coin-mode replay currently serializes independent
+    `coin+pside` pairs unnecessarily.
+  - Confirm whether unrelated flat pairs can delay held-pair protective
+    readiness.
+
 - [ ] Identify the current bottleneck with a focused profile.
   - Measure time spent in fill indexing, candle/timeline construction, pair
     iteration, EMA update, drawdown/tier update, event emission, and disk/cache
@@ -212,6 +286,14 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Report whether the bottleneck is CPU-bound Python, disk/cache IO, event
     emission, or exchange/cache backfill.
 
+- [ ] Build a deterministic HSL replay benchmark fixture.
+  - Include 25-30 pairs, one or more held positions, at least one cooldown
+    candidate, 30 days of one-minute rows, and realistic fill density.
+  - Fixture should run offline and produce comparable output for current full
+    replay, optimized replay, and checkpoint resume.
+  - Output metrics: elapsed, rows/s, per-stage timings, current HSL state by
+    held pair, cooldown state by affected flat pair, and equivalence diff.
+
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
     replay, realized-PnL peak/current calculations, and cooldown discovery.
@@ -222,6 +304,13 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     proof is established first.
   - Do not allow broad flat-pair replay to block a held pair that already has
     exact protective readiness.
+
+- [ ] Prefer priority ordering before parallelism.
+  - First replay currently held positions.
+  - Then replay coins with active cooldown implications.
+  - Then replay remaining eligible flat symbols in the background.
+  - This should improve safety even on a 1-vCPU VPS where parallelism has
+    limited value.
 
 - [ ] Add structured replay timing fields.
   - Done: current full-replay events include `timeline_rows`, `pairs`,
@@ -418,6 +507,50 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
 - [ ] HSL checkpointing reduces warm-restart replay without weakening
   stateless correctness: checkpoints accelerate reconstruction only when their
   proof matches exchange/cache-derived inputs.
+
+## Candidate PR Slices
+
+These slices are intentionally small enough for normal review and live smoke.
+Each slice should update this checklist with its result.
+
+1. [ ] Performance-report coverage slice.
+   - Add missing report groups for resource pressure, HSL replay/protective
+     readiness, candle/market/config age, and shutdown stages as source events
+     become available.
+   - Acceptance: `passivbot tool live-performance-report` can produce a bounded
+     summary explaining the slowest startup and cycle blockers from local
+     monitor data only.
+
+2. [ ] HSL replay benchmark/profiling slice.
+   - Add an offline deterministic benchmark or fixture path for coin-mode HSL
+     replay using realistic pair count, fill count, and row count.
+   - Acceptance: report current elapsed, rows/s, and per-stage timing without
+     contacting exchanges or changing live behavior.
+
+3. [ ] Held-position protective readiness slice.
+   - Classify currently held `coin+pside` pairs before unrelated flat pairs and
+     emit explicit `hsl_protective_*` state events.
+   - Acceptance: held-pair state matches existing full replay in tests, and a
+     held late-sorting symbol is no longer delayed by broad flat-symbol replay.
+
+4. [ ] Full replay lower-complexity slice.
+   - Replace avoidable nested scans and repeated fill/timeline work with exact
+     indexed/sparse replay.
+   - Acceptance: equivalence tests pass against the old replay contract and the
+     benchmark shows a material rows/s improvement.
+
+5. [ ] HSL checkpoint proof/resume slice.
+   - Write and resume from conservative performance checkpoints after exact
+     reconstruction.
+   - Acceptance: valid checkpoint warm restart is fast; stale/incompatible
+     checkpoint is bypassed with an observable reason; decisions remain
+     reproducible from exchange/cache-derived truth.
+
+6. [ ] Shutdown and restart latency slice.
+   - Make long non-critical startup/background work interruptible and report
+     shutdown blockers.
+   - Acceptance: repeated Ctrl+C should not be needed in the normal path, and
+     slow shutdown identifies the blocking stage.
 
 ## Suggested Implementation Order
 
