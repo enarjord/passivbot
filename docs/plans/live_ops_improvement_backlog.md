@@ -303,10 +303,14 @@ Related detailed plans:
       `.valid.npy` artifacts, including coverage windows, valid row counts,
       suspicious interior gap samples, and non-enforcing warm-cache evidence
       labels.
+    - 2026-06-27: Added fill/HSL metadata evidence from local JSON/NDJSON
+      artifacts, including fill `pnl_contract` compatibility counts, fill
+      coverage timestamps, known-gap counts, and HSL/risk state timestamp
+      summaries without repair or enforcement.
 
-    Remaining refinements: add candle/fill/HSL metadata compatibility checks,
-    fill/HSL coverage/readiness summaries, and deeper metadata compatibility
-    without making trading decisions.
+    Remaining refinements: add deeper candle/fill/HSL metadata compatibility
+    checks, synthetic/no-trade assumptions, and warm-cache readiness without
+    making trading decisions.
 
 14. [ ] Supervisor/process model.
     Status: partial. `live-smoke-report --supervisor-config` now reports
@@ -367,7 +371,8 @@ Related detailed plans:
 | 2026-06-26 | #12 Debug profile toggles | pending PR | Added opt-in live-event debug profiles via config/env and initial Rust orchestrator structured-event enrichment with bounded input-symbol and output-order samples | Add remote-call, candle/EMA, HSL, fills, and execution profiles as needed |
 | 2026-06-26 | #7 Live config preflight/linter | PR #714 / `564dc0a8` | Added `passivbot tool live-config-preflight`, a local-only JSON report for one config's risk-relevant live facts with bounded coin samples and malformed-structure errors; VPS5 preflight smoke returned `ok=true` with one expected missing short-side warning | Config diffing, deeper cache compatibility checks, and live startup enforcement remain open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #715 / `7b12d4b2` | Added passive `shutdown_events` summaries to full, summary, and brief `live-smoke-report` output for existing bot stopping/stage/stopped events; VPS5 no-restart smoke showed `shutdown_events.total=0`, all five bots matched, and no hard failures | Safe pull/stop/start orchestration remains open |
-| 2026-06-27 | #13 Cache integrity doctor | pending PR | Added read-only v2 candle coverage windows and suspicious interior gap samples from local `.valid.npy` artifacts | Fill/HSL coverage/readiness and deeper metadata compatibility |
+| 2026-06-27 | #13 Cache integrity doctor | PR #722 / `3b7e6306` | Added read-only v2 candle coverage windows and suspicious interior gap samples from local `.valid.npy` artifacts | Fill/HSL coverage/readiness and deeper metadata compatibility |
+| 2026-06-27 | #13 Cache integrity doctor | pending PR | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |

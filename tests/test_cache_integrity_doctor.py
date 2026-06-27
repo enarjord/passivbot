@@ -70,11 +70,11 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
     month_dir.mkdir(parents=True)
-    np.save(month_dir / "01.npy", np.full((8, 4), 1.0, dtype=np.float32))
-    np.save(
-        month_dir / "01.valid.npy",
-        np.array([False, True, True, False, False, True, True, False], dtype=bool),
-    )
+    expected_rows = 44_640
+    valid = np.zeros(expected_rows, dtype=bool)
+    valid[[1, 2, 5, 6]] = True
+    np.save(month_dir / "01.npy", np.full((expected_rows, 4), 1.0, dtype=np.float32))
+    np.save(month_dir / "01.valid.npy", valid)
 
     report = build_cache_integrity_report([root])
 
@@ -82,7 +82,9 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
     assert coverage["artifact_count"] == 1
     assert coverage["covered_artifact_count"] == 1
-    assert coverage["row_count"] == 8
+    assert coverage["length_mismatch_count"] == 0
+    assert coverage["row_count"] == expected_rows
+    assert coverage["expected_row_count"] == expected_rows
     assert coverage["valid_row_count"] == 4
     assert coverage["gap_count"] == 1
     assert coverage["max_gap_rows"] == 2
@@ -110,7 +112,8 @@ def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "okx" / "1h" / "ETH_USDT" / "2026"
     month_dir.mkdir(parents=True)
-    np.save(month_dir / "02.valid.npy", np.zeros(3, dtype=bool))
+    expected_rows = 672
+    np.save(month_dir / "02.valid.npy", np.zeros(expected_rows, dtype=bool))
 
     report = build_cache_integrity_report([root])
 
@@ -118,8 +121,130 @@ def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     assert coverage["warm_cache_evidence"] == "no_valid_rows"
     assert coverage["artifact_count"] == 1
     assert coverage["covered_artifact_count"] == 0
+    assert coverage["length_mismatch_count"] == 0
+    assert coverage["row_count"] == expected_rows
+    assert coverage["expected_row_count"] == expected_rows
     assert coverage["first_valid_date"] is None
     assert coverage["last_valid_date"] is None
+
+
+def test_cache_integrity_report_flags_truncated_candle_coverage_masks(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    np.save(month_dir / "01.valid.npy", np.ones(8, dtype=bool))
+
+    report = build_cache_integrity_report([root])
+
+    coverage = report["summary"]["by_family"]["candles"]["coverage"]
+    assert report["ok"] is True
+    assert coverage["warm_cache_evidence"] == "coverage_length_mismatch"
+    assert coverage["length_mismatch_count"] == 1
+    assert coverage["row_count"] == 8
+    assert coverage["expected_row_count"] == 44_640
+    assert coverage["gap_count"] == 1
+    assert coverage["gap_samples"][0]["boundary"] == "trailing_shortfall"
+    assert coverage["gap_samples"][0]["rows"] == 44_632
+    assert coverage["artifact_samples"][0]["length_mismatch"] is True
+    issue = report["issues"][0]
+    assert issue["severity"] == "warning"
+    assert issue["code"] == "coverage_length_mismatch"
+    assert issue["family"] == "candles"
+
+
+def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_coverage(tmp_path):
+    root = tmp_path / "caches"
+    fill_dir = root / "fill_events" / "binance" / "user_01"
+    fill_dir.mkdir(parents=True)
+    current_contract = "gross_pnl_quote_fee_best_effort_v2"
+    (fill_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "pnl_contract": current_contract,
+                "history_scope": "all",
+                "covered_start_ms": 1767225600000,
+                "oldest_event_ts": 1767312000000,
+                "newest_event_ts": 1767398400000,
+                "last_refresh_ms": 1767484800000,
+                "known_gaps": [{"start_ts": 1767355200000, "end_ts": 1767358800000}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fill_dir / "2026-01-02.ndjson").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
+                {
+                    "id": "a",
+                    "timestamp": 1767312000000,
+                    "pnl_contract": current_contract,
+                },
+                {"id": "b", "timestamp": 1767315600000},
+                {
+                    "id": "c",
+                    "timestamp": 1767319200000,
+                    "pnl_contract": "legacy_contract",
+                },
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["fills"]["metadata"]
+    assert metadata["compatibility"] == "legacy_or_missing_pnl_contract"
+    assert metadata["artifact_count"] == 2
+    assert metadata["metadata_file_count"] == 1
+    assert metadata["record_count"] == 3
+    assert metadata["current_pnl_contract_count"] == 2
+    assert metadata["legacy_pnl_contract_count"] == 1
+    assert metadata["missing_pnl_contract_count"] == 1
+    assert metadata["history_scope_counts"] == {"all": 1}
+    assert metadata["known_gap_count"] == 1
+    assert metadata["covered_start_date"] == "2026-01-01T00:00:00+00:00"
+    assert metadata["first_event_date"] == "2026-01-02T00:00:00+00:00"
+    assert metadata["last_event_date"] == "2026-01-03T00:00:00+00:00"
+    assert metadata["newest_event_date"] == "2026-01-03T00:00:00+00:00"
+    assert metadata["last_refresh_date"] == "2026-01-04T00:00:00+00:00"
+
+
+def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
+    root = tmp_path / "caches"
+    hsl_dir = root / "equity_hard_stop" / "binance"
+    hsl_dir.mkdir(parents=True)
+    (hsl_dir / "user_01.json").write_text(
+        json.dumps(
+            {
+                "pside": "long",
+                "symbol": "BTCUSDT",
+                "tier": "red",
+                "last_red_ts": 1767312000000,
+                "cooldown_until_ms": 1767315600000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["risk"]["metadata"]
+    assert metadata["compatibility"] == "local_state_with_timestamps"
+    assert metadata["artifact_count"] == 1
+    assert metadata["timestamp_field_count"] == 2
+    assert metadata["first_event_date"] == "2026-01-02T00:00:00+00:00"
+    assert metadata["last_event_date"] == "2026-01-02T01:00:00+00:00"
+    sample = metadata["artifact_samples"][0]
+    assert sample["hsl_related"] is True
+    assert sample["top_level_keys"] == [
+        "cooldown_until_ms",
+        "last_red_ts",
+        "pside",
+        "symbol",
+        "tier",
+    ]
 
 
 def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
