@@ -16,6 +16,17 @@ from live.smoke_report import _user_safe_display_path
 GROUP_LIMIT = 80
 SUMMARY_GROUP_LIMIT = 12
 
+_NON_BLOCKING_IMPACTS = {"diagnostics_only", "observability"}
+_BLOCKING_SCOPE_BY_IMPACT = {
+    "blocks_or_delays_hsl_readiness": "delays_protective_readiness",
+    "blocks_exchange_actions": "delays_exchange_actions",
+    "blocks_cycle_decision": "delays_cycle_decision",
+    "blocks_indicator_readiness": "delays_indicator_readiness",
+    "blocks_startup_readiness": "delays_startup_readiness",
+    "blocks_next_cycle": "delays_next_cycle",
+    "exchange_io": "exchange_io",
+}
+
 
 def _open_text(path: Path):
     if path.name.endswith(".gz"):
@@ -219,8 +230,8 @@ class _PerformanceAccumulator:
         group.add(value_ms, row=row, live_event=live_event)
         self.trading_impact_counts[trading_impact] += 1
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
-        groups = sorted(
+    def groups_list(self) -> list[dict[str, Any]]:
+        return sorted(
             (group.to_dict() for group in self.groups.values()),
             key=lambda item: (
                 -int(item.get("p95_ms", 0) or 0),
@@ -230,6 +241,9 @@ class _PerformanceAccumulator:
                 str(item.get("operation") or ""),
             ),
         )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = self.groups_list()
         return {
             "total_groups": len(groups),
             "groups_truncated": len(groups) > int(group_limit),
@@ -360,8 +374,8 @@ class _DecisionBoundaryAccumulator:
             self.groups[group_key] = group
         group.add(lag_ms, row=row, live_event=live_event)
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
-        groups = sorted(
+    def groups_list(self) -> list[dict[str, Any]]:
+        return sorted(
             (group.to_dict() for group in self.groups.values()),
             key=lambda item: (
                 -int(item.get("p95_ms", 0) or 0),
@@ -371,6 +385,9 @@ class _DecisionBoundaryAccumulator:
                 str(item.get("operation") or ""),
             ),
         )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = self.groups_list()
         return {
             "minute_ms": 60_000,
             "cycles": len(self.cycles_seen),
@@ -517,8 +534,8 @@ class _InputStalenessAccumulator:
                     trading_impact="blocks_indicator_readiness",
                 )
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
-        groups = sorted(
+    def groups_list(self) -> list[dict[str, Any]]:
+        return sorted(
             (group.to_dict() for group in self.groups.values()),
             key=lambda item: (
                 -int(item.get("p95_ms", 0) or 0),
@@ -528,6 +545,9 @@ class _InputStalenessAccumulator:
                 str(item.get("operation") or ""),
             ),
         )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = self.groups_list()
         return {
             "snapshots_seen": int(self.snapshots_seen),
             "rust_calls_seen": int(self.rust_calls_seen),
@@ -667,6 +687,67 @@ class _StartupReadinessAccumulator:
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
+
+
+def _slowest_blockers(
+    *,
+    performance_groups: list[dict[str, Any]],
+    decision_boundary_groups: list[dict[str, Any]],
+    input_staleness_groups: list[dict[str, Any]],
+    group_limit: int = GROUP_LIMIT,
+) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    for source_section, groups in (
+        ("performance", performance_groups),
+        ("decision_boundary_lag", decision_boundary_groups),
+        ("input_staleness", input_staleness_groups),
+    ):
+        for group in groups:
+            impact = str(group.get("trading_impact") or "")
+            if not impact or impact in _NON_BLOCKING_IMPACTS:
+                continue
+            item = {
+                key: group[key]
+                for key in (
+                    "bot",
+                    "operation",
+                    "component",
+                    "event_type",
+                    "trading_impact",
+                    "timing_kind",
+                    "count",
+                    "min_ms",
+                    "max_ms",
+                    "mean_ms",
+                    "median_ms",
+                    "p95_ms",
+                    "latest_ts",
+                    "statuses",
+                    "reason_codes",
+                    "symbols_sample",
+                )
+                if key in group
+            }
+            item["source_section"] = source_section
+            item["blocking_scope"] = _BLOCKING_SCOPE_BY_IMPACT.get(impact, impact)
+            items.append(item)
+    items = sorted(
+        items,
+        key=lambda item: (
+            -int(item.get("p95_ms", 0) or 0),
+            -int(item.get("max_ms", 0) or 0),
+            -int(item.get("count", 0) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("source_section") or ""),
+            str(item.get("operation") or ""),
+        ),
+    )
+    limit = max(0, int(group_limit))
+    return {
+        "total_groups": len(items),
+        "groups_truncated": len(items) > limit,
+        "groups": items[:limit],
+    }
 
 
 def _timings_map(value: Any) -> dict[str, int]:
@@ -1005,6 +1086,9 @@ def build_live_performance_report(
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    performance_groups = accumulator.groups_list()
+    decision_boundary_groups = decision_boundary.groups_list()
+    input_staleness_groups = input_staleness.groups_list()
     report = {
         "ok": error_count == 0,
         "root": _user_safe_display_path(root),
@@ -1026,6 +1110,12 @@ def build_live_performance_report(
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
+        "slowest_blockers": _slowest_blockers(
+            performance_groups=performance_groups,
+            decision_boundary_groups=decision_boundary_groups,
+            input_staleness_groups=input_staleness_groups,
+            group_limit=group_limit,
+        ),
     }
     if window_enabled:
         report["event_window"] = event_window
@@ -1103,6 +1193,18 @@ def summarize_live_performance_report(
         if len(startup_bots) > max(0, int(group_limit)):
             startup_readiness["bots_truncated"] = True
         summary["startup_readiness"] = startup_readiness
+    if isinstance(report.get("slowest_blockers"), dict):
+        slowest_blockers = report["slowest_blockers"]
+        blocker_groups = (
+            slowest_blockers.get("groups")
+            if isinstance(slowest_blockers.get("groups"), list)
+            else []
+        )
+        summary["slowest_blockers"] = {
+            "total_groups": int(slowest_blockers.get("total_groups") or 0),
+            "groups_truncated": bool(slowest_blockers.get("groups_truncated")),
+            "groups": blocker_groups[: max(0, int(group_limit))],
+        }
     if report.get("event_window") is not None:
         summary["event_window"] = report.get("event_window")
     if report.get("filters") is not None:
