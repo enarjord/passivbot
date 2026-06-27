@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added bounded staged-readiness health summaries to
+  `passivbot tool live-smoke-report`, projecting existing staged
+  `cycle.degraded` events into latest missing/invalid surface counts and
+  completed-candle mismatch evidence.
 - Added bounded EMA readiness health summaries to
   `passivbot tool live-smoke-report`, projecting existing `ema.unavailable`
   events into latest candidate/unavailable counts plus reason/error evidence.
