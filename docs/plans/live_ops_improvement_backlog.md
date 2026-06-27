@@ -401,12 +401,19 @@ Related detailed plans:
     outside the trading core but should consume the same event stream.
 
 15. [ ] Fake-live regression scenarios.
-    Status: open.
+    Status: partial. First focused offline observability regression coverage is
+    underway for existing live smoke/event-pipeline health behavior.
 
     Build more fake-exchange/fake-live scenarios for failures repeatedly seen in
     real work: stale candles, missing EMA inputs, fill pagination gaps, timestamp
     resync, queue overflow, slow shutdown, and exchange-call ambiguity. These
     should prove observability behavior without risking live accounts.
+
+    Work log:
+    - 2026-06-27: Added a focused offline smoke-report regression for
+      multi-bot event-pipeline queue/drop/sink-error health aggregation,
+      proving existing queue-overflow observability without live bots,
+      exchange calls, or behavior changes.
 
 16. [ ] Websocket reconnect diagnostics.
     Status: open.
