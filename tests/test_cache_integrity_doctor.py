@@ -247,6 +247,55 @@ def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
     ]
 
 
+def test_cache_integrity_report_derives_warm_cache_readiness(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1h" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    np.save(month_dir / "01.valid.npy", np.ones(744, dtype=bool))
+    fill_dir = root / "fill_events" / "binance" / "user_01"
+    fill_dir.mkdir(parents=True)
+    current_contract = "gross_pnl_quote_fee_best_effort_v2"
+    (fill_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "pnl_contract": current_contract,
+                "history_scope": "all",
+                "covered_start_ms": 1767225600000,
+                "oldest_event_ts": 1767312000000,
+                "newest_event_ts": 1767312000000,
+                "last_refresh_ms": 1767315600000,
+                "known_gaps": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fill_dir / "2026-01-02.ndjson").write_text(
+        json.dumps(
+            {
+                "id": "a",
+                "timestamp": 1767312000000,
+                "pnl_contract": current_contract,
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    readiness = report["summary"]["warm_cache_readiness"]
+    assert readiness["mode"] == "report_only_non_enforcing"
+    assert readiness["readiness"] == "core_evidence_observed"
+    assert readiness["missing_families"] == ["risk"]
+    assert readiness["attention_families"] == []
+    assert readiness["suspicious_gap_count"] == 0
+    assert readiness["families"]["candles"]["readiness"] == "observed"
+    assert readiness["families"]["fills"]["readiness"] == "observed"
+    assert readiness["families"]["fills"]["covered_start_date"] == "2026-01-01T00:00:00+00:00"
+    assert readiness["families"]["risk"]["readiness"] == "missing_optional"
+    assert report["roots"][0]["warm_cache_readiness"] == readiness
+
+
 def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
     missing = tmp_path / "missing"
 
@@ -254,6 +303,12 @@ def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
 
     assert report["ok"] is True
     assert report["summary"]["by_severity"] == {"warning": 1}
+    assert report["summary"]["warm_cache_readiness"]["readiness"] == "no_cache_evidence"
+    assert report["summary"]["warm_cache_readiness"]["missing_families"] == [
+        "candles",
+        "fills",
+        "risk",
+    ]
     assert report["issues"][0]["family"] == "root"
     assert report["issues"][0]["code"] == "root_missing"
 

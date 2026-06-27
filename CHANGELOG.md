@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added report-only warm-cache readiness evidence to
+  `passivbot tool cache-integrity-doctor`, derived from already-scanned local
+  candle, fill, and HSL/risk cache metadata.
 - Added fill-cache and HSL/risk-state metadata summaries to
   `passivbot tool cache-integrity-doctor`, including local fill
   `pnl_contract` compatibility counts and coverage timestamps.

@@ -16,6 +16,8 @@ MAX_COVERAGE_ARTIFACT_SAMPLES = 8
 MAX_COVERAGE_GAP_SAMPLES = 8
 MAX_METADATA_ARTIFACT_SAMPLES = 8
 CURRENT_FILL_PNL_CONTRACT = "gross_pnl_quote_fee_best_effort_v2"
+CORE_WARM_CACHE_FAMILIES = ("candles", "fills")
+WARM_CACHE_FAMILIES = ("candles", "fills", "risk")
 TIMESTAMP_FIELD_SUFFIXES = ("_ms", "_ts", "_at")
 TIMESTAMP_FIELD_NAMES = {
     "timestamp",
@@ -889,6 +891,170 @@ def _finalize_coverage(coverage: dict[str, Any], issue_count: int) -> dict[str, 
     }
 
 
+def _family_mapping_value(families: dict[str, Any], family: str, key: str) -> Any:
+    family_report = families[family] if family in families else {}
+    return family_report[key] if isinstance(family_report, dict) and key in family_report else None
+
+
+def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
+    coverage = _family_mapping_value(families, "candles", "coverage")
+    if not isinstance(coverage, dict) or int(coverage["artifact_count"]) == 0:
+        return {
+            "readiness": "missing",
+            "reason": "candle_coverage_missing",
+        }
+    evidence = str(coverage["warm_cache_evidence"])
+    attention = evidence != "coverage_observed"
+    reasons = [f"candle_{evidence}"]
+    gap_count = int(coverage["gap_count"])
+    length_mismatch_count = int(coverage["length_mismatch_count"])
+    if gap_count:
+        reasons.append("candle_suspicious_gaps_present")
+    if length_mismatch_count:
+        reasons.append("candle_length_mismatch_present")
+    return {
+        "readiness": "attention" if attention else "observed",
+        "reasons": reasons,
+        "evidence": evidence,
+        "artifact_count": int(coverage["artifact_count"]),
+        "covered_artifact_count": int(coverage["covered_artifact_count"]),
+        "length_mismatch_count": length_mismatch_count,
+        "valid_row_count": int(coverage["valid_row_count"]),
+        "expected_row_count": int(coverage["expected_row_count"]),
+        "first_valid_ms": coverage["first_valid_ms"],
+        "last_valid_ms": coverage["last_valid_ms"],
+        "first_valid_date": coverage["first_valid_date"],
+        "last_valid_date": coverage["last_valid_date"],
+        "suspicious_gap_count": gap_count,
+        "max_gap_rows": int(coverage["max_gap_rows"]),
+    }
+
+
+def _warm_cache_fill_report(families: dict[str, Any]) -> dict[str, Any]:
+    metadata = _family_mapping_value(families, "fills", "metadata")
+    if not isinstance(metadata, dict) or int(metadata["artifact_count"]) == 0:
+        return {
+            "readiness": "missing",
+            "reason": "fill_metadata_missing",
+        }
+    compatibility = str(metadata["compatibility"])
+    known_gap_count = int(metadata["known_gap_count"])
+    record_count = int(metadata["record_count"])
+    covered_start_ms = metadata["covered_start_ms"]
+    history_scope_counts = metadata["history_scope_counts"]
+    reasons = [f"fill_{compatibility}"]
+    if known_gap_count:
+        reasons.append("fill_known_gaps_present")
+    if covered_start_ms is None:
+        reasons.append("fill_covered_start_missing")
+    if record_count == 0:
+        reasons.append("fill_records_missing")
+    attention = (
+        compatibility != "current_pnl_contract"
+        or known_gap_count > 0
+        or covered_start_ms is None
+    )
+    return {
+        "readiness": "attention" if attention else "observed",
+        "reasons": reasons,
+        "compatibility": compatibility,
+        "artifact_count": int(metadata["artifact_count"]),
+        "metadata_file_count": int(metadata["metadata_file_count"]),
+        "record_count": record_count,
+        "current_pnl_contract_count": int(metadata["current_pnl_contract_count"]),
+        "legacy_pnl_contract_count": int(metadata["legacy_pnl_contract_count"]),
+        "missing_pnl_contract_count": int(metadata["missing_pnl_contract_count"]),
+        "history_scope_counts": dict(history_scope_counts),
+        "covered_start_ms": covered_start_ms,
+        "covered_start_date": metadata["covered_start_date"],
+        "first_event_ms": metadata["first_event_ms"],
+        "last_event_ms": metadata["last_event_ms"],
+        "first_event_date": metadata["first_event_date"],
+        "last_event_date": metadata["last_event_date"],
+        "last_refresh_ms": metadata["last_refresh_ms"],
+        "last_refresh_date": metadata["last_refresh_date"],
+        "suspicious_gap_count": known_gap_count,
+    }
+
+
+def _warm_cache_risk_report(families: dict[str, Any]) -> dict[str, Any]:
+    metadata = _family_mapping_value(families, "risk", "metadata")
+    if not isinstance(metadata, dict) or int(metadata["artifact_count"]) == 0:
+        return {
+            "readiness": "missing_optional",
+            "reason": "risk_hsl_metadata_missing_optional",
+        }
+    compatibility = str(metadata["compatibility"])
+    attention = compatibility == "issues_present"
+    return {
+        "readiness": "attention_optional" if attention else "observed_optional",
+        "reasons": [f"risk_{compatibility}"],
+        "compatibility": compatibility,
+        "artifact_count": int(metadata["artifact_count"]),
+        "record_count": int(metadata["record_count"]),
+        "timestamp_field_count": int(metadata["timestamp_field_count"]),
+        "first_event_ms": metadata["first_event_ms"],
+        "last_event_ms": metadata["last_event_ms"],
+        "first_event_date": metadata["first_event_date"],
+        "last_event_date": metadata["last_event_date"],
+    }
+
+
+def _build_warm_cache_readiness(families: dict[str, Any]) -> dict[str, Any]:
+    family_reports = {
+        "candles": _warm_cache_candle_report(families),
+        "fills": _warm_cache_fill_report(families),
+        "risk": _warm_cache_risk_report(families),
+    }
+    missing_families = [
+        family
+        for family in WARM_CACHE_FAMILIES
+        if str(family_reports[family]["readiness"]).startswith("missing")
+    ]
+    missing_core = [
+        family
+        for family in CORE_WARM_CACHE_FAMILIES
+        if str(family_reports[family]["readiness"]) == "missing"
+    ]
+    attention_families = [
+        family
+        for family, report in family_reports.items()
+        if "attention" in str(report["readiness"])
+    ]
+    reasons: list[str] = []
+    for family, report in family_reports.items():
+        if "reasons" in report:
+            reasons.extend(str(reason) for reason in report["reasons"])
+        elif "reason" in report:
+            reasons.append(str(report["reason"]))
+    suspicious_gap_count = sum(
+        int(report["suspicious_gap_count"])
+        for report in family_reports.values()
+        if "suspicious_gap_count" in report
+    )
+    if not any(
+        int(report["artifact_count"])
+        for report in family_reports.values()
+        if "artifact_count" in report
+    ):
+        readiness = "no_cache_evidence"
+    elif missing_core:
+        readiness = "insufficient_core_evidence"
+    elif attention_families:
+        readiness = "core_evidence_with_attention"
+    else:
+        readiness = "core_evidence_observed"
+    return {
+        "mode": "report_only_non_enforcing",
+        "readiness": readiness,
+        "reasons": sorted(set(reasons)),
+        "missing_families": missing_families,
+        "attention_families": attention_families,
+        "suspicious_gap_count": suspicious_gap_count,
+        "families": family_reports,
+    }
+
+
 def _finalize_family_summary(by_family: dict[str, dict[str, Any]]) -> dict[str, Any]:
     finalized: dict[str, Any] = {}
     for family, summary in sorted(by_family.items()):
@@ -1020,6 +1186,7 @@ def _scan_root(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             _merge_metadata(family_summary, metadata_artifact)
     summary["by_extension"] = dict(sorted(by_extension.items()))
     summary["by_family"] = _finalize_family_summary(by_family)
+    summary["warm_cache_readiness"] = _build_warm_cache_readiness(summary["by_family"])
     return summary, issues
 
 
@@ -1046,6 +1213,7 @@ def build_cache_integrity_report(roots: Iterable[str | Path]) -> dict[str, Any]:
                 _merge_finalized_coverage(summary, family_report["coverage"])
             if "metadata" in family_report:
                 _merge_finalized_metadata(summary, family_report["metadata"])
+    aggregate_by_family = _finalize_family_summary(by_family)
     summary = {
         "root_count": len(root_reports),
         "file_count": sum(int(root["file_count"]) for root in root_reports),
@@ -1053,7 +1221,8 @@ def build_cache_integrity_report(roots: Iterable[str | Path]) -> dict[str, Any]:
         "total_bytes": sum(int(root["total_bytes"]) for root in root_reports),
         "issue_count": len(issues),
         "by_severity": dict(sorted(by_severity.items())),
-        "by_family": _finalize_family_summary(by_family),
+        "by_family": aggregate_by_family,
+        "warm_cache_readiness": _build_warm_cache_readiness(aggregate_by_family),
     }
     return {
         "ok": "error" not in by_severity,
