@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b5fc245b` after PR #793, `Add live performance execution timing report`.
+- `87f22840` after PR #797, `Add HSL replay profile to performance report`.
 
 Current review gate:
 
@@ -30,6 +30,21 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #797 at `87f22840`.
+- Bots were not restarted for PRs #796/#797 because the changes were docs and
+  read-only performance-report tooling. All five configured `passivbot live`
+  processes remained running.
+- A 2-minute smoke after the PR #797 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`.
+- A focused 45-minute performance report confirmed the new
+  `hsl_replay_profile` section populated on VPS5. It showed four active HSL
+  replay profiles: GateIO about `1.25M` estimated dense pair-rows and `56.2%`
+  observed work, Binance about `1.12M` and `62.4%`, OKX about `1.17M` and
+  `62.9%`, and Kucoin with only the start event in the sampled window. This
+  validates the report slice and re-confirms that coin-HSL full replay remains
+  the dominant startup safety/performance gap.
 - Repository pulled through PR #696 at `d850daf5`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
@@ -2190,6 +2205,53 @@ VPS5 deployment status:
   because no order-wave/write events occurred in that sampled window. Existing
   slowest blockers were input-staleness and cycle-boundary lag groups, not
   execution writes.
+
+### PR #796: Live Performance Readiness Checklist
+
+- Branch: `codex/v8-live-performance-readiness-checklist`.
+- Scope: docs-only performance/readiness plan structure.
+- Result: `docs/plans/live_performance_readiness_goals.md` now has a short
+  current-priority checklist and definition of done for fast but correct
+  readiness, HSL protective startup latency, replay profiling, exact
+  optimization, checkpoints, warm restarts, shutdown latency, and
+  observability-vs-trading boundaries.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  `git diff --check -- docs/plans/live_performance_readiness_goals.md` passed.
+- VPS5 evidence: deployed at `8bba0641` without bot restart because this was
+  docs-only. A 2-minute brief smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`.
+
+### PR #797: HSL Replay Profile Performance Report
+
+- Branch: `codex/v8-live-performance-hsl-profile`.
+- Scope: read-only live performance report HSL replay profiling, docs, and
+  tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `hsl_replay_profile`, derived only from existing `hsl.replay.*` events. The
+  section whitelists bounded replay metadata and derives estimated dense,
+  required, held, and cooldown pair-row work, observed applied rows/progress
+  percentage, elapsed timing, and startup-blocking timing when available.
+  Trading behavior, exchange calls, event emission, and raw HSL/account payloads
+  are unchanged.
+- Review evidence: CI was green. Claude approved the rebased head with no
+  findings. Hermes approved the identical report slice before the clean rebase;
+  the only old-vs-new tree difference was the separately approved PR #796 docs
+  context. Local validation covered `tests/test_live_performance_report.py`,
+  adjacent event-query and smoke-report tests, py_compile, `git diff --check`,
+  a local compact CLI performance-report smoke, and a silent-handling scan of
+  touched report/test files.
+- VPS5 evidence: deployed at `87f22840` without bot restart because this is
+  read-only report tooling. A 2-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`. A focused 45-minute performance report returned
+  `ok=true` and showed `hsl_replay_profile` populated for Binance, GateIO,
+  OKX, and Kucoin. The populated groups made the current dense full-replay
+  problem explicit: Binance/GateIO/OKX were still in coin-HSL replay after
+  roughly `15-17m`, with about `1.1M-1.25M` estimated dense pair-rows each and
+  only about `56-63%` observed work in the sampled window.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
