@@ -54,6 +54,11 @@ _RESOURCE_PRESSURE_BOOL_FIELDS = (
     "event_pipeline_stopping",
     "event_pipeline_worker_alive",
 )
+_SHUTDOWN_EVENT_TYPES = {
+    "bot.stopping",
+    "bot.shutdown.stage",
+    "bot.stopped",
+}
 
 
 def _open_text(path: Path):
@@ -864,6 +869,61 @@ class _ResourcePressureAccumulator:
         }
 
 
+class _ShutdownLatencyAccumulator:
+    def __init__(self) -> None:
+        self.accumulator = _PerformanceAccumulator()
+        self.event_types: Counter[str] = Counter()
+        self.stage_counts: Counter[str] = Counter()
+        self.shutdowns_started = 0
+        self.shutdowns_completed = 0
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _SHUTDOWN_EVENT_TYPES:
+            return
+        self.event_types[event_type] += 1
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        if event_type == "bot.stopping":
+            self.shutdowns_started += 1
+            return
+        if event_type == "bot.shutdown.stage":
+            stage = data.get("stage") or live_event.get("reason_code") or "unknown"
+            stage = str(stage)
+            self.stage_counts[stage] += 1
+            self.accumulator.add(
+                row=row,
+                live_event=live_event,
+                operation=f"shutdown.stage.{stage}",
+                value_ms=_elapsed_s_to_ms(data.get("elapsed_s")),
+                trading_impact="observability",
+                timing_kind="cumulative",
+            )
+            return
+        if event_type == "bot.stopped":
+            self.shutdowns_completed += 1
+            self.accumulator.add(
+                row=row,
+                live_event=live_event,
+                operation="shutdown.total",
+                value_ms=_elapsed_s_to_ms(data.get("elapsed_s")),
+                trading_impact="observability",
+                timing_kind="duration",
+            )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        timing = self.accumulator.to_dict(group_limit=group_limit)
+        return {
+            "total_events": sum(self.event_types.values()),
+            "shutdowns_started": int(self.shutdowns_started),
+            "shutdowns_completed": int(self.shutdowns_completed),
+            "event_types": dict(self.event_types.most_common()),
+            "stage_counts": dict(self.stage_counts.most_common()),
+            "total_groups": int(timing.get("total_groups") or 0),
+            "groups_truncated": bool(timing.get("groups_truncated")),
+            "groups": timing.get("groups") or [],
+        }
+
+
 def _slowest_blockers(
     *,
     performance_groups: list[dict[str, Any]],
@@ -1165,6 +1225,7 @@ def build_live_performance_report(
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
+    shutdown_latency = _ShutdownLatencyAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -1250,6 +1311,7 @@ def build_live_performance_report(
                     )
                     startup_readiness.add(row=row, live_event=live_event)
                     resource_pressure.add(row=row, live_event=live_event)
+                    shutdown_latency.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -1288,6 +1350,7 @@ def build_live_performance_report(
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
+        "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "slowest_blockers": _slowest_blockers(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
@@ -1382,6 +1445,17 @@ def summarize_live_performance_report(
         if len(pressure_groups) > max(0, int(group_limit)):
             resource_pressure["groups_truncated"] = True
         summary["resource_pressure"] = resource_pressure
+    if isinstance(report.get("shutdown_latency"), dict):
+        shutdown_latency = dict(report["shutdown_latency"])
+        shutdown_groups = (
+            shutdown_latency.get("groups")
+            if isinstance(shutdown_latency.get("groups"), list)
+            else []
+        )
+        shutdown_latency["groups"] = shutdown_groups[: max(0, int(group_limit))]
+        if len(shutdown_groups) > max(0, int(group_limit)):
+            shutdown_latency["groups_truncated"] = True
+        summary["shutdown_latency"] = shutdown_latency
     if isinstance(report.get("slowest_blockers"), dict):
         slowest_blockers = report["slowest_blockers"]
         blocker_groups = (

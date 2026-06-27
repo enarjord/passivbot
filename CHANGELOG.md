@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `shutdown_latency` summaries to
+  `passivbot tool live-performance-report`, projecting existing lifecycle
+  shutdown events into per-stage and total shutdown timing groups without
+  copying shutdown error text.
 - Added `resource_pressure` summaries to
   `passivbot tool live-performance-report`, projecting whitelisted
   `health.summary` process and event-pipeline fields without raw account or
