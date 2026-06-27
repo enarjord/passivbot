@@ -139,11 +139,18 @@ Related detailed plans:
    Status: initial implementation merged. `health.summary` events now include
    process RSS, memory percent when available, open file descriptor count,
    system load averages, CPU count, and live-event pipeline queue/drop/sink
-   error counters.
+   error counters. `live-smoke-report` now also projects those existing
+   event-pipeline counters into full, summary, and brief smoke reports.
 
    Remaining refinements: exchange-call counts, candle-fetch concurrency, loop
    lag, thresholded console warnings, and richer system memory/swap fields. Keep
    this off console unless thresholds are crossed.
+
+   Work log:
+   - 2026-06-27: Added `live-smoke-report` event-pipeline health summaries
+     from existing `health.summary` counters, exposing queue depth, unfinished
+     work, dropped events, sink errors, degraded count, worker-not-alive count,
+     and stopping count without changing smoke verdict logic.
 
 6. [ ] Exchange health and contract probes.
    Status: partial. VPS5 smoke on 2026-06-25 surfaced Kucoin authoritative
@@ -337,7 +344,9 @@ Related detailed plans:
 13. [ ] Cache integrity doctor.
     Status: partial. Initial read-only local cache smoke doctor, cache-family
     summaries, candle coverage evidence, fill/HSL metadata evidence, and
-    report-only warm-cache readiness evidence are merged.
+    report-only warm-cache readiness evidence are merged. Deeper report-only
+    metadata compatibility evidence for candle known gaps, fill coverage proof,
+    and HSL artifact/timestamp compatibility is also merged.
 
     Add a read-only doctor for candle/fill/HSL caches that reports coverage,
     metadata compatibility, corrupted shards, suspicious gaps, synthetic/no-trade
@@ -491,6 +500,8 @@ Related detailed plans:
 | 2026-06-27 | #3 Live restart/smoke automation | PR #759 / `74a52ede` | Added `live-smoke-report` staged-readiness health summaries from existing staged `cycle.degraded` events; VPS5 smoke reported all five bots matched, no hard failures, no failed remote/account-critical calls, and `staged_readiness.total=4`, `bots=1`, `latest_missing_surface_total=1`, `latest_invalid_surface_total=1` | Use the new staged readiness signal to decide whether a narrow completed-candle readiness fix is warranted |
 | 2026-06-27 | #3 Live restart/smoke automation | PR #760 / `31d42ea3` | Recorded staged-readiness deploy evidence; VPS5 pull required no restart, an initial smoke surfaced real HSL ZEC RED finalizations through logs and `risk_events`, and settled follow-up smokes returned `ok=true`, no hard/log failures, all five bots matched, no failed remote/account-critical calls, and persistent `staged_readiness` across up to four bots | Continue using `staged_readiness` summaries to decide whether completed-candle target-change fixes or diagnostics are warranted |
 | 2026-06-27 | Adjacent staged readiness/runtime | PR #762 / `d9188b64` | Tolerated completed-candle fallback-to-normal signature shape recovery when symbol and target timestamp are unchanged; VPS5 restart smoke returned `ok=true`, all five bots matched, no hard/log failures, no failed remote/account-critical calls, and `staged_readiness.total=0` in both immediate and settled windows | Continue monitoring staged readiness; if it recurs, classify account-surface delays separately from completed-candle readiness shapes |
+| 2026-06-27 | #13 Cache integrity doctor | PR #764 / `7797d038` | Added report-only metadata compatibility evidence for candle known-gap no-trade reasons, fill current-contract coverage proof, and HSL artifact/timestamp compatibility; final review follow-up made mixed no-trade/unclassified gaps explicitly partial and still unproven | Further cache-doctor refinements should stay read-only and prove rather than assume coverage |
+| 2026-06-27 | #5 Resource pressure telemetry | PR #765 / `5275ab75` | Added `live-smoke-report` event-pipeline health summaries from existing `health.summary` queue/drop/sink-error counters; VPS5 30-minute smoke showed `event_pipeline.total=1`, no drops, no sink errors, and worker alive | Consider thresholded console/report warnings only after more live evidence |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |

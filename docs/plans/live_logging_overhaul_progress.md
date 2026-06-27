@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d9188b64` merge of PR #762, `Tolerate completed candle fallback shape recovery`.
+- `5275ab75` merge of PR #765, `Summarize live event pipeline health in smoke report`.
 
 Current review gate:
 
@@ -1747,13 +1747,61 @@ VPS5 deployment status:
   all five bots matched, clean repository state, no hard/log failures, no
   failed remote/account-critical calls, and `staged_readiness.total=0`.
 
+### PR #764: Cache Doctor Metadata Compatibility Evidence
+
+- Branch: `codex/v8-cache-doctor-compat`.
+- Scope: adjacent read-only cache diagnostics from the live-ops backlog.
+- Result: `passivbot tool cache-integrity-doctor` now reports deeper
+  metadata compatibility evidence for local candle/fill/HSL caches. Candle
+  `index.json` known-gap metadata is classified by no-trade vs unclassified
+  reasons, fill current-contract evidence distinguishes proven coverage from
+  current-contract-but-unproven coverage, and HSL/risk metadata reports HSL
+  artifact/timestamp compatibility fields. The final follow-up commit made
+  mixed no-trade/unclassified candle gaps explicitly partial and still
+  `candle_synthetic_no_trade_evidence_unproven`.
+- Review evidence: Claude and Hermes approved the final head; CI was green;
+  `tests/test_cache_integrity_doctor.py`, compileall, and `git diff --check`
+  passed locally for the follow-up.
+- VPS5 evidence: deployed as part of merged `v8` `5275ab75` without bot
+  restart because this is read-only local tooling.
+
+### PR #765: Live Smoke Event Pipeline Health
+
+- Branch: `codex/v8-smoke-pipeline-health`.
+- Scope: read-only smoke-report tooling.
+- Result: `passivbot tool live-smoke-report` now derives bounded
+  `event_pipeline_health` full/summary groups and brief `event_pipeline`
+  counters from existing `health.summary` event-pipeline counters. The new
+  projection reports latest queue depth, unfinished queue work, dropped event
+  counts, sink-error counts, degraded count, worker-not-alive count, and
+  stopping count without changing smoke verdict logic.
+- Review evidence: Claude and Hermes approved; CI was green; full
+  `tests/test_live_smoke_report.py`, compileall, and `git diff --check`
+  passed locally.
+- VPS5 evidence: deployed at `5275ab75` without bot restart because this is
+  read-only smoke-report tooling. A 5-minute smoke confirmed the new brief
+  `event_pipeline` field was present, but no recent matching health-summary
+  sample was in that short window. A 30-minute smoke reported
+  `event_pipeline.total=1`, `bots=1`, `latest_dropped_total=0`,
+  `latest_sink_error_total=0`, `latest_worker_not_alive_count=0`, and clean
+  tracked repository state. The same smoke was red from live risk state and
+  unrelated runtime events: HSL red/cooldown events, CRITICAL HSL text logs,
+  and an earlier Hyperliquid fill-refresh timeout. All five expected bots were
+  still running, and remote/account-critical call summaries reported no
+  failures.
+
 ## Current Next Steps
 
-1. Continue Phase 5/6 by adding the next high-value event producer or debug
+1. Inspect the current VPS5 HSL/risk smoke signal separately from the merged
+   tooling. The latest deploy smoke shows real HSL RED/cooldown activity and
+   CRITICAL risk text logs; decide whether smoke should keep treating those as
+   hard operator failures or whether risk-state criticality needs a more
+   explicit classification distinct from software crashes.
+2. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
    are more order/risk transition coverage or focused profile refinements only
    when live diagnostics need deeper evidence.
-2. Continue active read-only exchange health probes beyond account-critical
+3. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. PR #741 added
    clock-skew health. PR #743 added candle freshness health. PR #745 added
@@ -1764,11 +1812,11 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-3. Continue monitoring staged-readiness summaries after PR #762. The first
+4. Continue monitoring staged-readiness summaries after PR #762. The first
    post-restart smokes showed `staged_readiness.total=0`; if the signal returns,
    inspect whether it is a real current-epoch account surface delay or a new
    completed-candle readiness shape.
-4. Start the live restart/smoke automation slice if operational workflow speed
+5. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
+6. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
    compatibility checks and synthetic/no-trade assumptions.
