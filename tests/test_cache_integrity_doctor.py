@@ -122,6 +122,99 @@ def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     assert coverage["last_valid_date"] is None
 
 
+def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_coverage(tmp_path):
+    root = tmp_path / "caches"
+    fill_dir = root / "fill_events" / "binance" / "user_01"
+    fill_dir.mkdir(parents=True)
+    current_contract = "gross_pnl_quote_fee_best_effort_v2"
+    (fill_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "pnl_contract": current_contract,
+                "history_scope": "all",
+                "covered_start_ms": 1767225600000,
+                "oldest_event_ts": 1767312000000,
+                "newest_event_ts": 1767398400000,
+                "last_refresh_ms": 1767484800000,
+                "known_gaps": [{"start_ts": 1767355200000, "end_ts": 1767358800000}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (fill_dir / "2026-01-02.json").write_text(
+        json.dumps(
+            [
+                {
+                    "id": "a",
+                    "timestamp": 1767312000000,
+                    "pnl_contract": current_contract,
+                },
+                {"id": "b", "timestamp": 1767315600000},
+                {
+                    "id": "c",
+                    "timestamp": 1767319200000,
+                    "pnl_contract": "legacy_contract",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["fills"]["metadata"]
+    assert metadata["compatibility"] == "legacy_or_missing_pnl_contract"
+    assert metadata["artifact_count"] == 2
+    assert metadata["metadata_file_count"] == 1
+    assert metadata["record_count"] == 3
+    assert metadata["current_pnl_contract_count"] == 2
+    assert metadata["legacy_pnl_contract_count"] == 1
+    assert metadata["missing_pnl_contract_count"] == 1
+    assert metadata["history_scope_counts"] == {"all": 1}
+    assert metadata["known_gap_count"] == 1
+    assert metadata["covered_start_date"] == "2026-01-01T00:00:00+00:00"
+    assert metadata["first_event_date"] == "2026-01-02T00:00:00+00:00"
+    assert metadata["last_event_date"] == "2026-01-03T00:00:00+00:00"
+    assert metadata["newest_event_date"] == "2026-01-03T00:00:00+00:00"
+    assert metadata["last_refresh_date"] == "2026-01-04T00:00:00+00:00"
+
+
+def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
+    root = tmp_path / "caches"
+    hsl_dir = root / "equity_hard_stop" / "binance"
+    hsl_dir.mkdir(parents=True)
+    (hsl_dir / "user_01.json").write_text(
+        json.dumps(
+            {
+                "pside": "long",
+                "symbol": "BTCUSDT",
+                "tier": "red",
+                "last_red_ts": 1767312000000,
+                "cooldown_until_ms": 1767315600000,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["risk"]["metadata"]
+    assert metadata["compatibility"] == "local_state_with_timestamps"
+    assert metadata["artifact_count"] == 1
+    assert metadata["timestamp_field_count"] == 2
+    assert metadata["first_event_date"] == "2026-01-02T00:00:00+00:00"
+    assert metadata["last_event_date"] == "2026-01-02T01:00:00+00:00"
+    sample = metadata["artifact_samples"][0]
+    assert sample["hsl_related"] is True
+    assert sample["top_level_keys"] == [
+        "cooldown_until_ms",
+        "last_red_ts",
+        "pside",
+        "symbol",
+        "tier",
+    ]
+
+
 def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
     missing = tmp_path / "missing"
 

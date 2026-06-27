@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added fill-cache and HSL/risk-state metadata summaries to
+  `passivbot tool cache-integrity-doctor`, including local fill
+  `pnl_contract` compatibility counts and coverage timestamps.
 - Added v2 candle coverage windows and suspicious interior gap samples to
   `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
   cache artifacts.
