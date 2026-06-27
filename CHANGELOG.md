@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added risk/HSL log-match counters to `passivbot tool live-smoke-report`, so
+  CRITICAL risk-state log lines can be distinguished from non-risk hard log
+  matches without changing smoke verdict logic.
 - Added event-pipeline health summaries to
   `passivbot tool live-smoke-report`, projecting existing `health.summary`
   queue/drop/sink-error counters into full, summary, and brief reports.

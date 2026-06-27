@@ -27,6 +27,10 @@ ATTENTION_LOG_PATTERN = re.compile(
     r"\blevel=(?:critical|error)\b|\bfatal\b|\buncaught\b",
     re.IGNORECASE,
 )
+RISK_LOG_PATTERN = re.compile(
+    r"(?:\[(?:risk|hsl|wel|twel|unstuck)\]|\bHSL\[|\b(?:risk|hsl|wel|twel|unstuck)\.)",
+    re.IGNORECASE,
+)
 SENSITIVE_LOG_HEADER_PATTERN = re.compile(
     r"(?i)\b(authorization|proxy-authorization|x-mbx-apikey|cookie|set-cookie)"
     r"(\s*[:=]\s*)(?:bearer|basic)?\s*[^,\s;]+"
@@ -2819,6 +2823,10 @@ def _scan_logs(
             "files_scanned": 0,
             "hard_matches": 0,
             "attention_matches": 0,
+            "risk_attention_matches": 0,
+            "risk_hard_matches": 0,
+            "non_risk_attention_matches": 0,
+            "non_risk_hard_matches": 0,
             "window": window_report,
             "matches": [],
             "dropped_unparsed_attention_matches": 0,
@@ -2828,6 +2836,10 @@ def _scan_logs(
     matches: list[dict[str, Any]] = []
     hard_matches = 0
     attention_matches = 0
+    risk_attention_matches = 0
+    risk_hard_matches = 0
+    non_risk_attention_matches = 0
+    non_risk_hard_matches = 0
     lines_considered = 0
     lines_skipped_before = 0
     lines_skipped_after = 0
@@ -2873,13 +2885,23 @@ def _scan_logs(
                 continue
             attention_matches += 1
             hard = bool(HARD_LOG_PATTERN.search(line))
+            risk_match = bool(RISK_LOG_PATTERN.search(line))
+            if risk_match:
+                risk_attention_matches += 1
+            else:
+                non_risk_attention_matches += 1
             if hard:
                 hard_matches += 1
+                if risk_match:
+                    risk_hard_matches += 1
+                else:
+                    non_risk_hard_matches += 1
             if len(matches) < max(0, int(max_matches)):
                 match = {
                     "path": str(path),
                     "line": int(line_no),
                     "hard": hard,
+                    "category": "risk" if risk_match else "general",
                     "text": _redact_log_text(line, max_len=500),
                 }
                 if line_ts is not None:
@@ -2890,6 +2912,10 @@ def _scan_logs(
         "files_scanned": len(files),
         "hard_matches": hard_matches,
         "attention_matches": attention_matches,
+        "risk_attention_matches": risk_attention_matches,
+        "risk_hard_matches": risk_hard_matches,
+        "non_risk_attention_matches": non_risk_attention_matches,
+        "non_risk_hard_matches": non_risk_hard_matches,
         "window": _log_window_report(
             since_ms=since_ms,
             until_ms=until_ms,
@@ -3270,6 +3296,12 @@ def summarize_live_smoke_report(
             "files_scanned": int(logs.get("files_scanned") or 0),
             "hard_matches": int(logs.get("hard_matches") or 0),
             "attention_matches": int(logs.get("attention_matches") or 0),
+            "risk_attention_matches": int(logs.get("risk_attention_matches") or 0),
+            "risk_hard_matches": int(logs.get("risk_hard_matches") or 0),
+            "non_risk_attention_matches": int(
+                logs.get("non_risk_attention_matches") or 0
+            ),
+            "non_risk_hard_matches": int(logs.get("non_risk_hard_matches") or 0),
             "dropped_unparsed_attention_matches": int(
                 logs.get("dropped_unparsed_attention_matches") or 0
             ),
@@ -3439,6 +3471,16 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "files_scanned": _count_value(logs.get("files_scanned")),
             "hard_matches": _count_value(logs.get("hard_matches")),
             "attention_matches": _count_value(logs.get("attention_matches")),
+            "risk_attention_matches": _count_value(
+                logs.get("risk_attention_matches")
+            ),
+            "risk_hard_matches": _count_value(logs.get("risk_hard_matches")),
+            "non_risk_attention_matches": _count_value(
+                logs.get("non_risk_attention_matches")
+            ),
+            "non_risk_hard_matches": _count_value(
+                logs.get("non_risk_hard_matches")
+            ),
             "dropped_unparsed_attention_matches": _count_value(
                 logs.get("dropped_unparsed_attention_matches")
             ),

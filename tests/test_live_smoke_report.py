@@ -804,6 +804,10 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "files_scanned": 1,
         "hard_matches": 0,
         "attention_matches": 1,
+        "risk_attention_matches": 0,
+        "risk_hard_matches": 0,
+        "non_risk_attention_matches": 1,
+        "non_risk_hard_matches": 0,
         "dropped_unparsed_attention_matches": 0,
         "dropped_unparsed_hard_matches": 0,
     }
@@ -2141,6 +2145,63 @@ def test_live_smoke_report_log_scan_deduplicates_aliases_and_matches_levels(
     assert "AKIA123" not in emitted
     assert "hunter2" not in emitted
     assert "TOKEN123" not in emitted
+
+
+def test_live_smoke_report_log_scan_classifies_risk_matches(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "binance_01.log").write_text(
+        "\n".join(
+            [
+                (
+                    "2026-06-27T16:06:24Z CRITICAL [binance] [risk] "
+                    "HSL[long:XLM/USDT:USDT] reconstructed active coin RED cooldown"
+                ),
+                "2026-06-27T16:06:25Z CRITICAL uncaught task failure",
+                "2026-06-27T16:06:26Z ERROR [fills] temporary fetch failed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=logs_dir,
+        log_tail_lines=10,
+    )
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 2
+    assert report["logs"]["attention_matches"] == 3
+    assert report["logs"]["hard_matches"] == 2
+    assert report["logs"]["risk_attention_matches"] == 1
+    assert report["logs"]["risk_hard_matches"] == 1
+    assert report["logs"]["non_risk_attention_matches"] == 2
+    assert report["logs"]["non_risk_hard_matches"] == 1
+    assert [match["category"] for match in report["logs"]["matches"]] == [
+        "risk",
+        "general",
+        "general",
+    ]
+    assert summary["logs"]["risk_hard_matches"] == 1
+    assert summary["logs"]["non_risk_hard_matches"] == 1
+    assert brief["logs"]["risk_hard_matches"] == 1
+    assert brief["logs"]["non_risk_hard_matches"] == 1
 
 
 def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
