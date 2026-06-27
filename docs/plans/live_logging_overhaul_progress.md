@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `5714d36dd` merge of PR #728, `Add fills live event debug profile`.
+- `7ff5f8f20` merge of PR #736, `Record forager EMA readiness handoff gap`.
 
 Current review gate:
 
@@ -308,6 +308,26 @@ VPS5 deployment status:
   and rejected operations including SSH, tmux signaling, process signaling, git
   checkout/pull/fetch, `passivbot live`, exchange/API calls, and credential
   loading.
+- PRs #723-#724 and #728/#730/#732 added opt-in debug-profile enrichment for
+  remote calls, candles, fills, HSL, and execution events. They were deployed
+  to VPS5 without bot restart where appropriate because profiles are opt-in and
+  default live behavior and console volume were unchanged. Settled brief smoke
+  reports after those pulls showed all five expected bots running with no hard
+  failures, no log hard matches, no failed account-critical remote calls, and
+  only known non-hard EMA/staged-readiness or HSL attention.
+- Claude's retrospective audit for already-merged PRs #713-#722 was posted on
+  PR #723. Current `v8` contains follow-up coverage: PR #726 addressed
+  shutdown-message echo, EMA debug-profile scoping, and Rust debug best-effort
+  isolation; PR #734 addressed shareable path hygiene, flat config reporting,
+  and HSL preview scalar/path hardening; and the cache-doctor candle coverage
+  path now reports length mismatches using canonical row-count authority.
+- PR #735 was pulled to VPS5 without bot restart because it only changed
+  read-only startup-budget smoke projections. A later smoke initially surfaced
+  real HSL RED events and one OKX active-symbol forager EMA readiness handoff
+  error unrelated to the smoke-tooling change; a settled follow-up smoke
+  reported `ok=true`, no hard failures, no log hard matches, all five expected
+  bots matched, and no failed remote/account-critical calls. PR #736 recorded
+  the EMA-readiness handoff gap in the live-ops backlog.
 
 ## Phase Checklist
 
@@ -1148,8 +1168,8 @@ VPS5 deployment status:
 - Scope: Phase 5/6 opt-in structured debug enrichment.
 - Result: added `ema` as a `logging.live_event_debug_profiles` /
   `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` profile, including `ema-readiness`
-  aliases. When `ema` or `candles` is enabled, existing `ema.unavailable`
-  events include bounded parsed EMA type, span, and inner reason summaries.
+  aliases. When `ema` is enabled, existing `ema.unavailable` events include
+  bounded parsed EMA type, span, and inner reason summaries.
   Default events remain compact, console output is unchanged, and no
   exchange/order/risk behavior changed.
 - Review evidence: Hermes approved original head `1a9a53218`; after PR #719
@@ -1315,6 +1335,44 @@ VPS5 deployment status:
   matches, all five expected bots matched, clean tracked repository state, no
   failed remote calls, no failed account-critical remote calls, and no monitor
   errors or warnings.
+
+### PR #734: Retrospective Tool Hygiene
+
+- Branch: `codex/v8-retro-tool-hygiene`.
+- Scope: Claude retrospective follow-up for already-merged operator tooling.
+- Result: collapsed user/deploy prefixes in shareable restart/preflight/HSL
+  preview output, resolved grouped and flat bot-side config keys in preflight
+  reports, and kept HSL startup-preview event data scalar and allowlisted.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  preflight/HSL preview/restart-plan tests, compileall, `git diff --check`, and
+  touched-file audits passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  operator tooling. Existing bots were left running.
+
+### PR #735: Startup Budget Smoke Projections
+
+- Branch: `codex/maxwell-startup-budget-smoke`.
+- Scope: adjacent startup/warmup observability.
+- Result: `live-smoke-report` now projects existing `bot.startup_timing` events
+  into report-only elapsed and per-phase budget evidence using recent local p95
+  baselines. The slice does not enforce budgets or change startup behavior.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  smoke-report tests, compileall, and `git diff --check` passed before merge.
+- VPS5 evidence: deployed without bot restart. A settled follow-up smoke
+  reported all five expected bots running, no hard failures, no log hard
+  matches, no failed remote calls, and no failed account-critical calls.
+
+### PR #736: EMA Readiness Handoff Backlog
+
+- Branch: `codex/v8-backlog-ema-readiness-race`.
+- Scope: living backlog / progress tracking.
+- Result: recorded the OKX/AAVE active-symbol forager EMA readiness handoff gap
+  as live-ops backlog item #17 and noted that the first remediation must
+  preserve the no-fabricated-ranking-values contract.
+- Review evidence: Hermes approved and CI was green. Claude had not returned
+  before merge, so this docs-only backlog update used the degraded gate.
+- VPS5 evidence: pulled to VPS5 without bot restart; all five configured bots
+  remained running.
 
 ## Current Next Steps
 
