@@ -18,6 +18,8 @@ from tools.probe_ccxt_ticker_endpoints import (
     summarize_fill_history_probe_health,
     summarize_my_trades,
     summarize_ohlcvs,
+    summarize_rate_limit_probe_collection,
+    summarize_rate_limit_probe_health,
     summarize_account_critical_probe_collection,
     summarize_account_critical_probe_health,
     summarize_time_sync_probe_collection,
@@ -238,6 +240,8 @@ def test_create_exchange_sets_default_type_swap_before_load_markets(monkeypatch)
 async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     class FakeExchange:
         id = "fake"
+        rateLimit = 50
+        enableRateLimit = True
         has = {
             "fetchBalance": True,
             "fetchBidsAsks": True,
@@ -383,6 +387,21 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert out["fill_history_health"]["latest"]["order_present_count"] == 2
     assert "raw-trade-id" not in str(out["fill_history_health"])
     assert "raw-order-id" not in str(out["fill_history_health"])
+    assert out["rate_limit_health"]["exchange_rate_limit_ms"] == 50.0
+    assert out["rate_limit_health"]["exchange_enable_rate_limit"] is True
+    assert out["rate_limit_health"]["observed_call_count"] == 20
+    assert out["rate_limit_health"]["market_metadata_call_count"] == 1
+    assert out["rate_limit_health"]["time_sync_call_count"] == 1
+    assert out["rate_limit_health"]["public_call_count"] == 14
+    assert out["rate_limit_health"]["private_call_count"] == 4
+    assert out["rate_limit_health"]["concurrent_request_count"] == 4
+    assert out["rate_limit_health"]["estimated_min_serial_ms"] == 1000.0
+    assert out["rate_limit_health"]["endpoint_counts"]["fetch_ticker_concurrent"] == 2
+    assert out["rate_limit_health"]["endpoint_counts"]["fetch_open_orders"] == 1
+    assert out["rate_limit_health"]["notes"] == [
+        "contains_concurrent_batches",
+        "contains_authenticated_calls",
+    ]
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
 
 
@@ -847,10 +866,142 @@ def test_fill_history_probe_collection_aggregates_users():
     assert collection["users"][2]["enabled"] is False
 
 
+def test_rate_limit_probe_health_estimates_existing_probe_pressure():
+    summary = summarize_rate_limit_probe_health(
+        {
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            "sleep_between_seconds": 1.5,
+            "exchange_rate_limit_ms": 25,
+            "exchange_enable_rate_limit": False,
+            "load_markets": {"ok": True},
+            "repeats": [
+                {
+                    "fetch_time": {"ok": True},
+                    "fetch_tickers_all": {"ok": True},
+                    "fetch_tickers_symbols": {"ok": True},
+                    "fetch_ticker_sequential": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True},
+                            "ETH/USDT:USDT": {"ok": True},
+                        }
+                    },
+                    "fetch_ticker_concurrent": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True},
+                            "ETH/USDT:USDT": {"ok": True},
+                        }
+                    },
+                    "fetch_bids_asks_all": {"ok": True},
+                    "fetch_bids_asks_symbols": {"ok": True},
+                    "fetch_order_book_sequential": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True},
+                            "ETH/USDT:USDT": {"ok": True},
+                        }
+                    },
+                    "fetch_order_book_concurrent": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True},
+                            "ETH/USDT:USDT": {"ok": True},
+                        }
+                    },
+                    "fetch_ohlcv_1m_tail": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True},
+                            "ETH/USDT:USDT": {"ok": True},
+                        }
+                    },
+                    "fetch_balance": {"ok": True},
+                    "fetch_positions": {"ok": True},
+                    "fetch_open_orders_all": {
+                        "ok": True,
+                        "attempts": {"all_symbols": {"ok": True}},
+                    },
+                    "fetch_my_trades_first_symbol": {"ok": True},
+                }
+            ],
+        }
+    )
+
+    assert summary["observed_call_count"] == 20
+    assert summary["market_metadata_call_count"] == 1
+    assert summary["time_sync_call_count"] == 1
+    assert summary["public_call_count"] == 14
+    assert summary["private_call_count"] == 4
+    assert summary["concurrent_request_count"] == 4
+    assert summary["calls_per_repeat"]["max"] == 19.0
+    assert summary["estimated_min_serial_ms"] == 500.0
+    assert summary["configured_sleep_between_seconds"] == 1.5
+    assert summary["endpoint_counts"]["fetch_open_orders"] == 1
+    assert summary["concurrent_endpoint_counts"] == {
+        "fetch_order_book_concurrent": 2,
+        "fetch_ticker_concurrent": 2,
+    }
+    assert summary["notes"] == [
+        "ccxt_rate_limit_disabled",
+        "contains_concurrent_batches",
+        "contains_authenticated_calls",
+    ]
+
+
+def test_rate_limit_probe_collection_aggregates_users():
+    collection = summarize_rate_limit_probe_collection(
+        [
+            {
+                "user": "binance_01",
+                "exchange": "binance",
+                "rate_limit_health": {
+                    "exchange_rate_limit_ms": 50.0,
+                    "exchange_enable_rate_limit": True,
+                    "observed_call_count": 20,
+                    "private_call_count": 4,
+                    "public_call_count": 14,
+                    "concurrent_request_count": 4,
+                    "estimated_min_serial_ms": 1000.0,
+                    "endpoint_counts": {"fetch_ticker_concurrent": 2},
+                    "concurrent_endpoint_counts": {"fetch_ticker_concurrent": 2},
+                    "notes": ["contains_concurrent_batches"],
+                },
+            },
+            {
+                "user": "gateio_01",
+                "exchange": "gateio",
+                "rate_limit_health": {
+                    "exchange_rate_limit_ms": 100.0,
+                    "exchange_enable_rate_limit": True,
+                    "observed_call_count": 5,
+                    "private_call_count": 4,
+                    "public_call_count": 0,
+                    "concurrent_request_count": 0,
+                    "estimated_min_serial_ms": 500.0,
+                    "endpoint_counts": {"fetch_open_orders": 2},
+                    "concurrent_endpoint_counts": {},
+                    "notes": ["contains_authenticated_calls"],
+                },
+            },
+        ]
+    )
+
+    assert collection["observed_call_count"] == 25
+    assert collection["public_call_count"] == 14
+    assert collection["private_call_count"] == 8
+    assert collection["concurrent_request_count"] == 4
+    assert collection["exchange_rate_limit_ms"]["max"] == 100.0
+    assert collection["estimated_min_serial_ms"]["median"] == 750.0
+    assert collection["endpoint_counts"] == {
+        "fetch_open_orders": 2,
+        "fetch_ticker_concurrent": 2,
+    }
+    assert collection["concurrent_endpoint_counts"] == {"fetch_ticker_concurrent": 2}
+    assert collection["users"][0]["notes"] == ["contains_concurrent_batches"]
+
+
 @pytest.mark.asyncio
 async def test_time_sync_probe_uses_ccxt_capability_flag_for_unsupported_method():
     class FakeExchange:
         id = "fake"
+        rateLimit = 100
+        enableRateLimit = True
         has = {
             "fetchBalance": True,
             "fetchBidsAsks": True,
@@ -1088,3 +1239,7 @@ async def test_account_only_probe_skips_public_and_uses_open_orders_symbol_fallb
     assert out["candle_freshness_health"]["total_symbols"] == 0
     assert out["fill_history_health"]["enabled"] is False
     assert out["fill_history_health"]["total"] == 0
+    assert out["rate_limit_health"]["observed_call_count"] == 5
+    assert out["rate_limit_health"]["private_call_count"] == 4
+    assert out["rate_limit_health"]["public_call_count"] == 0
+    assert out["rate_limit_health"]["endpoint_counts"]["fetch_open_orders"] == 2

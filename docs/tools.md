@@ -181,9 +181,12 @@ Ticker probes inspect CCXT ticker support and latency without placing orders:
   omit the fill-history endpoint. When the existing first-symbol `fetch_my_trades` probe is enabled,
   `fill_history_health` summarizes that sample's success, latency, trade count, newest timestamp,
   and shape without emitting raw trade/order ids; it does not perform extra pagination coverage
-  calls. The probe also includes `time_sync_health` from read-only `fetch_time` clock-skew checks
-  when the exchange supports it; use `--skip-time-sync` to omit that call. When OHLCV probing is
-  enabled, `candle_freshness_health` summarizes the existing 1m candle tail results without making
+  calls. `rate_limit_health` estimates request pressure from the calls the probe already made,
+  including public/private/concurrent call counts and CCXT `rateLimit` metadata; it is a planning
+  estimate, not proof of exchange-side rate-limit consumption. The probe also includes
+  `time_sync_health` from read-only `fetch_time` clock-skew checks when the exchange supports it;
+  use `--skip-time-sync` to omit that call. When OHLCV probing is enabled,
+  `candle_freshness_health` summarizes the existing 1m candle tail results without making
   additional exchange calls. Keep authenticated runs low-rate when a live bot is using the same
   account.
 
