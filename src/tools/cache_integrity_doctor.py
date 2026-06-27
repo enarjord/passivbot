@@ -404,6 +404,27 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
                 "boundary": "trailing_shortfall",
             }
         )
+    leading_missing_rows = int(first_valid_idx or 0) if valid_row_count else 0
+    if leading_missing_rows:
+        gap_start_idx = 0
+        gap_end_idx = int(first_valid_idx) - 1
+        gap_start_ms = int(metadata["month_start_ms"])
+        gap_end_ms = int(metadata["month_start_ms"]) + gap_end_idx * interval_ms
+        gaps.append(
+            {
+                "path": str(path),
+                "exchange": metadata["exchange"],
+                "timeframe": metadata["timeframe"],
+                "symbol": metadata["symbol"],
+                "start_ms": gap_start_ms,
+                "end_ms": gap_end_ms,
+                "start_date": _format_ms(gap_start_ms),
+                "end_date": _format_ms(gap_end_ms),
+                "rows": int(leading_missing_rows),
+                "duration_ms": int(leading_missing_rows * interval_ms),
+                "boundary": "leading_missing",
+            }
+        )
     max_gap_rows = max((int(gap["rows"]) for gap in gaps), default=0)
     boundary_gap_count = sum(1 for gap in gaps if gap.get("boundary"))
     trailing_shortfall_gap_count = sum(
@@ -412,7 +433,6 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
     trailing_shortfall_rows = sum(
         int(gap["rows"]) for gap in gaps if gap.get("boundary") == "trailing_shortfall"
     )
-    leading_missing_rows = int(first_valid_idx or 0) if valid_row_count else 0
     return {
         "path": str(path),
         "exchange": metadata["exchange"],
