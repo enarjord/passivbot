@@ -11,6 +11,11 @@ DEFAULT_STARTUP_WAIT_S = 180
 DEFAULT_SMOKE_WINDOW_MINUTES = 30
 DEFAULT_MONITOR_ROOT = "monitor"
 DEFAULT_LOGS_ROOT = "logs"
+UNSAFE_PROCESS_SIGNAL_PATTERNS = (
+    "pkill -f 'passivbot live'",
+    "pgrep -f 'passivbot live' | xargs kill",
+    "kill $(pgrep -f 'passivbot live')",
+)
 
 
 def _positive_int(value: int, *, field: str) -> int:
@@ -76,6 +81,25 @@ def _repo_check_commands(repo_path: str | Path | None) -> list[str]:
             ["git", "-C", repo, "status", "--porcelain", "--untracked-files=no"]
         ),
     ]
+
+
+def _process_signal_safety_contract() -> dict[str, Any]:
+    return {
+        "strategy": "exact_tmux_pane_or_exact_pid_only",
+        "forbid_broad_process_pattern_signals": True,
+        "unsafe_patterns": list(UNSAFE_PROCESS_SIGNAL_PATTERNS),
+        "why": (
+            "Broad process-pattern signals can match the controller shell or "
+            "smoke command when the pattern appears in its arguments."
+        ),
+        "required_guards": [
+            "derive candidate processes from canonical live-smoke-report process rows",
+            "match configured command keys exactly before signaling",
+            "exclude the controller process and its ancestors",
+            "signal one matched bot at a time and re-scan after each signal",
+            "halt reload when duplicate, extra, or unowned matching live processes remain",
+        ],
+    }
 
 
 def _bot_phase_plan(
@@ -317,6 +341,7 @@ def build_live_restart_smoke_plan(
                 "risk/HSL events",
             ],
         },
+        "process_signal_safety": _process_signal_safety_contract(),
         "timeout_escalation_ladder": [
             {
                 "level": 0,
@@ -361,6 +386,7 @@ def build_live_restart_smoke_plan(
                 "ssh",
                 "tmux signal/send-keys",
                 "process kill/signal",
+                "broad process-pattern kill/signal",
                 "git pull/fetch/checkout",
                 "passivbot live",
                 "exchange/API calls",
