@@ -254,10 +254,24 @@ class OhlcvStore:
                             clear_src_end = month_offset(clear_end, year, month, timeframe) + 1
                             body[clear_src_start:clear_src_end] = np.nan
                             valid[clear_src_start:clear_src_end] = False
-                    for src_idx in indices:
-                        offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
-                        body[offset] = val_arr[src_idx]
-                        valid[offset] = True
+                    idx_arr = np.asarray(indices, dtype=np.int64)
+                    month_start = month_start_ts(year, month)
+                    offsets = ((ts_arr[idx_arr] - month_start) // interval_ms).astype(
+                        np.int64, copy=False
+                    )
+                    max_rows = rows_in_month(year, month, timeframe)
+                    if np.any(offsets < 0) or np.any(offsets >= max_rows):
+                        raise ValueError(
+                            f"timestamps out of month bounds for {year:04d}-{month:02d}"
+                        )
+                    if len(np.unique(offsets)) != len(offsets):
+                        for src_idx in indices:
+                            offset = month_offset(int(ts_arr[src_idx]), year, month, timeframe)
+                            body[offset] = val_arr[src_idx]
+                            valid[offset] = True
+                    else:
+                        body[offsets] = val_arr[idx_arr]
+                        valid[offsets] = True
                     body.flush()
                     valid.flush()
                 finally:

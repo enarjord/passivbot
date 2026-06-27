@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Improved cold `passivbot backtest` materialization by batching legacy OHLCV
+  imports by month, vectorizing chunk writes, publishing HLCV cache directories
+  atomically, and honoring Ctrl+C between expensive materializer/cache stages.
 - Added risk/HSL log-match counters to `passivbot tool live-smoke-report`, so
   CRITICAL risk-state log lines can be distinguished from non-risk hard log
   matches without changing smoke verdict logic.

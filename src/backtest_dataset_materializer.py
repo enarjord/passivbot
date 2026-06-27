@@ -10,6 +10,7 @@ from pathlib import Path
 import numpy as np
 
 from materialized_cache import prepare_materialized_run, release_materialized_root
+from backtest_cancellation import raise_if_backtest_cancel_requested
 from ohlcv_store import OhlcvStore, timeframe_to_interval_ms
 
 
@@ -223,20 +224,24 @@ class BacktestDatasetMaterializer:
         timestamps = None
         btc_mm = None
         try:
+            raise_if_backtest_cancel_requested("materializer memmap allocation")
             hlcvs = np.memmap(
                 hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4)
             )
             hlcvs[:] = np.nan
+            raise_if_backtest_cancel_requested("materializer hlcvs initialization")
             timestamps = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
             timestamps[:] = np.arange(start_ts, end_ts + interval_ms, interval_ms, dtype=np.int64)
             btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
             btc_mm[:] = btc_arr
+            raise_if_backtest_cancel_requested("materializer static arrays")
 
             enriched_mss = deepcopy(mss)
             valid_buffer = np.zeros(n_steps, dtype=np.bool_)
             symbols_by_coin = symbols_by_coin or {}
             source_windows_by_coin = source_windows_by_coin or {}
             for coin_idx, coin in enumerate(coins):
+                raise_if_backtest_cancel_requested("materializer coin loop")
                 coin_t0 = time.monotonic()
                 logging.info(
                     "[materializer] coin start %d/%d exchange=%s coin=%s",
@@ -269,6 +274,7 @@ class BacktestDatasetMaterializer:
                     coin_view[dest_start:dest_end],
                     valid_buffer[dest_start:dest_end],
                 )
+                raise_if_backtest_cancel_requested("materializer store copy")
                 source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
                     valid_buffer
                 )
@@ -312,7 +318,9 @@ class BacktestDatasetMaterializer:
                     synthetic_gap_fill_count,
                     time.monotonic() - coin_t0,
                 )
+                raise_if_backtest_cancel_requested("materializer coin finalize")
 
+            raise_if_backtest_cancel_requested("materializer close")
             _close_memmap(hlcvs)
             _close_memmap(timestamps)
             _close_memmap(btc_mm)
@@ -391,15 +399,19 @@ def materialize_frames(
     timestamps_mm = None
     btc_mm = None
     try:
+        raise_if_backtest_cancel_requested("frame materializer memmap allocation")
         hlcvs = np.memmap(hlcvs_path, mode="w+", dtype=np.float64, shape=(n_steps, len(coins), 4))
         hlcvs[:] = np.nan
+        raise_if_backtest_cancel_requested("frame materializer hlcvs initialization")
         timestamps_mm = np.memmap(timestamps_path, mode="w+", dtype=np.int64, shape=(n_steps,))
         timestamps_mm[:] = ts_arr
         btc_mm = np.memmap(btc_path, mode="w+", dtype=np.float64, shape=(n_steps,))
         btc_mm[:] = btc_arr
+        raise_if_backtest_cancel_requested("frame materializer static arrays")
 
         enriched_mss = deepcopy(mss)
         for coin_idx, coin in enumerate(coins):
+            raise_if_backtest_cancel_requested("frame materializer coin loop")
             coin_t0 = time.monotonic()
             logging.info(
                 "[materializer] frame coin start %d/%d exchange=%s coin=%s",
@@ -414,6 +426,7 @@ def materialize_frames(
                     f"aligned_values_by_coin[{coin!r}] must have shape ({n_steps}, 4), got {aligned.shape}"
                 )
             valid_mask = ~np.isnan(aligned[:, 0])
+            raise_if_backtest_cancel_requested("frame materializer coin copy")
             source_first_valid_index, source_last_valid_index, source_valid_count = _valid_span(
                 valid_mask
             )
@@ -456,7 +469,9 @@ def materialize_frames(
                 synthetic_gap_fill_count,
                 time.monotonic() - coin_t0,
             )
+            raise_if_backtest_cancel_requested("frame materializer coin finalize")
 
+        raise_if_backtest_cancel_requested("frame materializer close")
         _close_memmap(hlcvs)
         _close_memmap(timestamps_mm)
         _close_memmap(btc_mm)
