@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `74a52ede` merge of PR #759, `Summarize staged readiness in live smoke reports`.
+- `31d42ea3` merge of PR #760, `Record staged readiness smoke progress`.
 
 Current review gate:
 
@@ -1699,6 +1699,29 @@ VPS5 deployment status:
   `latest_invalid_surface_total=1`, making staged `completed_candles` style
   readiness degradation visible without full problem-event inspection.
 
+### PR #760: Staged Readiness Deploy Progress
+
+- Branch: `codex/v8-progress-after-staged-readiness-smoke`.
+- Scope: docs-only progress update.
+- Result: recorded PR #759 review, merge, deploy, and VPS5 smoke evidence in
+  this progress ledger and the live-ops backlog.
+- Review evidence: Claude and Hermes approved; CI was green.
+- VPS5 evidence: pulled to `31d42ea3` without bot restart because the slice is
+  docs-only. The first 5-minute smoke was red from real HSL ZEC long RED
+  finalizations on OKX, GateIO, and Binance, not from the docs change; the
+  structured `risk_events` section and text-log hard matches both surfaced the
+  RED finalizations. A settled 2-minute follow-up smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `logs.attention_matches=0`,
+  `matched_expected=5`, `missing_expected=[]`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Remaining non-hard attention was
+  visible through `ema_readiness` and `staged_readiness`; the settled
+  `staged_readiness` projection reported `total=5`, `bots=3`,
+  `latest_missing_surface_total=3`, and `latest_invalid_surface_total=3`.
+  A later 5-minute smoke still reported `ok=true`, all five bots matched, no
+  log matches, no failed remote/account-critical calls, and clean repository
+  state, while `staged_readiness` had grown to `total=17`, `bots=4`,
+  `latest_missing_surface_total=5`, and `latest_invalid_surface_total=5`.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1720,7 +1743,9 @@ VPS5 deployment status:
    smokes as the next candidate for a narrow fix if the new PR #759 summaries
    keep showing completed-candle target changes after warmup. PRs #679/#682
    made generic problem groups inspectable, PR #755 made EMA readiness directly
-   visible, and PR #759 made staged readiness directly visible.
+   visible, PR #759 made staged readiness directly visible, and PR #760
+   recorded that settled VPS5 smokes still showed staged readiness degradation
+   across three to four bots.
 4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
