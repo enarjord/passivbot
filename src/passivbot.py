@@ -9717,6 +9717,41 @@ class Passivbot:
             }
         ]
 
+    def _completed_candle_signatures_equivalent(
+        self,
+        expected_signature,
+        stamped_signature,
+    ) -> bool:
+        """Return true when both signatures cover the same completed targets.
+
+        A stamped target may include bounded ``tail_gap_fallback`` metadata while
+        a later cache check at the same stamp time sees normal coverage after a
+        background cache improvement. That metadata shape change must not defer
+        planning when the required symbol and completed-candle timestamp are
+        unchanged.
+        """
+
+        def _targets_by_symbol(signature) -> dict[str, tuple[str, int]]:
+            out: dict[str, tuple[str, int]] = {}
+            if not isinstance(signature, (list, tuple)):
+                return out
+            for item in signature:
+                if not isinstance(item, (list, tuple)) or len(item) < 2:
+                    continue
+                symbol = str(item[0] or "")
+                if not symbol:
+                    continue
+                try:
+                    target_ts = int(item[1])
+                except (TypeError, ValueError):
+                    continue
+                out[symbol] = (symbol, target_ts)
+            return out
+
+        return _targets_by_symbol(expected_signature) == _targets_by_symbol(
+            stamped_signature
+        )
+
     def _staged_planner_precondition_state(
         self,
         *,
