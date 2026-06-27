@@ -195,7 +195,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   The `hsl_replay_profile` section derives bounded HSL replay work/progress summaries from
   existing `hsl.replay.*` events, including pair counts, timeline rows, rows/s, estimated
   dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
-  available.
+  available. The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
+  candle cache load, and candle cache flush summaries from existing cache events without
+  exposing raw cache paths or payloads.
 
 ## Exchange Helpers
 

@@ -1145,6 +1145,174 @@ def test_live_performance_report_hsl_replay_profile_summary_is_bounded(tmp_path)
     assert summary["hsl_replay_profile"]["groups_truncated"] is True
 
 
+def test_live_performance_report_cache_warmup_from_existing_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cache.warmup_decision",
+                seq=1,
+                ts=1000,
+                component="cache.warmup",
+                reason_code="warmup_cache_decision",
+                data={
+                    "context": "startup_trading_ready",
+                    "timeframe": "1m",
+                    "symbol_count": 5,
+                    "reused_count": 3,
+                    "cold_count": 2,
+                    "cold_path_required": True,
+                    "reason_counts": {"warm_cache_accepted": 3, "missing_coverage": 2},
+                    "elapsed_ms": 123,
+                    "concurrency": 2,
+                    "ttl_ms": 300000,
+                },
+            ),
+            _monitor_row(
+                event_type="cache.load.completed",
+                seq=2,
+                ts=2000,
+                component="cache.candles",
+                reason_code="candle_disk_load_completed",
+                symbol="XLM/USDT:USDT",
+                data={
+                    "timeframe": "1m",
+                    "loaded_rows": 120,
+                    "loaded_start_ts": 100,
+                    "loaded_end_ts": 200,
+                    "days": 2,
+                    "source_days": {"primary": 1, "legacy": 1},
+                    "elapsed_ms": 45,
+                },
+            ),
+            _monitor_row(
+                event_type="cache.flush.completed",
+                seq=3,
+                ts=3000,
+                component="cache.candles",
+                reason_code="candle_disk_flush_completed",
+                symbol="XLM/USDT:USDT",
+                data={
+                    "timeframe": "1m",
+                    "persisted_rows": 80,
+                    "persisted_start_ts": 150,
+                    "persisted_end_ts": 250,
+                    "suppressed_count": 1,
+                    "suppressed_rows": 4,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    cache = report["cache_warmup"]
+    group = cache["groups"][0]
+    operations = _groups_by_operation(report)
+
+    assert cache["total_events"] == 3
+    assert cache["bot_count"] == 1
+    assert cache["event_types"] == {
+        "cache.warmup_decision": 1,
+        "cache.load.completed": 1,
+        "cache.flush.completed": 1,
+    }
+    assert group["bot"] == "binance/binance_01"
+    assert group["warmup"]["contexts"] == {"startup_trading_ready": 1}
+    assert group["warmup"]["reason_counts"] == {
+        "warm_cache_accepted": 3,
+        "missing_coverage": 2,
+    }
+    assert group["warmup"]["symbol_count"] == 5
+    assert group["warmup"]["reused_count"] == 3
+    assert group["warmup"]["cold_count"] == 2
+    assert group["warmup"]["cold_path_decisions"] == 1
+    assert group["warmup"]["elapsed_ms"]["max"] == 123
+    assert group["load"]["loaded_rows"] == 120
+    assert group["load"]["source_days"] == {"primary": 1, "legacy": 1}
+    assert group["load"]["elapsed_ms"]["max"] == 45
+    assert group["flush"]["persisted_rows"] == 80
+    assert group["flush"]["suppressed_events"] == 1
+    assert group["flush"]["suppressed_rows"] == 4
+    assert (
+        operations["cache_warmup_decision"]["trading_impact"]
+        == "blocks_indicator_readiness"
+    )
+    assert (
+        operations["cache_load_completed"]["trading_impact"]
+        == "blocks_indicator_readiness"
+    )
+
+
+def test_live_performance_report_cache_warmup_whitelists_values(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cache.load.completed",
+                seq=1,
+                ts=1000,
+                component="cache.candles",
+                data={
+                    "timeframe": "1m",
+                    "loaded_rows": 10,
+                    "path": "/home/operator/secret/cache.json",
+                    "cache_path": "/root/passivbot/caches/private",
+                    "raw_payload": {"leak_marker": "raw"},
+                    "api_key": "secret",
+                    "balance": 1000.0,
+                    "equity": 999.0,
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    rendered = json.dumps(report["cache_warmup"], sort_keys=True)
+
+    assert report["cache_warmup"]["groups"][0]["load"]["latest"]["data"] == {
+        "loaded_rows": 10,
+        "timeframe": "1m",
+    }
+    assert "/home/operator" not in rendered
+    assert "/root/passivbot" not in rendered
+    assert "secret" not in rendered
+    assert "leak_marker" not in rendered
+    assert "balance" not in rendered
+    assert "equity" not in rendered
+
+
+def test_live_performance_report_cache_warmup_summary_is_bounded(tmp_path):
+    for index in range(2):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="cache.warmup_decision",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                    component="cache.warmup",
+                    data={
+                        "context": "startup_trading_ready",
+                        "symbol_count": 1,
+                        "reused_count": index,
+                        "cold_count": 1 - index,
+                    },
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["cache_warmup"]["bot_count"] == 2
+    assert len(summary["cache_warmup"]["groups"]) == 1
+    assert summary["cache_warmup"]["groups_truncated"] is True
+
+
 def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

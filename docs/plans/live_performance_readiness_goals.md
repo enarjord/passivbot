@@ -229,6 +229,13 @@ classification when enough source events exist.
     replay CPU/IO profiling.
 - [ ] Cache readiness: fill cache coverage proof, candle coverage proof,
   checkpoint compatibility decision, repair scope, repair elapsed time.
+  - Status: partial. Existing `cache.warmup_decision`,
+    `cache.load.completed`, and `cache.flush.completed` events are now
+    summarized by `live-performance-report` as `cache_warmup`, including
+    bounded warm-cache reuse/cold-path decisions, candle load/flush row counts,
+    source/reason counters, and elapsed timing where present. Remaining work:
+    fill-cache coverage proof, HSL/checkpoint compatibility decisions, repair
+    scope, and repair elapsed time.
 - [ ] Account state: balance, positions, open orders, fills, state-refresh wall
   time, surface max/sum time, retry/degraded counts.
 - [ ] Market data: ticker/market price age, candle close age, EMA bundle age,
@@ -566,6 +573,8 @@ Trading-impact labels:
   - The table should be usable after a live incident to identify whether the
     critical delay was before risk classification, before planning, before
     exchange write, or after exchange write.
+  - Status: partial. Cache warmup/load/flush event timings now participate in
+    the performance report and are also grouped in `cache_warmup`.
 
 - [ ] Add a "slowest blockers" view.
   - Rank operations by elapsed time and trading impact.
