@@ -161,12 +161,14 @@ Related detailed plans:
    Binance probe validated `account_critical_health` success for all three
    account-critical surfaces. PR #741 added read-only `fetch_time`
    `time_sync_health` summaries and `--skip-time-sync`, counting unsupported
-   exchanges separately from actual failures.
+   exchanges separately from actual failures. PR #743 added
+   `candle_freshness_health`, derived from the existing OHLCV tail probe
+   results without adding exchange calls.
 
    Add/refine explicit read-only probes for each configured exchange/account
-   before or during smoke: rate-limit behavior, fill pagination coverage,
-   candle freshness, and basic endpoint latency. The passive smoke report now
-   also exposes top-level remote-call health
+   before or during smoke: rate-limit behavior, fill pagination coverage, and
+   basic endpoint latency. The passive smoke report now also exposes top-level
+   remote-call health
    success/failure/throttle totals and a filtered
    `account_critical_remote_call_health` summary for a quick operator scan.
 
@@ -455,7 +457,8 @@ Related detailed plans:
 | 2026-06-27 | #4 Startup phase budget tracking | PR #735 / `6f415777` | Added report-only startup budget projections to `live-smoke-report` phase summaries using prior local p95 baselines from existing monitor events; VPS5 deploy kept all five bots running and the settled smoke returned `ok=true` after unrelated transient HSL/EMA events aged out | Explicit durable budget config/events |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
-| 2026-06-27 | #6 Exchange health and contract probes | PR #741 / pending | Added `ticker-endpoint-probe` read-only `fetch_time` clock-skew evidence and collection-level `time_sync_health`, with unsupported exchanges separated from failures and `--skip-time-sync` as an operator escape hatch | Rate-limit/fill-pagination/candle-freshness probes |
+| 2026-06-27 | #6 Exchange health and contract probes | PR #741 / `d4c28058` | Added `ticker-endpoint-probe` read-only `fetch_time` clock-skew evidence and collection-level `time_sync_health`, with unsupported exchanges separated from failures and `--skip-time-sync` as an operator escape hatch | Rate-limit/fill-pagination/candle-freshness probes |
+| 2026-06-27 | #6 Exchange health and contract probes | PR #743 / pending | Added `ticker-endpoint-probe` `candle_freshness_health` summaries from existing 1m OHLCV tail results, including worst-symbol age and current-incomplete counts without extra exchange calls | Rate-limit/fill-pagination probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
