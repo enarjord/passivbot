@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `5d9f3a5` merge of PR #755, `Summarize EMA readiness in live smoke reports`.
+- `19b34138` merge of PR #756, `Add EMA gate modes for trailing martingale entries`.
 
 Current review gate:
 
@@ -1649,6 +1649,32 @@ VPS5 deployment status:
   `latest_candidate_unavailable_total=31`, and `latest_unavailable_total=112`,
   making persistent non-hard EMA readiness degradation visible without full
   problem-event inspection.
+
+### PR #756: EMA Gate Modes For Trailing Martingale Entries
+
+- Branch: `codex/v8-ema-entry-gate-mode`.
+- Scope: adjacent Rust strategy/runtime behavior, not a logging-overhaul slice.
+- Result: trailing-martingale entry EMA gating is now a fixed config policy
+  with `disabled`, `initial`, `reentry`, and `all` modes. The default remains
+  `initial`; unstuck EMA gating also gained an explicit fixed toggle defaulting
+  to enabled.
+- Review evidence: Claude and Hermes approved; CI was green; the PR author ran
+  `cargo check`, rebuilt the Rust extension, ran targeted Python suites, and
+  added real backtest/optimize smoke evidence. My final read agreed with the
+  reviewers that Claude's remaining notes were future-maintenance concerns, not
+  current merge blockers.
+- VPS5 evidence: deployed after PR #757. The VPS checkout pulled to
+  `19b34138`; the Rust extension was rebuilt in `/root/passivbot/venv` with
+  `PATH=/root/.cargo/bin:/root/passivbot/venv/bin:$PATH` and
+  `VIRTUAL_ENV=/root/passivbot/venv`. Bots were then restarted from
+  `/root/bots_vps5.yaml` and left running. An immediate 3-minute smoke and a
+  settled 5-minute smoke both reported all five expected bots matched, no hard
+  failures, no log hard/attention matches, no failed remote calls, no failed
+  account-critical calls, and clean tracked repository state. The settled smoke
+  at `19b34138` reported `remote_calls.total=336`,
+  `account_critical_remote_calls.total=46`, and only non-hard EMA readiness
+  attention (`ema_readiness.total=4`, `bots=1`,
+  `latest_candidate_unavailable_total=0`).
 
 ## Current Next Steps
 

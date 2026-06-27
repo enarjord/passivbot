@@ -79,6 +79,10 @@ Related detailed plans:
    dropped-unparsed attention/hard counters when the opt-in log-window drop
    policy suppresses contextless hard-looking log fragments. The safe restart
    orchestration contract is not implemented.
+   For Rust-touching deploys, the restart flow must also make extension rebuild
+   and freshness verification explicit before stopping/restarting live bots; PR
+   #756 showed that the VPS has Rust under `/root/.cargo/bin` but non-login SSH
+   commands need explicit `PATH`/`VIRTUAL_ENV` for `maturin develop --release`.
 
    Formalize the repeated VPS smoke routine: pull a branch, stop configured
    bots, measure shutdown time per bot, reload from `/root/bots_vps5.yaml`,
@@ -478,6 +482,7 @@ Related detailed plans:
 | 2026-06-27 | #6 Exchange health and contract probes | PR #751 / `4eef3572` | Added `ticker-endpoint-probe` `endpoint_latency_health` summaries from existing probe outcomes, including open-orders fallback attempts and fill-history pages; VPS5 Binance probe validated endpoint_count=11, total=12, slowest=load_markets, and expected Binance open-orders all-symbol warning classification | Deeper exchange-specific coverage checks |
 | 2026-06-27 | #6 Exchange health and contract probes | PR #753 / `0f1afc49` | Added `ticker-endpoint-probe` `exchange_surface_health` notes from existing open-orders, time-sync, fill-history, and OHLCV-tail outcomes; VPS5 Binance probe validated open-orders symbol fallback and fill-history short-page notes | Further probe expansion should be driven by concrete exchange gaps |
 | 2026-06-27 | #3 Live restart/smoke automation | PR #755 / `5d9f3a5f` | Added `live-smoke-report` EMA readiness health summaries from existing `ema.unavailable` events; settled VPS5 smoke reported all five bots matched, no hard failures, no failed remote/account-critical calls, and `ema_readiness.total=11`, `bots=4`, `latest_candidate_unavailable_total=31`, `latest_unavailable_total=112` | Safe pull/stop/start orchestration still open; staged readiness diagnostics remain a useful next slice |
+| 2026-06-27 | Adjacent strategy/runtime | PR #756 / `19b34138` | Added fixed trailing-martingale `ema_gate_mode` values and an unstuck EMA-gating toggle; VPS5 required an explicit Rust extension rebuild before restart, then immediate and settled smokes reported all five bots matched, no hard failures, no failed remote/account-critical calls, and only non-hard EMA readiness attention | Deployment tooling should make Rust rebuild/stamp verification explicit before live restarts |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
