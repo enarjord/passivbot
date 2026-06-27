@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `5275ab75` merge of PR #765, `Summarize live event pipeline health in smoke report`.
+- `b07d5166` merge of PR #767, `Classify risk log matches in smoke report`.
 
 Current review gate:
 
@@ -1790,13 +1790,35 @@ VPS5 deployment status:
   still running, and remote/account-critical call summaries reported no
   failures.
 
+### PR #767: Live Smoke Risk Log Classification
+
+- Branch: `codex/v8-smoke-risk-log-classification`.
+- Scope: read-only smoke-report tooling.
+- Result: `passivbot tool live-smoke-report` now splits text-log attention and
+  hard matches into risk/HSL-related and non-risk buckets. Full, summary, and
+  brief reports include `risk_attention_matches`, `risk_hard_matches`,
+  `non_risk_attention_matches`, and `non_risk_hard_matches`; bounded log match
+  samples now include `category=risk|general`. Smoke verdict logic is unchanged:
+  risk/HSL CRITICAL lines still count in `hard_matches` and still make smoke
+  red.
+- Review evidence: Claude and Hermes approved; CI was green; full
+  `tests/test_live_smoke_report.py`, compileall, `git diff --check`, and the
+  touched-file silent-handling audit passed locally.
+- VPS5 evidence: deployed at `b07d5166` without bot restart because this is
+  read-only smoke-report tooling. A 5-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`,
+  `logs.risk_hard_matches=0`, `logs.non_risk_hard_matches=0`, all five
+  expected bots matched, clean tracked repository state, no failed remote
+  calls, and no failed account-critical remote calls. Remaining attention was
+  non-hard EMA readiness and HSL status.
+
 ## Current Next Steps
 
-1. Inspect the current VPS5 HSL/risk smoke signal separately from the merged
-   tooling. The latest deploy smoke shows real HSL RED/cooldown activity and
-   CRITICAL risk text logs; decide whether smoke should keep treating those as
-   hard operator failures or whether risk-state criticality needs a more
-   explicit classification distinct from software crashes.
+1. Continue collecting smoke evidence with the new risk-vs-general log-match
+   counters before changing any verdict policy. If future HSL RED/cooldown
+   episodes make smoke red, the report can now show whether the red state came
+   from risk/HSL log lines, non-risk software failures, structured problem
+   events, or process/repository health.
 2. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
    are more order/risk transition coverage or focused profile refinements only

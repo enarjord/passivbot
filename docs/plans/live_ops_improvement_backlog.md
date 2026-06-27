@@ -274,6 +274,9 @@ Related detailed plans:
       lines for active coin-mode HSL positions, including distance to red,
       drawdown, slot budget, realized PnL peak, and unrealized PnL. The
       structured `hsl.status` event remains the durable source.
+    - 2026-06-27: Added `live-smoke-report` risk/HSL log-match counters,
+      splitting text-log attention/hard matches into risk and non-risk buckets
+      without changing smoke verdict logic.
 
 11. [x] Order lifecycle trace completeness.
     Status: initial reconstruction view merged. The order-wave/execution event
@@ -502,6 +505,7 @@ Related detailed plans:
 | 2026-06-27 | Adjacent staged readiness/runtime | PR #762 / `d9188b64` | Tolerated completed-candle fallback-to-normal signature shape recovery when symbol and target timestamp are unchanged; VPS5 restart smoke returned `ok=true`, all five bots matched, no hard/log failures, no failed remote/account-critical calls, and `staged_readiness.total=0` in both immediate and settled windows | Continue monitoring staged readiness; if it recurs, classify account-surface delays separately from completed-candle readiness shapes |
 | 2026-06-27 | #13 Cache integrity doctor | PR #764 / `7797d038` | Added report-only metadata compatibility evidence for candle known-gap no-trade reasons, fill current-contract coverage proof, and HSL artifact/timestamp compatibility; final review follow-up made mixed no-trade/unclassified gaps explicitly partial and still unproven | Further cache-doctor refinements should stay read-only and prove rather than assume coverage |
 | 2026-06-27 | #5 Resource pressure telemetry | PR #765 / `5275ab75` | Added `live-smoke-report` event-pipeline health summaries from existing `health.summary` queue/drop/sink-error counters; VPS5 30-minute smoke showed `event_pipeline.total=1`, no drops, no sink errors, and worker alive | Consider thresholded console/report warnings only after more live evidence |
+| 2026-06-27 | #10 Operator console redesign from events | PR #767 / `b07d5166` | Added `live-smoke-report` risk/HSL log-match counters and bounded `category=risk|general` match labels; VPS5 smoke after deploy was green with zero hard/risk/non-risk log matches and all five bots running | Use the split counters to collect evidence before changing smoke verdict policy for real HSL RED/cooldown episodes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
 | 2026-06-25 | #4 Startup phase budget tracking | PR #649 / `7391d43b` | Added startup timing baselines to `live-smoke-report` from existing `bot.startup_timing` monitor events | Explicit durable budget config/events |
 | 2026-06-25 | #5 Resource pressure telemetry | PR #643 / `09fd305b` | Added resource pressure and event-pipeline counters to `health.summary` | VPS5 restart/smoke pending; richer resource fields still open |
