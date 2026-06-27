@@ -263,8 +263,8 @@ Related detailed plans:
     surfaces are touched.
 
 12. [ ] Debug profile toggles.
-    Status: partial. Rust, EMA readiness, remote-call, candle, and fills
-    profile slices are merged; an HSL profile slice is in progress.
+    Status: partial. Rust, EMA readiness, remote-call, candle, fills, and HSL
+    profile slices are merged; an execution profile slice is in progress.
 
     Add narrow runtime/debug profiles that increase event detail for one domain:
     candles, fills, HSL, Rust payloads, order execution, or exchange calls. This
@@ -291,12 +291,15 @@ Related detailed plans:
     - 2026-06-27: Added a `fills` debug-profile slice for existing fill
       refresh and fill ingestion events, exposing bounded count, coverage, and
       key-shape metadata without raw source IDs or payload values.
-    - 2026-06-27: Started an `hsl` debug-profile slice for existing HSL
+    - 2026-06-27: Added an `hsl` debug-profile slice for existing HSL
       status, transition, replay, red-trigger, and cooldown events, exposing
       bounded event key, metric key, and latch/cooldown state-shape metadata.
+    - 2026-06-27: Started an `execution` debug-profile slice for existing
+      order-wave, order-write, create-filter, and confirmation events, exposing
+      bounded key-shape/counter metadata without raw order payload values.
 
-    Remaining refinements: add targeted execution profiles as those diagnostics
-    need deeper live evidence.
+    Remaining refinements: add new targeted profiles only as diagnostics need
+    deeper live evidence.
 
 13. [ ] Cache integrity doctor.
     Status: partial. Initial read-only local cache smoke doctor, cache-family
@@ -399,13 +402,14 @@ Related detailed plans:
 | 2026-06-26 | #3/#14 Supervisor/process diagnostics | PR #712 / `51ba92a3` | Extended `live-smoke-report --supervisor-config` to classify expected matches, missing expected commands, duplicate configured-command process matches, and extra/orphan-like `passivbot live` processes with bounded per-process metadata; VPS5 smoke showed all five configured bots matched with zero duplicate or extra live process matches; documented the read-only command-match limitation and shutdown escalation ladder as policy only | Safe pull/stop/start orchestration remains open |
 | 2026-06-26 | #12 Debug profile toggles | pending PR | Added opt-in live-event debug profiles via config/env and initial Rust orchestrator structured-event enrichment with bounded input-symbol and output-order samples | Add remote-call, candle/EMA, HSL, fills, and execution profiles as needed |
 | 2026-06-27 | #12 Debug profile toggles | PR #728 / `5714d36d` | Added opt-in `fills` debug-profile enrichment to existing fill refresh and ingestion events with bounded count, coverage, and key-shape metadata | HSL and execution profiles remain open |
-| 2026-06-27 | #12 Debug profile toggles | pending PR | Add opt-in `hsl` debug-profile enrichment to existing HSL event surfaces with bounded event key, metric key, and latch/cooldown state-shape metadata | Execution profile remains open |
+| 2026-06-27 | #12 Debug profile toggles | PR #730 / `1334982c` | Added opt-in `hsl` debug-profile enrichment to existing HSL event surfaces with bounded event key, metric key, and latch/cooldown state-shape metadata | Execution profile remains open |
+| 2026-06-27 | #12 Debug profile toggles | pending PR | Add opt-in `execution` debug-profile enrichment to existing order-wave, order-write, create-filter, and confirmation events with bounded key-shape/counter metadata | Review/deploy after merge |
 | 2026-06-26 | #7 Live config preflight/linter | PR #714 / `564dc0a8` | Added `passivbot tool live-config-preflight`, a local-only JSON report for one config's risk-relevant live facts with bounded coin samples and malformed-structure errors; VPS5 preflight smoke returned `ok=true` with one expected missing short-side warning | Config diffing, deeper cache compatibility checks, and live startup enforcement remain open |
 | 2026-06-26 | #3 Live restart/smoke automation | PR #715 / `7b12d4b2` | Added passive `shutdown_events` summaries to full, summary, and brief `live-smoke-report` output for existing bot stopping/stage/stopped events; VPS5 no-restart smoke showed `shutdown_events.total=0`, all five bots matched, and no hard failures | Safe pull/stop/start orchestration remains open |
 | 2026-06-27 | #13 Cache integrity doctor | PR #722 / `3b7e6306` | Added read-only v2 candle coverage windows and suspicious interior gap samples from local `.valid.npy` artifacts | Fill/HSL coverage/readiness and deeper metadata compatibility |
 | 2026-06-27 | #13 Cache integrity doctor | PR #725 / `1ed9c466` | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
 | 2026-06-27 | #13 Cache integrity doctor | PR #727 / `d8dd7246` | Added report-only warm-cache readiness evidence from already-scanned candle/fill/HSL cache metadata | Deeper metadata compatibility and synthetic/no-trade assumptions |
-| 2026-06-27 | #7 Live config preflight/linter | pending PR | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
+| 2026-06-27 | #7 Live config preflight/linter | PR #731 / `3cc2d229` | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
