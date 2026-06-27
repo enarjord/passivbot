@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added no-extra-call rate-limit pressure estimates to
+  `passivbot tool ticker-endpoint-probe`, derived from existing probe outcomes
+  and CCXT rate-limit metadata.
 - Added no-extra-call fill-history sample health summaries to
   `passivbot tool ticker-endpoint-probe`, derived from the existing
   `fetch_my_trades(first symbol)` probe result without raw trade/order ids.

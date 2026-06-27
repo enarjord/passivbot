@@ -837,6 +837,272 @@ def summarize_fill_history_probe_collection(probes: list[dict[str, Any]]) -> dic
     }
 
 
+def _non_negative_float(value: Any) -> float | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    parsed = float(value)
+    if not math.isfinite(parsed) or parsed < 0.0:
+        return None
+    return round(parsed, 3)
+
+
+def _probe_outcome_call_count(outcome: Any) -> int:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return 0
+    return 1
+
+
+def _symbol_outcome_call_count(outcome: Any) -> int:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return 0
+    symbols = outcome.get("symbols")
+    if isinstance(symbols, dict):
+        return len(symbols)
+    return _probe_outcome_call_count(outcome)
+
+
+def _open_orders_call_count(outcome: Any) -> int:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return 0
+    attempts = outcome.get("attempts")
+    if not isinstance(attempts, dict):
+        return _probe_outcome_call_count(outcome)
+    count = 0
+    if isinstance(attempts.get("all_symbols"), dict):
+        count += 1
+    symbol_attempt = attempts.get("symbol")
+    if isinstance(symbol_attempt, dict) and isinstance(symbol_attempt.get("outcome"), dict):
+        count += 1
+    return count
+
+
+def _add_rate_limit_count(
+    counters: dict[str, Any],
+    *,
+    endpoint: str,
+    category: str,
+    count: int,
+    concurrent: bool = False,
+) -> None:
+    if count <= 0:
+        return
+    counters["total"] += int(count)
+    counters[category] += int(count)
+    counters["endpoint_counts"][endpoint] += int(count)
+    if concurrent:
+        counters["concurrent_request_count"] += int(count)
+        counters["concurrent_endpoint_counts"][endpoint] += int(count)
+
+
+def _new_rate_limit_counters() -> dict[str, Any]:
+    return {
+        "total": 0,
+        "market_metadata": 0,
+        "time_sync": 0,
+        "public": 0,
+        "private": 0,
+        "concurrent_request_count": 0,
+        "endpoint_counts": Counter(),
+        "concurrent_endpoint_counts": Counter(),
+    }
+
+
+def _rate_limit_counts_for_repeat(repeat: dict[str, Any]) -> dict[str, Any]:
+    counters = _new_rate_limit_counters()
+    _add_rate_limit_count(
+        counters,
+        endpoint="fetch_time",
+        category="time_sync",
+        count=_probe_outcome_call_count(repeat.get("fetch_time")),
+    )
+    for endpoint in ("fetch_tickers_all", "fetch_tickers_symbols"):
+        _add_rate_limit_count(
+            counters,
+            endpoint=endpoint,
+            category="public",
+            count=_probe_outcome_call_count(repeat.get(endpoint)),
+        )
+    for endpoint in (
+        "fetch_ticker_sequential",
+        "fetch_order_book_sequential",
+        "fetch_ohlcv_1m_tail",
+    ):
+        _add_rate_limit_count(
+            counters,
+            endpoint=endpoint,
+            category="public",
+            count=_symbol_outcome_call_count(repeat.get(endpoint)),
+        )
+    for endpoint in ("fetch_ticker_concurrent", "fetch_order_book_concurrent"):
+        _add_rate_limit_count(
+            counters,
+            endpoint=endpoint,
+            category="public",
+            count=_symbol_outcome_call_count(repeat.get(endpoint)),
+            concurrent=True,
+        )
+    for endpoint in ("fetch_bids_asks_all", "fetch_bids_asks_symbols"):
+        _add_rate_limit_count(
+            counters,
+            endpoint=endpoint,
+            category="public",
+            count=_probe_outcome_call_count(repeat.get(endpoint)),
+        )
+    for endpoint in ("fetch_balance", "fetch_positions", "fetch_my_trades_first_symbol"):
+        _add_rate_limit_count(
+            counters,
+            endpoint=endpoint,
+            category="private",
+            count=_probe_outcome_call_count(repeat.get(endpoint)),
+        )
+    _add_rate_limit_count(
+        counters,
+        endpoint="fetch_open_orders",
+        category="private",
+        count=_open_orders_call_count(repeat.get("fetch_open_orders_all")),
+    )
+    return counters
+
+
+def _merge_rate_limit_counters(target: dict[str, Any], source: dict[str, Any]) -> None:
+    for key in (
+        "total",
+        "market_metadata",
+        "time_sync",
+        "public",
+        "private",
+        "concurrent_request_count",
+    ):
+        target[key] += int(source[key])
+    target["endpoint_counts"].update(source["endpoint_counts"])
+    target["concurrent_endpoint_counts"].update(source["concurrent_endpoint_counts"])
+
+
+def _counter_to_sorted_dict(counter: Counter[str]) -> dict[str, int]:
+    return {key: int(value) for key, value in sorted(counter.items())}
+
+
+def summarize_rate_limit_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Estimate read-only probe request pressure from already-recorded outcomes."""
+    counters = _new_rate_limit_counters()
+    repeat_totals = []
+    load_markets_count = _probe_outcome_call_count(probe.get("load_markets"))
+    _add_rate_limit_count(
+        counters,
+        endpoint="load_markets",
+        category="market_metadata",
+        count=load_markets_count,
+    )
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    for repeat in repeats:
+        if not isinstance(repeat, dict):
+            continue
+        repeat_counters = _rate_limit_counts_for_repeat(repeat)
+        repeat_totals.append(float(repeat_counters["total"]))
+        _merge_rate_limit_counters(counters, repeat_counters)
+    exchange_rate_limit_ms = _non_negative_float(probe.get("exchange_rate_limit_ms"))
+    estimated_min_serial_ms = (
+        round(counters["total"] * exchange_rate_limit_ms, 3)
+        if exchange_rate_limit_ms is not None
+        else None
+    )
+    notes = []
+    if probe.get("exchange_enable_rate_limit") is False:
+        notes.append("ccxt_rate_limit_disabled")
+    if counters["concurrent_request_count"] > 0:
+        notes.append("contains_concurrent_batches")
+    if counters["private"] > 0:
+        notes.append("contains_authenticated_calls")
+    return {
+        "exchange_rate_limit_ms": exchange_rate_limit_ms,
+        "exchange_enable_rate_limit": probe.get("exchange_enable_rate_limit"),
+        "symbol_count": len(probe.get("symbols")) if isinstance(probe.get("symbols"), list) else 0,
+        "repeat_count": len(repeats),
+        "configured_sleep_between_seconds": _non_negative_float(
+            probe.get("sleep_between_seconds")
+        ),
+        "observed_call_count": int(counters["total"]),
+        "market_metadata_call_count": int(counters["market_metadata"]),
+        "time_sync_call_count": int(counters["time_sync"]),
+        "public_call_count": int(counters["public"]),
+        "private_call_count": int(counters["private"]),
+        "concurrent_request_count": int(counters["concurrent_request_count"]),
+        "estimated_min_serial_ms": estimated_min_serial_ms,
+        "estimated_min_serial_seconds": (
+            round(estimated_min_serial_ms / 1000.0, 3)
+            if estimated_min_serial_ms is not None
+            else None
+        ),
+        "calls_per_repeat": _latency_summary(repeat_totals),
+        "endpoint_counts": _counter_to_sorted_dict(counters["endpoint_counts"]),
+        "concurrent_endpoint_counts": _counter_to_sorted_dict(
+            counters["concurrent_endpoint_counts"]
+        ),
+        "notes": notes,
+    }
+
+
+def summarize_rate_limit_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    totals = _new_rate_limit_counters()
+    rate_limits = []
+    estimated_serials = []
+    for probe in probes:
+        summary = probe.get("rate_limit_health")
+        if not isinstance(summary, dict):
+            summary = summarize_rate_limit_probe_health(probe)
+        observed_call_count = int(summary.get("observed_call_count") or 0)
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "exchange_rate_limit_ms": summary.get("exchange_rate_limit_ms"),
+            "exchange_enable_rate_limit": summary.get("exchange_enable_rate_limit"),
+            "observed_call_count": observed_call_count,
+            "private_call_count": int(summary.get("private_call_count") or 0),
+            "public_call_count": int(summary.get("public_call_count") or 0),
+            "concurrent_request_count": int(summary.get("concurrent_request_count") or 0),
+            "estimated_min_serial_ms": summary.get("estimated_min_serial_ms"),
+            "notes": summary.get("notes") if isinstance(summary.get("notes"), list) else [],
+        }
+        users.append(user_summary)
+        for key, counter_key in (
+            ("observed_call_count", "total"),
+            ("private_call_count", "private"),
+            ("public_call_count", "public"),
+            ("concurrent_request_count", "concurrent_request_count"),
+        ):
+            totals[counter_key] += int(user_summary[key])
+        endpoint_counts = summary.get("endpoint_counts")
+        if isinstance(endpoint_counts, dict):
+            totals["endpoint_counts"].update(
+                {str(key): int(value) for key, value in endpoint_counts.items()}
+            )
+        concurrent_counts = summary.get("concurrent_endpoint_counts")
+        if isinstance(concurrent_counts, dict):
+            totals["concurrent_endpoint_counts"].update(
+                {str(key): int(value) for key, value in concurrent_counts.items()}
+            )
+        rate_limit = _non_negative_float(summary.get("exchange_rate_limit_ms"))
+        if rate_limit is not None:
+            rate_limits.append(rate_limit)
+        serial_ms = _non_negative_float(summary.get("estimated_min_serial_ms"))
+        if serial_ms is not None:
+            estimated_serials.append(serial_ms)
+    return {
+        "users": users,
+        "observed_call_count": int(totals["total"]),
+        "public_call_count": int(totals["public"]),
+        "private_call_count": int(totals["private"]),
+        "concurrent_request_count": int(totals["concurrent_request_count"]),
+        "exchange_rate_limit_ms": _latency_summary(rate_limits),
+        "estimated_min_serial_ms": _latency_summary(estimated_serials),
+        "endpoint_counts": _counter_to_sorted_dict(totals["endpoint_counts"]),
+        "concurrent_endpoint_counts": _counter_to_sorted_dict(
+            totals["concurrent_endpoint_counts"]
+        ),
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -1084,6 +1350,9 @@ async def probe_exchange_ticker_endpoints(
         "include_ohlcv": bool(include_ohlcv),
         "include_my_trades": bool(include_my_trades),
         "include_time_sync": bool(include_time_sync),
+        "sleep_between_seconds": float(sleep_between_seconds),
+        "exchange_rate_limit_ms": getattr(exchange, "rateLimit", None),
+        "exchange_enable_rate_limit": getattr(exchange, "enableRateLimit", None),
         "market_count": len(markets) if isinstance(markets, dict) else None,
         "has": {
             "fetchBalance": bool(getattr(exchange, "has", {}).get("fetchBalance")),
@@ -1272,6 +1541,7 @@ async def probe_exchange_ticker_endpoints(
     out["time_sync_health"] = summarize_time_sync_probe_health(out)
     out["candle_freshness_health"] = summarize_candle_freshness_probe_health(out)
     out["fill_history_health"] = summarize_fill_history_probe_health(out)
+    out["rate_limit_health"] = summarize_rate_limit_probe_health(out)
     return out
 
 
@@ -1430,6 +1700,9 @@ async def async_main() -> int:
         result["probes"]
     )
     result["fill_history_health"] = summarize_fill_history_probe_collection(
+        result["probes"]
+    )
+    result["rate_limit_health"] = summarize_rate_limit_probe_collection(
         result["probes"]
     )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
