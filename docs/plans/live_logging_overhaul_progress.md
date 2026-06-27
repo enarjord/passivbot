@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ef75d210` after PR #783, `Update logging progress after HSL timing`.
+- `f763a85a` after PR #784, `Add startup readiness performance summary`.
 
 Current review gate:
 
@@ -2070,6 +2070,30 @@ VPS5 deployment status:
 - VPS5 evidence: deployed at `ef75d210` without bot restart because this was a
   docs-only update. The pull was a clean fast-forward and all five configured
   `passivbot live` processes remained running afterward.
+
+### PR #784: Startup Readiness Performance Summary
+
+- Branch: `codex/v8-live-startup-readiness-summary`.
+- Scope: read-only live performance report startup-readiness aggregation,
+  docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `startup_readiness`, derived from existing lifecycle/startup timing/HSL replay
+  events. The summary is generation-scoped across restarts, bounded by
+  `group_limit`, and copies only a fixed whitelist of HSL replay fields.
+- Review evidence: CI was green. Hermes approved the fixed head after a
+  generation-reset finding was addressed. Claude approved the slice and its
+  only bounding/value-safety suggestions were addressed with implementation
+  changes and regression tests. Local validation covered performance-report,
+  event-query, and smoke-report tests, py_compile, `git diff --check`, a
+  silent-handling audit, and a compact filtered CLI smoke.
+- VPS5 evidence: deployed at `f763a85a` without bot restart because this is
+  read-only report tooling. A focused Binance performance summary returned
+  `ok=true` and showed populated `startup_readiness`, including completed HSL
+  replay timing and startup phase timings. The immediate smoke caught a real
+  transient Binance `InvalidNonce` authoritative open-orders failure; a settled
+  2-minute smoke then reported `ok=true`, `hard_failures=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `matched_expected=5`, and `missing_expected=[]`.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
