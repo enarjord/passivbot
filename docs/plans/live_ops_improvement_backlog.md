@@ -255,7 +255,8 @@ Related detailed plans:
     surfaces are touched.
 
 12. [ ] Debug profile toggles.
-    Status: partial. Initial Rust live-event debug profile slice is in review.
+    Status: partial. Initial Rust live-event debug profile slice merged; EMA
+    readiness profile slice is in progress.
 
     Add narrow runtime/debug profiles that increase event detail for one domain:
     candles, fills, HSL, Rust payloads, order execution, or exchange calls. This
@@ -267,9 +268,14 @@ Related detailed plans:
       `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES`, with initial `rust` support for
       bounded Rust orchestrator input-symbol and output-order samples on
       structured events only.
+    - 2026-06-26: Added the `ema` debug profile, enriching
+      `ema.unavailable` structured events with bounded parsed EMA type, span,
+      and inner reason summaries while keeping default events compact and
+      console output unchanged.
 
-    Remaining refinements: add targeted profiles for remote calls, candle/EMA,
-    HSL, fills, and execution as those diagnostics need deeper live evidence.
+    Remaining refinements: add targeted profiles for remote calls, candle
+    coverage/tail state, HSL, fills, and execution as those diagnostics need
+    deeper live evidence.
 
 13. [ ] Cache integrity doctor.
     Status: partial. Initial read-only local cache smoke doctor and

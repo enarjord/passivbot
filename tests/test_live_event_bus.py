@@ -91,8 +91,11 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
 def test_live_event_debug_profiles_normalize_and_validate():
     assert normalize_live_event_debug_profiles(None) == ()
     assert normalize_live_event_debug_profiles("") == ()
-    assert normalize_live_event_debug_profiles("rust,remote-calls candle") == (
+    assert normalize_live_event_debug_profiles(
+        "rust,remote-calls candle EMA-readiness"
+    ) == (
         "candles",
+        "ema",
         "remote_calls",
         "rust",
     )

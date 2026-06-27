@@ -29,6 +29,7 @@ LIVE_EVENT_ID_KEYS = (
 LIVE_EVENT_DEBUG_PROFILE_ENV = "PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES"
 LIVE_EVENT_DEBUG_PROFILES = (
     "candles",
+    "ema",
     "execution",
     "fills",
     "forager",
@@ -41,6 +42,9 @@ LIVE_EVENT_DEBUG_PROFILES = (
 _LIVE_EVENT_DEBUG_PROFILE_SET = frozenset(LIVE_EVENT_DEBUG_PROFILES)
 _LIVE_EVENT_DEBUG_PROFILE_ALIASES = {
     "candle": "candles",
+    "emas": "ema",
+    "ema-readiness": "ema",
+    "ema_readiness": "ema",
     "remote": "remote_calls",
     "remote_call": "remote_calls",
     "remote-call": "remote_calls",
