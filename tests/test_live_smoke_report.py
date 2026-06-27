@@ -1849,7 +1849,6 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "count": 1,
                 "latest_ts": 5000,
                 "latest_data": {
-                    "allowance": -12.3,
                     "changed": True,
                     "price_diff_pct": 10.0,
                 },
