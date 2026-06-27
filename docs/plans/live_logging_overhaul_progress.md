@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `0f1afc49` merge of PR #753, `Add exchange surface health to ticker probe`.
+- `5d9f3a5` merge of PR #755, `Summarize EMA readiness in live smoke reports`.
 
 Current review gate:
 
@@ -1625,6 +1625,31 @@ VPS5 deployment status:
   failed remote calls, no failed account-critical remote calls, and clean
   tracked repository state.
 
+### PR #755: Live Smoke EMA Readiness Health
+
+- Branch: `codex/v8-smoke-ema-readiness-health`.
+- Scope: read-only smoke-report tooling.
+- Result: `passivbot tool live-smoke-report` now derives bounded
+  `ema_readiness_health` full/summary groups and brief `ema_readiness`
+  counters from existing `ema.unavailable` events. The new projection reports
+  event count, affected bot count, latest candidate/unavailable totals, bounded
+  reason counts, error-type counts, latest cycle IDs, and compact allowlisted
+  EMA event data without changing smoke verdict logic.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  smoke-report tests, compileall, `git diff --check`, and local real-data
+  summary/brief smoke checks passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  smoke-report tooling. The first 10-minute smoke after deploy caught a real
+  Binance `InvalidNonce`/timestamp-window recovery in authoritative positions
+  and the related text-log warning; later authoritative calls succeeded. A
+  settled 2-minute brief smoke at `5d9f3a5f` reported all five expected bots
+  running, no hard failures, no log hard/attention matches, no failed remote
+  calls, no failed account-critical remote calls, and clean tracked repository
+  state. The new `ema_readiness` counters reported `total=11`, `bots=4`,
+  `latest_candidate_unavailable_total=31`, and `latest_unavailable_total=112`,
+  making persistent non-hard EMA readiness degradation visible without full
+  problem-event inspection.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1642,10 +1667,11 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-3. Use the persistent non-hard EMA readiness / staged-execution degradation
-   visible in VPS5 smokes as the next candidate for targeted readiness
-   diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
-   to inspect by surfacing bounded latest event data and aggregate groups.
+3. Use the persistent non-hard staged-execution degradation visible in VPS5
+   smokes as the next candidate for targeted readiness diagnostics or a narrow
+   fix. PRs #679/#682 made generic problem groups inspectable, and PR #755 made
+   EMA readiness directly visible; staged `completed_candles` target changes are
+   now the larger remaining readiness signal.
 4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
