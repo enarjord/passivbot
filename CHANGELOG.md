@@ -19,6 +19,9 @@ All notable user-facing changes will be documented in this file.
 - Added the `ema` live-event debug profile, which enriches structured
   `ema.unavailable` events with bounded parsed readiness detail without
   changing console output or trading behavior.
+- Added the `remote_calls` live-event debug profile, which enriches structured
+  remote-call events with bounded payload-shape and correlation details without
+  adding raw payloads or console output.
 - Added `passivbot tool live-config-preflight` for read-only offline summaries
   of risk-relevant live config facts before startup.
 - Added shutdown-event summaries to `passivbot tool live-smoke-report`, including

@@ -1790,7 +1790,13 @@ def test_forager_and_ema_summary_emitters_are_best_effort_on_malformed_inputs(ca
     assert any(EventTypes.BOT_STARTUP_TIMING in msg for msg in messages)
 
 
-def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):
+def _make_remote_fetch_event_bot(
+    sink,
+    *,
+    cycle_id="cy_7",
+    map_max=None,
+    debug_profiles=(),
+):
     import passivbot as pb_mod
 
     class FakeBot:
@@ -1803,6 +1809,7 @@ def _make_remote_fetch_event_bot(sink, *, cycle_id="cy_7", map_max=None):
             self.exchange = "okx"
             self.user = "okx_01"
             self.bot_id = "bot_1"
+            self.live_event_debug_profiles = tuple(debug_profiles or ())
             self._live_event_current_cycle_id = cycle_id
             self._live_event_remote_call_seq = 0
             self._live_event_remote_call_ids = {}
@@ -1856,7 +1863,50 @@ def test_candle_remote_fetch_callback_emits_correlated_remote_call_events():
     assert started.symbol == "BTC/USDT:USDT"
     assert succeeded.data["rows"] == 100
     assert started.data["params"]["apiKey"] == "[redacted]"
+    assert "debug" not in started.data
+    assert "debug" not in succeeded.data
     assert bot._live_event_remote_call_seq == 1
+
+
+def test_remote_call_debug_profile_adds_bounded_candle_payload_shape():
+    sink = ListEventSink()
+    bot = _make_remote_fetch_event_bot(sink, debug_profiles=("remote_calls",))
+    base = {
+        "kind": "ccxt_fetch_ohlcv",
+        "exchange": "okx",
+        "symbol": "BTC/USDT:USDT",
+        "tf": "1m",
+        "since_ts": 123000,
+    }
+
+    bot._handle_candle_remote_fetch_event(
+        {**base, "stage": "start", "limit": 100, "params": {"apiKey": "secret"}}
+    )
+    bot._handle_candle_remote_fetch_event(
+        {
+            **base,
+            "stage": "ok",
+            "rows": 100,
+            "first_ts": 123000,
+            "last_ts": 183000,
+            "elapsed_ms": 42,
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, succeeded = sink.events
+    assert started.data["debug_profile"] == "remote_calls"
+    assert succeeded.data["debug_profile"] == "remote_calls"
+    assert started.data["debug"]["param_keys"] == ["apiKey"]
+    assert started.data["debug"]["kind"] == "ccxt_fetch_ohlcv"
+    assert started.data["debug"]["tf"] == "1m"
+    assert started.data["debug"]["since_ts"] == 123000
+    assert started.data["debug"]["limit"] == 100
+    assert succeeded.data["debug"]["matched_start"] is True
+    assert succeeded.data["debug"]["rows"] == 100
+    assert succeeded.data["debug"]["elapsed_ms"] == 42
+    assert "secret" not in str(started.data["debug"]).lower()
 
 
 def test_candle_remote_fetch_error_sanitizes_and_keeps_correlation():
@@ -2073,6 +2123,58 @@ async def test_authoritative_timed_fetch_emits_correlated_remote_call_events():
     assert succeeded.data["count"] == 2
     assert succeeded.data["state_epoch"] == 17
     assert succeeded.data["pending_confirmations"] == ["open_orders"]
+    assert "debug" not in started.data
+    assert "debug" not in succeeded.data
+
+
+@pytest.mark.asyncio
+async def test_remote_call_debug_profile_adds_authoritative_payload_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _timed_authoritative_fetch = pb_mod.Passivbot._timed_authoritative_fetch
+
+        def __init__(self):
+            self.exchange = "kucoin"
+            self.user = "kucoin_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("remote_calls",)
+            self._live_event_current_cycle_id = "cy_12"
+            self._authoritative_refresh_epoch = 21
+            self._authoritative_pending_confirmations = {"open_orders": 22}
+            self._live_event_remote_call_seq = 0
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    async def fetch_open_orders():
+        return [{"id": "a", "symbol": "BTC/USDT:USDT"}]
+
+    bot = FakeBot()
+    timings_ms = {}
+    result = await bot._timed_authoritative_fetch(
+        "open_orders", fetch_open_orders(), timings_ms
+    )
+
+    assert len(result) == 1
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+    started, succeeded = sink.events
+    assert started.data["debug_profile"] == "remote_calls"
+    assert succeeded.data["debug_profile"] == "remote_calls"
+    assert started.data["debug"]["surface"] == "open_orders"
+    assert started.data["debug"]["stage"] == "start"
+    assert started.data["debug"]["state_epoch"] == 21
+    assert started.data["debug"]["pending_confirmation_count"] == 1
+    assert succeeded.data["debug"]["surface"] == "open_orders"
+    assert succeeded.data["debug"]["stage"] == "ok"
+    assert succeeded.data["debug"]["state_epoch"] == 21
+    assert "count" in succeeded.data["debug"]["data_keys"]
 
 
 @pytest.mark.asyncio
