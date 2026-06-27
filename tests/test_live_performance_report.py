@@ -301,6 +301,94 @@ def test_live_performance_report_summary_projection_is_bounded(tmp_path):
     assert "event_types" not in summary
 
 
+def test_live_performance_report_slowest_blockers(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                seq=1,
+                ts=61_000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=63_000,
+                ids={"cycle_id": "cy_1"},
+                data={
+                    "elapsed_ms": 2000,
+                    "timings_ms": {"execute": 1100, "monitor_flush": 9000},
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=3,
+                ts=64_000,
+                component="risk.hsl",
+                data={"stage": "pair_replay", "elapsed_s": 12.0},
+            ),
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=4,
+                ts=65_000,
+                data={
+                    "kind": "balance",
+                    "revision": 1,
+                    "response_received_ts_ms": 60_000,
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=5,
+                ts=66_000,
+                data={"cycle_id": 2, "data_packets": [{"kind": "balance", "revision": 1}]},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    blockers = report["slowest_blockers"]
+    operations = [group["operation"] for group in blockers["groups"]]
+
+    assert blockers["total_groups"] >= 4
+    assert operations[0] == "hsl_replay.pair_replay.elapsed"
+    assert "cycle.phase.monitor_flush" not in operations
+    hsl_group = blockers["groups"][0]
+    assert hsl_group["source_section"] == "performance"
+    assert hsl_group["blocking_scope"] == "delays_protective_readiness"
+    assert hsl_group["p95_ms"] == 12000
+
+
+def test_live_performance_report_slowest_blockers_summary_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000, "timings_ms": {"execute": 900}},
+            ),
+            _monitor_row(
+                event_type="state.refresh_timing",
+                seq=2,
+                ts=2000,
+                data={"wall_ms": 2000, "surface_max_ms": 1500},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert summary["slowest_blockers"]["total_groups"] == 4
+    assert len(summary["slowest_blockers"]["groups"]) == 1
+    assert summary["slowest_blockers"]["groups"][0]["operation"] == "state_refresh.wall"
+
+
 def test_live_performance_report_decision_boundary_lag(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

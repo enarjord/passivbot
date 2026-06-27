@@ -178,7 +178,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
   snapshot build plus snapshot/EMA age at the Rust call boundary when those events are present.
   The startup-readiness section summarizes latest per-bot startup phase timings and HSL
-  replay state from existing lifecycle/replay events.
+  replay state from existing lifecycle/replay events. The `slowest_blockers` section ranks
+  non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
+  delays are visible without scanning every timing group.
 
 ## Exchange Helpers
 
