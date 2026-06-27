@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added process-signal safety guidance to
+  `passivbot tool live-restart-smoke-plan`, warning future restart automation
+  away from broad `pkill -f`/`pgrep -f` live-bot matches and toward exact tmux
+  panes or exact canonical process rows.
 - Added report-only startup phase budget projections to
   `passivbot tool live-smoke-report`, comparing latest startup timings with
   prior local p95 baselines from existing monitor events.

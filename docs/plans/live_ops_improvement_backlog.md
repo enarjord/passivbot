@@ -91,6 +91,11 @@ Related detailed plans:
      checks, and smoke-report command wiring. It explicitly rejects execution
      and does not signal processes, invoke tmux, SSH, pull code, start bots,
      contact exchanges, or load credentials.
+   - 2026-06-27: Added process-signal safety guidance to the plan-only restart
+     smoke planner after a VPS5 restart shell matched its own broad
+     `passivbot live` process pattern. The planner now records that future
+     execution must use exact tmux panes or exact canonical process rows, and
+     rejects broad process-pattern kill/signal commands.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes

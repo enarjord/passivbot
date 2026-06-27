@@ -54,10 +54,23 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "passivbot tool live-smoke-report" in report["smoke_report"]["command"]
     assert "--supervisor-config" in report["smoke_report"]["command"]
     assert "--recent-minutes 15" in report["smoke_report"]["command"]
+    assert report["process_signal_safety"]["strategy"] == (
+        "exact_tmux_pane_or_exact_pid_only"
+    )
+    assert report["process_signal_safety"]["forbid_broad_process_pattern_signals"] is True
+    assert "pkill -f 'passivbot live'" in report["process_signal_safety"][
+        "unsafe_patterns"
+    ]
+    assert "exclude the controller process and its ancestors" in report[
+        "process_signal_safety"
+    ]["required_guards"]
     assert all(
         item["execute"] is False for item in report["timeout_escalation_ladder"]
     )
     assert "ssh" in report["execution_policy"]["rejected_operations"]
+    assert "broad process-pattern kill/signal" in report["execution_policy"][
+        "rejected_operations"
+    ]
     assert "does_not_start_passivbot_live" in report["warnings"]
 
 
