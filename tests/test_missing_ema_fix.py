@@ -379,6 +379,8 @@ class _BundleReproBot:
         projected_close_ema=None,
         projected_qv_ema=None,
         projected_log_range_ema=None,
+        cached_qv_ema=None,
+        cached_log_range_ema=None,
         qv_mode="value",
         lr1m_mode="value",
         project_open_tail_after_health_calls=None,
@@ -400,6 +402,11 @@ class _BundleReproBot:
         self.projected_log_range_ema = (
             None if projected_log_range_ema is None else dict(projected_log_range_ema)
         )
+        self.cached_qv_ema = None if cached_qv_ema is None else dict(cached_qv_ema)
+        self.cached_log_range_ema = (
+            None if cached_log_range_ema is None else dict(cached_log_range_ema)
+        )
+        self.cached_metric_calls = []
         self.qv_mode = qv_mode
         self.lr1m_mode = lr1m_mode
         self.project_open_tail_after_health_calls = project_open_tail_after_health_calls
@@ -528,6 +535,38 @@ class _BundleReproBot:
                     "qv": qv,
                     "log_range": log_range,
                 }
+
+            async def get_latest_cached_ema_metrics(
+                self,
+                symbol,
+                spans_by_metric,
+                *,
+                max_staleness_ms=None,
+                window_candles=None,
+                timeframe="1m",
+            ):
+                self.outer.cached_metric_calls.append(
+                    {
+                        "symbol": symbol,
+                        "spans_by_metric": dict(spans_by_metric),
+                        "max_staleness_ms": max_staleness_ms,
+                        "window_candles": window_candles,
+                        "timeframe": timeframe,
+                    }
+                )
+                out = {}
+                if self.outer.cached_qv_ema is not None and "qv" in spans_by_metric:
+                    span = float(spans_by_metric["qv"])
+                    if span in self.outer.cached_qv_ema:
+                        out["qv"] = float(self.outer.cached_qv_ema[span])
+                if (
+                    self.outer.cached_log_range_ema is not None
+                    and "log_range" in spans_by_metric
+                ):
+                    span = float(spans_by_metric["log_range"])
+                    if span in self.outer.cached_log_range_ema:
+                        out["log_range"] = float(self.outer.cached_log_range_ema[span])
+                return out
 
         self.cm = _CM(self)
 
@@ -850,6 +889,53 @@ async def test_explicit_normal_missing_required_forager_features_fails_loudly():
         await pb_mod.Passivbot._load_orchestrator_ema_bundle(
             bot, [symbol], mode_overrides
         )
+
+
+@pytest.mark.asyncio
+async def test_active_forager_required_features_use_bounded_cached_carry_forward():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
+        qv_mode="nan",
+        lr1m_mode="nan",
+        cached_qv_ema={10.0: 250000.0},
+        cached_log_range_ema={10.0: 0.0015},
+    )
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+
+    (
+        _m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert m1_volume_emas[symbol][10.0] == pytest.approx(250000.0)
+    assert m1_log_range_emas[symbol][10.0] == pytest.approx(0.0015)
+    assert volumes_long[symbol] == pytest.approx(250000.0)
+    assert log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_projection_symbols == set()
+    assert {call["timeframe"] for call in bot.cached_metric_calls} == {"1m"}
+    assert all(
+        int(call["max_staleness_ms"]) >= 60_000
+        for call in bot.cached_metric_calls
+    )
 
 
 @pytest.mark.asyncio

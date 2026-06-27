@@ -14133,14 +14133,23 @@ class Passivbot:
                 else:
                     secondary_symbols.append(sym)
             cache_only_ttl = 365 * 24 * 3600 * 1000
-            if secondary_symbols:
-                max_calls = get_optional_live_value(
-                    self.config, "max_ohlcv_fetches_per_minute", 0
+            max_calls = get_optional_live_value(
+                self.config, "max_ohlcv_fetches_per_minute", 0
+            )
+            try:
+                max_calls_i = int(max_calls) if max_calls is not None else 0
+            except Exception:
+                max_calls_i = 0
+            priority_max_age_ms = int(
+                Passivbot._forager_target_staleness_ms(
+                    self,
+                    max(1, len(priority_symbols) + len(secondary_symbols)),
+                    max_calls_i,
                 )
-                try:
-                    max_calls_i = int(max_calls) if max_calls is not None else 0
-                except Exception:
-                    max_calls_i = 0
+            )
+            for sym in priority_symbols:
+                forager_cached_max_age_by_symbol[sym] = priority_max_age_ms
+            if secondary_symbols:
                 secondary_max_age_ms = int(
                     Passivbot._forager_target_staleness_ms(
                         self, len(secondary_symbols), max_calls_i
