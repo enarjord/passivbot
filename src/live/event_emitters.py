@@ -14,6 +14,7 @@ from live.event_bus import (
     ReasonCodes,
     authoritative_reason_code,
     emit_event,
+    live_event_debug_profile_enabled,
     utc_ms,
 )
 
@@ -1281,6 +1282,89 @@ def _candidate_unavailable_summary(
     return out
 
 
+_EMA_TYPE_RE = re.compile(
+    r"\b(?:missing\s+required\s+)?"
+    r"(?P<ema_type>m1_close|m1_volume|m1_log_range|h1_log_range)\s+EMA\b",
+    re.IGNORECASE,
+)
+_EMA_SPAN_REASON_RE = re.compile(
+    r"\bspan=(?P<span>[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)"
+    r"\s+reason=(?P<reason>[^;|]+)",
+    re.IGNORECASE,
+)
+
+
+def _candidate_detail_tuple(item: Any) -> tuple[str, str, str]:
+    if not isinstance(item, (list, tuple)):
+        return str(item), "", ""
+    symbol = str(item[0]) if len(item) >= 1 else ""
+    error_type = str(item[1]) if len(item) >= 2 else ""
+    error = str(item[2]) if len(item) >= 3 else ""
+    return symbol, error_type, error
+
+
+def _ema_unavailable_debug_summary(
+    candidate_values: dict[str, list[tuple[str, str, str]]] | None,
+    ema_unavailable_reasons: dict[str, list[str]] | None,
+    *,
+    limit: int = 8,
+) -> dict[str, Any]:
+    candidate_groups: list[dict[str, Any]] = []
+    for reason, raw_items in sorted((candidate_values or {}).items())[:limit]:
+        symbols: set[str] = set()
+        error_types: set[str] = set()
+        ema_type_counts: Counter[str] = Counter()
+        spans: list[float] = []
+        inner_reason_counts: Counter[str] = Counter()
+        for raw_item in raw_items or []:
+            symbol, error_type, error = _candidate_detail_tuple(raw_item)
+            if symbol:
+                symbols.add(symbol)
+            if error_type:
+                error_types.add(error_type)
+            for match in _EMA_TYPE_RE.finditer(error or ""):
+                ema_type_counts[match.group("ema_type").lower()] += 1
+            for match in _EMA_SPAN_REASON_RE.finditer(error or ""):
+                span = _safe_float(match.group("span"))
+                if span is not None:
+                    spans.append(span)
+                inner_reason = str(match.group("reason") or "").strip()
+                if inner_reason:
+                    inner_reason_counts[inner_reason[:120]] += 1
+        group: dict[str, Any] = {
+            "reason": str(reason),
+            "symbols": _symbol_sample(symbols),
+            "error_types": sorted(error_types)[:4],
+        }
+        if ema_type_counts:
+            group["ema_types"] = [
+                {"ema_type": key, "count": int(count)}
+                for key, count in sorted(ema_type_counts.items())
+            ][:limit]
+        if spans:
+            group["spans"] = _span_sample(spans)
+        if inner_reason_counts:
+            group["inner_reasons"] = [
+                {"reason": key, "count": int(count)}
+                for key, count in sorted(
+                    inner_reason_counts.items(), key=lambda kv: (-kv[1], kv[0])
+                )[:limit]
+            ]
+        candidate_groups.append(group)
+
+    unavailable_groups = [
+        {
+            "reason": str(reason),
+            "symbols": _symbol_sample(symbols or ()),
+        }
+        for reason, symbols in sorted((ema_unavailable_reasons or {}).items())[:limit]
+    ]
+    return {
+        "candidate_groups": candidate_groups,
+        "unavailable_groups": unavailable_groups,
+    }
+
+
 def _reason_symbol_summary(
     values: dict[str, list[str]] | None,
     *,
@@ -2080,6 +2164,24 @@ def _emit_ema_unavailable_event_unchecked(
                 "spans": _span_sample(span for _symbol, span in items),
             }
         )
+    data = {
+        "optional_drop_count": int(optional_count),
+        "optional_drop_groups": optional_summary,
+        "candidate_unavailable": _symbol_sample(candidate_symbols),
+        "candidate_unavailable_groups": _candidate_unavailable_summary(
+            candidate_ema_unavailable_details
+        ),
+        "unavailable": _symbol_sample(unavailable_symbols),
+        "unavailable_reasons": _reason_symbol_summary(ema_unavailable_reasons),
+    }
+    if live_event_debug_profile_enabled(bot, "ema") or live_event_debug_profile_enabled(
+        bot, "candles"
+    ):
+        data["debug_profile"] = "ema"
+        data["debug"] = _ema_unavailable_debug_summary(
+            candidate_ema_unavailable_details,
+            ema_unavailable_reasons,
+        )
     _safe_emit(
         bot,
         EventTypes.EMA_UNAVAILABLE,
@@ -2089,16 +2191,7 @@ def _emit_ema_unavailable_event_unchecked(
         cycle_id=current_live_event_cycle_id(bot),
         status=status,
         reason_code=reason_code,
-        data={
-            "optional_drop_count": int(optional_count),
-            "optional_drop_groups": optional_summary,
-            "candidate_unavailable": _symbol_sample(candidate_symbols),
-            "candidate_unavailable_groups": _candidate_unavailable_summary(
-                candidate_ema_unavailable_details
-            ),
-            "unavailable": _symbol_sample(unavailable_symbols),
-            "unavailable_reasons": _reason_symbol_summary(ema_unavailable_reasons),
-        },
+        data=data,
     )
 
 

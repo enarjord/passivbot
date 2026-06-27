@@ -13,6 +13,9 @@ All notable user-facing changes will be documented in this file.
 - Added `logging.live_event_debug_profiles` and
   `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` for opt-in structured live-event
   enrichment, starting with bounded Rust orchestrator input/output samples.
+- Added the `ema` live-event debug profile, which enriches structured
+  `ema.unavailable` events with bounded parsed readiness detail without
+  changing console output or trading behavior.
 - Added `passivbot tool live-config-preflight` for read-only offline summaries
   of risk-relevant live config facts before startup.
 - Added shutdown-event summaries to `passivbot tool live-smoke-report`, including

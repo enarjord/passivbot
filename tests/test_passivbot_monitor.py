@@ -1304,6 +1304,7 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert events[4].data["close_fallback_count"] == 1
     assert events[5].status == "degraded"
     assert events[5].data["candidate_unavailable"]["sample"] == ["XRP/USDT:USDT"]
+    assert "debug" not in events[5].data
     assert events[6].symbol == "ETH/USDT:USDT"
     assert events[6].status == "recovered"
     assert events[6].reason_code == "late_open_tail_projection"
@@ -1360,6 +1361,72 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
         "warm_cache_accepted": 1,
     }
     assert events[10].data["window_max_candles"] == 260
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_unavailable_event_debug_profile_adds_parsed_readiness_detail():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("ema",)
+            self._live_event_current_cycle_id = "cy_12"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_ema_unavailable_event(
+        candidate_ema_unavailable_details={
+            "cache_only_fetch_failed": [
+                (
+                    "BTC/USDT:USDT",
+                    "RuntimeError",
+                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT: "
+                    "span=672 reason=non-finite h1_log_range value nan; "
+                    "span=1100 reason=non-finite h1_log_range value nan",
+                ),
+                (
+                    "ETH/USDT:USDT",
+                    "RuntimeError",
+                    "[ema] missing required m1_log_range EMA for ETH/USDT:USDT: "
+                    "span=500 reason=missing required window",
+                ),
+            ]
+        },
+        ema_unavailable_reasons={
+            "never_fetched_cache_only": ["XRP/USDT:USDT", "ZEC/USDT:USDT"]
+        },
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.EMA_UNAVAILABLE
+    assert event.data["debug_profile"] == "ema"
+    debug = event.data["debug"]
+    assert debug["unavailable_groups"][0]["reason"] == "never_fetched_cache_only"
+    group = debug["candidate_groups"][0]
+    assert group["reason"] == "cache_only_fetch_failed"
+    assert group["symbols"]["sample"] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert group["ema_types"] == [
+        {"ema_type": "h1_log_range", "count": 1},
+        {"ema_type": "m1_log_range", "count": 1},
+    ]
+    assert group["spans"] == [500.0, 672.0, 1100.0]
+    assert group["inner_reasons"] == [
+        {"reason": "non-finite h1_log_range value nan", "count": 2},
+        {"reason": "missing required window", "count": 1},
+    ]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
