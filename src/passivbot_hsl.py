@@ -22,8 +22,113 @@ from config.coerce import (
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from fill_events_manager import signed_fee_paid_from_payload
+from live.event_bus import live_event_debug_profile_enabled
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
+
+
+def _hsl_key_sample(value: Any, *, limit: int = 32) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(key) for key in value)[: max(0, int(limit))]
+
+
+def _hsl_event_state_snapshot(
+    self,
+    *,
+    pside: str | None,
+    symbol: str | None = None,
+) -> dict[str, Any]:
+    if not pside:
+        return {}
+    state = None
+    if symbol:
+        coin_states = getattr(self, "_equity_hard_stop_coin", None)
+        if isinstance(coin_states, dict):
+            pside_states = coin_states.get(pside)
+            if isinstance(pside_states, dict):
+                state = pside_states.get(symbol)
+    if state is None:
+        states = getattr(self, "_equity_hard_stop", None)
+        if isinstance(states, dict):
+            state = states.get(pside)
+    if not isinstance(state, dict):
+        return {}
+    cooldown_until_ms = state.get("cooldown_until_ms")
+    return {
+        "halted": bool(state.get("halted")),
+        "no_restart_latched": bool(state.get("no_restart_latched")),
+        "cooldown_until_present": cooldown_until_ms is not None,
+        "pending_red": state.get("pending_red_since_ms") is not None,
+        "has_pending_stop_event": state.get("pending_stop_event") is not None,
+        "has_last_stop_event": state.get("last_stop_event") is not None,
+        "red_trigger_event_emitted": bool(state.get("red_trigger_event_emitted")),
+        "cooldown_intervention_active": bool(state.get("cooldown_intervention_active")),
+        "cooldown_repanic_reset_pending": bool(
+            state.get("cooldown_repanic_reset_pending")
+        ),
+        "cooldown_unresolved_residue": bool(state.get("cooldown_unresolved_residue")),
+        "pnl_reset_timestamp_present": state.get("pnl_reset_timestamp_ms") is not None,
+    }
+
+
+def _hsl_debug_payload(
+    self,
+    *,
+    event_type: str,
+    data: dict,
+    pside: str | None,
+    symbol: str | None = None,
+    status: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any]:
+    debug: dict[str, Any] = {
+        "event_type": str(event_type),
+        "data_keys": _hsl_key_sample(data),
+    }
+    if status is not None:
+        debug["status"] = str(status)
+    if reason_code is not None:
+        debug["reason_code"] = str(reason_code)
+    for key in ("signal_mode", "tier"):
+        if data.get(key) is not None:
+            debug[key] = str(data[key])
+    metrics = data.get("metrics")
+    if isinstance(metrics, dict):
+        debug["metrics_keys"] = _hsl_key_sample(metrics)
+    state_snapshot = _hsl_event_state_snapshot(self, pside=pside, symbol=symbol)
+    if state_snapshot:
+        debug["state"] = state_snapshot
+    return {key: value for key, value in debug.items() if value not in (None, [], {})}
+
+
+def _best_effort_hsl_debug_payload(
+    self,
+    *,
+    event_type: str,
+    data: dict,
+    pside: str | None,
+    symbol: str | None = None,
+    status: str | None = None,
+    reason_code: str | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return _hsl_debug_payload(
+            self,
+            event_type=event_type,
+            data=data,
+            pside=pside,
+            symbol=symbol,
+            status=status,
+            reason_code=reason_code,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to build HSL debug payload type=%s: %s",
+            event_type,
+            exc,
+        )
+        return None
 
 
 def _hsl_event_data(metrics: dict | None = None, extra: dict | None = None) -> dict[str, Any]:
@@ -48,6 +153,20 @@ def _emit_hsl_event(
     reason_code: str | None = None,
 ) -> None:
     live_event_delivered = False
+    event_data = dict(data or {})
+    if live_event_debug_profile_enabled(self, "hsl"):
+        debug = _best_effort_hsl_debug_payload(
+            self,
+            event_type=event_type,
+            data=event_data,
+            pside=pside,
+            symbol=symbol,
+            status=status,
+            reason_code=reason_code,
+        )
+        if debug:
+            event_data["debug_profile"] = "hsl"
+            event_data["debug"] = debug
     try:
         emit = getattr(self, "_emit_live_event", None)
         pipeline = getattr(self, "_live_event_pipeline", None)
@@ -62,7 +181,7 @@ def _emit_hsl_event(
                 pside=pside,
                 status=status,
                 reason_code=reason_code,
-                data=data,
+                data=event_data,
             ) is not None
     except Exception as exc:
         logging.debug("[event] failed to emit HSL live event type=%s: %s", event_type, exc)
@@ -74,7 +193,7 @@ def _emit_hsl_event(
             record(
                 event_type,
                 tags,
-                data,
+                event_data,
                 pside=pside,
                 symbol=symbol,
                 ts=ts,

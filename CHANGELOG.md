@@ -16,6 +16,9 @@ All notable user-facing changes will be documented in this file.
 - Added a `fills` live-event debug profile with bounded fill refresh and fill
   ingestion shape metadata, without raw fill/source payloads or default console
   changes.
+- Added an `hsl` live-event debug profile with bounded HSL event key, metric
+  key, and latch/cooldown state-shape metadata, without changing default HSL
+  events, console output, or trading behavior.
 - Added v2 candle coverage windows and suspicious interior gap samples to
   `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
   cache artifacts.
