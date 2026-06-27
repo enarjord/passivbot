@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `419612662` merge of PR #726, `Address live logging reviewer follow-ups`.
+- `5714d36dd` merge of PR #728, `Add fills live event debug profile`.
 
 Current review gate:
 
@@ -1182,6 +1182,19 @@ VPS5 deployment status:
   tracked repository state, no hard failures, no log hard matches, no failed
   remote calls, and no failed account-critical remote calls.
 
+### PR #727: Cache Doctor Warm-Cache Readiness Evidence
+
+- Branch: `codex/maxwell-cache-warm-readiness`.
+- Scope: adjacent cache/warmup diagnostics.
+- Result: `passivbot tool cache-integrity-doctor` now adds report-only
+  `warm_cache_readiness` summaries derived from already-scanned candle, fill,
+  and HSL/risk cache metadata. The readiness projection is explicitly
+  non-enforcing and does not change startup or trading behavior.
+- Review evidence: Claude and Hermes approved head `155e3640`; CI was green;
+  focused cache-doctor tests, compileall, `git diff --check`, and
+  touched-file silent-handling audit passed before merge. A parent-side
+  temporary-worktree validation also passed the focused test/check set.
+
 ### PR #723: Remote-Call Debug Profile
 
 - Branch: `codex/v8-remote-call-debug-profile`.
@@ -1241,21 +1254,35 @@ VPS5 deployment status:
   remote calls. Remaining attention came from known non-hard EMA/staged
   readiness and HSL status/cooldown events.
 
-### Pending PR: Fills Debug Profile
+### PR #728: Fills Debug Profile
 
 - Branch: `codex/v8-fills-debug-profile`.
 - Scope: Phase 5/6 opt-in structured debug enrichment.
-- Planned result: add `fills` debug-profile enrichment to existing
+- Result: added `fills` debug-profile enrichment to existing
   `fills.refresh_summary` and `fill.ingested` events with bounded coverage,
   count, and key-shape metadata. Default events and console output stay
   unchanged, and no raw fill IDs, source IDs, or payload values are emitted.
+- Review evidence: Claude and Hermes approved the original head `4c58a718`;
+  after PR #727 merged, the branch was rebased to `8ba083f6`, CI was green, and
+  both reviewers confirmed the rebased patch was unchanged. Local focused tests,
+  the broader live-event/monitor suite, compileall, and `git diff --check`
+  passed before merge.
+- VPS5 evidence: deployed to VPS5 at `5714d36d` without bot restart because the
+  slice is opt-in and no VPS config enabled it. The first 10-minute smoke was
+  red only because text logs contained a fresh OKX ccxt-pro websocket callback
+  traceback after a reconnect; structured monitor events had no hard failures,
+  all five expected bots matched, the repository was clean, and remote-call /
+  account-critical failures were zero. A settled 2-minute follow-up smoke
+  reported `ok=true`, no hard failures, no log hard matches, all five expected
+  bots matched, clean tracked repository state, no failed remote calls, and no
+  failed account-critical remote calls.
 
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
-   are exchange-call debug profiles, HSL preview, or more order/risk transition
-   coverage.
+   are HSL preview/status debug enrichment, execution debug profiles, or more
+   order/risk transition coverage.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. Remaining useful
@@ -1267,5 +1294,5 @@ VPS5 deployment status:
    to inspect by surfacing bounded latest event data and aggregate groups.
 4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
-5. Continue cache-doctor refinements in separate adjacent PRs: cache-family
-   metadata, coverage windows, suspicious gaps, and warm-cache readiness.
+5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
+   compatibility checks and synthetic/no-trade assumptions.
