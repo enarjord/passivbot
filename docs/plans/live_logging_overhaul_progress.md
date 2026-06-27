@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `27f597bec` merge of PR #720, `Add EMA live event debug profile`.
+- `09ae3773a` merge of PR #723, `Add remote-call live event debug profile`.
 
 Current review gate:
 
@@ -1163,6 +1163,53 @@ VPS5 deployment status:
   reported all five configured bots running, no hard failures, no log hard
   matches, no failed remote calls, no failed account-critical remote calls, and
   clean tracked repository state.
+
+### PR #722: Cache Doctor Candle Coverage Evidence
+
+- Branch: `codex/maxwell-cache-integrity-doctor-13a`.
+- Scope: adjacent cache/warmup diagnostics.
+- Result: `passivbot tool cache-integrity-doctor` now derives v2 candle
+  coverage windows, valid row counts, suspicious interior gap samples, and
+  non-enforcing warm-cache evidence labels from local `.valid.npy` artifacts.
+  It remains read-only and does not change cache materialization, startup, or
+  trading behavior.
+- Review evidence: Hermes approved head `43f6d17b`; CI was green; Maxwell ran
+  focused cache-doctor tests, compileall, `git diff --check`, and a touched-file
+  silent-handling audit before opening the PR. Claude did not return during the
+  merge window, so this read-only tooling slice used the degraded gate.
+- VPS5 evidence: deployed as part of the `09ae3773` pull without bot restart.
+  The 10-minute brief smoke reported all five configured bots running, clean
+  tracked repository state, no hard failures, no log hard matches, no failed
+  remote calls, and no failed account-critical remote calls.
+
+### PR #723: Remote-Call Debug Profile
+
+- Branch: `codex/v8-remote-call-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Result: added `remote_calls` debug-profile enrichment for candle remote-fetch
+  and authoritative state-fetch events. Enrichment is bounded to key shape,
+  selected timing/correlation fields, status/surface/kind, and counts; default
+  events remain unchanged, console output is unchanged, and no raw payloads are
+  added.
+- Review evidence: Hermes approved head `e78d79b0`; CI was green; focused
+  remote-call profile tests, the broader live-event/monitor suite, compileall,
+  `git diff --check`, and touched-file silent-handling audit passed before
+  merge. Claude did not return during the merge window, so this opt-in
+  observability slice used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `09ae3773` without bot restart because the
+  profile is opt-in and no VPS config enabled it. The same 10-minute brief
+  smoke reported no hard failures, all expected bots matched, and zero failed
+  remote/account-critical calls. Remaining attention came from known non-hard
+  EMA/staged-readiness and HSL cooldown events.
+
+### Pending PR: Candle Debug Profile
+
+- Branch: `codex/v8-candle-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Planned result: add `candles` debug-profile enrichment to existing
+  `candle.tail_projected` and `candle.coverage_checked` events, exposing bounded
+  key-shape, timeframe/window, and missing-coverage counters without raw candle
+  arrays or default console/log changes.
 
 ## Current Next Steps
 

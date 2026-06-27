@@ -255,8 +255,8 @@ Related detailed plans:
     surfaces are touched.
 
 12. [ ] Debug profile toggles.
-    Status: partial. Rust, EMA readiness, and remote-call profile slices are
-    merged or in progress.
+    Status: partial. Rust, EMA readiness, remote-call, and candle profile
+    slices are merged or in progress.
 
     Add narrow runtime/debug profiles that increase event detail for one domain:
     candles, fills, HSL, Rust payloads, order execution, or exchange calls. This
@@ -276,10 +276,13 @@ Related detailed plans:
       authoritative remote-call events, exposing bounded payload key shape,
       parameter key names, and correlation state without raw payloads or
       console output.
+    - 2026-06-27: Added `candles` debug-profile enrichment for existing candle
+      tail-projection and disk-coverage events, exposing bounded key-shape,
+      timeframe, window, and missing-coverage counters without raw candle rows
+      or console output.
 
-    Remaining refinements: add targeted profiles for candle coverage/tail
-    state, HSL, fills, and execution as those diagnostics need deeper live
-    evidence.
+    Remaining refinements: add targeted profiles for HSL, fills, and execution
+    as those diagnostics need deeper live evidence.
 
 13. [ ] Cache integrity doctor.
     Status: partial. Initial read-only local cache smoke doctor and
