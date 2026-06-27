@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `74270454a` merge of PR #747, `Add ticker probe rate limit health`.
+- `16c25149` merge of PR #749, `Add fill-history pagination sample to ticker probe`.
 
 Current review gate:
 
@@ -1556,18 +1556,28 @@ VPS5 deployment status:
   `private_call_count=5`, `concurrent_request_count=1`,
   `exchange_rate_limit_ms=50`, and `estimated_min_serial_ms=600`.
 
-### In Flight: Ticker Probe Fill Pagination Sample
+### PR #749: Ticker Probe Fill Pagination Sample
 
 - Branch: `codex/v8-ticker-probe-fill-pagination-sample`.
 - Scope: read-only active exchange health probe.
-- Intended result: `passivbot tool ticker-endpoint-probe` keeps the default
+- Result: `passivbot tool ticker-endpoint-probe` keeps the default
   one-call first-symbol `fetch_my_trades` sample, and adds opt-in bounded
   pagination through `--fill-history-pages` and `--fill-history-page-limit`.
   The probe records only page/count/timestamp/latency summaries and terminal
   pagination reason, with no raw trade/order ids.
-- Validation target: focused ticker-probe tests, compileall, `git diff --check`,
-  touched-file silent-handling audit, reviewer approval, then a low-rate VPS5
-  authenticated probe after merge.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  ticker-probe tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A 5-minute smoke and a settled 3-minute smoke at `16c25149`
+  reported all five expected bots running, no hard failures, no log hard
+  matches, no failed remote calls, no failed account-critical remote calls, and
+  clean tracked repository state. A one-repeat authenticated Binance probe for
+  `BTC/USDT:USDT` with `--fill-history-pages 2 --fill-history-page-limit 2`
+  validated `fill_history_health.total=1`, `succeeded=1`, `failed=0`,
+  `latest_call_count=1`, `latest_page_count=1`,
+  `latest_terminal_reason=short_page`, and
+  `rate_limit_health.endpoint_counts.fetch_my_trades_first_symbol=1`.
 
 ## Current Next Steps
 
@@ -1580,7 +1590,9 @@ VPS5 deployment status:
    `--account-only` plus symbol fallback for open-orders. PR #741 added
    clock-skew health. PR #743 added candle freshness health. PR #745 added
    fill-history sample health. PR #747 added rate-limit pressure estimates.
-   Remaining useful slices include full fill pagination coverage.
+   PR #749 added opt-in bounded fill pagination sampling. Remaining useful
+   slices include basic endpoint latency and deeper exchange-specific coverage
+   checks.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
