@@ -140,6 +140,10 @@ classification when enough source events exist.
 - [ ] Market data: ticker/market price age, candle close age, EMA bundle age,
   forager feature age, candle remote fetch latency, synthetic/no-trade gap
   repair counts.
+  - Status: partial. New `snapshot.built` metadata and performance-report
+    groups expose planning surface ages plus market-snapshot max/mean age at
+    snapshot build. Remaining work: candle close age, forager feature age, and
+    symbol-scoped stale-but-acceptable candidate metadata.
 - [ ] Decision boundary: whole-minute lag to cycle start, Rust input snapshot,
   Rust output, Python gate/filter, first exchange write, confirmation refresh.
 - [ ] Cycle phases: market state, account state, Rust planning,

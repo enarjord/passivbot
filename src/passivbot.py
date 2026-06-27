@@ -9113,6 +9113,44 @@ class Passivbot:
         self, snapshot: PlanningSnapshot, *, context: str
     ) -> None:
         availability = PlanningAvailability.from_snapshot(snapshot, now_ms=utc_ms())
+        surface_ages = []
+        for surface in snapshot.surfaces:
+            try:
+                age_ms = max(0, int(snapshot.ts_ms) - int(surface.updated_ms))
+            except (TypeError, ValueError):
+                continue
+            surface_ages.append(
+                {
+                    "name": str(surface.name),
+                    "age_ms": int(age_ms),
+                    "epoch": int(surface.epoch),
+                    "min_epoch": int(surface.min_epoch),
+                }
+            )
+        market_snapshot_ages = []
+        market_snapshot_sources = set()
+        for row in snapshot.market_snapshots:
+            try:
+                age_ms = max(0, int(snapshot.ts_ms) - int(row.fetched_ms))
+            except (TypeError, ValueError):
+                continue
+            market_snapshot_ages.append(int(age_ms))
+            market_snapshot_sources.add(str(row.source))
+        market_snapshot_summary = {
+            "count": len(snapshot.market_snapshots),
+            "symbol_count": len(snapshot.symbols),
+            "missing_count": max(0, len(snapshot.symbols) - len(snapshot.market_snapshots)),
+            "max_age_ms": max(market_snapshot_ages) if market_snapshot_ages else None,
+            "min_age_ms": min(market_snapshot_ages) if market_snapshot_ages else None,
+            "mean_age_ms": (
+                int(round(sum(market_snapshot_ages) / len(market_snapshot_ages)))
+                if market_snapshot_ages
+                else None
+            ),
+            "configured_max_age_ms": int(snapshot.market_snapshot_max_age_ms),
+            "sources": sorted(market_snapshot_sources)[:8],
+            "sources_count": len(market_snapshot_sources),
+        }
         emit_diagnostic_event(
             self,
             DiagnosticEvent.build(
@@ -9124,6 +9162,12 @@ class Passivbot:
                     "context": str(context),
                     "symbols": list(snapshot.symbols),
                     "required_surfaces": list(snapshot.required_surfaces),
+                    "surface_ages": surface_ages,
+                    "market_snapshot_summary": {
+                        key: value
+                        for key, value in market_snapshot_summary.items()
+                        if value is not None
+                    },
                     "data_packets": [
                         {
                             "kind": packet.kind,

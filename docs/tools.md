@@ -177,6 +177,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   confirmations, and completion. It also includes an input-staleness section derived from
   existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
   snapshot build plus snapshot/EMA age at the Rust call boundary when those events are present.
+  Newer `snapshot.built` events also expose bounded surface-age and market-snapshot age
+  summaries, allowing the report to break down stale planning inputs without exposing market
+  prices.
   The startup-readiness section summarizes latest per-bot startup phase timings and HSL
   replay state from existing lifecycle/replay events. The `slowest_blockers` section ranks
   non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
