@@ -378,6 +378,52 @@ def test_live_performance_report_decision_boundary_lag(tmp_path):
     )
 
 
+def test_live_performance_report_decision_boundary_handles_cycle_id_reuse(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_1"},
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(event_type="bot.started", seq=3, ts=10_000),
+            _monitor_row(
+                event_type="cycle.started",
+                seq=4,
+                ts=61_000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=5,
+                ts=62_000,
+                ids={"cycle_id": "cy_1"},
+                data={"elapsed_ms": 1000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+
+    assert report["decision_boundary_lag"]["cycles"] == 2
+    lag_groups = {
+        group["operation"]: group
+        for group in report["decision_boundary_lag"]["groups"]
+    }
+    assert lag_groups["decision_boundary.cycle_started"]["count"] == 2
+    assert lag_groups["decision_boundary.cycle_started"]["max_ms"] == 1000
+
+
 def test_live_performance_report_summary_includes_bounded_decision_lag(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -404,6 +450,162 @@ def test_live_performance_report_summary_includes_bounded_decision_lag(tmp_path)
     assert summary["decision_boundary_lag"]["cycles"] == 1
     assert summary["decision_boundary_lag"]["total_groups"] == 2
     assert len(summary["decision_boundary_lag"]["groups"]) == 1
+
+
+def test_live_performance_report_input_staleness(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=1,
+                ts=1000,
+                data={
+                    "kind": "balance",
+                    "revision": 7,
+                    "response_received_ts_ms": 1000,
+                },
+            ),
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=2,
+                ts=1200,
+                data={
+                    "kind": "open_orders",
+                    "revision": 8,
+                    "response_received_ts_ms": 1200,
+                },
+            ),
+            _monitor_row(
+                event_type="data_packet.updated",
+                seq=3,
+                ts=1400,
+                data={
+                    "kind": "positions",
+                    "revision": 9,
+                    "response_received_ts_ms": 1400,
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=4,
+                ts=2000,
+                data={
+                    "cycle_id": 1,
+                    "data_packets": [
+                        {"kind": "balance", "revision": 7},
+                        {"kind": "open_orders", "revision": 8},
+                        {"kind": "positions", "revision": 9},
+                    ],
+                },
+            ),
+            _monitor_row(
+                event_type="ema.bundle.completed",
+                seq=5,
+                ts=2500,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=6,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    staleness_groups = {
+        group["operation"]: group
+        for group in report["input_staleness"]["groups"]
+    }
+
+    assert report["input_staleness"]["snapshots_seen"] == 1
+    assert report["input_staleness"]["rust_calls_seen"] == 1
+    assert report["input_staleness"]["packet_refs_missing"] == 0
+    assert staleness_groups["input_staleness.data_packet.balance"]["max_ms"] == 1000
+    assert staleness_groups["input_staleness.data_packet.open_orders"]["max_ms"] == 800
+    assert staleness_groups["input_staleness.data_packet.positions"]["max_ms"] == 600
+    assert staleness_groups["input_staleness.snapshot_to_rust"]["max_ms"] == 1000
+    assert staleness_groups["input_staleness.ema_bundle_to_rust"]["max_ms"] == 500
+    assert staleness_groups["input_staleness.ema_bundle_to_rust"]["trading_impact"] == (
+        "blocks_indicator_readiness"
+    )
+
+
+def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=2000,
+                data={"cycle_id": 1, "data_packets": []},
+            ),
+            _monitor_row(event_type="bot.started", seq=2, ts=10_000),
+            _monitor_row(
+                event_type="cycle.started",
+                seq=3,
+                ts=11_000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="ema.bundle.completed",
+                seq=4,
+                ts=11_500,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=5,
+                ts=12_000,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    staleness_groups = {
+        group["operation"]: group
+        for group in report["input_staleness"]["groups"]
+    }
+
+    assert report["input_staleness"]["rust_calls_missing_snapshot"] == 1
+    assert "input_staleness.snapshot_to_rust" not in staleness_groups
+    assert staleness_groups["input_staleness.ema_bundle_to_rust"]["max_ms"] == 500
+
+
+def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=2000,
+                data={"cycle_id": 1, "data_packets": []},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=2,
+                ts=3000,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert summary["input_staleness"]["snapshots_seen"] == 1
+    assert summary["input_staleness"]["rust_calls_seen"] == 1
+    assert summary["input_staleness"]["rust_calls_missing_ema"] == 1
+    assert summary["input_staleness"]["total_groups"] == 1
+    assert len(summary["input_staleness"]["groups"]) == 1
 
 
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):

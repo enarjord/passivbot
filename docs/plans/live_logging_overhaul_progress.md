@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `0d742a4f` after PR #779, `Add live performance report summary filters`.
+- `f70434f3` after PR #780, `Add live decision boundary lag report`.
 
 Current review gate:
 
@@ -406,6 +406,16 @@ VPS5 deployment status:
   `hard_failures=0`, `logs.hard_matches=0`, all five expected bots matched,
   no account-critical remote-call failures, and one non-hard OKX candle
   timeout visible in `remote_calls`.
+- PR #780 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only extends read-only
+  performance-report tooling and docs. A filtered VPS5 performance summary for
+  `--exchange binance` returned `ok=true`, `decision_boundary_lag.cycles=7`,
+  `cycles_with_write=0`, and bounded lag groups led by
+  `decision_boundary.cycle_completed` p95 about `98s`,
+  `action_planned`/`rust_returned` p95 about `93s`, and `cycle_started` p95
+  about `53s`. A 5-minute summary smoke at `f70434f3` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, all five expected bots matched,
+  no failed remote calls, and no account-critical remote-call failures.
 
 ## Phase Checklist
 
@@ -418,7 +428,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter support | Cross-bot incident workflow, safe restart orchestration, input-staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, and initial input-staleness support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -1967,6 +1977,26 @@ VPS5 deployment status:
   5-minute summary smoke reported all five expected bots running with no hard
   failures, no text-log hard matches, and no failed account-critical remote
   calls.
+
+### PR #780: Live Decision Boundary Lag Report
+
+- Branch: `codex/v8-live-performance-decision-lag`.
+- Scope: read-only performance-report decision-boundary lag aggregation, tests,
+  and docs.
+- Result: `passivbot tool live-performance-report` now includes
+  `decision_boundary_lag`, aggregating per-bot lag from the relevant whole
+  minute boundary to cycle start, Rust call/return, action planning,
+  order-wave/write/confirmation events when present, and cycle completion. The
+  report keeps cycle ids internal and surfaces only aggregate timing groups.
+- Review evidence: Claude and Hermes approved with no findings; CI was green;
+  targeted performance-report, event-query, and smoke-report tests,
+  py_compile, `git diff --check`, and a local compact filtered CLI smoke
+  passed.
+- VPS5 evidence: deployed at `f70434f3` without bot restart because this is
+  read-only tooling. A filtered Binance performance summary returned `ok=true`
+  and showed decision-boundary lag groups directly; the same smoke pass kept
+  all five configured bots running with no hard failures and no failed
+  account-critical remote calls.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
