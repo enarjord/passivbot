@@ -1202,14 +1202,34 @@ VPS5 deployment status:
   remote/account-critical calls. Remaining attention came from known non-hard
   EMA/staged-readiness and HSL cooldown events.
 
-### Pending PR: Candle Debug Profile
+### PR #724: Candle Debug Profile
 
 - Branch: `codex/v8-candle-debug-profile`.
 - Scope: Phase 5/6 opt-in structured debug enrichment.
-- Planned result: add `candles` debug-profile enrichment to existing
+- Result: added `candles` debug-profile enrichment to existing
   `candle.tail_projected` and `candle.coverage_checked` events, exposing bounded
   key-shape, timeframe/window, and missing-coverage counters without raw candle
   arrays or default console/log changes.
+- Review evidence: Hermes approved head `4454fd09`; CI was green; focused
+  candle debug-profile tests, the broader live-event/monitor suite, compileall,
+  `git diff --check`, and touched-file silent-handling audit passed before
+  merge. Claude did not return before merge, so this opt-in observability slice
+  used the degraded gate.
+- VPS5 evidence: deployed to VPS5 at `f3969dbc` without bot restart because the
+  profile is opt-in and no VPS config enabled it. A 10-minute brief smoke
+  reported `ok=true`, no hard failures, all five expected bots matched, clean
+  tracked repository state, no failed remote calls, and no failed
+  account-critical remote calls.
+
+### Pending PR: Reviewer Follow-Ups
+
+- Branch: `codex/v8-reviewer-followups`.
+- Scope: Claude retrospective follow-up for already-merged low-risk
+  observability/tooling slices.
+- Planned result: redacts shareable live-ops path fields consistently, removes
+  shutdown event message echo from smoke summaries, scopes EMA debug enrichment
+  to the `ema` profile only, and keeps Rust debug sample construction
+  best-effort inside the event-emitter path.
 
 ## Current Next Steps
 

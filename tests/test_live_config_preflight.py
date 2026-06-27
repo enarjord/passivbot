@@ -142,6 +142,18 @@ def test_live_config_preflight_invalid_json_returns_nonzero(tmp_path, capsys):
     assert report["issues"][0]["code"] == "json_decode_failed"
 
 
+def test_live_config_preflight_missing_config_path_is_user_safe():
+    report = live_config_preflight.build_live_config_preflight_report(
+        "/root/passivbot/configs/missing.json"
+    )
+
+    assert report["ok"] is False
+    assert report["config_path"] == "~/passivbot/configs/missing.json"
+    assert report["issues"][0]["path"] == "~/passivbot/configs/missing.json"
+    rendered = json.dumps(report, sort_keys=True)
+    assert "/root" not in rendered
+
+
 def test_live_config_preflight_rejects_negative_sample_size(tmp_path):
     config_path = tmp_path / "live.json"
     _write_config(config_path, _sample_config())

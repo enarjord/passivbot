@@ -726,6 +726,85 @@ def test_rust_orchestrator_debug_profile_samples_are_bounded():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_rust_debug_sample_failures_do_not_suppress_base_events(monkeypatch):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_rust_orchestrator_called_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_called_event
+        )
+        _emit_rust_orchestrator_returned_event = (
+            pb_mod.Passivbot._emit_rust_orchestrator_returned_event
+        )
+
+        def __init__(self):
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("rust",)
+            self._live_event_current_cycle_id = "cy_rust"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    def fail_input_sample(*_args, **_kwargs):
+        raise RuntimeError("input sample failed")
+
+    def fail_output_sample(*_args, **_kwargs):
+        raise RuntimeError("output sample failed")
+
+    monkeypatch.setattr(
+        live_event_emitters,
+        "rust_input_symbol_debug_sample",
+        fail_input_sample,
+    )
+    monkeypatch.setattr(
+        live_event_emitters,
+        "rust_output_order_debug_sample",
+        fail_output_sample,
+    )
+
+    bot = FakeBot()
+    bot._emit_rust_orchestrator_called_event(
+        rust_call_id="rust_8",
+        input_hash="input_hash",
+        symbol_count=1,
+        tradable_count=1,
+        ema_unavailable_count=0,
+        trailing_unavailable_count=0,
+        hedge_mode=True,
+        strategy_kind="recursive_grid",
+        input_symbols=[{"symbol_idx": 0, "tradable": True}],
+        idx_to_symbol={0: "BTC/USDT:USDT"},
+    )
+    bot._emit_rust_orchestrator_returned_event(
+        rust_call_id="rust_8",
+        status="succeeded",
+        input_hash="input_hash",
+        output_hash="output_hash",
+        elapsed_ms=12,
+        order_count=1,
+        diagnostics={},
+        orders=[{"symbol_idx": 0, "order_type": "entry_grid_normal_long"}],
+        idx_to_symbol={0: "BTC/USDT:USDT"},
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    called, returned = sink.events
+    assert called.event_type == EventTypes.RUST_ORCHESTRATOR_CALLED
+    assert returned.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED
+    assert "debug_profile" not in called.data
+    assert "input_symbol_sample" not in called.data
+    assert "debug_profile" not in returned.data
+    assert "output_order_sample" not in returned.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_rust_orchestrator_emitters_are_best_effort(caplog):
     import passivbot as pb_mod
 
@@ -1523,6 +1602,48 @@ def test_ema_unavailable_event_debug_profile_adds_parsed_readiness_detail():
         {"reason": "non-finite h1_log_range value nan", "count": 2},
         {"reason": "missing required window", "count": 1},
     ]
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_ema_unavailable_event_debug_profile_not_enabled_by_candles_profile():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_ema_unavailable_event = pb_mod.Passivbot._emit_ema_unavailable_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("candles",)
+            self._live_event_current_cycle_id = "cy_13"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_ema_unavailable_event(
+        candidate_ema_unavailable_details={
+            "cache_only_fetch_failed": [
+                (
+                    "BTC/USDT:USDT",
+                    "RuntimeError",
+                    "[ema] missing required h1_log_range EMA for BTC/USDT:USDT",
+                )
+            ]
+        }
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[0]
+    assert event.event_type == EventTypes.EMA_UNAVAILABLE
+    assert "debug_profile" not in event.data
+    assert "debug" not in event.data
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

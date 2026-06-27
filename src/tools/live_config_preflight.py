@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from live.smoke_report import _user_safe_display_path
+
 
 DEFAULT_SAMPLE_SIZE = 8
 SIDES = ("long", "short")
@@ -224,19 +226,21 @@ def build_live_config_preflight_report(
     sample_size: int = DEFAULT_SAMPLE_SIZE,
 ) -> dict[str, Any]:
     path = Path(config_path).expanduser()
+    display_path = _user_safe_display_path(path)
     issues: list[dict[str, Any]] = []
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
+        detail = getattr(exc, "strerror", None) or type(exc).__name__
         return {
             "ok": False,
-            "config_path": str(path),
+            "config_path": display_path,
             "issues": [
                 _issue(
                     "error",
                     "read_failed",
-                    f"could not read config: {exc}",
-                    path=str(path),
+                    f"could not read config {display_path}: {detail}",
+                    path=display_path,
                 )
             ],
         }
@@ -245,20 +249,20 @@ def build_live_config_preflight_report(
     except json.JSONDecodeError as exc:
         return {
             "ok": False,
-            "config_path": str(path),
+            "config_path": display_path,
             "issues": [
                 _issue(
                     "error",
                     "json_decode_failed",
                     f"invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}",
-                    path=str(path),
+                    path=display_path,
                 )
             ],
         }
     if not isinstance(parsed, dict):
         return {
             "ok": False,
-            "config_path": str(path),
+            "config_path": display_path,
             "issues": [
                 _issue("error", "config_root_invalid", "config root must be a JSON object")
             ],
@@ -298,7 +302,7 @@ def build_live_config_preflight_report(
     severity_counts = Counter(issue["severity"] for issue in issues)
     return {
         "ok": "error" not in severity_counts,
-        "config_path": str(path),
+        "config_path": display_path,
         "config_version": parsed.get("config_version"),
         "identity": _identity_report(parsed, live),
         "hsl": {
