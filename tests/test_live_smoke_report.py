@@ -152,6 +152,20 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
     assert report["problem_events"][0]["event_type"] == "remote_call.failed"
     assert report["problem_events"][0]["hard"] is False
     assert report["problem_events"][0]["ids"] == {"remote_call_id": "rc_1"}
+    assert report["hard_failure_sources"] == {
+        "monitor_errors": 0,
+        "invalid_event_rows": 0,
+        "hard_problem_events": 0,
+        "log_hard_matches": 1,
+        "process_hard_failures": 0,
+        "total": 1,
+    }
+    assert report["attention_sources"] == {
+        "problem_events": 1,
+        "log_attention_matches": 2,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 3,
+    }
     assert report["remote_call_failures"] == {
         "total": 1,
         "groups_truncated": False,
@@ -720,6 +734,20 @@ def test_live_smoke_report_summary_projects_high_signal_fields(tmp_path):
     assert summary["attention"] is True
     assert summary["hard_failures"] == 0
     assert summary["attention_count"] == 3
+    assert summary["hard_failure_sources"] == {
+        "monitor_errors": 0,
+        "invalid_event_rows": 0,
+        "hard_problem_events": 0,
+        "log_hard_matches": 0,
+        "process_hard_failures": 0,
+        "total": 0,
+    }
+    assert summary["attention_sources"] == {
+        "problem_events": 2,
+        "log_attention_matches": 1,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 3,
+    }
     assert summary["monitor"]["live_events"] == 2
     assert summary["logs"]["attention_matches"] == 1
     assert summary["logs"]["matches_truncated"] is False
@@ -799,6 +827,20 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert brief["attention"] is True
     assert brief["hard_failures"] == 0
     assert brief["attention_count"] == 3
+    assert brief["hard_failure_sources"] == {
+        "monitor_errors": 0,
+        "invalid_event_rows": 0,
+        "hard_problem_events": 0,
+        "log_hard_matches": 0,
+        "process_hard_failures": 0,
+        "total": 0,
+    }
+    assert brief["attention_sources"] == {
+        "problem_events": 2,
+        "log_attention_matches": 1,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 3,
+    }
     assert brief["monitor"]["live_events"] == 2
     assert brief["logs"] == {
         "files_scanned": 1,
