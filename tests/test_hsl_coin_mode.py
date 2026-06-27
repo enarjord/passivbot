@@ -299,11 +299,25 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     assert events[1].reason_code == "history_loaded"
     assert events[1].data["symbols"] == 1
     assert events[1].data["pairs"] == 1
+    assert events[1].data["held_pairs"] == 1
+    assert events[1].data["cooldown_pairs"] == 0
+    assert events[1].data["required_pairs"] == 1
     assert events[1].data["timeline_rows"] == 2
     assert events[2].status == "succeeded"
     assert events[2].reason_code == "coin_history_replay_completed"
     assert events[2].data["rows"] == 2
+    assert events[2].data["applied_rows"] == 2
     assert events[2].data["pairs"] == 1
+    assert events[2].data["held_pairs"] == 1
+    assert events[2].data["cooldown_pairs"] == 0
+    assert events[2].data["required_pairs"] == 1
+    assert events[2].data["skipped_pairs"] == 0
+    assert events[2].data["timeline_rows"] == 2
+    assert events[2].data["fill_events"] == 0
+    assert events[2].data["panic_events"] == 0
+    assert events[2].data["rows_per_second"] is not None
+    assert events[2].data["full_elapsed_s"] is not None
+    assert events[2].data["startup_blocking_elapsed_s"] is not None
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

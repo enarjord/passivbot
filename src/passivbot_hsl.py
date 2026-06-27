@@ -2387,8 +2387,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         lookback_ms = self._equity_hard_stop_lookback_ms()
         lookback_start_ms = None if lookback_ms is None else now_ms - int(lookback_ms)
         symbols = set(self.positions.keys())
+        current_position_pairs: set[tuple[str, str]] = set()
         required_replay_pairs: set[tuple[str, str]] = set()
         required_replay_start_ts: dict[tuple[str, str], int] = {}
+        panic_replay_pairs: set[tuple[str, str]] = set()
         skipped_unsupported_symbols: set[str] = set()
 
         def remember_required_replay_start(
@@ -2406,6 +2408,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             for pside in self._hsl_psides():
                 if self._equity_hard_stop_has_open_position_symbol(pside, str(symbol)):
                     symbols.add(str(symbol))
+                    current_position_pairs.add((pside, str(symbol)))
                     required_replay_pairs.add((pside, str(symbol)))
         for event in fill_events:
             ts = _equity_hard_stop_fill_timestamp_ms(event)
@@ -2458,6 +2461,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 skipped_unsupported_symbols.add(symbol)
                 continue
             symbols.add(symbol)
+            panic_replay_pairs.add((pside, symbol))
             required_replay_pairs.add((pside, symbol))
             remember_required_replay_start(pside, symbol, minute_ts)
             key = (pside, symbol, minute_ts)
@@ -2498,6 +2502,11 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             if self._equity_hard_stop_coin_active_pside(pside)
             for symbol in sorted(symbols)
         ]
+        active_pair_set = set(active_pairs)
+        active_held_pairs = active_pair_set.intersection(current_position_pairs)
+        active_panic_pairs = active_pair_set.intersection(panic_replay_pairs)
+        active_required_pairs = active_pair_set.intersection(required_replay_pairs)
+        pair_rows_applied: dict[tuple[str, str], int] = {}
         logging.info(
             "[risk] HSL coin history reconstruction loaded | symbols=%d pairs=%d rows=%d fills=%d panic_events=%d",
             len(symbols),
@@ -2514,6 +2523,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 "stage": "loaded",
                 "symbols": len(symbols),
                 "pairs": len(active_pairs),
+                "held_pairs": len(active_held_pairs),
+                "cooldown_pairs": len(active_panic_pairs),
+                "required_pairs": len(active_required_pairs),
                 "timeline_rows": len(timeline_rows),
                 "fill_events": len(fill_events),
                 "panic_events": len(panic_flatten_events),
@@ -2536,6 +2548,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             if not force and now_s - last_progress_log_s < 15.0:
                 return
             last_progress_log_s = now_s
+            elapsed_s = max(0.0, now_s - replay_started_s)
+            rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
             logging.info(
                 "[risk] HSL coin history reconstruction progress | pair=%d/%d pside=%s symbol=%s applied_rows=%d total_rows=%d elapsed=%.1fs",
                 pair_idx,
@@ -2554,9 +2568,18 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     "stage": "pair_replay",
                     "pair_idx": int(pair_idx),
                     "pairs": len(active_pairs),
+                    "held_pairs": len(active_held_pairs),
+                    "cooldown_pairs": len(active_panic_pairs),
+                    "required_pairs": len(active_required_pairs),
+                    "timeline_rows": len(timeline_rows),
                     "applied_rows": int(applied_rows),
                     "total_applied_rows": int(rows),
-                    "elapsed_s": round(now_s - replay_started_s, 3),
+                    "rows_per_second": round(rows_per_second, 3)
+                    if rows_per_second is not None
+                    else None,
+                    "is_held_pair": (pside, symbol) in active_held_pairs,
+                    "is_cooldown_pair": (pside, symbol) in active_panic_pairs,
+                    "elapsed_s": round(elapsed_s, 3),
                 },
                 pside=pside,
                 symbol=symbol,
@@ -2738,6 +2761,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     )
                     applied_rows += 1
                     rows += 1
+                    pair_rows_applied[(pside, symbol)] = int(applied_rows)
                     if marker is None:
                         continue
                     stop_ts = int(marker["timestamp"])
@@ -2911,22 +2935,40 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         current_metrics,
                         realized_pnl_total=float(self._equity_hard_stop_realized_pnl_now()),
                     )
+                pair_rows_applied[(pside, symbol)] = int(applied_rows)
                 log_replay_progress(pair_idx, pside, symbol, applied_rows)
         self._equity_hard_stop_coin_initialized = True
+        elapsed_s = max(0.0, time.monotonic() - replay_started_s)
+        rows_per_second = float(rows) / elapsed_s if elapsed_s > 0.0 else None
+        skipped_pairs = sum(1 for pair in active_pairs if pair_rows_applied.get(pair, 0) == 0)
         logging.info(
             "[risk] HSL coin history reconstruction completed | rows=%d pairs=%d elapsed=%.1fs",
             rows,
             len(active_pairs),
-            time.monotonic() - replay_started_s,
+            elapsed_s,
         )
         _emit_hsl_replay_event(
             self,
             "hsl.replay.completed",
             {
                 "signal_mode": "coin",
+                "stage": "full_replay",
                 "rows": int(rows),
+                "applied_rows": int(rows),
                 "pairs": len(active_pairs),
-                "elapsed_s": round(time.monotonic() - replay_started_s, 3),
+                "held_pairs": len(active_held_pairs),
+                "cooldown_pairs": len(active_panic_pairs),
+                "required_pairs": len(active_required_pairs),
+                "skipped_pairs": int(skipped_pairs),
+                "timeline_rows": len(timeline_rows),
+                "fill_events": len(fill_events),
+                "panic_events": len(panic_flatten_events),
+                "rows_per_second": round(rows_per_second, 3)
+                if rows_per_second is not None
+                else None,
+                "full_elapsed_s": round(elapsed_s, 3),
+                "startup_blocking_elapsed_s": round(elapsed_s, 3),
+                "elapsed_s": round(elapsed_s, 3),
             },
             status="succeeded",
             reason_code="coin_history_replay_completed",
