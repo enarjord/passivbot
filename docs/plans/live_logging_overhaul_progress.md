@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `4eef3572` merge of PR #751, `Add endpoint latency health to ticker probe`.
+- `0f1afc49` merge of PR #753, `Add exchange surface health to ticker probe`.
 
 Current review gate:
 
@@ -1579,6 +1579,52 @@ VPS5 deployment status:
   `latest_terminal_reason=short_page`, and
   `rate_limit_health.endpoint_counts.fetch_my_trades_first_symbol=1`.
 
+### PR #751: Ticker Probe Endpoint Latency Health
+
+- Branch: `codex/v8-ticker-probe-endpoint-latency-health`.
+- Scope: read-only active exchange health probe.
+- Result: `passivbot tool ticker-endpoint-probe` now derives
+  `endpoint_latency_health` from already-recorded outcomes. The summary groups
+  endpoint attempts, including open-orders fallback attempts and fill-history
+  pages, by endpoint/category with success/failure counts, latency summaries,
+  error-type counts, and slowest endpoint metadata.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  ticker-probe tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A settled smoke at `4eef3572` reported all five expected bots
+  running, no hard failures, no log hard matches, no failed remote calls, no
+  failed account-critical remote calls, and clean tracked repository state. A
+  one-repeat authenticated Binance probe for `BTC/USDT:USDT` validated
+  `endpoint_latency_health.endpoint_count=11`, `total=12`, `succeeded=11`,
+  `failed=1`, `slowest.endpoint=load_markets`, and the expected Binance
+  all-symbol open-orders warning as one `fetch_open_orders` failure while
+  account-critical health remained successful through symbol fallback.
+
+### PR #753: Ticker Probe Exchange Surface Health
+
+- Branch: `codex/v8-ticker-probe-exchange-surface-health`.
+- Scope: read-only active exchange health probe.
+- Result: `passivbot tool ticker-endpoint-probe` now derives
+  `exchange_surface_health` from already-recorded open-orders, time-sync,
+  fill-history, and OHLCV-tail outcomes. The summary adds exchange/user notes
+  for surface quirks such as open-orders symbol fallback, unsupported time sync,
+  fill-history terminal pagination reason, and OHLCV tail shape without adding
+  exchange calls.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  ticker-probe tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A one-repeat authenticated Binance probe for `BTC/USDT:USDT`
+  validated `exchange_surface_health.notes=[fill_history_short_page,
+  open_orders_all_symbols_failed, open_orders_symbol_fallback_required]`,
+  `open_orders.mode_counts.symbol_fallback=1`,
+  `fill_history.terminal_reasons.short_page=1`, and collection-level exchange
+  note counts. A settled 5-minute smoke at `0f1afc49` reported all five
+  expected bots running, no hard failures, no log hard/attention matches, no
+  failed remote calls, no failed account-critical remote calls, and clean
+  tracked repository state.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1592,8 +1638,10 @@ VPS5 deployment status:
    fill-history sample health. PR #747 added rate-limit pressure estimates.
    PR #749 added opt-in bounded fill pagination sampling. PR #751 added
    `endpoint_latency_health` summaries from existing probe outcomes, including
-   open-orders fallback attempts and fill-history pages. Remaining useful
-   slices include deeper exchange-specific coverage checks.
+   open-orders fallback attempts and fill-history pages. PR #753 added
+   `exchange_surface_health` notes over the existing endpoint outcomes.
+   Remaining useful slices should be driven by a concrete live exchange gap
+   rather than broad probe expansion.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
