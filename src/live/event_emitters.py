@@ -2864,6 +2864,90 @@ def _fill_coverage_summary(status: Any) -> dict[str, Any]:
     return data
 
 
+def _fill_refresh_debug_payload(
+    *,
+    coverage_before: Any = None,
+    coverage_after: Any = None,
+    event_count_before: int | None = None,
+    event_count_after: int | None = None,
+    new_count: int | None = None,
+    enriched_count: int | None = None,
+    pending_pnl_count: int | None = None,
+) -> dict[str, Any]:
+    before_count = _safe_int(event_count_before)
+    after_count = _safe_int(event_count_after)
+    new_value = _safe_int(new_count)
+    enriched_value = _safe_int(enriched_count)
+    pending_value = _safe_int(pending_pnl_count)
+    data: dict[str, Any] = {
+        "coverage_before_keys": _mapping_key_sample(coverage_before),
+        "coverage_after_keys": _mapping_key_sample(coverage_after),
+        "event_count_before": before_count,
+        "event_count_after": after_count,
+        "new_count": new_value,
+        "enriched_count": enriched_value,
+        "pending_pnl_count": pending_value,
+    }
+    if before_count is not None and after_count is not None:
+        data["event_count_delta"] = int(after_count) - int(before_count)
+    if isinstance(coverage_before, dict):
+        data["coverage_before_ready"] = bool(coverage_before.get("ready", False))
+        reason = coverage_before.get("reason")
+        if reason is not None:
+            data["coverage_before_reason"] = str(reason)[:160]
+    if isinstance(coverage_after, dict):
+        data["coverage_after_ready"] = bool(coverage_after.get("ready", False))
+        reason = coverage_after.get("reason")
+        if reason is not None:
+            data["coverage_after_reason"] = str(reason)[:160]
+    if isinstance(coverage_before, dict) and isinstance(coverage_after, dict):
+        before_ready = bool(coverage_before.get("ready", False))
+        after_ready = bool(coverage_after.get("ready", False))
+        if before_ready != after_ready:
+            data["coverage_ready_transition"] = f"{before_ready}->{after_ready}"
+    return {key: value for key, value in data.items() if value not in (None, [], {})}
+
+
+def _best_effort_fill_refresh_debug_payload(**kwargs: Any) -> dict[str, Any] | None:
+    try:
+        return _fill_refresh_debug_payload(**kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to build fill refresh debug payload: %s", exc)
+        return None
+
+
+def _fill_ingested_debug_payload(
+    event: Any,
+    *,
+    payload: dict | None = None,
+) -> dict[str, Any]:
+    fill_payload = payload if isinstance(payload, dict) else {}
+    source_ids = list(getattr(event, "source_ids", []) or [])
+    data: dict[str, Any] = {
+        "payload_keys": _mapping_key_sample(fill_payload),
+        "payload_key_count": len(fill_payload),
+        "source_ids_count": len(source_ids),
+        "has_client_order_id": bool(getattr(event, "client_order_id", None)),
+        "has_fee": getattr(event, "fee", None) is not None,
+        "has_fee_paid": getattr(event, "fee_paid", None) is not None,
+        "has_pnl": getattr(event, "pnl", None) is not None,
+        "pnl_status": str(getattr(event, "pnl_status", "") or "")[:80] or None,
+    }
+    return {key: value for key, value in data.items() if value not in (None, [], {})}
+
+
+def _best_effort_fill_ingested_debug_payload(
+    event: Any,
+    *,
+    payload: dict | None = None,
+) -> dict[str, Any] | None:
+    try:
+        return _fill_ingested_debug_payload(event, payload=payload)
+    except Exception as exc:
+        logging.debug("[event] failed to build fill ingested debug payload: %s", exc)
+        return None
+
+
 def _emit_fills_refresh_summary_event_unchecked(
     bot: Any,
     *,
@@ -2925,6 +3009,19 @@ def _emit_fills_refresh_summary_event_unchecked(
     if error is not None:
         data["error_type"] = type(error).__name__
         data["error"] = _sanitize_remote_text(error, max_len=500)
+    if live_event_debug_profile_enabled(bot, "fills"):
+        debug = _best_effort_fill_refresh_debug_payload(
+            coverage_before=coverage_before,
+            coverage_after=coverage_after,
+            event_count_before=event_count_before,
+            event_count_after=event_count_after,
+            new_count=new_count,
+            enriched_count=enriched_count,
+            pending_pnl_count=pending_pnl_count,
+        )
+        if debug:
+            data["debug_profile"] = "fills"
+            data["debug"] = debug
     _safe_emit(
         bot,
         EventTypes.FILLS_REFRESH_SUMMARY,
@@ -2965,6 +3062,11 @@ def emit_fill_ingested_event(bot: Any, event: Any, *, payload: dict | None = Non
         for key in ("qty", "price", "pnl", "fee", "pb_order_type", "timestamp"):
             if key in fill_payload and data.get(key) is None:
                 data[key] = fill_payload.get(key)
+        if live_event_debug_profile_enabled(bot, "fills"):
+            debug = _best_effort_fill_ingested_debug_payload(event, payload=fill_payload)
+            if debug:
+                data["debug_profile"] = "fills"
+                data["debug"] = debug
         bot._emit_live_event(
             EventTypes.FILL_INGESTED,
             level="info",

@@ -13,6 +13,9 @@ All notable user-facing changes will be documented in this file.
 - Hardened recent live-ops tooling and debug-profile diagnostics by redacting
   shareable path fields consistently, keeping Rust debug sample construction
   best-effort, and scoping EMA debug enrichment to the `ema` profile only.
+- Added a `fills` live-event debug profile with bounded fill refresh and fill
+  ingestion shape metadata, without raw fill/source payloads or default console
+  changes.
 - Added v2 candle coverage windows and suspicious interior gap samples to
   `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
   cache artifacts.
