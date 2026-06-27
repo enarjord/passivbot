@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `4130155e1` merge of PR #745, `Add ticker probe fill history health`.
+- `74270454a` merge of PR #747, `Add ticker probe rate limit health`.
 
 Current review gate:
 
@@ -373,6 +373,17 @@ VPS5 deployment status:
   order-book/OHLCV/time-sync probes skipped, validated
   `fill_history_health.total=1`, `succeeded=1`, `failed=0`,
   `latest_symbol=BTC/USDT:USDT`, and `latest_trade_count=0`.
+- PR #747 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only changes read-only active probe
+  projections and docs. A brief smoke at `74270454` reported `ok=true`,
+  `hard_failures=0`, all five expected bots running, clean tracked repository
+  state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. A one-repeat authenticated
+  `ticker-endpoint-probe` on `binance_01` for `BTC/USDT:USDT`, with
+  order-book/OHLCV/time-sync probes skipped, validated
+  `rate_limit_health.observed_call_count=12`, `public_call_count=6`,
+  `private_call_count=5`, `concurrent_request_count=1`,
+  `exchange_rate_limit_ms=50`, and `estimated_min_serial_ms=600`.
 
 ## Phase Checklist
 
@@ -385,7 +396,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample health summaries and account-only mode, `live-config-preflight` offline config summaries | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries | Cross-bot incident workflow, safe restart orchestration, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -1523,6 +1534,28 @@ VPS5 deployment status:
   `fill_history_health.total=1`, `succeeded=1`, `failed=0`,
   `latest_symbol=BTC/USDT:USDT`, and `latest_trade_count=0`.
 
+### PR #747: Ticker Probe Rate Limit Health
+
+- Branch: `codex/v8-ticker-probe-rate-limit-health`.
+- Scope: read-only active exchange health probe.
+- Result: `passivbot tool ticker-endpoint-probe` now derives
+  `rate_limit_health` from existing probe outcomes and CCXT
+  `rateLimit`/`enableRateLimit` metadata. The summary reports observed
+  public/private/concurrent call counts, endpoint counts, configured sleep, and
+  an estimated minimum serial duration without adding exchange calls or
+  enforcing throttles.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  ticker-probe tests, compileall, `git diff --check`, and the touched-file
+  silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A brief smoke at `74270454` reported all five expected bots
+  running, no hard failures, no log hard matches, no failed remote calls, no
+  failed account-critical remote calls, and clean tracked repository state. A
+  one-repeat authenticated Binance probe for `BTC/USDT:USDT` validated
+  `rate_limit_health.observed_call_count=12`, `public_call_count=6`,
+  `private_call_count=5`, `concurrent_request_count=1`,
+  `exchange_rate_limit_ms=50`, and `estimated_min_serial_ms=600`.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1533,8 +1566,8 @@ VPS5 deployment status:
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. PR #741 added
    clock-skew health. PR #743 added candle freshness health. PR #745 added
-   fill-history sample health. Remaining useful slices include rate-limit
-   behavior and full fill pagination coverage.
+   fill-history sample health. PR #747 added rate-limit pressure estimates.
+   Remaining useful slices include full fill pagination coverage.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
