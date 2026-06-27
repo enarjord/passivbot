@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added v2 candle coverage windows and suspicious interior gap samples to
+  `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
+  cache artifacts.
 - Added `passivbot tool live-restart-smoke-plan` for read-only dry-run restart
   smoke planning from a tmuxp-style supervisor config, with explicit
   non-execution metadata and rejected execution flags.
