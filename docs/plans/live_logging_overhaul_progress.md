@@ -1556,6 +1556,19 @@ VPS5 deployment status:
   `private_call_count=5`, `concurrent_request_count=1`,
   `exchange_rate_limit_ms=50`, and `estimated_min_serial_ms=600`.
 
+### In Flight: Ticker Probe Fill Pagination Sample
+
+- Branch: `codex/v8-ticker-probe-fill-pagination-sample`.
+- Scope: read-only active exchange health probe.
+- Intended result: `passivbot tool ticker-endpoint-probe` keeps the default
+  one-call first-symbol `fetch_my_trades` sample, and adds opt-in bounded
+  pagination through `--fill-history-pages` and `--fill-history-page-limit`.
+  The probe records only page/count/timestamp/latency summaries and terminal
+  pagination reason, with no raw trade/order ids.
+- Validation target: focused ticker-probe tests, compileall, `git diff --check`,
+  touched-file silent-handling audit, reviewer approval, then a low-rate VPS5
+  authenticated probe after merge.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug

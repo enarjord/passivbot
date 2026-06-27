@@ -165,10 +165,12 @@ Related detailed plans:
    `candle_freshness_health`, derived from the existing OHLCV tail probe
    results without adding exchange calls. PR #745 adds `fill_history_health`,
    derived from the existing first-symbol `fetch_my_trades` sample without raw
-   trade/order ids or extra pagination calls.
+   trade/order ids or extra pagination calls. Branch
+   `codex/v8-ticker-probe-fill-pagination-sample` adds an opt-in bounded
+   `--fill-history-pages` sample while keeping the default one-call behavior.
 
    Add/refine explicit read-only probes for each configured exchange/account
-   before or during smoke: rate-limit behavior, full fill pagination coverage,
+   before or during smoke: deeper bounded fill-pagination samples,
    and basic endpoint latency. The passive smoke report now also exposes top-level
    remote-call health
    success/failure/throttle totals and a filtered
