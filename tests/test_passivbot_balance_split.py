@@ -5713,6 +5713,51 @@ def test_staged_planner_preconditions_validate_candles_at_surface_stamp_time():
     assert details["missing"] == []
 
 
+def test_staged_planner_preconditions_allow_tail_fallback_shape_recovery():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    symbol = "BTC/USDT:USDT"
+    stamp_ms = 120_500
+    stamped_signature = (
+        (symbol, 120_000, "tail_gap_fallback", 60_000, 60_000),
+    )
+    bot.active_symbols = [symbol]
+    bot.positions = {symbol: {"long": {"size": 1.0}, "short": {"size": 0.0}}}
+    bot.open_orders = {}
+    bot.PB_modes = {"long": {}, "short": {}}
+    bot.cm = SimpleNamespace(
+        get_completed_candle_health=lambda _symbol, windows=None, now_ms=None: {
+            "ok": True,
+            "timeframes": {
+                "1m": {
+                    "coverage_ok": True,
+                    "latest_expected_ts": 120_000,
+                    "last_cached_ts": 120_000,
+                    "missing_candles": 0,
+                    "runtime_synthetic_count": 0,
+                }
+            },
+        }
+    )
+
+    bot._begin_authoritative_refresh_epoch()
+    for surface in ACCOUNT_SURFACES:
+        bot._record_authoritative_surface(surface, (surface, "fresh"))
+    bot.freshness_ledger.stamp(
+        "completed_candles",
+        stamped_signature,
+        now_ms=stamp_ms,
+        epoch=bot._authoritative_refresh_epoch,
+    )
+
+    ok, details = bot._staged_planner_precondition_state(include_market_snapshot=False)
+
+    assert ok is True
+    assert details["missing"] == []
+
+
 def test_build_staged_planning_snapshot_captures_exact_surface_contract():
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {"user": "tester"}}

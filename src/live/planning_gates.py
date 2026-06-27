@@ -75,7 +75,15 @@ def staged_planner_precondition_state(
             expected_symbols, now_ms=candle_check_ms
         )
         stamped_signature = ledger.surface_signature("completed_candles")
-        if candle_missing or stamped_signature != signature:
+        equivalent = (
+            bot._completed_candle_signatures_equivalent(
+                signature,
+                stamped_signature,
+            )
+            if hasattr(bot, "_completed_candle_signatures_equivalent")
+            else stamped_signature == signature
+        )
+        if candle_missing or not equivalent:
             missing.append("completed_candles")
             invalid["completed_candles"] = candle_missing or (
                 bot._completed_candle_signature_mismatch_details(
