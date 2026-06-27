@@ -248,6 +248,43 @@ def _event_cycle_id(live_event: dict[str, Any]) -> str | None:
     return str(cycle_id)
 
 
+def _cycle_number(cycle_id: str | None) -> int | None:
+    if not cycle_id:
+        return None
+    text = str(cycle_id)
+    if text.startswith("cy_"):
+        text = text[3:]
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return None
+
+
+class _CycleScopeTracker:
+    def __init__(self) -> None:
+        self.generation_by_bot: dict[str, int] = {}
+        self.last_cycle_number_by_bot: dict[str, int] = {}
+
+    def observe(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> int:
+        bot = _bot_key(row, live_event)
+        generation = int(self.generation_by_bot.get(bot, 0))
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type == "bot.started":
+            generation += 1
+            self.generation_by_bot[bot] = generation
+            self.last_cycle_number_by_bot.pop(bot, None)
+            return generation
+        if event_type == "cycle.started":
+            cycle_number = _cycle_number(_event_cycle_id(live_event))
+            if cycle_number is not None:
+                previous = self.last_cycle_number_by_bot.get(bot)
+                if previous is not None and cycle_number <= previous:
+                    generation += 1
+                    self.generation_by_bot[bot] = generation
+                self.last_cycle_number_by_bot[bot] = cycle_number
+        return generation
+
+
 def _minute_boundary_ms(timestamp_ms: int) -> int:
     return int(timestamp_ms) - (int(timestamp_ms) % 60_000)
 
@@ -278,12 +315,18 @@ def _decision_trading_impact(milestone: str) -> str:
 class _DecisionBoundaryAccumulator:
     def __init__(self) -> None:
         self.groups: dict[tuple[str, str], _MetricGroup] = {}
-        self.cycle_boundaries: dict[tuple[str, str], int] = {}
-        self.cycles_seen: set[tuple[str, str]] = set()
-        self.cycles_with_write: set[tuple[str, str]] = set()
+        self.cycle_boundaries: dict[tuple[str, int, str], int] = {}
+        self.cycles_seen: set[tuple[str, int, str]] = set()
+        self.cycles_with_write: set[tuple[str, int, str]] = set()
         self.events_without_cycle_id = 0
 
-    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        cycle_scope: int,
+    ) -> None:
         event_type = str(live_event.get("event_type") or row.get("kind") or "")
         milestone = _decision_milestone(event_type)
         if milestone is None:
@@ -296,7 +339,7 @@ class _DecisionBoundaryAccumulator:
             self.events_without_cycle_id += 1
             return
         bot = _bot_key(row, live_event)
-        cycle_key = (bot, cycle_id)
+        cycle_key = (bot, int(cycle_scope), cycle_id)
         self.cycles_seen.add(cycle_key)
         if milestone == "cycle_started" or cycle_key not in self.cycle_boundaries:
             self.cycle_boundaries[cycle_key] = _minute_boundary_ms(timestamp_ms)
@@ -333,6 +376,164 @@ class _DecisionBoundaryAccumulator:
             "cycles": len(self.cycles_seen),
             "cycles_with_write": len(self.cycles_with_write),
             "events_without_cycle_id": int(self.events_without_cycle_id),
+            "total_groups": len(groups),
+            "groups_truncated": len(groups) > int(group_limit),
+            "groups": groups[: max(0, int(group_limit))],
+        }
+
+
+def _cycle_id_from_snapshot_data(data: dict[str, Any]) -> str | None:
+    cycle_id = data.get("cycle_id")
+    if cycle_id is None:
+        return None
+    text = str(cycle_id)
+    if text.startswith("cy_"):
+        return text
+    return f"cy_{text}"
+
+
+class _InputStalenessAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str, str], _MetricGroup] = {}
+        self.packet_received_ts: dict[tuple[str, int, str, str], int] = {}
+        self.snapshot_ts_by_cycle: dict[tuple[str, int, str], int] = {}
+        self.ema_ts_by_cycle: dict[tuple[str, int, str], int] = {}
+        self.snapshots_seen = 0
+        self.rust_calls_seen = 0
+        self.packet_refs_missing = 0
+        self.rust_calls_missing_snapshot = 0
+        self.rust_calls_missing_ema = 0
+
+    def _add_group(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        operation: str,
+        value_ms: int,
+        timing_kind: str,
+        trading_impact: str,
+    ) -> None:
+        bot = _bot_key(row, live_event)
+        group_key = (bot, operation, timing_kind)
+        group = self.groups.get(group_key)
+        if group is None:
+            group = _MetricGroup(
+                bot=bot,
+                operation=operation,
+                component="input_staleness",
+                event_type=str(live_event.get("event_type") or row.get("kind") or "unknown"),
+                trading_impact=trading_impact,
+                timing_kind=timing_kind,
+            )
+            self.groups[group_key] = group
+        group.add(value_ms, row=row, live_event=live_event)
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        cycle_scope: int,
+    ) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+        timestamp_ms = _record_ts(row)
+        if timestamp_ms is None:
+            return
+        bot = _bot_key(row, live_event)
+        if event_type == "data_packet.updated":
+            kind = data.get("kind")
+            revision = data.get("revision")
+            received_ts = _non_negative_ms(data.get("response_received_ts_ms"))
+            if kind is None or revision is None or received_ts is None:
+                return
+            self.packet_received_ts[(bot, int(cycle_scope), str(kind), str(revision))] = int(
+                received_ts
+            )
+            return
+        if event_type == "snapshot.built":
+            self.snapshots_seen += 1
+            cycle_id = _cycle_id_from_snapshot_data(data)
+            if cycle_id:
+                self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+            packets = data.get("data_packets")
+            if not isinstance(packets, list):
+                return
+            for packet in packets:
+                if not isinstance(packet, dict):
+                    continue
+                kind = packet.get("kind")
+                revision = packet.get("revision")
+                if kind is None or revision is None:
+                    continue
+                received_ts = self.packet_received_ts.get(
+                    (bot, int(cycle_scope), str(kind), str(revision))
+                )
+                if received_ts is None:
+                    self.packet_refs_missing += 1
+                    continue
+                self._add_group(
+                    row=row,
+                    live_event=live_event,
+                    operation=f"input_staleness.data_packet.{kind}",
+                    value_ms=max(0, int(timestamp_ms) - int(received_ts)),
+                    timing_kind="age_at_snapshot",
+                    trading_impact="blocks_exchange_actions",
+                )
+            return
+        if event_type == "ema.bundle.completed":
+            cycle_id = _event_cycle_id(live_event)
+            if cycle_id:
+                self.ema_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+            return
+        if event_type == "rust_orchestrator.called":
+            self.rust_calls_seen += 1
+            cycle_id = _event_cycle_id(live_event)
+            if not cycle_id:
+                return
+            snapshot_ts = self.snapshot_ts_by_cycle.get((bot, int(cycle_scope), cycle_id))
+            if snapshot_ts is None:
+                self.rust_calls_missing_snapshot += 1
+            else:
+                self._add_group(
+                    row=row,
+                    live_event=live_event,
+                    operation="input_staleness.snapshot_to_rust",
+                    value_ms=max(0, int(timestamp_ms) - int(snapshot_ts)),
+                    timing_kind="age_at_rust_call",
+                    trading_impact="blocks_cycle_decision",
+                )
+            ema_ts = self.ema_ts_by_cycle.get((bot, int(cycle_scope), cycle_id))
+            if ema_ts is None:
+                self.rust_calls_missing_ema += 1
+            else:
+                self._add_group(
+                    row=row,
+                    live_event=live_event,
+                    operation="input_staleness.ema_bundle_to_rust",
+                    value_ms=max(0, int(timestamp_ms) - int(ema_ts)),
+                    timing_kind="age_at_rust_call",
+                    trading_impact="blocks_indicator_readiness",
+                )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = sorted(
+            (group.to_dict() for group in self.groups.values()),
+            key=lambda item: (
+                -int(item.get("p95_ms", 0) or 0),
+                -int(item.get("max_ms", 0) or 0),
+                -int(item.get("count", 0) or 0),
+                str(item.get("bot") or ""),
+                str(item.get("operation") or ""),
+            ),
+        )
+        return {
+            "snapshots_seen": int(self.snapshots_seen),
+            "rust_calls_seen": int(self.rust_calls_seen),
+            "packet_refs_missing": int(self.packet_refs_missing),
+            "rust_calls_missing_snapshot": int(self.rust_calls_missing_snapshot),
+            "rust_calls_missing_ema": int(self.rust_calls_missing_ema),
             "total_groups": len(groups),
             "groups_truncated": len(groups) > int(group_limit),
             "groups": groups[: max(0, int(group_limit))],
@@ -576,6 +777,8 @@ def build_live_performance_report(
 
     accumulator = _PerformanceAccumulator()
     decision_boundary = _DecisionBoundaryAccumulator()
+    input_staleness = _InputStalenessAccumulator()
+    cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
     legacy_events = 0
@@ -640,6 +843,7 @@ def build_live_performance_report(
                             continue
                         event_window["events_considered"] += 1
                     event_type = str(live_event.get("event_type") or row.get("kind") or "unknown")
+                    cycle_scope = cycle_scope_tracker.observe(row=row, live_event=live_event)
                     event_types[event_type] += 1
                     bots[_bot_key(row, live_event)] += 1
                     _add_event_timings(
@@ -647,7 +851,16 @@ def build_live_performance_report(
                         row=row,
                         live_event=live_event,
                     )
-                    decision_boundary.add(row=row, live_event=live_event)
+                    decision_boundary.add(
+                        row=row,
+                        live_event=live_event,
+                        cycle_scope=cycle_scope,
+                    )
+                    input_staleness.add(
+                        row=row,
+                        live_event=live_event,
+                        cycle_scope=cycle_scope,
+                    )
         except OSError as exc:
             issues.append(
                 {
@@ -680,6 +893,7 @@ def build_live_performance_report(
         ],
         "performance": accumulator.to_dict(group_limit=group_limit),
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
+        "input_staleness": input_staleness.to_dict(group_limit=group_limit),
     }
     if window_enabled:
         report["event_window"] = event_window
@@ -726,6 +940,25 @@ def summarize_live_performance_report(
             "total_groups": int(decision_lag.get("total_groups") or 0),
             "groups_truncated": bool(decision_lag.get("groups_truncated")),
             "groups": decision_groups[: max(0, int(group_limit))],
+        }
+    if isinstance(report.get("input_staleness"), dict):
+        input_staleness = report["input_staleness"]
+        staleness_groups = (
+            input_staleness.get("groups")
+            if isinstance(input_staleness.get("groups"), list)
+            else []
+        )
+        summary["input_staleness"] = {
+            "snapshots_seen": int(input_staleness.get("snapshots_seen") or 0),
+            "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
+            "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),
+            "rust_calls_missing_snapshot": int(
+                input_staleness.get("rust_calls_missing_snapshot") or 0
+            ),
+            "rust_calls_missing_ema": int(input_staleness.get("rust_calls_missing_ema") or 0),
+            "total_groups": int(input_staleness.get("total_groups") or 0),
+            "groups_truncated": bool(input_staleness.get("groups_truncated")),
+            "groups": staleness_groups[: max(0, int(group_limit))],
         }
     if report.get("event_window") is not None:
         summary["event_window"] = report.get("event_window")

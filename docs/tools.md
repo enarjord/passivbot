@@ -174,7 +174,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `--bot EXCHANGE/USER`, `--exchange EXCHANGE`, or `--user USER` to focus one account or
   exchange. The report includes decision-boundary lag groups showing how far after the
   whole-minute boundary cycles reached start, Rust planning, action planning, writes,
-  confirmations, and completion.
+  confirmations, and completion. It also includes an input-staleness section derived from
+  existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
+  snapshot build plus snapshot/EMA age at the Rust call boundary when those events are present.
 
 ## Exchange Helpers
 

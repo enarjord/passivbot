@@ -9,6 +9,13 @@ exchange APIs, network latency, rate limits, cache repair, order confirmation,
 and partial/stale data. The goal is to measure every gap, reduce avoidable
 latency, and make unavoidable latency explicit in the event stream.
 
+The central readiness rule is speed with proof, not speed by assumption. A
+restart may use cached data and checkpoints aggressively only when metadata
+proves coverage, freshness, config compatibility, and code/schema
+compatibility. If proof is missing, the bot should perform the smallest exact
+repair needed for the affected order class instead of falling back to broad
+blocking reconstruction.
+
 ## Current Evidence
 
 Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
@@ -59,10 +66,35 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
      filters.
    - A follow-up slice added decision-boundary lag groups from current cycle
      events.
-   - Missing pieces: input staleness at decision time and complete coverage for
-     every order/write/shutdown stage.
+   - A follow-up slice added initial input-staleness groups from existing
+     account packet, snapshot, EMA bundle, and Rust-call events.
+   - Missing pieces: candle close age, market price age, config age, and
+     complete coverage for every order/write/shutdown stage.
 
 ## Performance Checklist
+
+### P0: Readiness Contract
+
+- [ ] Define readiness by order class, not by global startup completion.
+  - Protective panic/reduce-only paths require fresh account-critical surfaces
+    and the exact risk state for the held `coin+pside`.
+  - Fresh entries require the broader strategy-input contract, including
+    candidate freshness, EMA readiness, market snapshot freshness, and
+    cooldown/trading eligibility.
+  - Candidate-only stale inputs must not delay protective actions for held
+    positions.
+
+- [ ] Make every unavailable readiness state explicit.
+  - Use structured events for unavailable, degraded, repairing, ready, and
+    blocked states.
+  - Include reason codes, affected symbols/psides, source coverage, age, and
+    whether the state blocks protective actions, fresh entries, or diagnostics
+    only.
+
+- [ ] Do not use neutral defaults for trading-critical readiness.
+  - Missing HSL, fill, candle, account, or EMA proof must not become zero
+    drawdown, zero volume, empty fills, or ready-by-default.
+  - Allowed fallbacks must be bounded, observable, and covered by tests.
 
 ### P0: HSL Protective Readiness
 
@@ -109,9 +141,25 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Avoid repeated nested dict scans and repeated full fill-list scans per
     symbol.
 
+- [ ] Identify the current bottleneck with a focused profile.
+  - Measure time spent in fill indexing, candle/timeline construction, pair
+    iteration, EMA update, drawdown/tier update, event emission, and disk/cache
+    reads.
+  - Run the profile on a copied local monitor/cache fixture when possible so
+    optimization does not require live exchange access.
+  - Report rows/s and held-pair protective elapsed time before and after each
+    optimization.
+
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
     replay, realized-PnL peak/current calculations, and cooldown discovery.
+
+- [ ] Parallelize only where correctness boundaries are independent.
+  - Coin-mode held-pair protective reconstruction may classify independent
+    `coin+pside` pairs separately, as long as shared account/fill coverage
+    proof is established first.
+  - Do not allow broad flat-pair replay to block a held pair that already has
+    exact protective readiness.
 
 - [ ] Add structured replay timing fields.
   - Required fields: `timeline_rows`, `pairs`, `held_pairs`, `cooldown_pairs`,
@@ -147,6 +195,13 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Store checkpoint write timing and resume/fallback reason in structured
     events.
 
+- [ ] Keep checkpointing stateless in behavior.
+  - A checkpoint may accelerate reconstruction, but every trading decision must
+    still be reproducible from exchange state, config, cache coverage proof, and
+    replay after the checkpoint boundary.
+  - Checkpoint invalidation must be conservative: if any required proof is
+    ambiguous, discard or bypass the checkpoint and emit the reason.
+
 ### P1: General Live Performance Report
 
 - [x] Add `passivbot tool live-performance-report`.
@@ -177,9 +232,19 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - This is the main live-vs-backtest gap metric.
 
 - [ ] Report input staleness at decision time.
-  - Candle close age, EMA bundle age, account snapshot age, fills freshness,
-    open-order snapshot age, market price age, and config age.
+  - Initial report-derived support covers account packet age at snapshot build
+    and snapshot/EMA age at the Rust call boundary.
+  - Remaining staleness surfaces: candle close age, market price age, config
+    age, and richer symbol-scoped freshness where current events do not yet
+    carry enough timestamp proof.
   - Separate strict trading blockers from stale-but-acceptable forager inputs.
+
+- [ ] Add readiness SLA summaries.
+  - Report time from process start to account ready, held-position protective
+    ready, fresh-entry ready, first cycle started, first Rust call, first
+    exchange write eligibility, and full background replay complete.
+  - Group by exchange/user/bot so VPS-class regressions are visible before a
+    panic incident.
 
 ### P1: Runtime Cycle Speed
 
@@ -216,6 +281,12 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Cache proof failures should be explicit and targeted, not broad blocking
     repairs by default.
 
+- [ ] Add warm-restart acceptance fixtures.
+  - Restart after a short downtime with complete cache proof should skip broad
+    historical backfill and reach protective readiness quickly.
+  - Restart with one stale symbol should repair that symbol, not stall every
+    unrelated held position or the full forager universe.
+
 - [ ] Leave bots running after smoke/restart operations.
   - Operational automation should stop/restart only when needed and should
     verify all expected bots are running before handing control back.
@@ -251,3 +322,32 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
 - [ ] HSL checkpointing reduces warm-restart replay without weakening
   stateless correctness: checkpoints accelerate reconstruction only when their
   proof matches exchange/cache-derived inputs.
+
+## Suggested Implementation Order
+
+1. Add the missing performance/readiness metrics first, so every optimization
+   has before/after evidence.
+   - Decision-boundary lag and initial input staleness are started.
+   - Next metrics: HSL protective-ready elapsed time, full replay elapsed time,
+     cache proof decision, candle close age, market price age, and shutdown
+     blocking stage.
+
+2. Optimize HSL coin-mode protective readiness before broad full-replay speed.
+   - The highest-risk failure mode is delayed panic for a held position.
+   - Full universe replay and cooldown indexing still matter, but they should
+     not sit on the critical path for already-held positions.
+
+3. Add exact HSL replay profiling and lower-complexity replay.
+   - Profile first, then remove repeated scans and avoid pair-by-row nested
+     work where a sparse/event-driven pass is exact.
+   - Prove equivalence against current replay with fixtures before using it in
+     live.
+
+4. Add checkpoints after the exact optimized path is understood.
+   - Checkpoints should make warm restarts cheap, but they should not obscure
+     the baseline exact replay contract or make debugging harder.
+
+5. Keep the live performance report as the operator-facing scorecard.
+   - Every merged performance slice should update this checklist, add a
+     regression test where practical, and make the report more useful for the
+     next bottleneck.
