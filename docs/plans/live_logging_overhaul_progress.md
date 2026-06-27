@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f70434f3` after PR #780, `Add live decision boundary lag report`.
+- `b5e08986` after PR #782, `Add HSL replay timing fields`.
 
 Current review gate:
 
@@ -416,6 +416,28 @@ VPS5 deployment status:
   about `53s`. A 5-minute summary smoke at `f70434f3` reported `ok=true`,
   `hard_failures=0`, `logs.hard_matches=0`, all five expected bots matched,
   no failed remote calls, and no account-critical remote-call failures.
+- PR #781 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only extends read-only
+  performance-report tooling and docs. The new `input_staleness` section was
+  present in a filtered Binance report and showed high snapshot-to-Rust age
+  directly: `snapshot_to_rust` p95 about `192s`, account packet age at snapshot
+  p95 about `38-42s`, and EMA-bundle age p95 about `5s`. The first smoke after
+  deploy caught a real transient GateIO authoritative positions
+  `RequestTimeout`; a later settled 2-minute smoke at `cdb2f381` reported
+  `ok=true`, `hard_failures=0`, all five expected bots matched, no text-log
+  hard matches, no failed remote calls, and no failed account-critical remote
+  calls.
+- PR #782 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 with a bot restart because it changes live HSL replay event
+  producers. Shutdown was bounded but Kucoin/GateIO required a second Ctrl+C;
+  the session was reloaded from `/root/bots_vps5.yaml` and all five expected
+  bots were left running. Immediate and settled smokes at `b5e08986` reported
+  `ok=true`, `hard_failures=0`, no text-log hard matches, no failed remote
+  calls, and no failed account-critical remote calls. A direct
+  `live-event-query` confirmed new `hsl.replay.progress` fields on VPS5,
+  including `held_pairs`, `cooldown_pairs`, `required_pairs`,
+  `timeline_rows`, `applied_rows`, `total_applied_rows`, `rows_per_second`,
+  `is_held_pair`, and `is_cooldown_pair`.
 
 ## Phase Checklist
 
@@ -428,7 +450,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, and initial input-staleness support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, and initial input-staleness support, plus HSL replay pair/rate fields | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -1997,6 +2019,45 @@ VPS5 deployment status:
   and showed decision-boundary lag groups directly; the same smoke pass kept
   all five configured bots running with no hard failures and no failed
   account-critical remote calls.
+
+### PR #781: Live Input Staleness Report
+
+- Branch: `codex/v8-live-performance-input-staleness`.
+- Scope: read-only performance-report input-staleness aggregation, tests, and
+  docs.
+- Result: `passivbot tool live-performance-report` now includes
+  `input_staleness`, aggregating account packet age at snapshot build plus
+  snapshot/EMA-bundle age at the Rust call boundary when existing monitor
+  events provide enough proof. Joins are keyed by bot plus cycle generation so
+  reused cycle IDs after restart do not cross-link old snapshot/EMA state.
+- Review evidence: Claude and Hermes approved with no findings; CI was green;
+  targeted performance-report, event-query, and smoke-report tests,
+  py_compile, `git diff --check`, and a local compact CLI smoke passed.
+- VPS5 evidence: deployed at `cdb2f381` without bot restart because this is
+  read-only tooling. A filtered Binance performance summary returned
+  `ok=true` with `input_staleness` groups visible; a settled smoke after a
+  transient GateIO timeout reported all five expected bots running with no hard
+  failures and no failed account-critical remote calls.
+
+### PR #782: HSL Replay Timing Fields
+
+- Branch: `codex/v8-hsl-replay-timing-fields`.
+- Scope: HSL coin replay structured-event payload fields and tests only.
+- Result: `hsl.replay.progress`/`completed` payloads now expose bounded replay
+  context for performance work: held/cooldown/required pair counts,
+  `timeline_rows`, `applied_rows`, `total_applied_rows`, `skipped_pairs` on
+  completion, `rows_per_second`, `full_elapsed_s`,
+  `startup_blocking_elapsed_s`, and per-pair held/cooldown booleans. The
+  current full replay remains startup-blocking; true protective elapsed timing
+  still belongs to the future protective/full replay split.
+- Review evidence: Claude and Hermes approved with no findings; CI was green;
+  focused HSL tests, py_compile, `git diff --check`, and silent-handling audit
+  of touched files passed locally.
+- VPS5 evidence: deployed at `b5e08986` with a controlled restart from
+  `/root/bots_vps5.yaml`. Immediate and settled smokes reported all five
+  expected bots running with no hard failures and no failed account-critical
+  remote calls. Direct event query showed the new HSL replay fields in live
+  Binance, GateIO, and OKX replay progress events.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
