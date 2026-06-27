@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `31d42ea3` merge of PR #760, `Record staged readiness smoke progress`.
+- `d9188b64` merge of PR #762, `Tolerate completed candle fallback shape recovery`.
 
 Current review gate:
 
@@ -1722,6 +1722,31 @@ VPS5 deployment status:
   state, while `staged_readiness` had grown to `total=17`, `bots=4`,
   `latest_missing_surface_total=5`, and `latest_invalid_surface_total=5`.
 
+### PR #762: Completed Candle Fallback Shape Recovery
+
+- Branch: `codex/v8-staged-readiness-target-change`.
+- Scope: narrow staged-readiness runtime fix driven by the PR #759/#760 smoke
+  signal.
+- Result: completed-candle preconditions now compare canonical
+  `(symbol, completed_timestamp)` targets instead of exact signature tuple
+  shape, so a stamped bounded `tail_gap_fallback` signature may recover to
+  normal cache coverage without causing a spurious staged-planner defer. Symbol
+  set changes, target timestamp changes, and genuinely missing/stale completed
+  candles still defer.
+- Review evidence: Claude and Hermes approved; CI was green; focused staged
+  planner tests, `tests/test_live_smoke_report.py -k staged_readiness`,
+  compileall, `git diff --check`, and the full
+  `tests/test_passivbot_balance_split.py` file passed locally.
+- VPS5 evidence: deployed to `d9188b64` with a bot restart because this changed
+  live Python runtime code. Four bots stopped after the first exact-pane
+  Ctrl+C; Kucoin needed a second exact-pane Ctrl+C before the stale `passivbot`
+  tmux session was killed and reloaded from `/root/bots_vps5.yaml`. Immediate
+  2-minute smoke reported `ok=true`, all five bots matched, no hard/log
+  failures, no failed remote/account-critical calls, and
+  `staged_readiness.total=0`. A settled 5-minute smoke also reported `ok=true`,
+  all five bots matched, clean repository state, no hard/log failures, no
+  failed remote/account-critical calls, and `staged_readiness.total=0`.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1739,13 +1764,10 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-3. Use the persistent non-hard staged-execution degradation visible in VPS5
-   smokes as the next candidate for a narrow fix if the new PR #759 summaries
-   keep showing completed-candle target changes after warmup. PRs #679/#682
-   made generic problem groups inspectable, PR #755 made EMA readiness directly
-   visible, PR #759 made staged readiness directly visible, and PR #760
-   recorded that settled VPS5 smokes still showed staged readiness degradation
-   across three to four bots.
+3. Continue monitoring staged-readiness summaries after PR #762. The first
+   post-restart smokes showed `staged_readiness.total=0`; if the signal returns,
+   inspect whether it is a real current-epoch account surface delay or a new
+   completed-candle readiness shape.
 4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
