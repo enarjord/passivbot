@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `e3429ee9b` merge of PR #737, `Carry forward active forager EMA features`.
+- `87e53dac6` merge of PR #739, `Add restart plan process signal safety`.
 
 Current review gate:
 
@@ -336,6 +336,12 @@ VPS5 deployment status:
   and `/root/bots_vps5.yaml` was reloaded, leaving all five configured bots
   running. Settled 2-minute and 5-minute smokes at `e3429ee9` both reported
   `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
+- PR #739 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only changes plan-only restart tooling
+  and docs. A settled 5-minute smoke at `87e53dac` reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
   `missing_expected_count=0`, `remote_calls.failed=0`, and
   `account_critical_remote_calls.failed=0`.
 
@@ -1404,6 +1410,24 @@ VPS5 deployment status:
   2-minute and 5-minute smokes reported all five expected bots running, no hard
   failures, no log hard matches, no failed remote calls, no failed
   account-critical remote calls, and clean tracked repository state.
+
+### PR #739: Restart Plan Process Signal Safety
+
+- Branch: `codex/v8-restart-plan-process-safety`.
+- Scope: adjacent operator restart/smoke planning.
+- Result: `passivbot tool live-restart-smoke-plan` now includes a
+  `process_signal_safety` contract that warns future restart automation away
+  from broad `pkill -f` / `pgrep -f` live-bot process matches and toward exact
+  tmux panes or exact canonical process rows. The plan remains read-only and
+  execution-unavailable.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  restart-plan tests, compileall, `git diff --check`, and the diff-only
+  touched-file silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is plan-only
+  operator tooling. A settled 5-minute smoke at `87e53dac` reported all five
+  expected bots running, no hard failures, no log hard matches, no failed
+  remote calls, no failed account-critical remote calls, and clean tracked
+  repository state.
 
 ## Current Next Steps
 
