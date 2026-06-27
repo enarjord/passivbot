@@ -102,6 +102,47 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "full_elapsed_s",
     "startup_blocking_elapsed_s",
 )
+_CACHE_EVENT_TYPES = {
+    "cache.load.completed",
+    "cache.flush.completed",
+    "cache.warmup_decision",
+}
+_CACHE_STRING_FIELDS = (
+    "context",
+    "timeframe",
+    "stage",
+)
+_CACHE_BOOL_FIELDS = (
+    "cold_path_required",
+)
+_CACHE_NUMERIC_FIELDS = (
+    "start_ts",
+    "end_ts",
+    "loaded_rows",
+    "loaded_start_ts",
+    "loaded_end_ts",
+    "days",
+    "primary_days",
+    "legacy_days",
+    "merged_days",
+    "elapsed_ms",
+    "suppressed_count",
+    "persisted_rows",
+    "persisted_start_ts",
+    "persisted_end_ts",
+    "suppressed_rows",
+    "symbol_count",
+    "reused_count",
+    "cold_count",
+    "concurrency",
+    "ttl_ms",
+    "window_min_candles",
+    "window_max_candles",
+)
+_CACHE_COUNTER_FIELDS = (
+    "source_days",
+    "reason_counts",
+)
 
 
 def _open_text(path: Path):
@@ -871,6 +912,43 @@ def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
     return out
 
 
+def _bounded_cache_event_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _CACHE_STRING_FIELDS:
+        value = data.get(key)
+        if value is not None:
+            out[key] = str(value)
+    for key in _CACHE_BOOL_FIELDS:
+        if key in data:
+            out[key] = bool(data.get(key))
+    for key in _CACHE_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    for key in _CACHE_COUNTER_FIELDS:
+        mapping = _safe_counter_mapping(data.get(key))
+        if mapping:
+            out[key] = mapping
+    return out
+
+
+def _number_summary(values: list[int]) -> dict[str, Any]:
+    sorted_values = sorted(int(value) for value in values)
+    if not sorted_values:
+        return {}
+    mean_value = statistics.fmean(sorted_values)
+    return {
+        "count": len(sorted_values),
+        "min": int(sorted_values[0]),
+        "max": int(sorted_values[-1]),
+        "mean": int(round(mean_value)),
+        "median": int(round(statistics.median(sorted_values))),
+        "p95": _percentile(sorted_values, 0.95),
+    }
+
+
 def _hsl_replay_observed_rows(data: dict[str, Any]) -> int | None:
     for key in ("total_applied_rows", "applied_rows", "rows"):
         value = _non_negative_number(data.get(key))
@@ -1007,6 +1085,227 @@ class _HslReplayProfileAccumulator:
                         item.get("latest", {})
                         .get("derived", {})
                         .get("latest_elapsed_ms", 0)
+                    )
+                    or 0
+                ),
+                -int(item.get("latest_ts", 0) or 0),
+                str(item.get("bot") or ""),
+            ),
+        )
+        limit = max(0, int(group_limit))
+        return {
+            "total_events": int(self.total_events),
+            "bot_count": len(groups),
+            "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(groups) > limit,
+            "groups": groups[:limit],
+        }
+
+
+class _CacheWarmupAccumulator:
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+        self.total_events = 0
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _CACHE_EVENT_TYPES:
+            return
+        data = _bounded_cache_event_data(live_event.get("data"))
+        if not data:
+            return
+        bot = _bot_key(row, live_event)
+        state = self.bots.get(bot)
+        if state is None:
+            state = {
+                "bot": bot,
+                "event_types": Counter(),
+                "total_events": 0,
+                "latest_ts": None,
+                "symbols": Counter(),
+                "timeframes": Counter(),
+                "warmup_contexts": Counter(),
+                "warmup_reason_counts": Counter(),
+                "load_source_days": Counter(),
+                "warmup_elapsed_ms": [],
+                "load_elapsed_ms": [],
+                "symbol_count": 0,
+                "reused_count": 0,
+                "cold_count": 0,
+                "cold_path_decisions": 0,
+                "loaded_rows": 0,
+                "persisted_rows": 0,
+                "suppressed_load_events": 0,
+                "suppressed_flush_events": 0,
+                "suppressed_flush_rows": 0,
+            }
+            self.bots[bot] = state
+
+        self.total_events += 1
+        self.event_types[event_type] += 1
+        state["total_events"] = int(state["total_events"]) + 1
+        state["event_types"][event_type] += 1
+        ts = _record_ts(row)
+        symbol = live_event.get("symbol") or row.get("symbol")
+        if symbol is not None:
+            state["symbols"][str(symbol)] += 1
+        timeframe = data.get("timeframe")
+        if timeframe is not None:
+            state["timeframes"][str(timeframe)] += 1
+
+        record = {
+            key: value
+            for key, value in {
+                "event_type": event_type,
+                "status": live_event.get("status"),
+                "reason_code": live_event.get("reason_code"),
+                "ts": int(ts) if ts is not None else None,
+                "symbol": str(symbol) if symbol is not None else None,
+                "data": data,
+            }.items()
+            if value not in (None, {}, [])
+        }
+
+        if event_type == "cache.warmup_decision":
+            context = data.get("context")
+            if context is not None:
+                state["warmup_contexts"][str(context)] += 1
+            for key in ("symbol_count", "reused_count", "cold_count"):
+                value = _non_negative_number(data.get(key))
+                if value is not None:
+                    state[key] = int(state.get(key) or 0) + int(value)
+            if bool(data.get("cold_path_required")):
+                state["cold_path_decisions"] = int(state["cold_path_decisions"]) + 1
+            elapsed_ms = _non_negative_ms(data.get("elapsed_ms"))
+            if elapsed_ms is not None:
+                state["warmup_elapsed_ms"].append(elapsed_ms)
+            for reason, count in _safe_counter_mapping(data.get("reason_counts")).items():
+                state["warmup_reason_counts"][reason] += int(count)
+            state["latest_warmup_decision"] = record
+        elif event_type == "cache.load.completed":
+            loaded_rows = _non_negative_number(data.get("loaded_rows"))
+            if loaded_rows is not None:
+                state["loaded_rows"] = int(state["loaded_rows"]) + int(loaded_rows)
+            suppressed = _non_negative_number(data.get("suppressed_count"))
+            if suppressed is not None:
+                state["suppressed_load_events"] = int(state["suppressed_load_events"]) + int(
+                    suppressed
+                )
+            elapsed_ms = _non_negative_ms(data.get("elapsed_ms"))
+            if elapsed_ms is not None:
+                state["load_elapsed_ms"].append(elapsed_ms)
+            for source, count in _safe_counter_mapping(data.get("source_days")).items():
+                state["load_source_days"][source] += int(count)
+            state["latest_load_completed"] = record
+        elif event_type == "cache.flush.completed":
+            persisted_rows = _non_negative_number(data.get("persisted_rows"))
+            if persisted_rows is not None:
+                state["persisted_rows"] = int(state["persisted_rows"]) + int(persisted_rows)
+            suppressed = _non_negative_number(data.get("suppressed_count"))
+            if suppressed is not None:
+                state["suppressed_flush_events"] = int(state["suppressed_flush_events"]) + int(
+                    suppressed
+                )
+            suppressed_rows = _non_negative_number(data.get("suppressed_rows"))
+            if suppressed_rows is not None:
+                state["suppressed_flush_rows"] = int(state["suppressed_flush_rows"]) + int(
+                    suppressed_rows
+                )
+            state["latest_flush_completed"] = record
+
+        latest_changed = ts is None or state.get("latest_ts") is None
+        if ts is not None and state.get("latest_ts") is not None:
+            latest_changed = int(ts) >= int(state["latest_ts"])
+        if latest_changed:
+            if ts is not None:
+                state["latest_ts"] = int(ts)
+            state["latest"] = record
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = []
+        for bot, state in self.bots.items():
+            event_counts = (
+                state["event_types"]
+                if isinstance(state.get("event_types"), Counter)
+                else Counter()
+            )
+            warmup = {}
+            if event_counts.get("cache.warmup_decision", 0) > 0:
+                warmup = {
+                    "contexts": dict(state["warmup_contexts"].most_common()),
+                    "reason_counts": dict(state["warmup_reason_counts"].most_common()),
+                    "symbol_count": int(state.get("symbol_count") or 0),
+                    "reused_count": int(state.get("reused_count") or 0),
+                    "cold_count": int(state.get("cold_count") or 0),
+                    "cold_path_decisions": int(state.get("cold_path_decisions") or 0),
+                    "elapsed_ms": _number_summary(state.get("warmup_elapsed_ms") or []),
+                    "latest": state.get("latest_warmup_decision"),
+                }
+            load = {}
+            if event_counts.get("cache.load.completed", 0) > 0:
+                load = {
+                    "loaded_rows": int(state.get("loaded_rows") or 0),
+                    "source_days": dict(state["load_source_days"].most_common()),
+                    "suppressed_events": int(state.get("suppressed_load_events") or 0),
+                    "elapsed_ms": _number_summary(state.get("load_elapsed_ms") or []),
+                    "latest": state.get("latest_load_completed"),
+                }
+            flush = {}
+            if event_counts.get("cache.flush.completed", 0) > 0:
+                flush = {
+                    "persisted_rows": int(state.get("persisted_rows") or 0),
+                    "suppressed_events": int(state.get("suppressed_flush_events") or 0),
+                    "suppressed_rows": int(state.get("suppressed_flush_rows") or 0),
+                    "latest": state.get("latest_flush_completed"),
+                }
+            group = {
+                "bot": bot,
+                "total_events": int(state.get("total_events") or 0),
+                "latest_ts": state.get("latest_ts"),
+                "event_types": dict(event_counts.most_common()),
+                "timeframes": dict(state["timeframes"].most_common()),
+                "symbols": {
+                    "count": len(state["symbols"]),
+                    "sample": [
+                        symbol
+                        for symbol, _count in state["symbols"].most_common(10)
+                    ],
+                }
+                if state.get("symbols")
+                else {},
+                "latest": state.get("latest"),
+                "warmup": {
+                    key: value
+                    for key, value in warmup.items()
+                    if value not in (None, {}, [])
+                },
+                "load": {
+                    key: value
+                    for key, value in load.items()
+                    if value not in (None, {}, [])
+                },
+                "flush": {
+                    key: value
+                    for key, value in flush.items()
+                    if value not in (None, {}, [])
+                },
+            }
+            groups.append(
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, {}, [])
+                }
+            )
+        groups = sorted(
+            groups,
+            key=lambda item: (
+                -int((item.get("warmup", {}) or {}).get("cold_path_decisions", 0) or 0),
+                -int((item.get("warmup", {}) or {}).get("cold_count", 0) or 0),
+                -int(
+                    ((item.get("load", {}) or {}).get("elapsed_ms", {}) or {}).get(
+                        "p95", 0
                     )
                     or 0
                 ),
@@ -1538,6 +1837,12 @@ def _trading_impact_for_event(event_type: str, operation: str) -> str:
         return "exchange_io"
     if event_type.startswith("hsl.replay."):
         return "blocks_or_delays_hsl_readiness"
+    if event_type == "cache.warmup_decision":
+        return "blocks_indicator_readiness"
+    if event_type == "cache.load.completed":
+        return "blocks_indicator_readiness"
+    if event_type == "cache.flush.completed":
+        return "diagnostics_only"
     if event_type == "bot.startup_timing":
         return "blocks_startup_readiness"
     return "observability"
@@ -1630,6 +1935,17 @@ def _add_event_timings(
         )
         return
 
+    if event_type in _CACHE_EVENT_TYPES:
+        operation = event_type.replace(".", "_")
+        accumulator.add(
+            row=row,
+            live_event=live_event,
+            operation=operation,
+            value_ms=_non_negative_ms(data.get("elapsed_ms")),
+            trading_impact=_trading_impact_for_event(event_type, operation),
+        )
+        return
+
     if event_type == "bot.startup_timing":
         stage = data.get("stage") or data.get("phase") or "startup"
         operation = f"startup.{stage}"
@@ -1714,6 +2030,7 @@ def build_live_performance_report(
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
     hsl_replay_profile = _HslReplayProfileAccumulator()
+    cache_warmup = _CacheWarmupAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
@@ -1802,6 +2119,7 @@ def build_live_performance_report(
                     )
                     startup_readiness.add(row=row, live_event=live_event)
                     hsl_replay_profile.add(row=row, live_event=live_event)
+                    cache_warmup.add(row=row, live_event=live_event)
                     resource_pressure.add(row=row, live_event=live_event)
                     shutdown_latency.add(row=row, live_event=live_event)
                     execution_timing.add(
@@ -1848,6 +2166,7 @@ def build_live_performance_report(
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
         "hsl_replay_profile": hsl_replay_profile.to_dict(group_limit=group_limit),
+        "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
@@ -1952,6 +2271,17 @@ def summarize_live_performance_report(
         if len(hsl_groups) > max(0, int(group_limit)):
             hsl_replay_profile["groups_truncated"] = True
         summary["hsl_replay_profile"] = hsl_replay_profile
+    if isinstance(report.get("cache_warmup"), dict):
+        cache_warmup = dict(report["cache_warmup"])
+        cache_groups = (
+            cache_warmup.get("groups")
+            if isinstance(cache_warmup.get("groups"), list)
+            else []
+        )
+        cache_warmup["groups"] = cache_groups[: max(0, int(group_limit))]
+        if len(cache_groups) > max(0, int(group_limit)):
+            cache_warmup["groups_truncated"] = True
+        summary["cache_warmup"] = cache_warmup
     if isinstance(report.get("resource_pressure"), dict):
         resource_pressure = dict(report["resource_pressure"])
         pressure_groups = (
