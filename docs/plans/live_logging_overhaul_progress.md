@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7ff5f8f20` merge of PR #736, `Record forager EMA readiness handoff gap`.
+- `e3429ee9b` merge of PR #737, `Carry forward active forager EMA features`.
 
 Current review gate:
 
@@ -328,6 +328,16 @@ VPS5 deployment status:
   reported `ok=true`, no hard failures, no log hard matches, all five expected
   bots matched, and no failed remote/account-critical calls. PR #736 recorded
   the EMA-readiness handoff gap in the live-ops backlog.
+- PR #737 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 and deployed with a bot restart because it changed live forager EMA
+  readiness behavior. The first Ctrl+C round left Kucoin running; a follow-up
+  SIGINT stopped it, but the restart shell killed itself because the process
+  match also matched the shell command. The stale tmux session was then killed
+  and `/root/bots_vps5.yaml` was reloaded, leaving all five configured bots
+  running. Settled 2-minute and 5-minute smokes at `e3429ee9` both reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 
 ## Phase Checklist
 
@@ -1372,6 +1382,28 @@ VPS5 deployment status:
 - Review evidence: Claude and Hermes approved; CI was green before merge.
 - VPS5 evidence: pulled to VPS5 without bot restart; all five configured bots
   remained running.
+
+### PR #737: Active Forager EMA Carry-Forward
+
+- Branch: `codex/v8-forager-active-ema-projection`.
+- Scope: live forager EMA readiness hardening for active/normal symbols.
+- Result: active/normal forager symbols may use bounded cached real-candle
+  quote-volume and log-range EMA values when the current EMA read is transiently
+  unavailable, while candidate-only symbols still become unavailable and
+  active/normal symbols without cached values still fail loudly. The fix keeps
+  open-tail projection valid for close EMA readiness only in forager mode, so
+  qv/log-range ranking inputs do not come from projected open-tail values.
+- Review evidence: Hermes first found that cached metric fallback and open-tail
+  projection shared one eligibility map; fixed head `6965783e` split cached
+  metric and projection eligibility and added a regression covering projected
+  qv/log-range values differing from cached real-candle values. Claude and
+  Hermes approved the fixed head; CI was green; focused EMA tests, compileall,
+  `git diff --check`, and a diff-only silent-handling audit passed before
+  merge.
+- VPS5 evidence: deployed to VPS5 at `e3429ee9` with a bot restart. Settled
+  2-minute and 5-minute smokes reported all five expected bots running, no hard
+  failures, no log hard matches, no failed remote calls, no failed
+  account-critical remote calls, and clean tracked repository state.
 
 ## Current Next Steps
 
