@@ -1593,6 +1593,10 @@ VPS5 deployment status:
    PR #749 added opt-in bounded fill pagination sampling. Remaining useful
    slices include basic endpoint latency and deeper exchange-specific coverage
    checks.
+   Branch `codex/v8-ticker-probe-endpoint-latency-health` adds
+   `endpoint_latency_health` summaries from existing probe outcomes, including
+   open-orders fallback attempts and fill-history pages, without adding exchange
+   calls.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier

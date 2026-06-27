@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added no-extra-call endpoint latency health summaries to
+  `passivbot tool ticker-endpoint-probe`, derived from existing probe outcomes.
 - Added opt-in bounded fill-history pagination sampling to
   `passivbot tool ticker-endpoint-probe` via `--fill-history-pages`, while
   preserving the default single-call `fetch_my_trades(first symbol)` behavior.

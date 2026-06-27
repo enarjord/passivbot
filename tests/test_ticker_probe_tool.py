@@ -14,6 +14,8 @@ from tools.probe_ccxt_ticker_endpoints import (
     select_default_symbols,
     summarize_candle_freshness_probe_collection,
     summarize_candle_freshness_probe_health,
+    summarize_endpoint_latency_probe_collection,
+    summarize_endpoint_latency_probe_health,
     summarize_fill_history_probe_collection,
     summarize_fill_history_probe_health,
     summarize_my_trades,
@@ -402,6 +404,13 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
         "contains_concurrent_batches",
         "contains_authenticated_calls",
     ]
+    assert out["endpoint_latency_health"]["total"] == 20
+    assert out["endpoint_latency_health"]["failed"] == 0
+    assert out["endpoint_latency_health"]["endpoint_count"] == 15
+    assert out["endpoint_latency_health"]["endpoints"]["fetch_ticker_concurrent"]["total"] == 2
+    assert out["endpoint_latency_health"]["endpoints"]["fetch_open_orders"]["total"] == 1
+    assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["total"] == 1
+    assert out["endpoint_latency_health"]["slowest"]["endpoint"] in out["endpoint_latency_health"]["endpoints"]
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
 
 
@@ -511,6 +520,9 @@ async def test_probe_exchange_ticker_endpoints_opt_in_fill_history_pagination():
     assert out["rate_limit_health"]["observed_call_count"] == 6
     assert out["rate_limit_health"]["private_call_count"] == 5
     assert out["rate_limit_health"]["endpoint_counts"]["fetch_my_trades_first_symbol"] == 2
+    assert out["endpoint_latency_health"]["total"] == 6
+    assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["total"] == 2
+    assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["failed"] == 0
     assert "raw-trade-id" not in str(out)
     assert "raw-order-id" not in str(out)
     assert "raw-trade-id" not in str(out["fill_history_health"])
@@ -554,6 +566,103 @@ def test_account_critical_probe_health_summarizes_failures_without_raw_errors():
     assert summary["surfaces"]["open_orders"]["latest"]["error_type"] == "RuntimeError"
     assert "secret=leak" not in str(summary)
     assert "raw payload" not in str(summary)
+
+
+def test_endpoint_latency_probe_health_summarizes_existing_outcomes_only():
+    summary = summarize_endpoint_latency_probe_health(
+        {
+            "load_markets": {"ok": True, "elapsed_ms": 10.0},
+            "repeats": [
+                {
+                    "fetch_tickers_all": {"ok": True, "elapsed_ms": 20.0},
+                    "fetch_ticker_concurrent": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {"ok": True, "elapsed_ms": 30.0},
+                            "ETH/USDT:USDT": {
+                                "ok": False,
+                                "elapsed_ms": 40.0,
+                                "error_type": "RequestTimeout",
+                                "error": "raw exchange error should not appear",
+                            },
+                        }
+                    },
+                    "fetch_open_orders_all": {
+                        "attempts": {
+                            "all_symbols": {
+                                "ok": False,
+                                "elapsed_ms": 0.5,
+                                "error_type": "ExchangeError",
+                                "error": "raw warning should not appear",
+                            },
+                            "symbol": {
+                                "symbol": "BTC/USDT:USDT",
+                                "outcome": {"ok": True, "elapsed_ms": 12.5},
+                            },
+                        }
+                    },
+                    "fetch_my_trades_first_symbol": {
+                        "pages": [
+                            {"ok": True, "elapsed_ms": 5.0, "trade_count": 2},
+                            {"ok": True, "elapsed_ms": 6.0, "trade_count": 1},
+                        ]
+                    },
+                }
+            ],
+        }
+    )
+
+    assert summary["total"] == 8
+    assert summary["succeeded"] == 6
+    assert summary["failed"] == 2
+    assert summary["failure_pct"] == pytest.approx(25.0)
+    assert summary["endpoints"]["fetch_ticker_concurrent"]["total"] == 2
+    assert summary["endpoints"]["fetch_ticker_concurrent"]["failed"] == 1
+    assert summary["endpoints"]["fetch_ticker_concurrent"]["error_types"] == {
+        "RequestTimeout": 1
+    }
+    assert summary["endpoints"]["fetch_open_orders"]["total"] == 2
+    assert summary["endpoints"]["fetch_my_trades_first_symbol"]["total"] == 2
+    assert summary["slowest"]["endpoint"] == "fetch_ticker_concurrent"
+    assert "raw exchange error" not in str(summary)
+    assert "raw warning" not in str(summary)
+
+
+def test_endpoint_latency_probe_collection_aggregates_raw_probe_latencies():
+    collection = summarize_endpoint_latency_probe_collection(
+        [
+            {
+                "user": "binance_01",
+                "exchange": "binance",
+                "load_markets": {"ok": True, "elapsed_ms": 10.0},
+                "repeats": [{"fetch_balance": {"ok": True, "elapsed_ms": 20.0}}],
+            },
+            {
+                "user": "kucoin_01",
+                "exchange": "kucoinfutures",
+                "load_markets": {"ok": True, "elapsed_ms": 30.0},
+                "repeats": [
+                    {
+                        "fetch_balance": {
+                            "ok": False,
+                            "elapsed_ms": 40.0,
+                            "error_type": "RequestTimeout",
+                        }
+                    }
+                ],
+            },
+        ]
+    )
+
+    assert collection["total"] == 4
+    assert collection["succeeded"] == 3
+    assert collection["failed"] == 1
+    assert collection["users"][0]["user"] == "binance_01"
+    assert collection["endpoints"]["load_markets"]["total"] == 2
+    assert collection["endpoints"]["fetch_balance"]["total"] == 2
+    assert collection["endpoints"]["fetch_balance"]["failed"] == 1
+    assert collection["endpoints"]["fetch_balance"]["error_types"] == {
+        "RequestTimeout": 1
+    }
 
 
 def test_account_critical_probe_collection_aggregates_user_summaries():

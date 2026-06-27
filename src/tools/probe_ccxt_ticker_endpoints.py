@@ -29,6 +29,23 @@ ACCOUNT_CRITICAL_ENDPOINTS = {
     "positions": "fetch_positions",
     "open_orders": "fetch_open_orders_all",
 }
+ENDPOINT_LATENCY_CATEGORIES = {
+    "load_markets": "market_metadata",
+    "fetch_time": "time_sync",
+    "fetch_tickers_all": "public",
+    "fetch_tickers_symbols": "public",
+    "fetch_ticker_sequential": "public",
+    "fetch_ticker_concurrent": "public",
+    "fetch_bids_asks_all": "public",
+    "fetch_bids_asks_symbols": "public",
+    "fetch_order_book_sequential": "public",
+    "fetch_order_book_concurrent": "public",
+    "fetch_ohlcv_1m_tail": "public",
+    "fetch_balance": "private",
+    "fetch_positions": "private",
+    "fetch_open_orders": "private",
+    "fetch_my_trades_first_symbol": "private",
+}
 
 
 def select_default_symbols(
@@ -1126,6 +1143,288 @@ def summarize_rate_limit_probe_collection(probes: list[dict[str, Any]]) -> dict[
     }
 
 
+def _endpoint_latency_entry(endpoint: str, category: str | None = None) -> dict[str, Any]:
+    return {
+        "category": category or ENDPOINT_LATENCY_CATEGORIES.get(endpoint, "unknown"),
+        "total": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "latencies": [],
+        "error_types": Counter(),
+        "latest": None,
+    }
+
+
+def _record_endpoint_latency(
+    endpoints: dict[str, dict[str, Any]],
+    *,
+    endpoint: str,
+    outcome: Any,
+    category: str | None = None,
+) -> None:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return
+    elapsed = _elapsed_ms(outcome)
+    entry = endpoints.setdefault(
+        endpoint,
+        _endpoint_latency_entry(endpoint, category=category),
+    )
+    entry["total"] += 1
+    if elapsed is not None:
+        entry["latencies"].append(elapsed)
+    ok = bool(outcome.get("ok"))
+    if ok:
+        entry["succeeded"] += 1
+        entry["latest"] = {"ok": True, "elapsed_ms": elapsed}
+        return
+    entry["failed"] += 1
+    error_type = str(outcome.get("error_type") or "unknown")
+    entry["error_types"][error_type] += 1
+    entry["latest"] = {
+        "ok": False,
+        "elapsed_ms": elapsed,
+        "error_type": error_type,
+    }
+
+
+def _record_symbol_endpoint_latencies(
+    endpoints: dict[str, dict[str, Any]],
+    *,
+    endpoint: str,
+    outcome: Any,
+    category: str | None = None,
+) -> None:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return
+    symbols = outcome.get("symbols")
+    if not isinstance(symbols, dict):
+        _record_endpoint_latency(
+            endpoints,
+            endpoint=endpoint,
+            outcome=outcome,
+            category=category,
+        )
+        return
+    for symbol_outcome in symbols.values():
+        _record_endpoint_latency(
+            endpoints,
+            endpoint=endpoint,
+            outcome=symbol_outcome,
+            category=category,
+        )
+
+
+def _record_open_orders_endpoint_latencies(
+    endpoints: dict[str, dict[str, Any]],
+    outcome: Any,
+) -> None:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return
+    attempts = outcome.get("attempts")
+    if not isinstance(attempts, dict):
+        _record_endpoint_latency(
+            endpoints,
+            endpoint="fetch_open_orders",
+            outcome=outcome,
+            category="private",
+        )
+        return
+    if isinstance(attempts.get("all_symbols"), dict):
+        _record_endpoint_latency(
+            endpoints,
+            endpoint="fetch_open_orders",
+            outcome=attempts["all_symbols"],
+            category="private",
+        )
+    symbol_attempt = attempts.get("symbol")
+    if isinstance(symbol_attempt, dict) and isinstance(symbol_attempt.get("outcome"), dict):
+        _record_endpoint_latency(
+            endpoints,
+            endpoint="fetch_open_orders",
+            outcome=symbol_attempt["outcome"],
+            category="private",
+        )
+
+
+def _record_my_trades_endpoint_latencies(
+    endpoints: dict[str, dict[str, Any]],
+    outcome: Any,
+) -> None:
+    if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
+        return
+    pages = outcome.get("pages")
+    if not isinstance(pages, list):
+        _record_endpoint_latency(
+            endpoints,
+            endpoint="fetch_my_trades_first_symbol",
+            outcome=outcome,
+            category="private",
+        )
+        return
+    for page in pages:
+        _record_endpoint_latency(
+            endpoints,
+            endpoint="fetch_my_trades_first_symbol",
+            outcome=page,
+            category="private",
+        )
+
+
+def _finalize_endpoint_latency_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    total = int(entry["total"])
+    failed = int(entry["failed"])
+    return {
+        "category": entry["category"],
+        "total": total,
+        "succeeded": int(entry["succeeded"]),
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "latency_ms": _latency_summary(list(entry["latencies"])),
+        "error_types": dict(sorted(entry["error_types"].items())),
+        "latest": entry["latest"],
+    }
+
+
+def _record_probe_endpoint_latencies(
+    endpoints: dict[str, dict[str, Any]],
+    probe: dict[str, Any],
+) -> None:
+    _record_endpoint_latency(
+        endpoints,
+        endpoint="load_markets",
+        outcome=probe.get("load_markets"),
+        category="market_metadata",
+    )
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    for repeat in repeats:
+        if not isinstance(repeat, dict):
+            continue
+        for endpoint in (
+            "fetch_time",
+            "fetch_tickers_all",
+            "fetch_tickers_symbols",
+            "fetch_bids_asks_all",
+            "fetch_bids_asks_symbols",
+            "fetch_balance",
+            "fetch_positions",
+        ):
+            _record_endpoint_latency(
+                endpoints,
+                endpoint=endpoint,
+                outcome=repeat.get(endpoint),
+            )
+        for endpoint in (
+            "fetch_ticker_sequential",
+            "fetch_ticker_concurrent",
+            "fetch_order_book_sequential",
+            "fetch_order_book_concurrent",
+            "fetch_ohlcv_1m_tail",
+        ):
+            _record_symbol_endpoint_latencies(
+                endpoints,
+                endpoint=endpoint,
+                outcome=repeat.get(endpoint),
+            )
+        _record_open_orders_endpoint_latencies(
+            endpoints,
+            repeat.get("fetch_open_orders_all"),
+        )
+        _record_my_trades_endpoint_latencies(
+            endpoints,
+            repeat.get("fetch_my_trades_first_symbol"),
+        )
+
+
+def summarize_endpoint_latency_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize endpoint latency from already-recorded probe outcomes."""
+    endpoints: dict[str, dict[str, Any]] = {}
+    _record_probe_endpoint_latencies(endpoints, probe)
+    finalized = {
+        endpoint: _finalize_endpoint_latency_entry(entry)
+        for endpoint, entry in sorted(endpoints.items())
+        if int(entry.get("total") or 0) > 0
+    }
+    total = sum(int(entry["total"]) for entry in finalized.values())
+    succeeded = sum(int(entry["succeeded"]) for entry in finalized.values())
+    failed = sum(int(entry["failed"]) for entry in finalized.values())
+    slowest = None
+    for endpoint, entry in finalized.items():
+        latency = entry.get("latency_ms") if isinstance(entry.get("latency_ms"), dict) else {}
+        max_latency = _round_ms_value(latency.get("max"))
+        if max_latency is None:
+            continue
+        candidate = {
+            "endpoint": endpoint,
+            "category": entry.get("category"),
+            "max_latency_ms": max_latency,
+        }
+        if slowest is None or max_latency > float(slowest.get("max_latency_ms") or -1.0):
+            slowest = candidate
+    return {
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "endpoint_count": len(finalized),
+        "slowest": slowest,
+        "endpoints": finalized,
+    }
+
+
+def summarize_endpoint_latency_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    endpoint_totals: dict[str, dict[str, Any]] = {}
+    for probe in probes:
+        summary = probe.get("endpoint_latency_health")
+        if not isinstance(summary, dict):
+            summary = summarize_endpoint_latency_probe_health(probe)
+        slowest = summary.get("slowest") if isinstance(summary.get("slowest"), dict) else {}
+        users.append(
+            {
+                "user": probe.get("user"),
+                "exchange": probe.get("exchange"),
+                "total": int(summary.get("total") or 0),
+                "succeeded": int(summary.get("succeeded") or 0),
+                "failed": int(summary.get("failed") or 0),
+                "failure_pct": summary.get("failure_pct"),
+                "slowest_endpoint": slowest.get("endpoint"),
+                "slowest_max_latency_ms": slowest.get("max_latency_ms"),
+            }
+        )
+        _record_probe_endpoint_latencies(endpoint_totals, probe)
+    finalized = {
+        endpoint: _finalize_endpoint_latency_entry(entry)
+        for endpoint, entry in sorted(endpoint_totals.items())
+        if int(entry.get("total") or 0) > 0
+    }
+    total = sum(user["total"] for user in users)
+    succeeded = sum(user["succeeded"] for user in users)
+    failed = sum(user["failed"] for user in users)
+    slowest = None
+    for endpoint, entry in finalized.items():
+        latency = entry.get("latency_ms") if isinstance(entry.get("latency_ms"), dict) else {}
+        max_latency = _round_ms_value(latency.get("max"))
+        if max_latency is None:
+            continue
+        candidate = {
+            "endpoint": endpoint,
+            "category": entry.get("category"),
+            "max_latency_ms": max_latency,
+        }
+        if slowest is None or max_latency > float(slowest.get("max_latency_ms") or -1.0):
+            slowest = candidate
+    return {
+        "users": users,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "failure_pct": _pct(failed, total),
+        "endpoint_count": len(finalized),
+        "slowest": slowest,
+        "endpoints": finalized,
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -1673,6 +1972,7 @@ async def probe_exchange_ticker_endpoints(
     out["candle_freshness_health"] = summarize_candle_freshness_probe_health(out)
     out["fill_history_health"] = summarize_fill_history_probe_health(out)
     out["rate_limit_health"] = summarize_rate_limit_probe_health(out)
+    out["endpoint_latency_health"] = summarize_endpoint_latency_probe_health(out)
     return out
 
 
@@ -1857,6 +2157,9 @@ async def async_main() -> int:
         result["probes"]
     )
     result["rate_limit_health"] = summarize_rate_limit_probe_collection(
+        result["probes"]
+    )
+    result["endpoint_latency_health"] = summarize_endpoint_latency_probe_collection(
         result["probes"]
     )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"

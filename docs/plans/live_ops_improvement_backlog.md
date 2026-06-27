@@ -168,11 +168,14 @@ Related detailed plans:
    trade/order ids or extra pagination calls. PR #747 added
    `rate_limit_health` request-pressure estimates. PR #749 added an opt-in
    bounded `--fill-history-pages` sample while keeping the default one-call
-   behavior.
+   behavior. Branch `codex/v8-ticker-probe-endpoint-latency-health` adds
+   endpoint latency summaries from existing probe outcomes, including
+   open-orders fallback attempts and fill-history pages, without adding exchange
+   calls.
 
    Add/refine explicit read-only probes for each configured exchange/account
-   before or during smoke: basic endpoint latency and deeper exchange-specific
-   coverage checks. The passive smoke report now also exposes top-level
+   before or during smoke: deeper exchange-specific coverage checks. The
+   passive smoke report now also exposes top-level
    remote-call health
    success/failure/throttle totals and a filtered
    `account_critical_remote_call_health` summary for a quick operator scan.
