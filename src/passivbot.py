@@ -14117,7 +14117,8 @@ class Passivbot:
                 return False
             return symbol in set(getattr(self, "active_symbols", []) or [])
 
-        forager_cached_max_age_by_symbol: dict[str, int] = {}
+        forager_cached_metric_max_age_by_symbol: dict[str, int] = {}
+        forager_projection_max_age_by_symbol: dict[str, int] = {}
         if is_forager_mode():
             priority_symbols = []
             secondary_symbols = []
@@ -14133,14 +14134,23 @@ class Passivbot:
                 else:
                     secondary_symbols.append(sym)
             cache_only_ttl = 365 * 24 * 3600 * 1000
-            if secondary_symbols:
-                max_calls = get_optional_live_value(
-                    self.config, "max_ohlcv_fetches_per_minute", 0
+            max_calls = get_optional_live_value(
+                self.config, "max_ohlcv_fetches_per_minute", 0
+            )
+            try:
+                max_calls_i = int(max_calls) if max_calls is not None else 0
+            except Exception:
+                max_calls_i = 0
+            priority_max_age_ms = int(
+                Passivbot._forager_target_staleness_ms(
+                    self,
+                    max(1, len(priority_symbols) + len(secondary_symbols)),
+                    max_calls_i,
                 )
-                try:
-                    max_calls_i = int(max_calls) if max_calls is not None else 0
-                except Exception:
-                    max_calls_i = 0
+            )
+            for sym in priority_symbols:
+                forager_cached_metric_max_age_by_symbol[sym] = priority_max_age_ms
+            if secondary_symbols:
                 secondary_max_age_ms = int(
                     Passivbot._forager_target_staleness_ms(
                         self, len(secondary_symbols), max_calls_i
@@ -14151,7 +14161,10 @@ class Passivbot:
                 stale_unavailable = set()
                 for sym in secondary_symbols:
                     cache_only_symbols.add(sym)
-                    forager_cached_max_age_by_symbol[sym] = int(secondary_max_age_ms)
+                    forager_cached_metric_max_age_by_symbol[sym] = int(
+                        secondary_max_age_ms
+                    )
+                    forager_projection_max_age_by_symbol[sym] = int(secondary_max_age_ms)
                     m1_max_age_by_symbol[sym] = cache_only_ttl
                     h1_max_age_by_symbol[sym] = cache_only_ttl
                     try:
@@ -14195,12 +14208,12 @@ class Passivbot:
                     exc,
                 )
                 ctx = None
-            if ctx is None and sym in forager_cached_max_age_by_symbol:
+            if ctx is None and sym in forager_projection_max_age_by_symbol:
                 try:
                     now_ms = utc_ms()
                     latest_expected = (now_ms // ONE_MIN_MS) * ONE_MIN_MS - ONE_MIN_MS
                     last_cached = int(self.cm.get_last_final_ts(sym) or 0)
-                    max_tail_gap_ms = int(forager_cached_max_age_by_symbol[sym])
+                    max_tail_gap_ms = int(forager_projection_max_age_by_symbol[sym])
                     tail_gap_age_ms = max(0, int(latest_expected) - int(last_cached))
                     if last_cached > 0 and tail_gap_age_ms <= max_tail_gap_ms:
                         ctx = {
@@ -14252,7 +14265,7 @@ class Passivbot:
         async def fetch_cached_forager_metric(
             symbol: str, span: float, metric_key: str
         ) -> Optional[float]:
-            max_staleness_ms = forager_cached_max_age_by_symbol.get(symbol)
+            max_staleness_ms = forager_cached_metric_max_age_by_symbol.get(symbol)
             if max_staleness_ms is None:
                 return None
             cached = await Passivbot._get_forager_cached_ema_metrics(
@@ -14633,10 +14646,10 @@ class Passivbot:
                     "[ema] projected open-tail close EMA incomplete for "
                     f"{sym}: spans={','.join(f'{span:.8g}' for span in missing_close)}"
                 )
-            if candidate_only_forager_symbol(sym):
-                # For flat forager candidates, open-tail projection is valid
-                # for close EMA readiness only. Ranking qv/log-range must carry
-                # forward cached real-candle EMA values.
+            if is_forager_mode():
+                # In forager mode, open-tail projection is valid for close EMA
+                # readiness only. Quote-volume and log-range ranking inputs must
+                # use current or cached real-candle EMA values.
                 vol = None
                 lr1m = None
             else:

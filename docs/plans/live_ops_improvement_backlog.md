@@ -373,7 +373,10 @@ Related detailed plans:
     requiring manual log inspection.
 
 17. [ ] Forager active-symbol EMA readiness handoff.
-    Status: open.
+    Status: partial. First hardening slice allows active/normal forager symbols
+    to carry forward bounded cached real-candle qv/log-range EMA values during
+    fill handoff. Broader create-side readiness gating and fake-live coverage
+    remain open.
 
     VPS5 smoke after PR #735 caught an OKX recovery case where `AAVE` was
     selected/posted as a forager initial entry, filled, and became an active
@@ -390,6 +393,12 @@ Related detailed plans:
     carry forward bounded/stale forager feature values through the first active
     cycle with structured readiness metadata. Do not fabricate neutral
     volume/log-range values, and do not weaken protective/risk actions.
+
+    Work log:
+    - 2026-06-27: Added bounded cached qv/log-range EMA carry-forward for
+      active/normal forager symbols, reusing local real-candle EMA metrics
+      within the configured forager staleness cap. Candidate-only symbols still
+      remain unavailable instead of receiving synthetic ranking tails.
 
 ## Merged Work Log
 

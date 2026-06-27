@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 - Added report-only startup phase budget projections to
   `passivbot tool live-smoke-report`, comparing latest startup timings with
   prior local p95 baselines from existing monitor events.
+- Hardened forager active-symbol EMA readiness by allowing required
+  qv/log-range ranking features to carry forward bounded cached real-candle EMA
+  values for active/normal symbols during fill handoff.
 - Added optional `--compare` diff reporting to
   `passivbot tool live-config-preflight` for local, read-only HSL, universe,
   forager, identity, and cache-setting changes between two configs.
