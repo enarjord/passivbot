@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `87e53dac6` merge of PR #739, `Add restart plan process signal safety`.
+- `d4c28058e` merge of PR #741, `Add ticker probe time sync health`.
 
 Current review gate:
 
@@ -344,6 +344,15 @@ VPS5 deployment status:
   `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
   `missing_expected_count=0`, `remote_calls.failed=0`, and
   `account_critical_remote_calls.failed=0`.
+- PR #741 was merged after Claude + Hermes approval and green CI, then pulled
+  to VPS5 without bot restart because it only changes read-only active probe
+  tooling and docs. A 5-minute compact smoke at `d4c28058` reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`,
+  `account_critical_remote_calls.failed=0`, and clean tracked repository
+  state. A one-repeat `ticker-endpoint-probe --account-only` on `binance_01`
+  validated the new `time_sync_health` output with `total=1`, `succeeded=1`,
+  `failed=0`, `unsupported=0`, and `max_abs_clock_skew_ms=14`.
 
 ## Phase Checklist
 
@@ -1429,6 +1438,29 @@ VPS5 deployment status:
   remote calls, no failed account-critical remote calls, and clean tracked
   repository state.
 
+### PR #741: Ticker Probe Time Sync Health
+
+- Branch: `codex/v8-ticker-probe-clock-skew`.
+- Scope: read-only active exchange health probe.
+- Result: `passivbot tool ticker-endpoint-probe` now records bounded
+  `fetch_time` clock-skew evidence in each repeat and summarizes it as
+  per-user and collection-level `time_sync_health`. Unsupported exchanges are
+  counted separately from true failures, and `--skip-time-sync` omits the extra
+  read-only time call.
+- Review evidence: Hermes first found that inherited CCXT `fetch_time` methods
+  can exist when `has["fetchTime"]` is false or missing. The fixed head
+  `6d24b8b7` gates on `has["fetchTime"] is True`, remaps `NotSupported` to
+  unsupported/skipped, and adds a regression proving the unsupported inherited
+  method is not called. Claude and Hermes approved the fixed head; CI was
+  green; focused ticker-probe tests, compileall, `git diff --check`, and the
+  touched-file silent-handling audit passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  probe tooling. A compact smoke at `d4c28058` reported all five expected bots
+  running, no hard failures, no log hard matches, no failed account-critical
+  remote calls, and clean tracked repository state. A real Binance
+  `--account-only` probe produced `time_sync_health.total=1`,
+  `succeeded=1`, `failed=0`, `unsupported=0`, and `max_abs_clock_skew_ms=14`.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1437,9 +1469,9 @@ VPS5 deployment status:
    when live diagnostics need deeper evidence.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
-   `--account-only` plus symbol fallback for open-orders. Remaining useful
-   slices include clock skew, rate-limit behavior, fill pagination coverage, and
-   candle freshness probes.
+   `--account-only` plus symbol fallback for open-orders. PR #741 added
+   clock-skew health. Remaining useful slices include rate-limit behavior, fill
+   pagination coverage, and candle freshness probes.
 3. Use the persistent non-hard EMA readiness / staged-execution degradation
    visible in VPS5 smokes as the next candidate for targeted readiness
    diagnostics or a narrow fix. PRs #679 and #682 made the problem groups easier
