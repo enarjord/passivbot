@@ -151,13 +151,15 @@ def test_cache_integrity_report_summarizes_candle_no_trade_gap_metadata(tmp_path
     coverage = candles["coverage"]
     assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
     readiness = report["summary"]["warm_cache_readiness"]["families"]["candles"]
-    assert readiness["no_trade_gap_evidence"] == "no_trade_known_gaps_observed"
+    assert readiness["no_trade_gap_evidence"] == "partial_no_trade_known_gap_evidence"
     assert readiness["known_gap_count"] == 2
     assert readiness["known_gap_reason_counts"] == {
         "legacy_unclassified": 1,
         "no_trades": 1,
     }
-    assert "candle_no_trade_known_gaps_observed" in readiness["reasons"]
+    assert "candle_partial_no_trade_known_gap_evidence" in readiness["reasons"]
+    assert "candle_unclassified_known_gaps_present" in readiness["reasons"]
+    assert "candle_synthetic_no_trade_evidence_unproven" in readiness["reasons"]
 
 
 def test_cache_integrity_report_marks_candle_gaps_without_no_trade_evidence(tmp_path):

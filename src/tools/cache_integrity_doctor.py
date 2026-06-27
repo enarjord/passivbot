@@ -1033,9 +1033,15 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
     known_gap_count = int(metadata.get("known_gap_count") or 0)
     no_trade_known_gap_count = int(metadata.get("no_trade_known_gap_count") or 0)
     known_gap_reason_counts = dict(metadata.get("known_gap_reason_counts") or {})
-    if no_trade_known_gap_count:
+    unclassified_known_gap_count = int(metadata.get("unclassified_known_gap_count") or 0)
+    if known_gap_count and no_trade_known_gap_count == known_gap_count:
         no_trade_gap_evidence = "no_trade_known_gaps_observed"
         reasons.append("candle_no_trade_known_gaps_observed")
+    elif no_trade_known_gap_count:
+        no_trade_gap_evidence = "partial_no_trade_known_gap_evidence"
+        reasons.append("candle_partial_no_trade_known_gap_evidence")
+        if unclassified_known_gap_count:
+            reasons.append("candle_unclassified_known_gaps_present")
     elif known_gap_count:
         no_trade_gap_evidence = "known_gaps_without_no_trade_reason"
         reasons.append("candle_known_gaps_without_no_trade_reason")
@@ -1043,7 +1049,7 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
         no_trade_gap_evidence = "no_local_no_trade_gap_evidence"
     if gap_count:
         reasons.append("candle_suspicious_gaps_present")
-        if not no_trade_known_gap_count:
+        if not no_trade_known_gap_count or no_trade_known_gap_count != known_gap_count:
             reasons.append("candle_synthetic_no_trade_evidence_unproven")
     if length_mismatch_count:
         reasons.append("candle_length_mismatch_present")
