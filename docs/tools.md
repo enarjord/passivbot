@@ -187,7 +187,10 @@ Ticker probes inspect CCXT ticker support and latency without placing orders:
   including public/private/concurrent call counts and CCXT `rateLimit` metadata; it is a planning
   estimate, not proof of exchange-side rate-limit consumption. `endpoint_latency_health` groups
   already-recorded endpoint attempts by endpoint, including open-orders fallback attempts and
-  fill-history pages, with success/failure counts and latency summaries. The probe also includes
+  fill-history pages, with success/failure counts and latency summaries. `exchange_surface_health`
+  adds exchange/user-level notes from those same outcomes, such as open-orders symbol fallback,
+  unsupported time sync, fill-history terminal pagination reason, and OHLCV tail shape, without
+  making additional exchange calls. The probe also includes
   `time_sync_health` from read-only `fetch_time` clock-skew checks when the exchange supports it;
   use `--skip-time-sync` to omit that call. When OHLCV probing is enabled,
   `candle_freshness_health` summarizes the existing 1m candle tail results without making
