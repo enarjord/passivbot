@@ -59,6 +59,20 @@ _SHUTDOWN_EVENT_TYPES = {
     "bot.shutdown.stage",
     "bot.stopped",
 }
+_EXECUTION_CREATE_TERMINALS = {
+    "execution.create_succeeded",
+    "execution.create_failed",
+    "execution.create_rejected",
+}
+_EXECUTION_CANCEL_TERMINALS = {
+    "execution.cancel_succeeded",
+    "execution.cancel_failed",
+    "execution.cancel_ambiguous_terminal",
+}
+_EXECUTION_CONFIRMATION_TERMINALS = {
+    "execution.confirmation_satisfied",
+    "execution.confirmation_timeout",
+}
 
 
 def _open_text(path: Path):
@@ -313,6 +327,16 @@ def _event_cycle_id(live_event: dict[str, Any]) -> str | None:
     if cycle_id is None:
         return None
     return str(cycle_id)
+
+
+def _event_id_value(live_event: dict[str, Any], key: str) -> str | None:
+    ids = live_event.get("ids")
+    if not isinstance(ids, dict):
+        return None
+    value = ids.get(key)
+    if value is None:
+        return None
+    return str(value)
 
 
 def _cycle_number(cycle_id: str | None) -> int | None:
@@ -924,11 +948,217 @@ class _ShutdownLatencyAccumulator:
         }
 
 
+class _ExecutionTimingAccumulator:
+    def __init__(self) -> None:
+        self.accumulator = _PerformanceAccumulator()
+        self.action_starts: dict[tuple[str, int, str], int] = {}
+        self.confirmation_starts: dict[tuple[str, int, str], int] = {}
+        self.wave_starts: dict[tuple[str, int, str], int] = {}
+        self.event_types: Counter[str] = Counter()
+        self.missing_id_counts: Counter[str] = Counter()
+        self.unpaired_terminal_counts: Counter[str] = Counter()
+        self.starts_seen: Counter[str] = Counter()
+        self.terminals_seen: Counter[str] = Counter()
+        self.timing_observations: Counter[str] = Counter()
+
+    def _add_timing(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        operation: str,
+        value_ms: int | None,
+        timing_kind: str = "duration",
+    ) -> None:
+        self.accumulator.add(
+            row=row,
+            live_event=live_event,
+            operation=operation,
+            value_ms=value_ms,
+            trading_impact="exchange_io",
+            timing_kind=timing_kind,
+        )
+        if value_ms is not None:
+            self.timing_observations[operation] += 1
+
+    def _pair_elapsed(
+        self,
+        *,
+        starts: dict[tuple[str, int, str], int],
+        key: tuple[str, int, str],
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        operation: str,
+    ) -> None:
+        start_ts = starts.pop(key, None)
+        end_ts = _record_ts(row)
+        if start_ts is None or end_ts is None:
+            self.unpaired_terminal_counts[operation] += 1
+            return
+        self._add_timing(
+            row=row,
+            live_event=live_event,
+            operation=operation,
+            value_ms=max(0, int(end_ts) - int(start_ts)),
+        )
+
+    def add(
+        self,
+        *,
+        row: dict[str, Any],
+        live_event: dict[str, Any],
+        cycle_scope: int,
+    ) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if not (
+            event_type.startswith("execution.")
+            or event_type.startswith("order_wave.")
+        ):
+            return
+        self.event_types[event_type] += 1
+        bot = _bot_key(row, live_event)
+        timestamp_ms = _record_ts(row)
+        data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+
+        if event_type == "order_wave.started":
+            order_wave_id = _event_id_value(live_event, "order_wave_id")
+            self.starts_seen["order_wave.total"] += 1
+            if order_wave_id is None or timestamp_ms is None:
+                self.missing_id_counts["order_wave.total"] += 1
+                return
+            self.wave_starts[(bot, int(cycle_scope), order_wave_id)] = int(timestamp_ms)
+            return
+
+        if event_type == "order_wave.completed":
+            self.terminals_seen["order_wave.total"] += 1
+            order_wave_id = _event_id_value(live_event, "order_wave_id")
+            emitted_elapsed = _non_negative_ms(data.get("elapsed_ms"))
+            if emitted_elapsed is not None:
+                if order_wave_id is not None:
+                    self.wave_starts.pop((bot, int(cycle_scope), order_wave_id), None)
+                self._add_timing(
+                    row=row,
+                    live_event=live_event,
+                    operation="order_wave.total",
+                    value_ms=emitted_elapsed,
+                )
+                return
+            if order_wave_id is None:
+                self.missing_id_counts["order_wave.total"] += 1
+                return
+            self._pair_elapsed(
+                starts=self.wave_starts,
+                key=(bot, int(cycle_scope), order_wave_id),
+                row=row,
+                live_event=live_event,
+                operation="order_wave.total",
+            )
+            return
+
+        if event_type in {"execution.create_sent", "execution.cancel_sent"}:
+            operation = (
+                "execution.create_response"
+                if event_type == "execution.create_sent"
+                else "execution.cancel_response"
+            )
+            action_id = _event_id_value(live_event, "action_id")
+            self.starts_seen[operation] += 1
+            if action_id is None or timestamp_ms is None:
+                self.missing_id_counts[operation] += 1
+                return
+            self.action_starts[(bot, int(cycle_scope), action_id)] = int(timestamp_ms)
+            return
+
+        if event_type in _EXECUTION_CREATE_TERMINALS | _EXECUTION_CANCEL_TERMINALS:
+            operation = (
+                "execution.create_response"
+                if event_type in _EXECUTION_CREATE_TERMINALS
+                else "execution.cancel_response"
+            )
+            self.terminals_seen[operation] += 1
+            action_id = _event_id_value(live_event, "action_id")
+            if action_id is None:
+                self.missing_id_counts[operation] += 1
+                return
+            self._pair_elapsed(
+                starts=self.action_starts,
+                key=(bot, int(cycle_scope), action_id),
+                row=row,
+                live_event=live_event,
+                operation=operation,
+            )
+            return
+
+        if event_type == "execution.confirmation_requested":
+            order_wave_id = _event_id_value(live_event, "order_wave_id")
+            self.starts_seen["execution.confirmation"] += 1
+            if order_wave_id is None or timestamp_ms is None:
+                self.missing_id_counts["execution.confirmation"] += 1
+                return
+            self.confirmation_starts[(bot, int(cycle_scope), order_wave_id)] = int(timestamp_ms)
+            return
+
+        if event_type in _EXECUTION_CONFIRMATION_TERMINALS:
+            operation = "execution.confirmation"
+            self.terminals_seen[operation] += 1
+            order_wave_id = _event_id_value(live_event, "order_wave_id")
+            emitted_elapsed = _non_negative_ms(data.get("confirm_ms"))
+            if emitted_elapsed is None:
+                emitted_elapsed = _non_negative_ms(data.get("elapsed_ms"))
+            if emitted_elapsed is not None:
+                if order_wave_id is not None:
+                    self.confirmation_starts.pop(
+                        (bot, int(cycle_scope), order_wave_id),
+                        None,
+                    )
+                self._add_timing(
+                    row=row,
+                    live_event=live_event,
+                    operation=operation,
+                    value_ms=emitted_elapsed,
+                )
+                return
+            if order_wave_id is None:
+                self.missing_id_counts[operation] += 1
+                return
+            self._pair_elapsed(
+                starts=self.confirmation_starts,
+                key=(bot, int(cycle_scope), order_wave_id),
+                row=row,
+                live_event=live_event,
+                operation=operation,
+            )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        timing = self.accumulator.to_dict(group_limit=group_limit)
+        pending_starts = Counter()
+        for _key in self.action_starts:
+            pending_starts["execution.write_response"] += 1
+        for _key in self.confirmation_starts:
+            pending_starts["execution.confirmation"] += 1
+        for _key in self.wave_starts:
+            pending_starts["order_wave.total"] += 1
+        return {
+            "total_events": sum(self.event_types.values()),
+            "event_types": dict(self.event_types.most_common()),
+            "starts_seen": dict(sorted(self.starts_seen.items())),
+            "terminals_seen": dict(sorted(self.terminals_seen.items())),
+            "timing_observations": dict(sorted(self.timing_observations.items())),
+            "missing_id_counts": dict(sorted(self.missing_id_counts.items())),
+            "unpaired_terminal_counts": dict(sorted(self.unpaired_terminal_counts.items())),
+            "pending_start_counts": dict(sorted(pending_starts.items())),
+            "total_groups": int(timing.get("total_groups") or 0),
+            "groups_truncated": bool(timing.get("groups_truncated")),
+            "groups": timing.get("groups") or [],
+        }
+
+
 def _slowest_blockers(
     *,
     performance_groups: list[dict[str, Any]],
     decision_boundary_groups: list[dict[str, Any]],
     input_staleness_groups: list[dict[str, Any]],
+    execution_timing_groups: list[dict[str, Any]],
     group_limit: int = GROUP_LIMIT,
 ) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
@@ -936,6 +1166,7 @@ def _slowest_blockers(
         ("performance", performance_groups),
         ("decision_boundary_lag", decision_boundary_groups),
         ("input_staleness", input_staleness_groups),
+        ("execution_timing", execution_timing_groups),
     ):
         for group in groups:
             impact = str(group.get("trading_impact") or "")
@@ -1226,6 +1457,7 @@ def build_live_performance_report(
     startup_readiness = _StartupReadinessAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
+    execution_timing = _ExecutionTimingAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -1312,6 +1544,11 @@ def build_live_performance_report(
                     startup_readiness.add(row=row, live_event=live_event)
                     resource_pressure.add(row=row, live_event=live_event)
                     shutdown_latency.add(row=row, live_event=live_event)
+                    execution_timing.add(
+                        row=row,
+                        live_event=live_event,
+                        cycle_scope=cycle_scope,
+                    )
         except OSError as exc:
             issues.append(
                 {
@@ -1328,6 +1565,7 @@ def build_live_performance_report(
     performance_groups = accumulator.groups_list()
     decision_boundary_groups = decision_boundary.groups_list()
     input_staleness_groups = input_staleness.groups_list()
+    execution_timing_groups = execution_timing.accumulator.groups_list()
     report = {
         "ok": error_count == 0,
         "root": _user_safe_display_path(root),
@@ -1351,10 +1589,12 @@ def build_live_performance_report(
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
+        "execution_timing": execution_timing.to_dict(group_limit=group_limit),
         "slowest_blockers": _slowest_blockers(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
             input_staleness_groups=input_staleness_groups,
+            execution_timing_groups=execution_timing_groups,
             group_limit=group_limit,
         ),
     }
@@ -1456,6 +1696,17 @@ def summarize_live_performance_report(
         if len(shutdown_groups) > max(0, int(group_limit)):
             shutdown_latency["groups_truncated"] = True
         summary["shutdown_latency"] = shutdown_latency
+    if isinstance(report.get("execution_timing"), dict):
+        execution_timing = dict(report["execution_timing"])
+        execution_groups = (
+            execution_timing.get("groups")
+            if isinstance(execution_timing.get("groups"), list)
+            else []
+        )
+        execution_timing["groups"] = execution_groups[: max(0, int(group_limit))]
+        if len(execution_groups) > max(0, int(group_limit)):
+            execution_timing["groups_truncated"] = True
+        summary["execution_timing"] = execution_timing
     if isinstance(report.get("slowest_blockers"), dict):
         slowest_blockers = report["slowest_blockers"]
         blocker_groups = (

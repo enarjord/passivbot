@@ -186,7 +186,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   event queue depth, dropped-event counters, and sink-error counters without exposing raw
   account or financial payloads. The `shutdown_latency` section summarizes existing
   lifecycle shutdown events, including per-stage cumulative elapsed time and final shutdown
-  duration, without copying shutdown error text.
+  duration, without copying shutdown error text. The `execution_timing` section derives
+  aggregate exchange-action latency groups from existing order-wave, order create/cancel,
+  and confirmation events with missing/unpaired counters, without exposing raw order payloads.
 
 ## Exchange Helpers
 
