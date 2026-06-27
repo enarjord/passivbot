@@ -10,6 +10,7 @@ from typing import Any
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import discover_event_files
+from live.smoke_report import _user_safe_display_path
 
 
 GROUP_LIMIT = 80
@@ -415,17 +416,17 @@ def build_live_performance_report(
         files = []
         issues.append(
             {
-                "path": str(root),
+                "path": _user_safe_display_path(root),
                 "line": None,
                 "severity": "error",
                 "code": "path_not_found",
-                "message": str(exc),
+                "message": getattr(exc, "strerror", None) or "path not found",
             }
         )
     if not files and not issues:
         issues.append(
             {
-                "path": str(root),
+                "path": _user_safe_display_path(root),
                 "line": None,
                 "severity": "error",
                 "code": "no_event_files",
@@ -452,7 +453,7 @@ def build_live_performance_report(
                     except json.JSONDecodeError as exc:
                         issues.append(
                             {
-                                "path": str(path),
+                                "path": _user_safe_display_path(path),
                                 "line": int(line_no),
                                 "severity": "error",
                                 "code": "invalid_json",
@@ -463,7 +464,7 @@ def build_live_performance_report(
                     if not isinstance(row, dict):
                         issues.append(
                             {
-                                "path": str(path),
+                                "path": _user_safe_display_path(path),
                                 "line": int(line_no),
                                 "severity": "error",
                                 "code": "invalid_record",
@@ -499,11 +500,11 @@ def build_live_performance_report(
         except OSError as exc:
             issues.append(
                 {
-                    "path": str(path),
+                    "path": _user_safe_display_path(path),
                     "line": None,
                     "severity": "error",
                     "code": "read_failed",
-                    "message": str(exc),
+                    "message": getattr(exc, "strerror", None) or type(exc).__name__,
                 }
             )
 
@@ -511,9 +512,9 @@ def build_live_performance_report(
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     report = {
         "ok": error_count == 0,
-        "root": str(Path(root).expanduser()),
+        "root": _user_safe_display_path(root),
         "include_rotated": bool(include_rotated),
-        "files": [str(path) for path in files],
+        "files": [_user_safe_display_path(path) for path in files],
         "files_scanned": len(files),
         "records_total": int(records_total),
         "live_events": int(live_events),

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import io
 import json
+from pathlib import Path
 
+import live.performance_report as performance_report_module
 from live.performance_report import build_live_performance_report
 from tools import live_performance_report
 
@@ -225,3 +228,69 @@ def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert out["ok"] is True
     assert out["performance"]["groups"][0]["operation"] == "cycle.elapsed"
+
+
+def test_live_performance_report_redacts_missing_root_paths():
+    report = build_live_performance_report("/Users/operator/passivbot/missing-monitor")
+
+    rendered = json.dumps(report, sort_keys=True)
+    assert report["root"] == "~/passivbot/missing-monitor"
+    assert report["issues"][0]["path"] == "~/passivbot/missing-monitor"
+    assert "/Users/operator" not in rendered
+
+
+def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeypatch):
+    event_path = Path("/root/passivbot/monitor/binance/binance_01/events/current.ndjson")
+
+    monkeypatch.setattr(
+        performance_report_module,
+        "discover_event_files",
+        lambda root, *, include_rotated=False: [event_path],
+    )
+
+    def fail_open(path):
+        raise OSError(13, "Permission denied", str(path))
+
+    monkeypatch.setattr(performance_report_module, "_open_text", fail_open)
+
+    report = build_live_performance_report("/root/passivbot/monitor")
+
+    rendered = json.dumps(report, sort_keys=True)
+    assert report["root"] == "~/passivbot/monitor"
+    assert report["files"] == ["~/passivbot/monitor/binance/binance_01/events/current.ndjson"]
+    assert report["issues"][0]["path"] == (
+        "~/passivbot/monitor/binance/binance_01/events/current.ndjson"
+    )
+    assert report["issues"][0]["message"] == "Permission denied"
+    assert "/root/passivbot" not in rendered
+
+
+def test_live_performance_report_redacts_file_paths_for_valid_events(monkeypatch):
+    event_path = Path("/Users/operator/passivbot/monitor/binance/binance_01/events/current.ndjson")
+    row = _monitor_row(
+        event_type="cycle.completed",
+        seq=1,
+        ts=1000,
+        data={"elapsed_ms": 1000},
+    )
+
+    monkeypatch.setattr(
+        performance_report_module,
+        "discover_event_files",
+        lambda root, *, include_rotated=False: [event_path],
+    )
+    monkeypatch.setattr(
+        performance_report_module,
+        "_open_text",
+        lambda path: io.StringIO(json.dumps(row) + "\n"),
+    )
+
+    report = build_live_performance_report("/Users/operator/passivbot/monitor")
+
+    rendered = json.dumps(report, sort_keys=True)
+    assert report["ok"] is True
+    assert report["root"] == "~/passivbot/monitor"
+    assert report["files"] == [
+        "~/passivbot/monitor/binance/binance_01/events/current.ndjson"
+    ]
+    assert "/Users/operator" not in rendered
