@@ -275,6 +275,150 @@ def summarize_account_critical_probe_collection(probes: list[dict[str, Any]]) ->
     }
 
 
+def _clock_skew_summary(values: list[float]) -> dict[str, Any]:
+    summary = _latency_summary(values)
+    summary["max_abs"] = (
+        round(max((abs(value) for value in values), default=0.0), 3)
+        if values
+        else None
+    )
+    return summary
+
+
+def _round_ms_value(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    return round(float(value), 3)
+
+
+def summarize_time_sync_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize read-only exchange clock-skew probe results."""
+    include_time_sync = bool(probe.get("include_time_sync", True))
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    total = 0
+    succeeded = 0
+    failed = 0
+    unsupported = 0
+    latencies = []
+    skews = []
+    error_types: Counter[str] = Counter()
+    latest: dict[str, Any] | None = None
+    for repeat in repeats:
+        outcome = repeat.get("fetch_time") if isinstance(repeat, dict) else None
+        if outcome is None:
+            if include_time_sync:
+                unsupported += 1
+                latest = {"ok": False, "supported": False, "skipped": True}
+            continue
+        if not isinstance(outcome, dict):
+            total += 1
+            failed += 1
+            error_types["missing_outcome"] += 1
+            latest = {
+                "ok": False,
+                "elapsed_ms": None,
+                "error_type": "missing_outcome",
+            }
+            continue
+        if bool(outcome.get("skipped")) or outcome.get("supported") is False:
+            unsupported += 1
+            latest = {"ok": False, "supported": False, "skipped": True}
+            continue
+        total += 1
+        elapsed_ms = _elapsed_ms(outcome)
+        if elapsed_ms is not None:
+            latencies.append(elapsed_ms)
+        ok = bool(outcome.get("ok")) if isinstance(outcome, dict) else False
+        if ok:
+            succeeded += 1
+            skew = _round_ms_value(outcome.get("clock_skew_ms"))
+            if skew is not None:
+                skews.append(skew)
+            latest = {
+                "ok": True,
+                "elapsed_ms": elapsed_ms,
+                "clock_skew_ms": skew,
+                "abs_clock_skew_ms": round(abs(skew), 3) if skew is not None else None,
+            }
+            continue
+        failed += 1
+        error_type = (
+            str(outcome.get("error_type") or "unknown")
+            if isinstance(outcome, dict)
+            else "missing_outcome"
+        )
+        error_types[error_type] += 1
+        latest = {"ok": False, "elapsed_ms": elapsed_ms, "error_type": error_type}
+    return {
+        "enabled": include_time_sync,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "unsupported": unsupported,
+        "failure_pct": _pct(failed, total),
+        "latency_ms": _latency_summary(latencies),
+        "clock_skew_ms": _clock_skew_summary(skews),
+        "error_types": dict(sorted(error_types.items())),
+        "latest": latest,
+    }
+
+
+def summarize_time_sync_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    total = 0
+    succeeded = 0
+    failed = 0
+    unsupported = 0
+    skews = []
+    for probe in probes:
+        summary = probe.get("time_sync_health")
+        if not isinstance(summary, dict):
+            summary = summarize_time_sync_probe_health(probe)
+        skew_summary = (
+            summary.get("clock_skew_ms") if isinstance(summary.get("clock_skew_ms"), dict) else {}
+        )
+        latest = summary.get("latest") if isinstance(summary.get("latest"), dict) else {}
+        latest_skew = _round_ms_value(latest.get("clock_skew_ms"))
+        probe_skews: list[float] = []
+        repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+        for repeat in repeats:
+            outcome = repeat.get("fetch_time") if isinstance(repeat, dict) else None
+            if isinstance(outcome, dict) and outcome.get("ok"):
+                skew = _round_ms_value(outcome.get("clock_skew_ms"))
+                if skew is not None:
+                    probe_skews.append(skew)
+        if probe_skews:
+            skews.extend(probe_skews)
+        elif latest_skew is not None:
+            skews.append(latest_skew)
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "enabled": bool(summary.get("enabled")),
+            "total": int(summary.get("total") or 0),
+            "succeeded": int(summary.get("succeeded") or 0),
+            "failed": int(summary.get("failed") or 0),
+            "unsupported": int(summary.get("unsupported") or 0),
+            "failure_pct": summary.get("failure_pct"),
+            "latest_clock_skew_ms": latest_skew,
+            "max_abs_clock_skew_ms": skew_summary.get("max_abs"),
+        }
+        users.append(user_summary)
+        total += user_summary["total"]
+        succeeded += user_summary["succeeded"]
+        failed += user_summary["failed"]
+        unsupported += user_summary["unsupported"]
+    return {
+        "users": users,
+        "total": total,
+        "succeeded": succeeded,
+        "failed": failed,
+        "unsupported": unsupported,
+        "failure_pct": _pct(failed, total),
+        "clock_skew_ms": _clock_skew_summary(skews),
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -284,6 +428,49 @@ async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]
             "type": type(markets).__name__,
         }
     return outcome, markets
+
+
+async def _fetch_exchange_time_sync(exchange) -> dict[str, Any]:
+    method = getattr(exchange, "fetch_time", None)
+    has = getattr(exchange, "has", None)
+    supported = isinstance(has, dict) and has.get("fetchTime") is True
+    if method is None or not supported:
+        return {
+            "ok": False,
+            "supported": False,
+            "skipped": True,
+            "error_type": "UnsupportedEndpoint",
+            "error": "fetch_time unavailable",
+        }
+    local_before_ms = int(utc_ms())
+    outcome = await _timed_call(method())
+    local_after_ms = int(utc_ms())
+    local_midpoint_ms = int(round((local_before_ms + local_after_ms) / 2.0))
+    outcome["supported"] = True
+    outcome["local_before_ms"] = local_before_ms
+    outcome["local_after_ms"] = local_after_ms
+    outcome["local_midpoint_ms"] = local_midpoint_ms
+    if not outcome["ok"] and outcome.get("error_type") == "NotSupported":
+        outcome["supported"] = False
+        outcome["skipped"] = True
+        return outcome
+    if outcome["ok"]:
+        try:
+            exchange_time_ms = int(outcome.pop("value"))
+        except (TypeError, ValueError):
+            outcome.update(
+                {
+                    "ok": False,
+                    "error_type": "ValueError",
+                    "error": "fetch_time returned non-integer timestamp",
+                }
+            )
+        else:
+            outcome["exchange_time_ms"] = exchange_time_ms
+            outcome["exchange_datetime"] = ts_to_date(exchange_time_ms)
+            outcome["clock_skew_ms"] = int(exchange_time_ms - local_midpoint_ms)
+            outcome["abs_clock_skew_ms"] = abs(int(outcome["clock_skew_ms"]))
+    return outcome
 
 
 async def _fetch_ticker_sequential(exchange, symbols: list[str]) -> dict[str, Any]:
@@ -450,6 +637,7 @@ async def probe_exchange_ticker_endpoints(
     include_order_book: bool = True,
     include_ohlcv: bool = True,
     include_my_trades: bool = True,
+    include_time_sync: bool = True,
     progress: bool = False,
 ) -> dict[str, Any]:
     exchange_id = getattr(exchange, "id", str(user_info.get("exchange") or ""))
@@ -476,6 +664,7 @@ async def probe_exchange_ticker_endpoints(
         "include_private": bool(include_private),
         "include_public": bool(include_public),
         "include_my_trades": bool(include_my_trades),
+        "include_time_sync": bool(include_time_sync),
         "market_count": len(markets) if isinstance(markets, dict) else None,
         "has": {
             "fetchBalance": bool(getattr(exchange, "has", {}).get("fetchBalance")),
@@ -485,6 +674,7 @@ async def probe_exchange_ticker_endpoints(
             "fetchOpenOrders": bool(getattr(exchange, "has", {}).get("fetchOpenOrders")),
             "fetchOrderBook": bool(getattr(exchange, "has", {}).get("fetchOrderBook")),
             "fetchPositions": bool(getattr(exchange, "has", {}).get("fetchPositions")),
+            "fetchTime": bool(getattr(exchange, "has", {}).get("fetchTime")),
             "fetchTicker": bool(getattr(exchange, "has", {}).get("fetchTicker")),
             "fetchTickers": bool(getattr(exchange, "has", {}).get("fetchTickers")),
         },
@@ -506,6 +696,14 @@ async def probe_exchange_ticker_endpoints(
             "started_at_ms": int(utc_ms()),
             "started_at": ts_to_date(utc_ms()),
         }
+
+        if include_time_sync:
+            emit_progress(f"{repeat_label} fetch_time", enabled=progress)
+            repeat["fetch_time"] = await _fetch_exchange_time_sync(exchange)
+            emit_progress(
+                f"{repeat_label} fetch_time {format_outcome(repeat['fetch_time'])}",
+                enabled=progress,
+            )
 
         if include_public:
             emit_progress(f"{repeat_label} fetch_tickers()", enabled=progress)
@@ -651,6 +849,7 @@ async def probe_exchange_ticker_endpoints(
             await asyncio.sleep(float(sleep_between_seconds))
 
     out["account_critical_health"] = summarize_account_critical_probe_health(out)
+    out["time_sync_health"] = summarize_time_sync_probe_health(out)
     return out
 
 
@@ -669,6 +868,7 @@ async def probe_user_ticker_endpoints(
     include_order_book: bool = True,
     include_ohlcv: bool = True,
     include_my_trades: bool = True,
+    include_time_sync: bool = True,
     progress: bool = False,
 ) -> dict[str, Any]:
     emit_progress(f"[{user}] loading api key config", enabled=progress)
@@ -694,6 +894,7 @@ async def probe_user_ticker_endpoints(
             include_order_book=include_order_book,
             include_ohlcv=include_ohlcv,
             include_my_trades=include_my_trades,
+            include_time_sync=include_time_sync,
             progress=progress,
         )
     finally:
@@ -735,6 +936,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip authenticated fetch_my_trades probe",
     )
+    parser.add_argument(
+        "--skip-time-sync",
+        action="store_true",
+        help="skip read-only fetch_time clock-skew probe",
+    )
     parser.add_argument("--quiet", action="store_true", help="suppress progress output")
     parser.add_argument("--out", help="output JSON path; default is tmp/ccxt_ticker_probe_<ts>.json")
     parser.add_argument("--json", action="store_true", help="also print JSON to stdout")
@@ -768,6 +974,7 @@ async def async_main() -> int:
         "include_order_book": not bool(args.skip_order_book) and not bool(args.account_only),
         "include_ohlcv": not bool(args.skip_ohlcv) and not bool(args.account_only),
         "include_my_trades": not bool(args.skip_my_trades) and not bool(args.account_only),
+        "include_time_sync": not bool(args.skip_time_sync),
         "probes": [],
     }
     for user in users:
@@ -787,6 +994,7 @@ async def async_main() -> int:
                 include_order_book=not bool(args.skip_order_book) and not bool(args.account_only),
                 include_ohlcv=not bool(args.skip_ohlcv) and not bool(args.account_only),
                 include_my_trades=not bool(args.skip_my_trades) and not bool(args.account_only),
+                include_time_sync=not bool(args.skip_time_sync),
                 progress=not bool(args.quiet),
             )
         )
@@ -795,6 +1003,7 @@ async def async_main() -> int:
     result["account_critical_health"] = summarize_account_critical_probe_collection(
         result["probes"]
     )
+    result["time_sync_health"] = summarize_time_sync_probe_collection(result["probes"])
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(result, indent=2, sort_keys=True, default=str) + "\n")

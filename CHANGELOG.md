@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added read-only `fetch_time` clock-skew health summaries to
+  `passivbot tool ticker-endpoint-probe`, with `--skip-time-sync` for operators
+  who want to omit the extra time-sync call.
 - Added process-signal safety guidance to
   `passivbot tool live-restart-smoke-plan`, warning future restart automation
   away from broad `pkill -f`/`pgrep -f` live-bot matches and toward exact tmux
