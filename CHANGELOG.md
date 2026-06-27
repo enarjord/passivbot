@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added snapshot surface and market-snapshot age breakdowns to
+  `passivbot tool live-performance-report`, using bounded metadata from
+  existing `snapshot.built` events without exposing market prices or raw
+  payloads.
 - Added `execution_timing` summaries to
   `passivbot tool live-performance-report`, deriving bounded exchange-action
   latency groups from existing order-wave, create/cancel, and confirmation

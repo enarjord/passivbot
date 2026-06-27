@@ -493,6 +493,8 @@ class _InputStalenessAccumulator:
         self.snapshot_ts_by_cycle: dict[tuple[str, int, str], int] = {}
         self.ema_ts_by_cycle: dict[tuple[str, int, str], int] = {}
         self.snapshots_seen = 0
+        self.snapshot_surface_age_rows = 0
+        self.snapshot_market_summaries_seen = 0
         self.rust_calls_seen = 0
         self.packet_refs_missing = 0
         self.rust_calls_missing_snapshot = 0
@@ -551,6 +553,53 @@ class _InputStalenessAccumulator:
             cycle_id = _cycle_id_from_snapshot_data(data)
             if cycle_id:
                 self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
+            surface_ages = data.get("surface_ages")
+            if isinstance(surface_ages, list):
+                for surface in surface_ages:
+                    if not isinstance(surface, dict):
+                        continue
+                    name = surface.get("name")
+                    age_ms = _non_negative_ms(surface.get("age_ms"))
+                    if name is None or age_ms is None:
+                        continue
+                    self.snapshot_surface_age_rows += 1
+                    surface_name = str(name)
+                    impact = (
+                        "blocks_indicator_readiness"
+                        if surface_name == "completed_candles"
+                        else "blocks_exchange_actions"
+                    )
+                    self._add_group(
+                        row=row,
+                        live_event=live_event,
+                        operation=f"input_staleness.surface.{surface_name}",
+                        value_ms=age_ms,
+                        timing_kind="age_at_snapshot",
+                        trading_impact=impact,
+                    )
+            market_summary = data.get("market_snapshot_summary")
+            if isinstance(market_summary, dict):
+                max_age_ms = _non_negative_ms(market_summary.get("max_age_ms"))
+                mean_age_ms = _non_negative_ms(market_summary.get("mean_age_ms"))
+                if max_age_ms is not None:
+                    self.snapshot_market_summaries_seen += 1
+                    self._add_group(
+                        row=row,
+                        live_event=live_event,
+                        operation="input_staleness.market_snapshot.max",
+                        value_ms=max_age_ms,
+                        timing_kind="age_at_snapshot",
+                        trading_impact="blocks_exchange_actions",
+                    )
+                if mean_age_ms is not None:
+                    self._add_group(
+                        row=row,
+                        live_event=live_event,
+                        operation="input_staleness.market_snapshot.mean",
+                        value_ms=mean_age_ms,
+                        timing_kind="age_at_snapshot",
+                        trading_impact="blocks_exchange_actions",
+                    )
             packets = data.get("data_packets")
             if not isinstance(packets, list):
                 return
@@ -627,6 +676,8 @@ class _InputStalenessAccumulator:
         groups = self.groups_list()
         return {
             "snapshots_seen": int(self.snapshots_seen),
+            "snapshot_surface_age_rows": int(self.snapshot_surface_age_rows),
+            "snapshot_market_summaries_seen": int(self.snapshot_market_summaries_seen),
             "rust_calls_seen": int(self.rust_calls_seen),
             "packet_refs_missing": int(self.packet_refs_missing),
             "rust_calls_missing_snapshot": int(self.rust_calls_missing_snapshot),
@@ -1653,6 +1704,12 @@ def summarize_live_performance_report(
         )
         summary["input_staleness"] = {
             "snapshots_seen": int(input_staleness.get("snapshots_seen") or 0),
+            "snapshot_surface_age_rows": int(
+                input_staleness.get("snapshot_surface_age_rows") or 0
+            ),
+            "snapshot_market_summaries_seen": int(
+                input_staleness.get("snapshot_market_summaries_seen") or 0
+            ),
             "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
             "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),
             "rust_calls_missing_snapshot": int(

@@ -581,6 +581,30 @@ def test_live_performance_report_input_staleness(tmp_path):
                 ts=2000,
                 data={
                     "cycle_id": 1,
+                    "surface_ages": [
+                        {
+                            "name": "balance",
+                            "age_ms": 900,
+                            "epoch": 3,
+                            "min_epoch": 3,
+                        },
+                        {
+                            "name": "completed_candles",
+                            "age_ms": 1500,
+                            "epoch": 2,
+                            "min_epoch": 2,
+                        },
+                    ],
+                    "market_snapshot_summary": {
+                        "count": 2,
+                        "symbol_count": 2,
+                        "missing_count": 0,
+                        "max_age_ms": 700,
+                        "mean_age_ms": 450,
+                        "configured_max_age_ms": 10_000,
+                        "sources": ["ticker"],
+                        "sources_count": 1,
+                    },
                     "data_packets": [
                         {"kind": "balance", "revision": 7},
                         {"kind": "open_orders", "revision": 8},
@@ -610,8 +634,17 @@ def test_live_performance_report_input_staleness(tmp_path):
     }
 
     assert report["input_staleness"]["snapshots_seen"] == 1
+    assert report["input_staleness"]["snapshot_surface_age_rows"] == 2
+    assert report["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert report["input_staleness"]["rust_calls_seen"] == 1
     assert report["input_staleness"]["packet_refs_missing"] == 0
+    assert staleness_groups["input_staleness.surface.balance"]["max_ms"] == 900
+    assert staleness_groups["input_staleness.surface.completed_candles"]["max_ms"] == 1500
+    assert staleness_groups["input_staleness.surface.completed_candles"][
+        "trading_impact"
+    ] == "blocks_indicator_readiness"
+    assert staleness_groups["input_staleness.market_snapshot.max"]["max_ms"] == 700
+    assert staleness_groups["input_staleness.market_snapshot.mean"]["max_ms"] == 450
     assert staleness_groups["input_staleness.data_packet.balance"]["max_ms"] == 1000
     assert staleness_groups["input_staleness.data_packet.open_orders"]["max_ms"] == 800
     assert staleness_groups["input_staleness.data_packet.positions"]["max_ms"] == 600
@@ -631,7 +664,12 @@ def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path
                 event_type="snapshot.built",
                 seq=1,
                 ts=2000,
-                data={"cycle_id": 1, "data_packets": []},
+                data={
+                    "cycle_id": 1,
+                    "surface_ages": [{"name": "balance", "age_ms": 500}],
+                    "market_snapshot_summary": {"max_age_ms": 250, "mean_age_ms": 125},
+                    "data_packets": [],
+                },
             ),
             _monitor_row(event_type="bot.started", seq=2, ts=10_000),
             _monitor_row(
@@ -675,7 +713,12 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
                 event_type="snapshot.built",
                 seq=1,
                 ts=2000,
-                data={"cycle_id": 1, "data_packets": []},
+                data={
+                    "cycle_id": 1,
+                    "surface_ages": [{"name": "balance", "age_ms": 500}],
+                    "market_snapshot_summary": {"max_age_ms": 250, "mean_age_ms": 125},
+                    "data_packets": [],
+                },
             ),
             _monitor_row(
                 event_type="rust_orchestrator.called",
@@ -690,9 +733,11 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     summary = summarize_live_performance_report(report, group_limit=1)
 
     assert summary["input_staleness"]["snapshots_seen"] == 1
+    assert summary["input_staleness"]["snapshot_surface_age_rows"] == 1
+    assert summary["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert summary["input_staleness"]["rust_calls_seen"] == 1
     assert summary["input_staleness"]["rust_calls_missing_ema"] == 1
-    assert summary["input_staleness"]["total_groups"] == 1
+    assert summary["input_staleness"]["total_groups"] == 4
     assert len(summary["input_staleness"]["groups"]) == 1
 
 
