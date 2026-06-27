@@ -301,6 +301,111 @@ def test_live_performance_report_summary_projection_is_bounded(tmp_path):
     assert "event_types" not in summary
 
 
+def test_live_performance_report_decision_boundary_lag(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                seq=1,
+                ts=61_000,
+                component="execution_loop",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=2,
+                ts=62_500,
+                component="rust_orchestrator",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.returned",
+                seq=3,
+                ts=62_700,
+                component="rust_orchestrator",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="action.planned",
+                seq=4,
+                ts=62_800,
+                component="action_planner",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=5,
+                ts=63_500,
+                component="executor",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="execution.confirmation_satisfied",
+                seq=6,
+                ts=64_000,
+                component="executor",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=7,
+                ts=64_200,
+                component="execution_loop",
+                ids={"cycle_id": "cy_1"},
+                data={"elapsed_ms": 3200},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    lag_groups = {
+        group["operation"]: group
+        for group in report["decision_boundary_lag"]["groups"]
+    }
+
+    assert report["decision_boundary_lag"]["cycles"] == 1
+    assert report["decision_boundary_lag"]["cycles_with_write"] == 1
+    assert lag_groups["decision_boundary.cycle_started"]["max_ms"] == 1000
+    assert lag_groups["decision_boundary.rust_called"]["max_ms"] == 2500
+    assert lag_groups["decision_boundary.action_planned"]["max_ms"] == 2800
+    assert lag_groups["decision_boundary.first_write_sent"]["max_ms"] == 3500
+    assert lag_groups["decision_boundary.confirmation_satisfied"]["max_ms"] == 4000
+    assert lag_groups["decision_boundary.cycle_completed"]["max_ms"] == 4200
+    assert lag_groups["decision_boundary.first_write_sent"]["trading_impact"] == (
+        "blocks_exchange_actions"
+    )
+
+
+def test_live_performance_report_summary_includes_bounded_decision_lag(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                seq=1,
+                ts=61_000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=2,
+                ts=62_500,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert summary["decision_boundary_lag"]["cycles"] == 1
+    assert summary["decision_boundary_lag"]["total_groups"] == 2
+    assert len(summary["decision_boundary_lag"]["groups"]) == 1
+
+
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
