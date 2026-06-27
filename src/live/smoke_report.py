@@ -64,6 +64,7 @@ ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
 RISK_EVENT_GROUP_LIMIT = 20
 SHUTDOWN_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
+EMA_READINESS_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -921,6 +922,176 @@ def _summarize_problem_event_groups(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > PROBLEM_EVENT_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _count_from_summary(value: Any) -> int:
+    if not isinstance(value, dict):
+        return 0
+    return int(_non_negative_int(value.get("count")) or 0)
+
+
+def _reason_symbol_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, list):
+        return {}
+    counts: Counter[str] = Counter()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        reason = str(item.get("reason") or "unknown")
+        counts[reason] += _count_from_summary(item.get("symbols")) or 1
+    return dict(counts.most_common())
+
+
+def _candidate_error_type_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, list):
+        return {}
+    counts: Counter[str] = Counter()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        error_types = item.get("error_types")
+        if isinstance(error_types, list):
+            for error_type in error_types:
+                if error_type:
+                    counts[str(error_type)] += 1
+    return dict(counts.most_common())
+
+
+def _ema_readiness_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_candidate_unavailable_count": _count_from_summary(
+            payload.get("candidate_unavailable")
+        ),
+        "latest_unavailable_count": _count_from_summary(payload.get("unavailable")),
+        "latest_optional_drop_count": int(
+            _non_negative_int(payload.get("optional_drop_count")) or 0
+        ),
+        "candidate_reason_counts": _reason_symbol_counts(
+            payload.get("candidate_unavailable_groups")
+        ),
+        "unavailable_reason_counts": _reason_symbol_counts(
+            payload.get("unavailable_reasons")
+        ),
+        "candidate_error_type_counts": _candidate_error_type_counts(
+            payload.get("candidate_unavailable_groups")
+        ),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+        "latest_data": _compact_problem_event_data(live_event),
+    }
+
+
+def _merge_ema_readiness_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("reason_code"),
+        group.get("status"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_candidate_unavailable_count",
+            "latest_unavailable_count",
+            "latest_optional_drop_count",
+            "candidate_reason_counts",
+            "unavailable_reason_counts",
+            "candidate_error_type_counts",
+            "latest_ids",
+            "latest_data",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_ema_readiness_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            -int(item.get("latest_candidate_unavailable_count") or 0),
+            -int(item.get("latest_unavailable_count") or 0),
+            -int(item.get("count") or 0),
+            str(item.get("bot") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:EMA_READINESS_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > EMA_READINESS_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len({group.get("bot") for group in groups.values()}),
+        "latest_candidate_unavailable_total": sum(
+            int(group.get("latest_candidate_unavailable_count") or 0)
+            for group in groups.values()
+        ),
+        "latest_unavailable_total": sum(
+            int(group.get("latest_unavailable_count") or 0)
+            for group in groups.values()
+        ),
+        "latest_optional_drop_total": sum(
+            int(group.get("latest_optional_drop_count") or 0)
+            for group in groups.values()
+        ),
         "groups": compact_groups,
     }
 
@@ -1917,6 +2088,8 @@ def _scan_events(
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    ema_readiness_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -1999,6 +2172,18 @@ def _scan_events(
                                 remote_call_timing_groups,
                                 remote_call_timing_group,
                             )
+                    if event_type == EventTypes.EMA_UNAVAILABLE:
+                        ema_readiness_event_type_counts[str(event_type)] += 1
+                        _merge_ema_readiness_group(
+                            ema_readiness_groups,
+                            _ema_readiness_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if event_type in RISK_EVENT_TYPES:
                         risk_event_type_counts[str(event_type)] += 1
                         _merge_risk_event_group(
@@ -2097,6 +2282,10 @@ def _scan_events(
             _account_critical_remote_call_health_groups(remote_call_health_groups)
         ),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
+        "ema_readiness_health": _summarize_ema_readiness_health(
+            ema_readiness_groups,
+            ema_readiness_event_type_counts,
+        ),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
             risk_event_type_counts,
@@ -2405,6 +2594,16 @@ def build_live_smoke_report(
                 "groups_truncated": False,
                 "groups": [],
             },
+            "ema_readiness_health": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "bots": 0,
+                "latest_candidate_unavailable_total": 0,
+                "latest_unavailable_total": 0,
+                "latest_optional_drop_total": 0,
+                "groups": [],
+            },
             "risk_events": {
                 "total": 0,
                 "groups_truncated": False,
@@ -2479,6 +2678,7 @@ def build_live_smoke_report(
             "account_critical_remote_call_health"
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
+        "ema_readiness_health": event_scan["ema_readiness_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
@@ -2511,6 +2711,12 @@ def _summary_limited_groups(
             "failure_pct": summary.get("failure_pct"),
             "throttled_pct": summary.get("throttled_pct"),
             "event_types": summary.get("event_types"),
+            "bots": summary.get("bots"),
+            "latest_candidate_unavailable_total": summary.get(
+                "latest_candidate_unavailable_total"
+            ),
+            "latest_unavailable_total": summary.get("latest_unavailable_total"),
+            "latest_optional_drop_total": summary.get("latest_optional_drop_total"),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
             "groups": groups[:limit],
@@ -2548,6 +2754,11 @@ def summarize_live_smoke_report(
     )
     risk_events = (
         report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+    ema_readiness_health = (
+        report.get("ema_readiness_health")
+        if isinstance(report.get("ema_readiness_health"), dict)
+        else {}
     )
     shutdown_events = (
         report.get("shutdown_events")
@@ -2648,6 +2859,10 @@ def summarize_live_smoke_report(
             report.get("account_critical_remote_call_health") or {},
             limit=max_groups,
         ),
+        "ema_readiness_health": _summary_limited_groups(
+            ema_readiness_health,
+            limit=max_groups,
+        ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
@@ -2693,6 +2908,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     monitor = report.get("monitor") if isinstance(report.get("monitor"), dict) else {}
     risk_events = (
         report.get("risk_events") if isinstance(report.get("risk_events"), dict) else {}
+    )
+    ema_readiness_health = (
+        report.get("ema_readiness_health")
+        if isinstance(report.get("ema_readiness_health"), dict)
+        else {}
     )
     shutdown_events = (
         report.get("shutdown_events")
@@ -2780,6 +3000,20 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "account_critical_remote_calls": _brief_remote_call_health(
             report.get("account_critical_remote_call_health")
         ),
+        "ema_readiness": {
+            "total": _count_value(ema_readiness_health.get("total")),
+            "bots": _count_value(ema_readiness_health.get("bots")),
+            "latest_candidate_unavailable_total": _count_value(
+                ema_readiness_health.get("latest_candidate_unavailable_total")
+            ),
+            "latest_unavailable_total": _count_value(
+                ema_readiness_health.get("latest_unavailable_total")
+            ),
+            "latest_optional_drop_total": _count_value(
+                ema_readiness_health.get("latest_optional_drop_total")
+            ),
+            "event_types": ema_readiness_health.get("event_types") or {},
+        },
         "risk_events": {
             "total": _count_value(risk_events.get("total")),
             "event_types": risk_events.get("event_types") or {},

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added bounded EMA readiness health summaries to
+  `passivbot tool live-smoke-report`, projecting existing `ema.unavailable`
+  events into latest candidate/unavailable counts plus reason/error evidence.
 - Added no-extra-call `exchange_surface_health` summaries to
   `passivbot tool ticker-endpoint-probe`, interpreting already-recorded endpoint
   outcomes into exchange/user-level notes for open-orders fallback, time-sync
