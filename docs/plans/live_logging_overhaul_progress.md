@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f763a85a` after PR #784, `Add startup readiness performance summary`.
+- `002fb965` after PR #787, `Add live performance slowest blockers view`.
 
 Current review gate:
 
@@ -2094,6 +2094,29 @@ VPS5 deployment status:
   2-minute smoke then reported `ok=true`, `hard_failures=0`,
   `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
   `matched_expected=5`, and `missing_expected=[]`.
+
+### PR #787: Live Performance Slowest Blockers View
+
+- Branch: `codex/v8-live-performance-slowest-blockers`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `slowest_blockers`, a bounded cross-section ranking derived from existing
+  performance, decision-boundary, and input-staleness metric groups. The view
+  excludes diagnostics-only/observability groups and copies only the existing
+  bounded metric fields plus `source_section` and `blocking_scope`.
+- Review evidence: CI was green. Claude approved the current head with no
+  findings. Hermes approved the equivalent pre-rebase code delta; the final
+  rebase only moved the branch over the already-merged progress-doc update.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, silent-handling audit, and a compact
+  filtered CLI smoke.
+- VPS5 evidence: deployed at `002fb965` without bot restart because this is
+  read-only report tooling. A focused Binance performance report returned
+  `ok=true` and showed `slowest_blockers` populated, with startup warmup and
+  HSL-related timings ranked above lower-impact groups. A 2-minute smoke
+  reported `ok=true`, `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
