@@ -140,8 +140,11 @@ from plotting import (
 from collections import defaultdict
 import logging
 import gzip
+import shutil
 import traceback
+import uuid
 from logging_setup import configure_logging, resolve_log_level
+from backtest_cancellation import raise_if_backtest_cancel_requested
 from materialized_cache import release_materialized_payload
 from suite_runner import (
     extract_suite_config,
@@ -1673,7 +1676,7 @@ def save_coins_hlcvs_to_cache(
         cache_hash,
         timestamps=timestamps,
     )
-    cache_dir.mkdir(parents=True, exist_ok=True)
+    cache_dir.parent.mkdir(parents=True, exist_ok=True)
     is_compressed = bool(require_config_value(config, "backtest.compress_cache"))
     warmup_minutes = int(warmup_minutes)
     meta_path = cache_dir / "cache_meta.json"
@@ -1693,9 +1696,69 @@ def save_coins_hlcvs_to_cache(
                 cache_dir,
                 exc,
             )
+    raise_if_backtest_cancel_requested("cache save start")
     logging.info(f"Dumping cache...")
-    json.dump(coins, open(cache_dir / "coins.json", "w"))
-    json.dump(mss, open(cache_dir / "market_specific_settings.json", "w"))
+    tmp_cache_dir = (
+        cache_dir.parent / f".{cache_dir.name}.tmp-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    )
+    backup_cache_dir = (
+        cache_dir.parent
+        / f".{cache_dir.name}.backup-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+    )
+    if tmp_cache_dir.exists():
+        shutil.rmtree(tmp_cache_dir)
+    if backup_cache_dir.exists():
+        shutil.rmtree(backup_cache_dir)
+    tmp_cache_dir.mkdir(parents=True)
+    published = False
+    try:
+        json.dump(coins, open(tmp_cache_dir / "coins.json", "w"))
+        json.dump(mss, open(tmp_cache_dir / "market_specific_settings.json", "w"))
+        _save_coins_hlcvs_artifacts_to_cache_dir(
+            config=config,
+            cache_dir=tmp_cache_dir,
+            coins=coins,
+            hlcvs=hlcvs,
+            exchange=exchange,
+            mss=mss,
+            btc_usd_prices=btc_usd_prices,
+            timestamps=timestamps,
+            warmup_minutes=warmup_minutes,
+            cache_hash=cache_hash,
+            is_compressed=is_compressed,
+        )
+        raise_if_backtest_cancel_requested("cache publish")
+        if cache_dir.exists():
+            os.replace(cache_dir, backup_cache_dir)
+        try:
+            os.replace(tmp_cache_dir, cache_dir)
+        except BaseException:
+            if backup_cache_dir.exists() and not cache_dir.exists():
+                os.replace(backup_cache_dir, cache_dir)
+            raise
+        published = True
+    finally:
+        if not published and tmp_cache_dir.exists():
+            shutil.rmtree(tmp_cache_dir, ignore_errors=True)
+        if backup_cache_dir.exists():
+            shutil.rmtree(backup_cache_dir, ignore_errors=True)
+    return cache_dir
+
+
+def _save_coins_hlcvs_artifacts_to_cache_dir(
+    *,
+    config,
+    cache_dir: Path,
+    coins,
+    hlcvs,
+    exchange,
+    mss,
+    btc_usd_prices,
+    timestamps,
+    warmup_minutes: int,
+    cache_hash: str,
+    is_compressed: bool,
+) -> None:
     uncompressed_size = hlcvs.nbytes
     sts = utc_ms()
     if is_compressed:
@@ -1703,15 +1766,18 @@ def save_coins_hlcvs_to_cache(
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         with gzip.open(fpath, "wb", compresslevel=1) as f:
             np.save(f, hlcvs)
+        raise_if_backtest_cancel_requested("hlcvs cache artifact")
         if timestamps is not None:
             ts_fpath = cache_dir / "timestamps.npy.gz"
             logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
             with gzip.open(ts_fpath, "wb", compresslevel=1) as f:
                 np.save(f, timestamps)
+            raise_if_backtest_cancel_requested("timestamps cache artifact")
         btc_fpath = cache_dir / "btc_usd_prices.npy.gz"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
         with gzip.open(btc_fpath, "wb", compresslevel=1) as f:
             np.save(f, btc_usd_prices)
+        raise_if_backtest_cancel_requested("btc cache artifact")
         compressed_size = (cache_dir / "hlcvs.npy.gz").stat().st_size
         btc_compressed_size = (cache_dir / "btc_usd_prices.npy.gz").stat().st_size
         line = (
@@ -1723,13 +1789,16 @@ def save_coins_hlcvs_to_cache(
         fpath = cache_dir / "hlcvs.npy"
         logging.info(f"Attempting to save hlcvs data to cache {fpath}...")
         np.save(fpath, hlcvs)
+        raise_if_backtest_cancel_requested("hlcvs cache artifact")
         if timestamps is not None:
             ts_fpath = cache_dir / "timestamps.npy"
             logging.info(f"Attempting to save timestamps to cache {ts_fpath}...")
             np.save(ts_fpath, timestamps)
+            raise_if_backtest_cancel_requested("timestamps cache artifact")
         btc_fpath = cache_dir / "btc_usd_prices.npy"
         logging.info(f"Attempting to save BTC/USD prices to cache {btc_fpath}...")
         np.save(btc_fpath, btc_usd_prices)
+        raise_if_backtest_cancel_requested("btc cache artifact")
         line = ""
     logging.info(
         f"Successfully dumped hlcvs cache {fpath}: "
@@ -1745,6 +1814,7 @@ def save_coins_hlcvs_to_cache(
             indent=2,
             sort_keys=True,
         )
+    raise_if_backtest_cancel_requested("cache manifest build")
     manifest = build_hlcvs_manifest(
         config=config,
         exchange=exchange,
@@ -1757,6 +1827,7 @@ def save_coins_hlcvs_to_cache(
         warmup_minutes=warmup_minutes,
         compressed=is_compressed,
     )
+    raise_if_backtest_cancel_requested("cache manifest write")
     write_hlcvs_manifest(cache_dir, manifest)
     json.dump(
         {
@@ -1764,9 +1835,8 @@ def save_coins_hlcvs_to_cache(
             "materialization_schema_version": manifest["materialization_schema_version"],
             "manifest_schema_version": manifest["schema_version"],
         },
-        open(meta_path, "w"),
+        open(cache_dir / "cache_meta.json", "w"),
     )
-    return cache_dir
 
 
 def ensure_valid_index_metadata(mss, hlcvs, coins, warmup_map=None):
@@ -1977,8 +2047,12 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
             force_overwrite=force_refetch_gaps,
         )
     except Exception as e:
+        release_materialized_payload(hlcvs)
         logging.error(f"Failed to save hlcvs to cache: {e}")
         traceback.print_exc()
+        raise
+    except BaseException:
+        release_materialized_payload(hlcvs)
         raise
     return coins, hlcvs, mss, results_path, cache_dir, btc_usd_prices, timestamps
 
@@ -2815,6 +2889,7 @@ async def main():
                 logging.info(f"chose {ex} for {','.join(exchange_preference[ex])}")
             config["backtest"]["coins"][exchange] = coins
             config["backtest"]["cache_dir"][exchange] = str(cache_dir)
+            raise_if_backtest_cancel_requested("backtest execution")
 
             fills, equities_array, analysis, payload = run_backtest(
                 hlcvs,
@@ -2855,6 +2930,7 @@ async def main():
             try:
                 configs[exchange]["backtest"]["coins"][exchange] = coins
                 configs[exchange]["backtest"]["cache_dir"][exchange] = str(cache_dir)
+                raise_if_backtest_cancel_requested("backtest execution")
                 fills, equities_array, analysis, payload = run_backtest(
                     hlcvs,
                     mss,

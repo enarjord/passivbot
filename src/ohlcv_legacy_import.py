@@ -3,11 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from collections import defaultdict
 
 import numpy as np
 
 from legacy_data_migrator import _sanitize_symbol
-from ohlcv_store import OhlcvStore
+from ohlcv_store import OhlcvStore, month_key_for_ts
 from ohlcv_utils import load_ohlcv_data
 
 
@@ -129,6 +130,7 @@ def import_legacy_range_into_store(
         return 0
 
     imported_rows = 0
+    month_batches: dict[tuple[int, int], list[tuple[np.ndarray, np.ndarray]]] = defaultdict(list)
     for day in _iter_utc_days(start_ts, end_ts):
         fpath = _resolve_legacy_day_path(symbol_dir, day)
         if fpath is None:
@@ -137,6 +139,17 @@ def import_legacy_range_into_store(
         mask = (ts >= int(start_ts)) & (ts <= int(end_ts))
         if not mask.any():
             continue
-        store.write_rows(exchange, timeframe, symbol, ts[mask], values[mask])
+        day_ts = ts[mask]
+        day_values = values[mask]
+        month_batches[month_key_for_ts(int(day_ts[0]))].append((day_ts, day_values))
         imported_rows += int(mask.sum())
+    for key in sorted(month_batches):
+        ts_parts, value_parts = zip(*month_batches[key])
+        store.write_rows(
+            exchange,
+            timeframe,
+            symbol,
+            np.concatenate(ts_parts),
+            np.concatenate(value_parts),
+        )
     return imported_rows

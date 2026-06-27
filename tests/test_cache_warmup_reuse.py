@@ -16,6 +16,7 @@ Tests cover:
 """
 
 import copy
+import asyncio
 import gzip
 import json
 import os
@@ -498,6 +499,102 @@ class TestSavePersistsWarmupMetadata:
         assert float(loaded[0, 0, 0]) == 7.0
         meta = json.load(open(os.path.join(str(cache_dir), "cache_meta.json")))
         assert meta["warmup_minutes"] == 1000
+
+    def test_interrupted_save_cleans_temp_and_preserves_existing_cache(self, tmp_path, monkeypatch):
+        """A pending interrupt during artifact save must not publish partial cache data."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        original = np.zeros((10, 1, 4), dtype=np.float64)
+        replacement = np.ones((10, 1, 4), dtype=np.float64) * 7.0
+        mss = {"BTC": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            original,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=1000,
+        )
+
+        def interrupt_after_hlcvs(stage):
+            if stage == "hlcvs cache artifact":
+                raise asyncio.CancelledError("test interrupt")
+
+        monkeypatch.setattr("backtest.raise_if_backtest_cancel_requested", interrupt_after_hlcvs)
+
+        with pytest.raises(asyncio.CancelledError):
+            save_coins_hlcvs_to_cache(
+                cfg,
+                coins,
+                replacement,
+                "binance",
+                mss,
+                btc_usd,
+                timestamps,
+                warmup_minutes=1000,
+                force_overwrite=True,
+            )
+
+        loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
+        assert float(loaded[0, 0, 0]) == 0.0
+        assert not list(Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.tmp-*"))
+
+    def test_publish_failure_restores_existing_cache(self, tmp_path, monkeypatch):
+        """A failed staged-cache publish must restore the previous cache directory."""
+        monkeypatch.chdir(tmp_path)
+        cfg = _base_config()
+
+        coins = ["BTC"]
+        original = np.zeros((10, 1, 4), dtype=np.float64)
+        replacement = np.ones((10, 1, 4), dtype=np.float64) * 7.0
+        mss = {"BTC": {}}
+        btc_usd = np.ones(10, dtype=np.float64)
+        timestamps = np.arange(10, dtype=np.int64) * 60_000
+
+        cache_dir = save_coins_hlcvs_to_cache(
+            cfg,
+            coins,
+            original,
+            "binance",
+            mss,
+            btc_usd,
+            timestamps,
+            warmup_minutes=1000,
+        )
+
+        real_replace = os.replace
+
+        def fail_staged_publish(src, dst):
+            if Path(src).name.startswith(f".{Path(cache_dir).name}.tmp-"):
+                raise OSError("test publish failure")
+            return real_replace(src, dst)
+
+        monkeypatch.setattr("backtest.os.replace", fail_staged_publish)
+
+        with pytest.raises(OSError, match="test publish failure"):
+            save_coins_hlcvs_to_cache(
+                cfg,
+                coins,
+                replacement,
+                "binance",
+                mss,
+                btc_usd,
+                timestamps,
+                warmup_minutes=1000,
+                force_overwrite=True,
+            )
+
+        loaded = np.load(os.path.join(str(cache_dir), "hlcvs.npy"))
+        assert float(loaded[0, 0, 0]) == 0.0
+        assert not list(Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.tmp-*"))
+        assert not list(Path(cache_dir).parent.glob(f".{Path(cache_dir).name}.backup-*"))
 
     def test_save_overwrites_corrupt_manifest_cache_even_when_warmup_sufficient(
         self, tmp_path, monkeypatch

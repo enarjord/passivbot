@@ -39,6 +39,24 @@ def test_store_writes_and_reads_partial_month_range(tmp_path):
     np.testing.assert_allclose(out.values, vals)
 
 
+def test_store_rejects_unaligned_vectorized_timestamps(tmp_path):
+    catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "caches" / "ohlcvs", catalog)
+
+    base = month_start_ts(2026, 4)
+    ts = np.array([base, base + 30_000], dtype=np.int64)
+    vals = np.array(
+        [
+            [101.0, 99.0, 100.0, 10.0],
+            [102.0, 100.0, 101.0, 11.0],
+        ],
+        dtype=np.float32,
+    )
+
+    with pytest.raises(ValueError, match="align"):
+        store.write_rows("binance", "1m", "BTC/USDT", ts, vals)
+
+
 def test_due_persistent_gap_remains_visible_to_planner(tmp_path):
     catalog = OhlcvCatalog(tmp_path / "caches" / "ohlcvs" / "catalog.sqlite")
     start = month_start_ts(2026, 4)

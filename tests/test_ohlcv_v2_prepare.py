@@ -1,4 +1,5 @@
 import importlib
+import asyncio
 import json
 import sys
 from types import SimpleNamespace
@@ -2276,6 +2277,64 @@ async def test_prepare_hlcvs_mss_prefers_local_v2_before_full_prepare(monkeypatc
     np.testing.assert_array_equal(timestamps, prepared[1])
     assert mss["ETH"]["first_valid_index"] == 0
     assert mss["ETH"]["last_valid_index"] == 0
+
+
+@pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_releases_payload_when_cache_save_interrupted(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    hlcvs = np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64)
+    prepared = (
+        {
+            "ETH": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "binance"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        hlcvs,
+        np.array([50_000.0], dtype=np.float64),
+    )
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+
+    async def fake_try_prepare(*args, **kwargs):
+        return prepared
+
+    def interrupting_save(*args, **kwargs):
+        raise asyncio.CancelledError("test interrupt")
+
+    released = []
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fake_try_prepare)
+    monkeypatch.setattr(backtest, "save_coins_hlcvs_to_cache", interrupting_save)
+    monkeypatch.setattr(backtest, "release_materialized_payload", released.append)
+
+    with pytest.raises(asyncio.CancelledError):
+        await backtest.prepare_hlcvs_mss(config, "binance")
+
+    assert released == [hlcvs]
 
 
 @pytest.mark.asyncio

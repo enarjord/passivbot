@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Improved cold `passivbot backtest` materialization by batching legacy OHLCV
+  imports by month, vectorizing chunk writes, staging HLCV cache writes with
+  rollback on publish failure, and honoring Ctrl+C between expensive
+  materializer/cache stages.
 - Added explicit hard-failure and attention source breakdowns to
   `passivbot tool live-smoke-report`, so red or attention smokes identify
   monitor parse errors, invalid rows, structured events, log matches, and
