@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `002fb965` after PR #787, `Add live performance slowest blockers view`.
+- `bc6e7f1d` after PR #789, `Add live performance resource pressure report`.
 
 Current review gate:
 
@@ -2117,6 +2117,32 @@ VPS5 deployment status:
   reported `ok=true`, `hard_failures=0`, `remote_calls.failed=0`,
   `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
   `missing_expected=[]`.
+
+### PR #789: Live Performance Resource Pressure Report
+
+- Branch: `codex/v8-live-performance-resource-pressure`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `resource_pressure`, derived only from existing `health.summary` events. The
+  section aggregates whitelisted process and event-pipeline fields such as RSS,
+  memory percent, open file descriptors, load averages, loop duration, event
+  queue depth, dropped-event counters, sink-error counters, degraded count, and
+  event-pipeline worker state. It does not surface raw account, balance,
+  equity, PnL, or other financial health payload fields.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Claude noted one optional non-blocking efficiency nit: the report accumulator
+  stores value lists for min/max/mean, which is acceptable for this one-shot
+  offline report and consistent with nearby report accumulators. Local
+  validation covered performance-report, event-query, and smoke-report tests,
+  py_compile, `git diff --check`, silent-handling audit, and a compact
+  filtered CLI smoke.
+- VPS5 evidence: deployed at `bc6e7f1d` without bot restart because this is
+  read-only report tooling. A compact smoke reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused performance summary showed
+  `resource_pressure` populated for GateIO and Hyperliquid with RSS, load
+  average, loop duration, event queue, sink-error, and worker-state fields.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
