@@ -99,6 +99,69 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert "api_key" not in rendered
 
 
+def test_live_config_preflight_compare_reports_bounded_risk_relevant_changes(tmp_path):
+    baseline = _sample_config()
+    target = _sample_config()
+    target["live"]["user"] = "okx_01"
+    target["live"]["exchange"] = "okx"
+    target["live"]["hsl_signal_mode"] = "per_side"
+    target["live"]["approved_coins"]["long"] = ["BTC", "ETH", "SOL", "ADA", "BNB"]
+    target["live"]["ignored_coins"]["short"] = ["DOGE", "XRP"]
+    target["live"]["max_forager_candle_staleness_minutes"] = 20
+    target["live"]["max_warmup_minutes"] = 45
+    target["live"]["api_key"] = "new-secret-api-key"
+    target["bot"]["long"]["hsl"]["enabled"] = False
+    target["bot"]["short"]["risk"] = {"n_positions": 2}
+
+    baseline_path = tmp_path / "baseline.json"
+    target_path = tmp_path / "target.json"
+    _write_config(baseline_path, baseline)
+    _write_config(target_path, target)
+
+    report = live_config_preflight.build_live_config_preflight_report(
+        target_path,
+        compare_config_path=baseline_path,
+        sample_size=1,
+    )
+    rendered = json.dumps(report, sort_keys=True)
+    changes = {change["field"]: change for change in report["diff"]["changes"]}
+
+    assert report["ok"] is True
+    assert report["diff"]["ok"] is True
+    assert report["diff"]["summary"]["category_counts"]["hsl"] == 2
+    assert changes["live.user"]["before"] == {
+        "present": True,
+        "value": "binance_01",
+    }
+    assert changes["live.exchange"]["after"] == {"present": True, "value": "okx"}
+    assert changes["live.hsl_signal_mode"]["after"] == {
+        "present": True,
+        "value": "per_side",
+    }
+    assert changes["bot.long.hsl.enabled"]["after"] == {
+        "present": True,
+        "value": False,
+    }
+    assert changes["live.max_forager_candle_staleness_minutes"]["after"] == {
+        "present": True,
+        "value": 20,
+    }
+    assert changes["live.max_warmup_minutes"]["after"] == {
+        "present": True,
+        "value": 45,
+    }
+    assert changes["live.approved_coins.long"]["added_count"] == 2
+    assert changes["live.approved_coins.long"]["removed_count"] == 1
+    assert changes["live.approved_coins.long"]["added_sample"] == ["ADA"]
+    assert changes["live.approved_coins.long"]["added_truncated"] == 1
+    assert changes["live.ignored_coins.short"]["added_count"] == 2
+    assert changes["live.ignored_coins.short"]["added_sample"] == ["DOGE"]
+    assert changes["live.ignored_coins.short"]["added_truncated"] == 1
+    assert "super-secret-api-key" not in rendered
+    assert "new-secret-api-key" not in rendered
+    assert "api_key" not in rendered
+
+
 def test_live_config_preflight_handles_all_and_invalid_coin_shapes(tmp_path):
     config = _sample_config()
     config["live"]["approved_coins"] = "all"
@@ -201,3 +264,25 @@ def test_live_config_preflight_tool_dispatch_forwards_module_and_prog(monkeypatc
         "--compact",
     ]
     assert captured["prog_env"] == "passivbot tool live-config-preflight"
+
+
+def test_live_config_preflight_compare_cli_emits_diff(tmp_path, capsys):
+    baseline_path = tmp_path / "baseline.json"
+    target_path = tmp_path / "target.json"
+    baseline = _sample_config()
+    target = _sample_config()
+    target["live"]["force_cold_startup"] = True
+    _write_config(baseline_path, baseline)
+    _write_config(target_path, target)
+
+    assert (
+        live_config_preflight.main(
+            [str(target_path), "--compare", str(baseline_path), "--compact"]
+        )
+        == 0
+    )
+    report = json.loads(capsys.readouterr().out)
+
+    assert report["diff"]["summary"]["change_count"] == 1
+    assert report["diff"]["changes"][0]["field"] == "live.force_cold_startup"
+    assert report["diff"]["changes"][0]["after"] == {"present": True, "value": True}

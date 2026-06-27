@@ -161,7 +161,9 @@ Related detailed plans:
    read-only offline JSON report for one config, covering identity hints, HSL
    side settings, HSL signal mode, approved/ignored universe counts with
    bounded samples, forager slot/staleness settings, and cache-related live
-   settings. It does not load API keys, contact exchanges, or enforce startup
+   settings. It also supports an optional local `--compare` baseline config
+   diff for risk-relevant HSL, universe, forager, identity, and cache-setting
+   changes. It does not load API keys, contact exchanges, or enforce startup
    policy.
 
    Add a preflight that explains risk-relevant config changes before startup:
@@ -169,6 +171,12 @@ Related detailed plans:
    universe size, forager staleness policy, max slots, exchange/user mismatch,
    and cache compatibility. The output should be structured and should not make
    trading decisions.
+
+   Work log:
+   - 2026-06-27: Added optional read-only `--compare` diff reporting for local
+     two-config preflights, covering HSL signal/enabled changes, approved and
+     ignored universe count/sample deltas, forager slots/staleness, identity
+     hints, and cache live settings without credentials or exchange contact.
 
 8. [ ] HSL dry-run preview for startup.
    Status: partial. `passivbot tool hsl-startup-preview` now emits a read-only
@@ -393,6 +401,7 @@ Related detailed plans:
 | 2026-06-27 | #13 Cache integrity doctor | PR #722 / `3b7e6306` | Added read-only v2 candle coverage windows and suspicious interior gap samples from local `.valid.npy` artifacts | Fill/HSL coverage/readiness and deeper metadata compatibility |
 | 2026-06-27 | #13 Cache integrity doctor | PR #725 / `1ed9c466` | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
 | 2026-06-27 | #13 Cache integrity doctor | PR #727 / `d8dd7246` | Added report-only warm-cache readiness evidence from already-scanned candle/fill/HSL cache metadata | Deeper metadata compatibility and synthetic/no-trade assumptions |
+| 2026-06-27 | #7 Live config preflight/linter | pending PR | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |

@@ -137,7 +137,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool monitor-dev`
 - `passivbot tool live-config-preflight` emits a read-only offline JSON report for one live
   config, summarizing identity hints, HSL settings, universe counts, forager slots/staleness,
-  and cache-related live settings without contacting exchanges.
+  and cache-related live settings without contacting exchanges. Add
+  `--compare BASELINE_CONFIG.json` to include a bounded, read-only diff of risk-relevant
+  HSL, universe, forager, identity, and cache-setting changes between two local configs.
 - `passivbot tool hsl-startup-preview` emits a read-only offline JSON preview for one live
   config plus optional local monitor events. It reports configured HSL settings and latest
   local HSL status/cooldown observations when present, while explicitly marking current
