@@ -22,6 +22,9 @@ All notable user-facing changes will be documented in this file.
 - Added an `hsl` live-event debug profile with bounded HSL event key, metric
   key, and latch/cooldown state-shape metadata, without changing default HSL
   events, console output, or trading behavior.
+- Added an `execution` live-event debug profile with bounded order-wave,
+  order-write, and confirmation key-shape metadata, without raw order payloads
+  or default console changes.
 - Added v2 candle coverage windows and suspicious interior gap samples to
   `passivbot tool cache-integrity-doctor`, derived only from local `.valid.npy`
   cache artifacts.

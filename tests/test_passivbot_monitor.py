@@ -441,6 +441,71 @@ def test_order_wave_summary_emits_live_event(caplog):
     assert event.data["cancel_posted"] == 1
     assert event.data["create_posted"] == 1
     assert set(event.data["symbols"]) == {"BTC/USDT:USDT", "ETH/USDT:USDT"}
+    assert "debug_profile" not in event.data
+    assert "debug" not in event.data
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+def test_execution_debug_profile_adds_bounded_order_wave_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _begin_order_wave = pb_mod.Passivbot._begin_order_wave
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_order_wave_completed_event = (
+            pb_mod.Passivbot._emit_order_wave_completed_event
+        )
+        _emit_order_wave_started_event = pb_mod.Passivbot._emit_order_wave_started_event
+
+        def __init__(self):
+            self.exchange = "binance"
+            self.user = "binance_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("execution",)
+            self._order_wave_seq = 0
+            self._live_event_current_cycle_id = "cy_execution_debug_wave"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT", "qty": 1, "price": 100.0}],
+        [{"symbol": "ETH/USDT:USDT", "qty": 2, "price": 200.0}],
+    )
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+    wave["requested_confirmations"] = {"open_orders": 5}
+
+    bot._emit_order_wave_started_event(wave)
+    bot._emit_order_wave_completed_event(wave, elapsed_ms=42)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    started = [
+        event for event in sink.events if event.event_type == EventTypes.ORDER_WAVE_STARTED
+    ][-1]
+    completed = [
+        event for event in sink.events if event.event_type == EventTypes.ORDER_WAVE_COMPLETED
+    ][-1]
+    assert started.event_type == EventTypes.ORDER_WAVE_STARTED
+    assert started.data["debug_profile"] == "execution"
+    assert started.data["debug"]["event_type"] == EventTypes.ORDER_WAVE_STARTED
+    assert started.data["debug"]["wave_counts"]["planned_cancel"] == 1
+    assert completed.event_type == EventTypes.ORDER_WAVE_COMPLETED
+    assert completed.data["debug_profile"] == "execution"
+    debug = completed.data["debug"]
+    assert debug["event_type"] == EventTypes.ORDER_WAVE_COMPLETED
+    assert "requested_confirmations" in debug["data_keys"]
+    assert debug["wave_counts"] == {
+        "planned_cancel": 1,
+        "planned_create": 1,
+        "cancel_posted": 1,
+        "create_posted": 1,
+    }
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
@@ -3033,6 +3098,88 @@ async def test_execute_orders_parent_records_order_opened_event():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_execution_debug_profile_adds_bounded_order_write_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_order_event = pb_mod.Passivbot._emit_execution_order_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "okx"
+            self.user = "okx_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("execution",)
+            self._live_event_current_cycle_id = "cy_execution_debug_order"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    order = {
+        "symbol": "BTC/USDT:USDT",
+        "side": "buy",
+        "position_side": "long",
+        "qty": 0.01,
+        "price": 100000.0,
+        "reduce_only": False,
+        "custom_id": "raw-client-order-id-123",
+        "id": "raw-exchange-order-id-456",
+        "_delta": {"price_pct_diff": 0.001, "qty_pct_diff": 0.002},
+    }
+    result = {
+        "id": "raw-result-order-id-789",
+        "clientOrderId": "raw-result-client-order-id-999",
+        "status": "open",
+        "raw_payload": {"nested": "not emitted"},
+    }
+    extra = {"exchange_latency_ms": 123, "raw_response": {"nested": "not emitted"}}
+    wave = {"id": 17, "event_id": "ow_17", "planned_create": 1, "create_posted": 1}
+
+    bot._emit_execution_order_event(
+        event_type=EventTypes.EXECUTION_CREATE_SUCCEEDED,
+        order=order,
+        action="create",
+        status="succeeded",
+        reason_code=ReasonCodes.EXCHANGE_ACKNOWLEDGED,
+        index=0,
+        wave=wave,
+        result=result,
+        extra=extra,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.EXECUTION_CREATE_SUCCEEDED
+    assert event.data["debug_profile"] == "execution"
+    debug = event.data["debug"]
+    assert debug["event_type"] == EventTypes.EXECUTION_CREATE_SUCCEEDED
+    assert debug["action"] == "create"
+    assert "price" in debug["data_keys"]
+    assert "custom_id" in debug["order_keys"]
+    assert "raw_payload" in debug["result_keys"]
+    assert "raw_response" in debug["extra_keys"]
+    assert debug["has_client_order_id"] is True
+    assert debug["has_exchange_order_id"] is True
+    assert debug["has_result_order_id"] is True
+    assert debug["has_result_client_order_id"] is True
+    assert debug["result_status"] == "open"
+    assert debug["wave_counts"] == {"planned_create": 1, "create_posted": 1}
+    serialized_debug = json.dumps(debug, sort_keys=True)
+    assert "raw-client-order-id-123" not in serialized_debug
+    assert "raw-exchange-order-id-456" not in serialized_debug
+    assert "raw-result-order-id-789" not in serialized_debug
+    assert "raw-result-client-order-id-999" not in serialized_debug
+    assert "BTC/USDT:USDT" not in serialized_debug
+    assert "\"buy\"" not in serialized_debug
+    assert "\"long\"" not in serialized_debug
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events():
     import passivbot as pb_mod
@@ -3057,6 +3204,7 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
             self.exchange = "hyperliquid"
             self.user = "hyperliquid_01"
             self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("execution",)
             self._live_event_current_cycle_id = "cy_12"
             self._authoritative_pending_confirmations = {}
             self._authoritative_refresh_epoch = 4
@@ -3134,9 +3282,18 @@ async def test_execute_cancellations_parent_emits_ambiguous_confirmation_events(
     assert ambiguous.status == "degraded"
     assert ambiguous.reason_code == "requires_full_authoritative_confirmation"
     assert ambiguous.order_wave_id == "ow_9"
+    assert ambiguous.data["debug_profile"] == "execution"
+    assert ambiguous.data["debug"]["action"] == "cancel"
     requested = sink.events[2]
     assert requested.data["target_epoch"] == 5
     assert requested.data["surfaces"] == ["balance", "fills", "open_orders", "positions"]
+    assert requested.data["debug_profile"] == "execution"
+    assert requested.data["debug"]["surfaces"] == [
+        "balance",
+        "fills",
+        "open_orders",
+        "positions",
+    ]
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

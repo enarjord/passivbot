@@ -188,6 +188,128 @@ def _remote_call_debug_payload(
     return debug
 
 
+def _bounded_str_values(value: Any, *, limit: int = 32) -> list[str]:
+    try:
+        values = sorted(str(item) for item in value)
+    except TypeError:
+        return [str(value)]
+    return values[:limit]
+
+
+def _execution_wave_counts(wave: dict[str, Any]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for key in (
+        "planned_cancel",
+        "planned_create",
+        "cancel_posted",
+        "create_posted",
+        "skipped_cancel",
+        "deferred_create",
+        "skipped_create",
+    ):
+        if key in wave:
+            try:
+                count = int(wave.get(key) or 0)
+            except (TypeError, ValueError):
+                continue
+            if count:
+                counts[key] = count
+    return counts
+
+
+def _execution_debug_payload(
+    data: dict[str, Any],
+    *,
+    event_type: str,
+    action: str | None = None,
+    order: dict | None = None,
+    result: dict | BaseException | None = None,
+    extra: dict | None = None,
+    wave: dict | None = None,
+    surfaces: Any = None,
+    confirmations: dict | None = None,
+    fresh_surfaces: Any = None,
+    limit: int = 32,
+) -> dict[str, Any]:
+    debug: dict[str, Any] = {
+        "event_type": str(event_type),
+        "data_keys": _mapping_key_sample(data, limit=limit),
+    }
+    if action is not None:
+        debug["action"] = str(action)
+    if isinstance(order, dict):
+        debug["order_keys"] = _mapping_key_sample(order, limit=limit)
+        debug["has_client_order_id"] = bool(
+            order.get("custom_id") or order.get("clientOrderId")
+        )
+        debug["has_exchange_order_id"] = bool(order.get("id") or order.get("order_id"))
+    if isinstance(result, dict):
+        debug["result_keys"] = _mapping_key_sample(result, limit=limit)
+        debug["has_result_order_id"] = bool(result.get("id") or result.get("order_id"))
+        debug["has_result_client_order_id"] = bool(
+            result.get("custom_id") or result.get("clientOrderId")
+        )
+        if result.get("status") is not None:
+            debug["result_status"] = str(result.get("status"))
+    elif isinstance(result, BaseException):
+        debug["result_error_type"] = type(result).__name__
+    if isinstance(extra, dict):
+        debug["extra_keys"] = _mapping_key_sample(extra, limit=limit)
+    if isinstance(wave, dict):
+        debug["wave_keys"] = _mapping_key_sample(wave, limit=limit)
+        counts = _execution_wave_counts(wave)
+        if counts:
+            debug["wave_counts"] = counts
+    if surfaces is not None:
+        debug["surfaces"] = _bounded_str_values(surfaces, limit=limit)
+    if isinstance(confirmations, dict):
+        debug["confirmation_surfaces"] = _mapping_key_sample(confirmations, limit=limit)
+        debug["confirmation_count"] = len(confirmations)
+    if fresh_surfaces is not None:
+        debug["fresh_surfaces"] = _bounded_str_values(fresh_surfaces, limit=limit)
+    return {key: value for key, value in debug.items() if value not in (None, [], {})}
+
+
+def _add_execution_debug_profile(
+    bot: Any,
+    data: dict[str, Any],
+    *,
+    event_type: str,
+    action: str | None = None,
+    order: dict | None = None,
+    result: dict | BaseException | None = None,
+    extra: dict | None = None,
+    wave: dict | None = None,
+    surfaces: Any = None,
+    confirmations: dict | None = None,
+    fresh_surfaces: Any = None,
+) -> None:
+    if not live_event_debug_profile_enabled(bot, "execution"):
+        return
+    try:
+        data["debug_profile"] = "execution"
+        data["debug"] = _execution_debug_payload(
+            data,
+            event_type=event_type,
+            action=action,
+            order=order,
+            result=result,
+            extra=extra,
+            wave=wave,
+            surfaces=surfaces,
+            confirmations=confirmations,
+            fresh_surfaces=fresh_surfaces,
+        )
+    except Exception as exc:
+        data.pop("debug_profile", None)
+        data.pop("debug", None)
+        logging.debug(
+            "[event] failed to build execution debug payload type=%s: %s",
+            event_type,
+            exc,
+        )
+
+
 def _remote_call_map_max(bot: Any) -> int:
     try:
         raw = getattr(bot, "_live_event_remote_call_map_max", None)
@@ -785,6 +907,27 @@ def emit_order_wave_completed_event(
     elif skipped_cancel or skipped_create:
         status = "skipped"
         reason_code = "order_filtered"
+    data = {
+        "id": int(wave.get("id", 0) or 0),
+        "elapsed_ms": int(elapsed_ms),
+        "planned_cancel": planned_cancel,
+        "planned_create": planned_create,
+        "cancel_posted": cancel_posted,
+        "create_posted": create_posted,
+        "cancel_ms": wave.get("cancel_ms"),
+        "create_ms": wave.get("create_ms"),
+        "skipped_cancel": skipped_cancel,
+        "deferred_create": deferred_create,
+        "skipped_create": skipped_create,
+        "symbols": list(wave.get("symbols") or []),
+        "requested_confirmations": dict(wave.get("requested_confirmations") or {}),
+    }
+    _add_execution_debug_profile(
+        bot,
+        data,
+        event_type=EventTypes.ORDER_WAVE_COMPLETED,
+        wave=wave,
+    )
     bot._emit_live_event(
         EventTypes.ORDER_WAVE_COMPLETED,
         level=str(level).lower(),
@@ -794,23 +937,7 @@ def emit_order_wave_completed_event(
         order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
         status=status,
         reason_code=reason_code,
-        data={
-            "id": int(wave.get("id", 0) or 0),
-            "elapsed_ms": int(elapsed_ms),
-            "planned_cancel": planned_cancel,
-            "planned_create": planned_create,
-            "cancel_posted": cancel_posted,
-            "create_posted": create_posted,
-            "cancel_ms": wave.get("cancel_ms"),
-            "create_ms": wave.get("create_ms"),
-            "skipped_cancel": skipped_cancel,
-            "deferred_create": deferred_create,
-            "skipped_create": skipped_create,
-            "symbols": list(wave.get("symbols") or []),
-            "requested_confirmations": dict(
-                wave.get("requested_confirmations") or {}
-            ),
-        },
+        data=data,
     )
 
 
@@ -818,6 +945,18 @@ def emit_order_wave_started_event(bot: Any, wave: dict | None) -> None:
     if not wave:
         return
     try:
+        data = {
+            "id": int(wave.get("id", 0) or 0),
+            "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+            "planned_create": int(wave.get("planned_create", 0) or 0),
+            "symbols": list(wave.get("symbols") or []),
+        }
+        _add_execution_debug_profile(
+            bot,
+            data,
+            event_type=EventTypes.ORDER_WAVE_STARTED,
+            wave=wave,
+        )
         bot._emit_live_event(
             EventTypes.ORDER_WAVE_STARTED,
             level="debug",
@@ -826,12 +965,7 @@ def emit_order_wave_started_event(bot: Any, wave: dict | None) -> None:
             cycle_id=bot._current_live_event_cycle_id(),
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="started",
-            data={
-                "id": int(wave.get("id", 0) or 0),
-                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
-                "planned_create": int(wave.get("planned_create", 0) or 0),
-                "symbols": list(wave.get("symbols") or []),
-            },
+            data=data,
         )
     except Exception as exc:
         logging.debug("[event] failed to emit order wave started event: %s", exc)
@@ -2542,6 +2676,14 @@ def emit_execution_create_filter_event(
                 "symbols_truncated": len(symbol_values) > 12,
             }
         )
+        _add_execution_debug_profile(
+            bot,
+            payload,
+            event_type=event_type,
+            action="create_filter",
+            extra=data,
+            wave=wave,
+        )
         bot._emit_live_event(
             event_type,
             level=level,
@@ -2601,6 +2743,16 @@ def emit_execution_order_event(
             data["error"] = _sanitize_remote_text(error, max_len=500)
         if extra:
             data.update(extra)
+        _add_execution_debug_profile(
+            bot,
+            data,
+            event_type=event_type,
+            action=action,
+            order=order,
+            result=result,
+            extra=extra,
+            wave=wave,
+        )
         bot._emit_live_event(
             event_type,
             level=level,
@@ -2642,6 +2794,19 @@ def emit_execution_confirmation_requested_event(
             if isinstance(wave, dict)
             else None
         )
+        data = {
+            "surfaces": sorted(str(surface) for surface in surfaces),
+            "target_epoch": int(target_epoch),
+            "current_epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
+            "min_epoch": int(min_epoch) if min_epoch is not None else None,
+        }
+        _add_execution_debug_profile(
+            bot,
+            data,
+            event_type=EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+            wave=wave,
+            surfaces=surfaces,
+        )
         bot._emit_live_event(
             EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
             level="debug",
@@ -2651,12 +2816,7 @@ def emit_execution_confirmation_requested_event(
             order_wave_id=order_wave_id,
             status="started",
             reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION,
-            data={
-                "surfaces": sorted(str(surface) for surface in surfaces),
-                "target_epoch": int(target_epoch),
-                "current_epoch": int(getattr(bot, "_authoritative_refresh_epoch", 0) or 0),
-                "min_epoch": int(min_epoch) if min_epoch is not None else None,
-            },
+            data=data,
         )
     except Exception as exc:
         logging.debug("[event] failed to emit confirmation requested event: %s", exc)
@@ -2675,6 +2835,31 @@ def emit_execution_confirmation_satisfied_event(
     level: str = "debug",
 ) -> None:
     try:
+        data = {
+            "id": int(wave.get("id", 0) or 0),
+            "elapsed_ms": int(elapsed_ms),
+            "confirm_ms": int(confirm_ms),
+            "current_epoch": int(current_epoch),
+            "confirmations": {
+                str(surface): int(epoch)
+                for surface, epoch in dict(confirmations or {}).items()
+            },
+            "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
+            "changed_surfaces": list(changed_surfaces or []),
+            "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+            "planned_create": int(wave.get("planned_create", 0) or 0),
+            "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
+            "create_posted": int(wave.get("create_posted", 0) or 0),
+            "symbols": list(wave.get("symbols") or []),
+        }
+        _add_execution_debug_profile(
+            bot,
+            data,
+            event_type=EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+            wave=wave,
+            confirmations=confirmations,
+            fresh_surfaces=fresh_surfaces,
+        )
         bot._emit_live_event(
             EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
             level=str(level).lower(),
@@ -2684,23 +2869,7 @@ def emit_execution_confirmation_satisfied_event(
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="succeeded",
             reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION,
-            data={
-                "id": int(wave.get("id", 0) or 0),
-                "elapsed_ms": int(elapsed_ms),
-                "confirm_ms": int(confirm_ms),
-                "current_epoch": int(current_epoch),
-                "confirmations": {
-                    str(surface): int(epoch)
-                    for surface, epoch in dict(confirmations or {}).items()
-                },
-                "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
-                "changed_surfaces": list(changed_surfaces or []),
-                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
-                "planned_create": int(wave.get("planned_create", 0) or 0),
-                "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
-                "create_posted": int(wave.get("create_posted", 0) or 0),
-                "symbols": list(wave.get("symbols") or []),
-            },
+            data=data,
         )
     except Exception as exc:
         logging.debug("[event] failed to emit confirmation satisfied event: %s", exc)
@@ -2719,6 +2888,36 @@ def emit_execution_confirmation_timeout_event(
     level: str = "warning",
 ) -> None:
     try:
+        data = {
+            "id": int(wave.get("id", 0) or 0),
+            "elapsed_ms": int(elapsed_ms),
+            "confirm_ms": int(confirm_ms),
+            "timeout_ms": int(timeout_ms),
+            "current_epoch": int(current_epoch),
+            "confirmations": {
+                str(surface): int(epoch)
+                for surface, epoch in dict(confirmations or {}).items()
+            },
+            "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
+            "pending_surfaces": sorted(
+                str(surface)
+                for surface, epoch in dict(confirmations or {}).items()
+                if surface not in fresh_surfaces or current_epoch < int(epoch)
+            ),
+            "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
+            "planned_create": int(wave.get("planned_create", 0) or 0),
+            "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
+            "create_posted": int(wave.get("create_posted", 0) or 0),
+            "symbols": list(wave.get("symbols") or []),
+        }
+        _add_execution_debug_profile(
+            bot,
+            data,
+            event_type=EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
+            wave=wave,
+            confirmations=confirmations,
+            fresh_surfaces=fresh_surfaces,
+        )
         bot._emit_live_event(
             EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
             level=str(level).lower(),
@@ -2728,28 +2927,7 @@ def emit_execution_confirmation_timeout_event(
             order_wave_id=str(wave.get("event_id") or f"ow_{wave.get('id', '')}"),
             status="degraded",
             reason_code=ReasonCodes.AUTHORITATIVE_CONFIRMATION_TIMEOUT,
-            data={
-                "id": int(wave.get("id", 0) or 0),
-                "elapsed_ms": int(elapsed_ms),
-                "confirm_ms": int(confirm_ms),
-                "timeout_ms": int(timeout_ms),
-                "current_epoch": int(current_epoch),
-                "confirmations": {
-                    str(surface): int(epoch)
-                    for surface, epoch in dict(confirmations or {}).items()
-                },
-                "fresh_surfaces": sorted(str(surface) for surface in fresh_surfaces),
-                "pending_surfaces": sorted(
-                    str(surface)
-                    for surface, epoch in dict(confirmations or {}).items()
-                    if surface not in fresh_surfaces or current_epoch < int(epoch)
-                ),
-                "planned_cancel": int(wave.get("planned_cancel", 0) or 0),
-                "planned_create": int(wave.get("planned_create", 0) or 0),
-                "cancel_posted": int(wave.get("cancel_posted", 0) or 0),
-                "create_posted": int(wave.get("create_posted", 0) or 0),
-                "symbols": list(wave.get("symbols") or []),
-            },
+            data=data,
         )
     except Exception as exc:
         logging.debug("[event] failed to emit confirmation timeout event: %s", exc)

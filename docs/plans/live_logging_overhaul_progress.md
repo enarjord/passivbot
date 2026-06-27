@@ -1277,21 +1277,35 @@ VPS5 deployment status:
   bots matched, clean tracked repository state, no failed remote calls, and no
   failed account-critical remote calls.
 
-### Pending PR: HSL Debug Profile
+### PR #730: HSL Debug Profile
 
 - Branch: `codex/v8-hsl-debug-profile`.
 - Scope: Phase 5/6 opt-in structured debug enrichment.
-- Result: in progress. Add `hsl` debug-profile enrichment to existing HSL
+- Result: added `hsl` debug-profile enrichment to existing HSL
   status, transition, replay, red-trigger, and cooldown events with bounded
   event key, metric key, and HSL latch/cooldown state-shape metadata. Default
   HSL events and console output remain unchanged.
+- Review evidence: Hermes approved head `7cfb80ac`, CI was green, and local
+  focused tests, the broader HSL/live-event suite, compileall,
+  `git diff --check`, and touched-file silent-handling audit passed. Claude did
+  not return before merge, so this opt-in observability slice used the degraded
+  gate.
+
+### Pending PR: Execution Debug Profile
+
+- Branch: `codex/v8-execution-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Result: in progress. Add `execution` debug-profile enrichment to existing
+  order-wave, order-write, create-filter, and confirmation events with bounded
+  key-shape/counter metadata. Default execution event payloads and console
+  output remain unchanged, and raw order payload values are not added.
 
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
-   are HSL preview/status debug enrichment, execution debug profiles, or more
-   order/risk transition coverage.
+   are HSL preview/status debug enrichment or more order/risk transition
+   coverage.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. Remaining useful
