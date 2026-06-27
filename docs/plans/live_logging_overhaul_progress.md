@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `a04bc1ed` after PR #791, `Add live performance shutdown latency report`.
+- `b5fc245b` after PR #793, `Add live performance execution timing report`.
 
 Current review gate:
 
@@ -2165,6 +2165,31 @@ VPS5 deployment status:
   `missing_expected=[]`. A focused performance summary showed
   `shutdown_latency` present; it was empty in the recent window because no
   shutdown lifecycle events occurred during that window.
+
+### PR #793: Live Performance Execution Timing Report
+
+- Branch: `codex/v8-live-performance-execution-timing`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `execution_timing`, derived only from existing order-wave, order create/cancel,
+  and confirmation events. The section reports bounded exchange-action latency
+  groups plus `starts_seen`, `terminals_seen`, `timing_observations`,
+  `missing_id_counts`, `unpaired_terminal_counts`, and `pending_start_counts`.
+  Pairing keys are used only internally; raw order payloads, action ids, and
+  client-order ids are not surfaced.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, and a compact synthetic CLI
+  performance-report smoke.
+- VPS5 evidence: deployed at `b5fc245b` without bot restart because this is
+  read-only report tooling. All five configured `passivbot live` processes
+  remained running after pull. A 5-minute smoke reported `hard_failures=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `matched_expected=5`, and `missing_expected=[]`. A 180-minute performance
+  summary returned `ok=true` and showed `execution_timing` present but empty
+  because no order-wave/write events occurred in that sampled window. Existing
+  slowest blockers were input-staleness and cycle-boundary lag groups, not
+  execution writes.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
