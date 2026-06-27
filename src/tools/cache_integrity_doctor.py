@@ -229,6 +229,12 @@ def _coverage_summary_entry() -> dict[str, Any]:
         "expected_row_count": 0,
         "valid_row_count": 0,
         "gap_count": 0,
+        "interior_gap_count": 0,
+        "boundary_gap_count": 0,
+        "trailing_shortfall_gap_count": 0,
+        "leading_missing_artifact_count": 0,
+        "leading_missing_rows": 0,
+        "trailing_shortfall_rows": 0,
         "max_gap_rows": 0,
         "max_gap_ms": 0,
         "first_valid_ms": None,
@@ -399,6 +405,14 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
             }
         )
     max_gap_rows = max((int(gap["rows"]) for gap in gaps), default=0)
+    boundary_gap_count = sum(1 for gap in gaps if gap.get("boundary"))
+    trailing_shortfall_gap_count = sum(
+        1 for gap in gaps if gap.get("boundary") == "trailing_shortfall"
+    )
+    trailing_shortfall_rows = sum(
+        int(gap["rows"]) for gap in gaps if gap.get("boundary") == "trailing_shortfall"
+    )
+    leading_missing_rows = int(first_valid_idx or 0) if valid_row_count else 0
     return {
         "path": str(path),
         "exchange": metadata["exchange"],
@@ -416,6 +430,11 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
         "first_valid_date": _format_ms(first_valid_ms),
         "last_valid_date": _format_ms(last_valid_ms),
         "gap_count": len(gaps),
+        "interior_gap_count": len(gaps) - boundary_gap_count,
+        "boundary_gap_count": boundary_gap_count,
+        "trailing_shortfall_gap_count": trailing_shortfall_gap_count,
+        "leading_missing_rows": leading_missing_rows,
+        "trailing_shortfall_rows": trailing_shortfall_rows,
         "max_gap_rows": max_gap_rows,
         "max_gap_ms": int(max_gap_rows * interval_ms),
         "gaps": gaps,
@@ -441,6 +460,13 @@ def _merge_coverage(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
     coverage["length_mismatch_count"] += int(bool(artifact["length_mismatch"]))
     coverage["valid_row_count"] += int(artifact["valid_row_count"])
     coverage["gap_count"] += int(artifact["gap_count"])
+    coverage["interior_gap_count"] += int(artifact["interior_gap_count"])
+    coverage["boundary_gap_count"] += int(artifact["boundary_gap_count"])
+    coverage["trailing_shortfall_gap_count"] += int(artifact["trailing_shortfall_gap_count"])
+    if int(artifact["leading_missing_rows"]):
+        coverage["leading_missing_artifact_count"] += 1
+        coverage["leading_missing_rows"] += int(artifact["leading_missing_rows"])
+    coverage["trailing_shortfall_rows"] += int(artifact["trailing_shortfall_rows"])
     coverage["max_gap_rows"] = max(int(coverage["max_gap_rows"]), int(artifact["max_gap_rows"]))
     coverage["max_gap_ms"] = max(int(coverage["max_gap_ms"]), int(artifact["max_gap_ms"]))
     first_valid_ms = artifact["first_valid_ms"]
@@ -469,6 +495,16 @@ def _merge_finalized_coverage(summary: dict[str, Any], coverage_report: dict[str
     coverage["expected_row_count"] += int(coverage_report["expected_row_count"])
     coverage["valid_row_count"] += int(coverage_report["valid_row_count"])
     coverage["gap_count"] += int(coverage_report["gap_count"])
+    coverage["interior_gap_count"] += int(coverage_report["interior_gap_count"])
+    coverage["boundary_gap_count"] += int(coverage_report["boundary_gap_count"])
+    coverage["trailing_shortfall_gap_count"] += int(
+        coverage_report["trailing_shortfall_gap_count"]
+    )
+    coverage["leading_missing_artifact_count"] += int(
+        coverage_report["leading_missing_artifact_count"]
+    )
+    coverage["leading_missing_rows"] += int(coverage_report["leading_missing_rows"])
+    coverage["trailing_shortfall_rows"] += int(coverage_report["trailing_shortfall_rows"])
     coverage["max_gap_rows"] = max(
         int(coverage["max_gap_rows"]),
         int(coverage_report["max_gap_rows"]),
@@ -1000,6 +1036,12 @@ def _finalize_coverage(coverage: dict[str, Any], issue_count: int) -> dict[str, 
         "expected_row_count": int(coverage["expected_row_count"]),
         "valid_row_count": valid_row_count,
         "gap_count": gap_count,
+        "interior_gap_count": int(coverage["interior_gap_count"]),
+        "boundary_gap_count": int(coverage["boundary_gap_count"]),
+        "trailing_shortfall_gap_count": int(coverage["trailing_shortfall_gap_count"]),
+        "leading_missing_artifact_count": int(coverage["leading_missing_artifact_count"]),
+        "leading_missing_rows": int(coverage["leading_missing_rows"]),
+        "trailing_shortfall_rows": int(coverage["trailing_shortfall_rows"]),
         "max_gap_rows": int(coverage["max_gap_rows"]),
         "max_gap_ms": int(coverage["max_gap_ms"]),
         "first_valid_ms": coverage["first_valid_ms"],
@@ -1029,6 +1071,10 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
     attention = evidence != "coverage_observed"
     reasons = [f"candle_{evidence}"]
     gap_count = int(coverage["gap_count"])
+    interior_gap_count = int(coverage["interior_gap_count"])
+    boundary_gap_count = int(coverage["boundary_gap_count"])
+    leading_missing_rows = int(coverage["leading_missing_rows"])
+    trailing_shortfall_rows = int(coverage["trailing_shortfall_rows"])
     length_mismatch_count = int(coverage["length_mismatch_count"])
     known_gap_count = int(metadata.get("known_gap_count") or 0)
     no_trade_known_gap_count = int(metadata.get("no_trade_known_gap_count") or 0)
@@ -1049,8 +1095,14 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
         no_trade_gap_evidence = "no_local_no_trade_gap_evidence"
     if gap_count:
         reasons.append("candle_suspicious_gaps_present")
+        if interior_gap_count:
+            reasons.append("candle_interior_gaps_present")
+        if boundary_gap_count:
+            reasons.append("candle_boundary_gaps_present")
         if not no_trade_known_gap_count or no_trade_known_gap_count != known_gap_count:
             reasons.append("candle_synthetic_no_trade_evidence_unproven")
+    if leading_missing_rows:
+        reasons.append("candle_leading_missing_rows_present")
     if length_mismatch_count:
         reasons.append("candle_length_mismatch_present")
     return {
@@ -1067,6 +1119,12 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
         "first_valid_date": coverage["first_valid_date"],
         "last_valid_date": coverage["last_valid_date"],
         "suspicious_gap_count": gap_count,
+        "interior_gap_count": interior_gap_count,
+        "boundary_gap_count": boundary_gap_count,
+        "trailing_shortfall_gap_count": int(coverage["trailing_shortfall_gap_count"]),
+        "leading_missing_artifact_count": int(coverage["leading_missing_artifact_count"]),
+        "leading_missing_rows": leading_missing_rows,
+        "trailing_shortfall_rows": trailing_shortfall_rows,
         "max_gap_rows": int(coverage["max_gap_rows"]),
         "no_trade_gap_evidence": no_trade_gap_evidence,
         "known_gap_count": known_gap_count,
