@@ -14,6 +14,9 @@ from tools.probe_ccxt_ticker_endpoints import (
     select_default_symbols,
     summarize_candle_freshness_probe_collection,
     summarize_candle_freshness_probe_health,
+    summarize_fill_history_probe_collection,
+    summarize_fill_history_probe_health,
+    summarize_my_trades,
     summarize_ohlcvs,
     summarize_account_critical_probe_collection,
     summarize_account_critical_probe_health,
@@ -303,7 +306,22 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
             return []
 
         async def fetch_my_trades(self, symbol=None, since=None, limit=None):
-            return []
+            return [
+                {
+                    "id": "raw-trade-id-1",
+                    "order": "raw-order-id-1",
+                    "timestamp": 1_767_225_540_000,
+                    "symbol": symbol,
+                    "side": "buy",
+                },
+                {
+                    "id": "raw-trade-id-2",
+                    "orderId": "raw-order-id-2",
+                    "timestamp": 1_767_225_600_000,
+                    "symbol": symbol,
+                    "side": "sell",
+                },
+            ]
 
     exchange = FakeExchange()
 
@@ -334,6 +352,10 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert repeat["fetch_positions"]["ok"] is True
     assert repeat["fetch_open_orders_all"]["ok"] is True
     assert repeat["fetch_my_trades_first_symbol"]["ok"] is True
+    assert repeat["fetch_my_trades_first_symbol"]["symbol"] == "BTC/USDT:USDT"
+    assert repeat["fetch_my_trades_first_symbol"]["value"]["count"] == 2
+    assert repeat["fetch_my_trades_first_symbol"]["value"]["id_present_count"] == 2
+    assert repeat["fetch_my_trades_first_symbol"]["value"]["order_present_count"] == 2
     assert repeat["fetch_time"]["ok"] is True
     assert repeat["fetch_time"]["supported"] is True
     assert isinstance(repeat["fetch_time"]["clock_skew_ms"], int)
@@ -351,6 +373,16 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert out["account_critical_health"]["succeeded"] == 3
     assert out["account_critical_health"]["failed"] == 0
     assert out["account_critical_health"]["surfaces"]["balance"]["latency_ms"]["count"] == 1
+    assert out["fill_history_health"]["enabled"] is True
+    assert out["fill_history_health"]["total"] == 1
+    assert out["fill_history_health"]["succeeded"] == 1
+    assert out["fill_history_health"]["failed"] == 0
+    assert out["fill_history_health"]["latest"]["symbol"] == "BTC/USDT:USDT"
+    assert out["fill_history_health"]["latest"]["trade_count"] == 2
+    assert out["fill_history_health"]["latest"]["id_present_count"] == 2
+    assert out["fill_history_health"]["latest"]["order_present_count"] == 2
+    assert "raw-trade-id" not in str(out["fill_history_health"])
+    assert "raw-order-id" not in str(out["fill_history_health"])
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
 
 
@@ -650,6 +682,171 @@ def test_candle_freshness_probe_collection_aggregates_users():
     assert collection["users"][1]["worst_symbol"] == "ETH/USDT:USDT"
 
 
+def test_summarize_my_trades_reports_shape_without_raw_ids():
+    summary = summarize_my_trades(
+        [
+            {
+                "id": "raw-fill-id-a",
+                "order": "raw-order-id-a",
+                "timestamp": 1_000_000,
+                "symbol": "BTC/USDT:USDT",
+                "side": "buy",
+                "info": {"secret": "not emitted"},
+            },
+            {
+                "id": "raw-fill-id-b",
+                "orderId": "raw-order-id-b",
+                "timestamp": 1_060_000,
+                "symbol": "ETH/USDT:USDT",
+                "side": "sell",
+            },
+            {"symbol": "ETH/USDT:USDT"},
+        ]
+    )
+
+    assert summary["count"] == 3
+    assert summary["dict_count"] == 3
+    assert summary["timestamp_count"] == 2
+    assert summary["missing_timestamp_count"] == 1
+    assert summary["first_timestamp"] == 1_000_000
+    assert summary["last_timestamp"] == 1_060_000
+    assert summary["symbol_count"] == 2
+    assert summary["symbols_sample"] == ["BTC/USDT:USDT", "ETH/USDT:USDT"]
+    assert summary["side_counts"] == {"buy": 1, "sell": 1}
+    assert summary["id_present_count"] == 2
+    assert summary["order_present_count"] == 2
+    assert "raw-fill-id" not in str(summary)
+    assert "raw-order-id" not in str(summary)
+    assert "not emitted" not in str(summary)
+
+
+def test_fill_history_probe_health_summarizes_success_failure_without_raw_errors():
+    summary = summarize_fill_history_probe_health(
+        {
+            "include_private": True,
+            "include_my_trades": True,
+            "repeats": [
+                {
+                    "fetch_my_trades_first_symbol": {
+                        "ok": True,
+                        "symbol": "BTC/USDT:USDT",
+                        "elapsed_ms": 12.0,
+                        "value": {
+                            "count": 2,
+                            "timestamp_count": 2,
+                            "missing_timestamp_count": 0,
+                            "first_timestamp": 1_000_000,
+                            "first_datetime": "1970-01-01T00:16:40",
+                            "last_timestamp": 1_060_000,
+                            "last_datetime": "1970-01-01T00:17:40",
+                            "symbol_count": 1,
+                            "side_counts": {"buy": 1, "sell": 1},
+                            "id_present_count": 2,
+                            "order_present_count": 2,
+                        },
+                    }
+                },
+                {
+                    "fetch_my_trades_first_symbol": {
+                        "ok": False,
+                        "symbol": "ETH/USDT:USDT",
+                        "elapsed_ms": 22.0,
+                        "error_type": "RequestTimeout",
+                        "error": "raw exchange error apiKey=SECRET should not appear",
+                    }
+                },
+            ],
+        }
+    )
+
+    assert summary["enabled"] is True
+    assert summary["total"] == 2
+    assert summary["succeeded"] == 1
+    assert summary["failed"] == 1
+    assert summary["failure_pct"] == pytest.approx(50.0)
+    assert summary["latency_ms"]["count"] == 2
+    assert summary["trade_count"]["max"] == 2.0
+    assert summary["error_types"] == {"RequestTimeout": 1}
+    assert summary["latest"]["ok"] is False
+    assert summary["latest"]["error_type"] == "RequestTimeout"
+    assert summary["newest_trade"]["symbol"] == "BTC/USDT:USDT"
+    assert summary["newest_trade"]["last_timestamp"] == 1_060_000
+    assert "raw exchange error" not in str(summary)
+    assert "SECRET" not in str(summary)
+
+
+def test_fill_history_probe_collection_aggregates_users():
+    collection = summarize_fill_history_probe_collection(
+        [
+            {
+                "user": "binance_01",
+                "exchange": "binance",
+                "fill_history_health": {
+                    "enabled": True,
+                    "total": 1,
+                    "succeeded": 1,
+                    "failed": 0,
+                    "failure_pct": 0.0,
+                    "latest": {
+                        "symbol": "BTC/USDT:USDT",
+                        "trade_count": 2,
+                    },
+                    "newest_trade": {
+                        "symbol": "BTC/USDT:USDT",
+                        "last_timestamp": 1_060_000,
+                        "last_datetime": "1970-01-01T00:17:40",
+                        "trade_count": 2,
+                    },
+                },
+            },
+            {
+                "user": "okx_01",
+                "exchange": "okx",
+                "fill_history_health": {
+                    "enabled": True,
+                    "total": 1,
+                    "succeeded": 0,
+                    "failed": 1,
+                    "failure_pct": 100.0,
+                    "latest": {
+                        "symbol": "ETH/USDT:USDT",
+                        "trade_count": 0,
+                    },
+                    "newest_trade": None,
+                },
+            },
+            {
+                "user": "paper_01",
+                "exchange": "paper",
+                "fill_history_health": {
+                    "enabled": False,
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "failure_pct": None,
+                    "latest": None,
+                    "newest_trade": None,
+                },
+            },
+        ]
+    )
+
+    assert collection["total"] == 2
+    assert collection["succeeded"] == 1
+    assert collection["failed"] == 1
+    assert collection["failure_pct"] == pytest.approx(50.0)
+    assert collection["trade_count"]["count"] == 2
+    assert collection["newest_trade"] == {
+        "user": "binance_01",
+        "exchange": "binance",
+        "symbol": "BTC/USDT:USDT",
+        "last_timestamp": 1_060_000,
+        "last_datetime": "1970-01-01T00:17:40",
+        "trade_count": 2,
+    }
+    assert collection["users"][2]["enabled"] is False
+
+
 @pytest.mark.asyncio
 async def test_time_sync_probe_uses_ccxt_capability_flag_for_unsupported_method():
     class FakeExchange:
@@ -889,3 +1086,5 @@ async def test_account_only_probe_skips_public_and_uses_open_orders_symbol_fallb
     assert out["account_critical_health"]["failed"] == 0
     assert out["candle_freshness_health"]["enabled"] is False
     assert out["candle_freshness_health"]["total_symbols"] == 0
+    assert out["fill_history_health"]["enabled"] is False
+    assert out["fill_history_health"]["total"] == 0

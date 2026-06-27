@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added no-extra-call fill-history sample health summaries to
+  `passivbot tool ticker-endpoint-probe`, derived from the existing
+  `fetch_my_trades(first symbol)` probe result without raw trade/order ids.
 - Added no-extra-call 1m candle freshness health summaries to
   `passivbot tool ticker-endpoint-probe`, derived from the existing OHLCV tail
   probe results.
