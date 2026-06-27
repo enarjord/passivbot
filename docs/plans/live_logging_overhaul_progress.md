@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `19b34138` merge of PR #756, `Add EMA gate modes for trailing martingale entries`.
+- `74a52ede` merge of PR #759, `Summarize staged readiness in live smoke reports`.
 
 Current review gate:
 
@@ -1676,6 +1676,29 @@ VPS5 deployment status:
   attention (`ema_readiness.total=4`, `bots=1`,
   `latest_candidate_unavailable_total=0`).
 
+### PR #759: Live Smoke Staged Readiness Health
+
+- Branch: `codex/v8-smoke-staged-readiness-health`.
+- Scope: read-only smoke-report tooling.
+- Result: `passivbot tool live-smoke-report` now derives bounded
+  `staged_readiness_health` full/summary groups and brief `staged_readiness`
+  counters from existing staged `cycle.degraded` events. The new projection
+  reports affected bot count, latest missing/invalid staged-surface totals,
+  missing/invalid surface groups, completed-candle mismatch counts, latest
+  cycle IDs, and compact allowlisted cycle-degraded event data without changing
+  smoke verdict logic.
+- Review evidence: Claude and Hermes approved; CI was green; focused
+  smoke-report tests, compileall, `git diff --check`, and a local real-data
+  brief smoke projection passed before merge.
+- VPS5 evidence: deployed without bot restart because the slice is read-only
+  smoke-report tooling. A 5-minute brief smoke at `74a52ede` reported all five
+  expected bots running, no hard failures, no log hard/attention matches, no
+  failed remote calls, no failed account-critical calls, and clean tracked
+  repository state. The new `staged_readiness` counters reported `total=4`,
+  `bots=1`, `latest_missing_surface_total=1`, and
+  `latest_invalid_surface_total=1`, making staged `completed_candles` style
+  readiness degradation visible without full problem-event inspection.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
@@ -1694,10 +1717,10 @@ VPS5 deployment status:
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
 3. Use the persistent non-hard staged-execution degradation visible in VPS5
-   smokes as the next candidate for targeted readiness diagnostics or a narrow
-   fix. PRs #679/#682 made generic problem groups inspectable, and PR #755 made
-   EMA readiness directly visible; staged `completed_candles` target changes are
-   now the larger remaining readiness signal.
+   smokes as the next candidate for a narrow fix if the new PR #759 summaries
+   keep showing completed-candle target changes after warmup. PRs #679/#682
+   made generic problem groups inspectable, PR #755 made EMA readiness directly
+   visible, and PR #759 made staged readiness directly visible.
 4. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 5. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
