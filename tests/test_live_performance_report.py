@@ -1068,6 +1068,115 @@ def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path):
     assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_faisal"
 
 
+def test_live_performance_report_shutdown_latency_from_lifecycle_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.stopping",
+                seq=1,
+                ts=1000,
+                status="started",
+                component="lifecycle",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully"},
+            ),
+            _monitor_row(
+                event_type="bot.shutdown.stage",
+                seq=2,
+                ts=2000,
+                status="succeeded",
+                component="shutdown",
+                reason_code="maintainers_stopped",
+                data={"stage": "maintainers_stopped", "elapsed_s": 2.5, "task_count": 4},
+            ),
+            _monitor_row(
+                event_type="bot.shutdown.stage",
+                seq=3,
+                ts=3000,
+                status="degraded",
+                level="warning",
+                component="shutdown",
+                reason_code="execution_loop_timeout",
+                data={
+                    "stage": "execution_loop_timeout",
+                    "elapsed_s": 6.25,
+                    "timeout_s": 5.0,
+                    "error": "api_key=AKIA123 Authorization: Bearer TOKEN123",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=4,
+                ts=4000,
+                status="succeeded",
+                component="lifecycle",
+                reason_code="shutdown_gracefully",
+                data={"reason": "shutdown_gracefully", "elapsed_s": 7.5},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    shutdown = report["shutdown_latency"]
+    groups = {group["operation"]: group for group in shutdown["groups"]}
+    rendered = json.dumps(shutdown, sort_keys=True)
+
+    assert shutdown["total_events"] == 4
+    assert shutdown["shutdowns_started"] == 1
+    assert shutdown["shutdowns_completed"] == 1
+    assert shutdown["event_types"] == {
+        "bot.stopping": 1,
+        "bot.shutdown.stage": 2,
+        "bot.stopped": 1,
+    }
+    assert shutdown["stage_counts"] == {
+        "maintainers_stopped": 1,
+        "execution_loop_timeout": 1,
+    }
+    assert groups["shutdown.stage.execution_loop_timeout"]["max_ms"] == 6250
+    assert groups["shutdown.stage.execution_loop_timeout"]["statuses"] == {"degraded": 1}
+    assert groups["shutdown.stage.execution_loop_timeout"]["timing_kind"] == "cumulative"
+    assert groups["shutdown.total"]["max_ms"] == 7500
+    assert groups["shutdown.total"]["timing_kind"] == "duration"
+    assert "AKIA123" not in rendered
+    assert "TOKEN123" not in rendered
+    assert "api_key" not in rendered
+
+
+def test_live_performance_report_shutdown_latency_summary_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.shutdown.stage",
+                seq=1,
+                ts=1000,
+                component="shutdown",
+                reason_code="requested",
+                data={"stage": "requested", "elapsed_s": 0.1},
+            ),
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=2,
+                ts=2000,
+                component="lifecycle",
+                data={"elapsed_s": 2.0},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["shutdown_latency"]["total_groups"] == 2
+    assert len(summary["shutdown_latency"]["groups"]) == 1
+    assert summary["shutdown_latency"]["groups_truncated"] is True
+    assert summary["shutdown_latency"]["groups"][0]["operation"] == "shutdown.total"
+
+
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

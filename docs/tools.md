@@ -184,7 +184,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   summarizes whitelisted process and event-pipeline health fields from existing
   `health.summary` events, including RSS, memory percent, file descriptors, load average,
   event queue depth, dropped-event counters, and sink-error counters without exposing raw
-  account or financial payloads.
+  account or financial payloads. The `shutdown_latency` section summarizes existing
+  lifecycle shutdown events, including per-stage cumulative elapsed time and final shutdown
+  duration, without copying shutdown error text.
 
 ## Exchange Helpers
 
