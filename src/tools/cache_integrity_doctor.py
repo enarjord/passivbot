@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from collections import Counter
+from datetime import datetime, timezone
 import json
 from pathlib import Path
 from typing import Any, Iterable
@@ -9,6 +10,27 @@ from typing import Any, Iterable
 
 NUMPY_CACHE_SUFFIXES = {".npy"}
 DEFAULT_ROOTS = ("caches",)
+MAX_COVERAGE_ARTIFACT_SAMPLES = 8
+MAX_COVERAGE_GAP_SAMPLES = 8
+
+
+def _timeframe_interval_ms(timeframe: str) -> int | None:
+    normalized = str(timeframe).strip().lower()
+    if normalized == "1m":
+        return 60_000
+    if normalized == "1h":
+        return 60 * 60_000
+    return None
+
+
+def _format_ms(ts_ms: int | None) -> str | None:
+    if ts_ms is None:
+        return None
+    return datetime.fromtimestamp(int(ts_ms) / 1000, tz=timezone.utc).isoformat()
+
+
+def _month_start_ms(year: int, month: int) -> int:
+    return int(datetime(int(year), int(month), 1, tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def _issue(
@@ -154,24 +176,267 @@ def _cache_family(root: Path, path: Path) -> str:
     return "unknown"
 
 
+def _coverage_summary_entry() -> dict[str, Any]:
+    return {
+        "artifact_count": 0,
+        "covered_artifact_count": 0,
+        "row_count": 0,
+        "valid_row_count": 0,
+        "gap_count": 0,
+        "max_gap_rows": 0,
+        "max_gap_ms": 0,
+        "first_valid_ms": None,
+        "last_valid_ms": None,
+        "artifact_samples": [],
+        "gap_samples": [],
+    }
+
+
 def _family_summary_entry() -> dict[str, Any]:
     return {
         "file_count": 0,
         "total_bytes": 0,
         "issue_count": 0,
         "by_extension": Counter(),
+        "coverage": _coverage_summary_entry(),
+    }
+
+
+def _parse_ohlcv_valid_artifact(root: Path, path: Path) -> dict[str, Any] | None:
+    name = path.name.lower()
+    if not name.endswith(".valid.npy"):
+        return None
+    try:
+        rel_parts = path.relative_to(root).parts
+    except ValueError:
+        rel_parts = path.parts
+    parts = [part.lower() for part in rel_parts]
+    if "data" in parts:
+        data_idx = parts.index("data")
+        offset = data_idx + 1
+    else:
+        offset = len(parts) - 5
+    if offset < 0 or len(parts) < offset + 5:
+        return None
+    exchange = rel_parts[offset]
+    timeframe = rel_parts[offset + 1]
+    symbol = rel_parts[offset + 2]
+    year_raw = rel_parts[offset + 3]
+    month_raw = path.name.split(".", maxsplit=1)[0]
+    interval_ms = _timeframe_interval_ms(timeframe)
+    if interval_ms is None:
+        return None
+    try:
+        year = int(year_raw)
+        month = int(month_raw)
+    except ValueError:
+        return None
+    if not 1 <= month <= 12:
+        return None
+    return {
+        "exchange": exchange,
+        "timeframe": timeframe,
+        "symbol": symbol,
+        "year": year,
+        "month": month,
+        "interval_ms": interval_ms,
+        "month_start_ms": _month_start_ms(year, month),
+    }
+
+
+def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str, Any] | None:
+    if family != "candles":
+        return None
+    metadata = _parse_ohlcv_valid_artifact(root, path)
+    if metadata is None:
+        return None
+    try:
+        import numpy as np
+    except ImportError:
+        return None
+    try:
+        valid = np.asarray(np.load(path, mmap_mode="r", allow_pickle=False), dtype=bool)
+    except (OSError, ValueError, EOFError, AttributeError, TypeError):
+        return None
+    if valid.ndim != 1:
+        return None
+    valid_indices = np.flatnonzero(valid)
+    row_count = int(valid.shape[0])
+    valid_row_count = int(valid_indices.size)
+    interval_ms = int(metadata["interval_ms"])
+    first_valid_idx: int | None = None
+    last_valid_idx: int | None = None
+    first_valid_ms: int | None = None
+    last_valid_ms: int | None = None
+    gaps: list[dict[str, Any]] = []
+    if valid_row_count:
+        first_valid_idx = int(valid_indices[0])
+        last_valid_idx = int(valid_indices[-1])
+        first_valid_ms = int(metadata["month_start_ms"]) + first_valid_idx * interval_ms
+        last_valid_ms = int(metadata["month_start_ms"]) + last_valid_idx * interval_ms
+        diffs = np.diff(valid_indices)
+        gap_positions = np.flatnonzero(diffs > 1)
+        for gap_pos in gap_positions:
+            prev_idx = int(valid_indices[int(gap_pos)])
+            next_idx = int(valid_indices[int(gap_pos) + 1])
+            gap_start_idx = prev_idx + 1
+            gap_end_idx = next_idx - 1
+            gap_rows = gap_end_idx - gap_start_idx + 1
+            gap_start_ms = int(metadata["month_start_ms"]) + gap_start_idx * interval_ms
+            gap_end_ms = int(metadata["month_start_ms"]) + gap_end_idx * interval_ms
+            gaps.append(
+                {
+                    "path": str(path),
+                    "exchange": metadata["exchange"],
+                    "timeframe": metadata["timeframe"],
+                    "symbol": metadata["symbol"],
+                    "start_ms": gap_start_ms,
+                    "end_ms": gap_end_ms,
+                    "start_date": _format_ms(gap_start_ms),
+                    "end_date": _format_ms(gap_end_ms),
+                    "rows": int(gap_rows),
+                    "duration_ms": int(gap_rows * interval_ms),
+                }
+            )
+    max_gap_rows = max((int(gap["rows"]) for gap in gaps), default=0)
+    return {
+        "path": str(path),
+        "exchange": metadata["exchange"],
+        "timeframe": metadata["timeframe"],
+        "symbol": metadata["symbol"],
+        "year": metadata["year"],
+        "month": metadata["month"],
+        "interval_ms": interval_ms,
+        "row_count": row_count,
+        "valid_row_count": valid_row_count,
+        "first_valid_ms": first_valid_ms,
+        "last_valid_ms": last_valid_ms,
+        "first_valid_date": _format_ms(first_valid_ms),
+        "last_valid_date": _format_ms(last_valid_ms),
+        "gap_count": len(gaps),
+        "max_gap_rows": max_gap_rows,
+        "max_gap_ms": int(max_gap_rows * interval_ms),
+        "gaps": gaps,
+    }
+
+
+def _add_limited_sample(samples: list[dict[str, Any]], item: dict[str, Any], limit: int) -> None:
+    if len(samples) < limit:
+        samples.append(item)
+
+
+def _add_gap_samples(samples: list[dict[str, Any]], gaps: list[dict[str, Any]]) -> None:
+    samples.extend(gaps)
+    samples.sort(key=lambda item: (int(item["rows"]), str(item["path"])), reverse=True)
+    del samples[MAX_COVERAGE_GAP_SAMPLES:]
+
+
+def _merge_coverage(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
+    coverage = summary["coverage"]
+    coverage["artifact_count"] += 1
+    coverage["row_count"] += int(artifact["row_count"])
+    coverage["valid_row_count"] += int(artifact["valid_row_count"])
+    coverage["gap_count"] += int(artifact["gap_count"])
+    coverage["max_gap_rows"] = max(int(coverage["max_gap_rows"]), int(artifact["max_gap_rows"]))
+    coverage["max_gap_ms"] = max(int(coverage["max_gap_ms"]), int(artifact["max_gap_ms"]))
+    first_valid_ms = artifact["first_valid_ms"]
+    last_valid_ms = artifact["last_valid_ms"]
+    if first_valid_ms is not None:
+        coverage["covered_artifact_count"] += 1
+        if coverage["first_valid_ms"] is None or int(first_valid_ms) < int(
+            coverage["first_valid_ms"]
+        ):
+            coverage["first_valid_ms"] = int(first_valid_ms)
+        if coverage["last_valid_ms"] is None or int(last_valid_ms) > int(
+            coverage["last_valid_ms"]
+        ):
+            coverage["last_valid_ms"] = int(last_valid_ms)
+    sample = {key: value for key, value in artifact.items() if key != "gaps"}
+    _add_limited_sample(coverage["artifact_samples"], sample, MAX_COVERAGE_ARTIFACT_SAMPLES)
+    _add_gap_samples(coverage["gap_samples"], artifact["gaps"])
+
+
+def _merge_finalized_coverage(summary: dict[str, Any], coverage_report: dict[str, Any]) -> None:
+    coverage = summary["coverage"]
+    coverage["artifact_count"] += int(coverage_report["artifact_count"])
+    coverage["covered_artifact_count"] += int(coverage_report["covered_artifact_count"])
+    coverage["row_count"] += int(coverage_report["row_count"])
+    coverage["valid_row_count"] += int(coverage_report["valid_row_count"])
+    coverage["gap_count"] += int(coverage_report["gap_count"])
+    coverage["max_gap_rows"] = max(
+        int(coverage["max_gap_rows"]),
+        int(coverage_report["max_gap_rows"]),
+    )
+    coverage["max_gap_ms"] = max(
+        int(coverage["max_gap_ms"]),
+        int(coverage_report["max_gap_ms"]),
+    )
+    first_valid_ms = coverage_report["first_valid_ms"]
+    last_valid_ms = coverage_report["last_valid_ms"]
+    if first_valid_ms is not None:
+        if coverage["first_valid_ms"] is None or int(first_valid_ms) < int(
+            coverage["first_valid_ms"]
+        ):
+            coverage["first_valid_ms"] = int(first_valid_ms)
+        if coverage["last_valid_ms"] is None or int(last_valid_ms) > int(
+            coverage["last_valid_ms"]
+        ):
+            coverage["last_valid_ms"] = int(last_valid_ms)
+    for artifact in coverage_report["artifact_samples"]:
+        _add_limited_sample(
+            coverage["artifact_samples"],
+            artifact,
+            MAX_COVERAGE_ARTIFACT_SAMPLES,
+        )
+    _add_gap_samples(coverage["gap_samples"], coverage_report["gap_samples"])
+
+
+def _finalize_coverage(coverage: dict[str, Any], issue_count: int) -> dict[str, Any]:
+    artifact_count = int(coverage["artifact_count"])
+    valid_row_count = int(coverage["valid_row_count"])
+    gap_count = int(coverage["gap_count"])
+    if artifact_count == 0:
+        evidence = "no_coverage_metadata"
+    elif issue_count:
+        evidence = "issues_present"
+    elif valid_row_count == 0:
+        evidence = "no_valid_rows"
+    elif gap_count:
+        evidence = "coverage_with_gaps"
+    else:
+        evidence = "coverage_observed"
+    return {
+        "warm_cache_evidence": evidence,
+        "artifact_count": artifact_count,
+        "covered_artifact_count": int(coverage["covered_artifact_count"]),
+        "row_count": int(coverage["row_count"]),
+        "valid_row_count": valid_row_count,
+        "gap_count": gap_count,
+        "max_gap_rows": int(coverage["max_gap_rows"]),
+        "max_gap_ms": int(coverage["max_gap_ms"]),
+        "first_valid_ms": coverage["first_valid_ms"],
+        "last_valid_ms": coverage["last_valid_ms"],
+        "first_valid_date": _format_ms(coverage["first_valid_ms"]),
+        "last_valid_date": _format_ms(coverage["last_valid_ms"]),
+        "artifact_samples": list(coverage["artifact_samples"]),
+        "gap_samples": list(coverage["gap_samples"]),
     }
 
 
 def _finalize_family_summary(by_family: dict[str, dict[str, Any]]) -> dict[str, Any]:
     finalized: dict[str, Any] = {}
     for family, summary in sorted(by_family.items()):
-        finalized[family] = {
+        issue_count = int(summary["issue_count"])
+        family_report = {
             "file_count": int(summary["file_count"]),
             "total_bytes": int(summary["total_bytes"]),
-            "issue_count": int(summary["issue_count"]),
+            "issue_count": issue_count,
             "by_extension": dict(sorted(summary["by_extension"].items())),
         }
+        coverage = _finalize_coverage(summary["coverage"], issue_count)
+        if family == "candles" or int(coverage["artifact_count"]):
+            family_report["coverage"] = coverage
+        finalized[family] = family_report
     return finalized
 
 
@@ -259,6 +524,9 @@ def _scan_root(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
             issue.setdefault("family", family)
         family_summary["issue_count"] += len(file_issues)
         issues.extend(file_issues)
+        coverage_artifact = _inspect_coverage_artifact(root, entry, family)
+        if coverage_artifact is not None:
+            _merge_coverage(family_summary, coverage_artifact)
     summary["by_extension"] = dict(sorted(by_extension.items()))
     summary["by_family"] = _finalize_family_summary(by_family)
     return summary, issues
@@ -283,6 +551,8 @@ def build_cache_integrity_report(roots: Iterable[str | Path]) -> dict[str, Any]:
             summary["total_bytes"] += int(family_report["total_bytes"])
             summary["issue_count"] += int(family_report["issue_count"])
             summary["by_extension"].update(family_report["by_extension"])
+            if "coverage" in family_report:
+                _merge_finalized_coverage(summary, family_report["coverage"])
     summary = {
         "root_count": len(root_reports),
         "file_count": sum(int(root["file_count"]) for root in root_reports),

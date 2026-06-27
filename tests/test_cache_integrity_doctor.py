@@ -66,6 +66,62 @@ def test_cache_integrity_report_summarizes_cache_families(tmp_path):
     assert issue["family"] == "candles"
 
 
+def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    np.save(month_dir / "01.npy", np.full((8, 4), 1.0, dtype=np.float32))
+    np.save(
+        month_dir / "01.valid.npy",
+        np.array([False, True, True, False, False, True, True, False], dtype=bool),
+    )
+
+    report = build_cache_integrity_report([root])
+
+    coverage = report["summary"]["by_family"]["candles"]["coverage"]
+    assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
+    assert coverage["artifact_count"] == 1
+    assert coverage["covered_artifact_count"] == 1
+    assert coverage["row_count"] == 8
+    assert coverage["valid_row_count"] == 4
+    assert coverage["gap_count"] == 1
+    assert coverage["max_gap_rows"] == 2
+    assert coverage["first_valid_date"] == "2026-01-01T00:01:00+00:00"
+    assert coverage["last_valid_date"] == "2026-01-01T00:06:00+00:00"
+    assert coverage["artifact_samples"][0]["symbol"] == "BTC_USDT"
+    assert coverage["artifact_samples"][0]["gap_count"] == 1
+    assert coverage["gap_samples"] == [
+        {
+            "path": str(month_dir / "01.valid.npy"),
+            "exchange": "binance",
+            "timeframe": "1m",
+            "symbol": "BTC_USDT",
+            "start_ms": 1767225780000,
+            "end_ms": 1767225840000,
+            "start_date": "2026-01-01T00:03:00+00:00",
+            "end_date": "2026-01-01T00:04:00+00:00",
+            "rows": 2,
+            "duration_ms": 120000,
+        }
+    ]
+
+
+def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "okx" / "1h" / "ETH_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    np.save(month_dir / "02.valid.npy", np.zeros(3, dtype=bool))
+
+    report = build_cache_integrity_report([root])
+
+    coverage = report["summary"]["by_family"]["candles"]["coverage"]
+    assert coverage["warm_cache_evidence"] == "no_valid_rows"
+    assert coverage["artifact_count"] == 1
+    assert coverage["covered_artifact_count"] == 0
+    assert coverage["first_valid_date"] is None
+    assert coverage["last_valid_date"] is None
+
+
 def test_cache_integrity_report_marks_missing_root_as_warning(tmp_path):
     missing = tmp_path / "missing"
 
