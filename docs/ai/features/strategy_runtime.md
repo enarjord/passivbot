@@ -69,9 +69,31 @@ Entries and closes use threshold/retracement fields.
 Entry thresholds and retracements are multiplicative distances. Positive volatility or wallet
 exposure weights widen them.
 
+`bot.<side>.strategy.trailing_martingale.entry.ema_gate_mode` controls which entry orders are
+capped/floored by the EMA entry band:
+
+- `disabled`: no emitted entry order is capped/floored by EMA. Flat initial entries rest at current
+  best bid/ask; re-entries use normal threshold/retracement logic.
+- `all`: initial entries, partial initial entries, and re-entries are capped/floored by EMA.
+- `initial`: normal initial and partial initial entries are capped/floored by EMA. Re-entries are
+  not EMA capped/floored. This is the default and preserves the previous v8 behavior.
+- `reentry`: flat initial entries are not capped/floored by EMA; re-entries are capped/floored by
+  EMA.
+
+The value is fixed config, not an optimizer parameter. In one-way mode, if both sides are flat and
+both long and short are otherwise eligible, the long-vs-short tie-break still uses the EMA entry
+band distance even when `ema_gate_mode = "disabled"`. Candles and EMA bands are therefore required
+for that tie-break, and missing EMA inputs must fail loudly.
+
 Close thresholds are additive so they can intentionally cross through break-even or negative markup
 as wallet exposure rises. Close retracement is volatility-weighted and intentionally has no
 wallet-exposure modifier.
+
+Auto-unstuck has its own EMA trigger toggle:
+`bot.<side>.unstuck.ema_gating_enabled`. It defaults to `true`. When false, auto-unstuck skips the
+EMA trigger/readiness check but still requires `unstuck.enabled`, loss allowance, exposure
+threshold, close sizing, and valid market/exchange inputs. The toggle does not add independent
+unstuck EMA spans.
 
 ## Live/Backtest Market Slippage Boundary
 

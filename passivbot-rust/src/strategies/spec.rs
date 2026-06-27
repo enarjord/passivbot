@@ -14,11 +14,21 @@ pub struct StrategyParameterSpec {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct StrategyFixedParameterSpec {
+    pub side: &'static str,
+    pub name: &'static str,
+    pub config_path: Vec<&'static str>,
+    pub default: &'static str,
+    pub allowed_values: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct StrategySpec {
     pub strategy_kind: &'static str,
     pub defaults: BTreeMap<&'static str, BTreeMap<&'static str, f64>>,
     pub optimize_bounds: BTreeMap<String, Vec<f64>>,
     pub parameters: Vec<StrategyParameterSpec>,
+    pub fixed_parameters: Vec<StrategyFixedParameterSpec>,
 }
 
 struct ParamSeed {
@@ -536,6 +546,7 @@ fn build_strategy_spec(
         defaults,
         optimize_bounds,
         parameters,
+        fixed_parameters: Vec::new(),
     }
 }
 
@@ -583,11 +594,23 @@ fn build_nested_strategy_spec(
         defaults,
         optimize_bounds,
         parameters,
+        fixed_parameters: Vec::new(),
     }
 }
 
 pub fn trailing_martingale_spec() -> StrategySpec {
-    build_nested_strategy_spec("trailing_martingale", TRAILING_MARTINGALE_PARAM_SEEDS)
+    let mut spec =
+        build_nested_strategy_spec("trailing_martingale", TRAILING_MARTINGALE_PARAM_SEEDS);
+    for side in ["long", "short"] {
+        spec.fixed_parameters.push(StrategyFixedParameterSpec {
+            side,
+            name: "entry_ema_gate_mode",
+            config_path: vec!["strategy", side, "entry", "ema_gate_mode"],
+            default: "initial",
+            allowed_values: vec!["disabled", "all", "initial", "reentry"],
+        });
+    }
+    spec
 }
 
 pub fn trailing_grid_v7_spec() -> StrategySpec {

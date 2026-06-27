@@ -940,6 +940,7 @@ fn test_trailing_martingale_params_value_from_flat(bot_params: &BotParams) -> se
         volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
         entry: crate::strategies::TrailingMartingaleEntryParams {
             double_down_factor: bot_params.entry_grid_double_down_factor,
+            ema_gate_mode: crate::strategies::EmaGateMode::Initial,
             initial_ema_dist: bot_params.entry_initial_ema_dist,
             initial_qty_pct: bot_params.entry_initial_qty_pct,
             threshold_base_pct: bot_params.entry_grid_spacing_pct,
@@ -6093,6 +6094,7 @@ mod tests {
             volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
             entry: TrailingMartingaleEntryParams {
                 double_down_factor: bot_params.entry_grid_double_down_factor,
+                ema_gate_mode: crate::strategies::EmaGateMode::Initial,
                 initial_ema_dist: bot_params.entry_initial_ema_dist,
                 initial_qty_pct: bot_params.entry_initial_qty_pct,
                 threshold_base_pct: bot_params.entry_grid_spacing_pct,

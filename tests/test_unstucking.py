@@ -22,6 +22,7 @@ def _build_position(
     wallet_exposure_limit=1.0,
     unstuck_threshold=0.0,
     unstuck_close_pct=0.1,
+    unstuck_ema_gating_enabled=True,
     unstuck_ema_dist=0.0,
     qty_step=0.01,
     price_step=0.01,
@@ -46,6 +47,7 @@ def _build_position(
         "wallet_exposure_limit": float(wallet_exposure_limit),
         "unstuck_threshold": float(unstuck_threshold),
         "unstuck_close_pct": float(unstuck_close_pct),
+        "unstuck_ema_gating_enabled": bool(unstuck_ema_gating_enabled),
         "unstuck_ema_dist": float(unstuck_ema_dist),
         "risk_we_excess_allowance_pct": float(risk_we_excess_allowance_pct),
         "ema_band_upper": float(ema_band_upper),
@@ -122,6 +124,29 @@ def test_unstucking_skips_when_price_not_beyond_ema():
     ]
     result = pbr.calc_unstucking_close_py(1000.0, 5.0, 0.0, positions)
     assert result is None
+
+
+@pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")
+def test_unstucking_ema_gating_disabled_ignores_ema_trigger():
+    positions = [
+        _build_position(
+            side="long",
+            position_size=2.0,
+            position_price=100.0,
+            current_price=95.0,
+            ema_band_upper=100.0,
+            unstuck_ema_gating_enabled=False,
+        )
+    ]
+
+    result = pbr.calc_unstucking_close_py(1000.0, 5.0, 0.0, positions)
+
+    assert result is not None
+    idx, side_code, qty, price, order_type_id = result
+    assert idx == 0
+    assert qty < 0.0
+    assert price == pytest.approx(95.0)
+    assert order_type_id == pbr.order_type_snake_to_id("close_unstuck_long")
 
 
 @pytest.mark.skipif(pbr is None or pbr_is_stub, reason="passivbot_rust extension not available")

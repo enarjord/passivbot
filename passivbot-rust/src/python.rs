@@ -18,7 +18,8 @@ use crate::risk::{
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
 use crate::strategies::{
-    EmaAnchorParams, StrategySide, TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
+    EmaAnchorParams, EmaGateMode, StrategySide, TrailingMartingaleCloseParams,
+    TrailingMartingaleEntryParams,
 };
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
@@ -1139,6 +1140,12 @@ pub fn calc_unstucking_close_py(
             .get_item("unstuck_close_pct")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_close_pct'"))?
             .extract::<f64>()?;
+        let unstuck_ema_gating_enabled =
+            if let Some(value) = dict.get_item("unstuck_ema_gating_enabled")? {
+                value.extract::<bool>()?
+            } else {
+                true
+            };
         let unstuck_ema_dist = dict
             .get_item("unstuck_ema_dist")?
             .ok_or_else(|| PyValueError::new_err("position missing 'unstuck_ema_dist'"))?
@@ -1185,6 +1192,7 @@ pub fn calc_unstucking_close_py(
             effective_we_excess_allowance_pct,
             unstuck_threshold,
             unstuck_close_pct,
+            unstuck_ema_gating_enabled,
             unstuck_ema_dist,
             unstuck_loss_allowance_pct: 0.0,
             total_wallet_exposure_limit: 0.0,
@@ -2052,6 +2060,7 @@ fn trailing_martingale_strategy_params_from_dict(dict: &PyDict) -> PyResult<Valu
         "volatility_ema_span_1m": extract_value::<f64>(dict, "volatility_ema_span_1m")?,
         "entry": {
             "double_down_factor": extract_value::<f64>(entry, "double_down_factor")?,
+            "ema_gate_mode": extract_optional_string(entry, "ema_gate_mode", "initial")?,
             "initial_ema_dist": extract_value::<f64>(entry, "initial_ema_dist")?,
             "initial_qty_pct": extract_value::<f64>(entry, "initial_qty_pct")?,
             "threshold_base_pct": extract_value::<f64>(entry, "threshold_base_pct")?,
@@ -2231,6 +2240,13 @@ fn extract_optional_bool(dict: &PyDict, key: &str, default: bool) -> PyResult<bo
     })
 }
 
+fn extract_optional_string(dict: &PyDict, key: &str, default: &str) -> PyResult<String> {
+    Ok(match dict.get_item(key)? {
+        Some(item) => item.extract::<String>()?,
+        None => default.to_string(),
+    })
+}
+
 fn extract_optional_we_excess_allowance_mode(dict: &PyDict) -> PyResult<WeExcessAllowanceMode> {
     Ok(match dict.get_item("risk_we_excess_allowance_mode")? {
         Some(item) => {
@@ -2394,6 +2410,11 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         risk_we_excess_allowance_pct,
         risk_we_excess_allowance_mode: extract_optional_we_excess_allowance_mode(dict)?,
         unstuck_enabled: extract_optional_bool(dict, "unstuck_enabled", true)?,
+        unstuck_ema_gating_enabled: extract_optional_bool(
+            dict,
+            "unstuck_ema_gating_enabled",
+            true,
+        )?,
         unstuck_close_pct: extract_value(dict, "unstuck_close_pct")?,
         unstuck_ema_dist: extract_value(dict, "unstuck_ema_dist")?,
         unstuck_loss_allowance_pct: extract_value(dict, "unstuck_loss_allowance_pct")?,
@@ -2479,6 +2500,7 @@ fn make_trailing_martingale_entry_params(
     );
     TrailingMartingaleEntryParams {
         double_down_factor: entry_grid_double_down_factor,
+        ema_gate_mode: EmaGateMode::Initial,
         initial_ema_dist: entry_initial_ema_dist,
         initial_qty_pct: entry_initial_qty_pct,
         threshold_base_pct: entry_grid_spacing_pct,

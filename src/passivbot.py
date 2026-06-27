@@ -12876,7 +12876,9 @@ class Passivbot:
         bool_keys = {
             "risk_wel_enforcer_enabled",
             "risk_twel_enforcer_enabled",
+            "risk_twel_entry_gate_enabled",
             "unstuck_enabled",
+            "unstuck_ema_gating_enabled",
         }
         string_keys = {
             "risk_we_excess_allowance_mode",
@@ -12934,11 +12936,13 @@ class Passivbot:
             "risk_wel_enforcer_enabled",
             "risk_wel_enforcer_threshold",
             "risk_twel_enforcer_enabled",
+            "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
             "risk_we_excess_allowance_mode",
             "unstuck_enabled",
             "unstuck_close_pct",
+            "unstuck_ema_gating_enabled",
             "unstuck_ema_dist",
             "unstuck_loss_allowance_pct",
             "unstuck_threshold",

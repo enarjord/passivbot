@@ -29,7 +29,7 @@ def _set_path(mapping, path, value):
 
 def _nested_strategy_values_from_spec(spec, field):
     result = {"long": {}, "short": {}}
-    for param in spec["parameters"]:
+    for param in [*spec["parameters"], *spec.get("fixed_parameters", [])]:
         config_path = param["config_path"]
         pside = config_path[1]
         _set_path(result[pside], config_path[2:], param[field])
@@ -75,6 +75,36 @@ def test_rust_strategy_spec_matches_generated_strategy_optimize_bounds(strategy_
             flat_generated[f"{pside}_{local_key}"] = value
 
     assert flat_generated == expected
+
+
+def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound():
+    source = get_template_config()
+    source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_gate_mode"] = "REENTRY"
+    source["bot"]["short"]["unstuck"]["ema_gating_enabled"] = False
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert (
+        prepared["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_gate_mode"]
+        == "reentry"
+    )
+    assert prepared["bot"]["short"]["unstuck"]["ema_gating_enabled"] is False
+    assert "ema_gate_mode" not in json.dumps(prepared["optimize"]["bounds"])
+    spec = pbr.get_strategy_spec("trailing_martingale")
+    assert any(
+        param["config_path"] == ["strategy", "long", "entry", "ema_gate_mode"]
+        and param["default"] == "initial"
+        and param["allowed_values"] == ["disabled", "all", "initial", "reentry"]
+        for param in spec["fixed_parameters"]
+    )
+
+
+def test_prepare_config_rejects_invalid_trailing_martingale_ema_gate_mode():
+    source = get_template_config()
+    source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_gate_mode"] = "re_entry"
+
+    with pytest.raises(ValueError, match="ema_gate_mode must be one of"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
 def _minimal_v7_trailing_grid_config():
