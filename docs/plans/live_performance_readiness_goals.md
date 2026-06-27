@@ -57,8 +57,10 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
    - First slice added `passivbot tool live-performance-report` with timing
      groups, trading-impact labels, summary projection, and bot/user/exchange
      filters.
-   - Missing pieces: decision-boundary lag, input staleness at decision time,
-     and complete coverage for every order/write/shutdown stage.
+   - A follow-up slice added decision-boundary lag groups from current cycle
+     events.
+   - Missing pieces: input staleness at decision time and complete coverage for
+     every order/write/shutdown stage.
 
 ## Performance Checklist
 
@@ -168,10 +170,10 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Mark phases that can delay panic/protective orders.
   - Mark phases that only affect diagnostics/console/dashboard.
 
-- [ ] Report decision-boundary lag.
+- [x] Report decision-boundary lag.
   - For each cycle, measure how far after the relevant whole-minute boundary
-    the bot had sufficient inputs, called Rust, produced a plan, submitted
-    writes, and confirmed exchange state.
+    the bot started the cycle, called Rust as the current planning-ready proxy,
+    produced a plan, submitted writes, and confirmed exchange state.
   - This is the main live-vs-backtest gap metric.
 
 - [ ] Report input staleness at decision time.

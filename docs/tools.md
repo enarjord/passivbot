@@ -172,7 +172,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and
   `--bot EXCHANGE/USER`, `--exchange EXCHANGE`, or `--user USER` to focus one account or
-  exchange.
+  exchange. The report includes decision-boundary lag groups showing how far after the
+  whole-minute boundary cycles reached start, Rust planning, action planning, writes,
+  confirmations, and completion.
 
 ## Exchange Helpers
 

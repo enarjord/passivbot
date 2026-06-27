@@ -238,6 +238,107 @@ class _PerformanceAccumulator:
         }
 
 
+def _event_cycle_id(live_event: dict[str, Any]) -> str | None:
+    ids = live_event.get("ids")
+    if not isinstance(ids, dict):
+        return None
+    cycle_id = ids.get("cycle_id")
+    if cycle_id is None:
+        return None
+    return str(cycle_id)
+
+
+def _minute_boundary_ms(timestamp_ms: int) -> int:
+    return int(timestamp_ms) - (int(timestamp_ms) % 60_000)
+
+
+def _decision_milestone(event_type: str) -> str | None:
+    return {
+        "cycle.started": "cycle_started",
+        "rust_orchestrator.called": "rust_called",
+        "rust_orchestrator.returned": "rust_returned",
+        "action.planned": "action_planned",
+        "order_wave.started": "order_wave_started",
+        "execution.create_sent": "first_write_sent",
+        "execution.cancel_sent": "first_write_sent",
+        "execution.confirmation_requested": "confirmation_requested",
+        "execution.confirmation_satisfied": "confirmation_satisfied",
+        "cycle.completed": "cycle_completed",
+    }.get(event_type)
+
+
+def _decision_trading_impact(milestone: str) -> str:
+    if milestone in {"first_write_sent", "confirmation_requested", "confirmation_satisfied"}:
+        return "blocks_exchange_actions"
+    if milestone == "cycle_completed":
+        return "blocks_next_cycle"
+    return "blocks_cycle_decision"
+
+
+class _DecisionBoundaryAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str], _MetricGroup] = {}
+        self.cycle_boundaries: dict[tuple[str, str], int] = {}
+        self.cycles_seen: set[tuple[str, str]] = set()
+        self.cycles_with_write: set[tuple[str, str]] = set()
+        self.events_without_cycle_id = 0
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        milestone = _decision_milestone(event_type)
+        if milestone is None:
+            return
+        timestamp_ms = _record_ts(row)
+        if timestamp_ms is None:
+            return
+        cycle_id = _event_cycle_id(live_event)
+        if not cycle_id:
+            self.events_without_cycle_id += 1
+            return
+        bot = _bot_key(row, live_event)
+        cycle_key = (bot, cycle_id)
+        self.cycles_seen.add(cycle_key)
+        if milestone == "cycle_started" or cycle_key not in self.cycle_boundaries:
+            self.cycle_boundaries[cycle_key] = _minute_boundary_ms(timestamp_ms)
+        if milestone == "first_write_sent":
+            self.cycles_with_write.add(cycle_key)
+        lag_ms = max(0, int(timestamp_ms) - int(self.cycle_boundaries[cycle_key]))
+        group_key = (bot, milestone)
+        group = self.groups.get(group_key)
+        if group is None:
+            group = _MetricGroup(
+                bot=bot,
+                operation=f"decision_boundary.{milestone}",
+                component="decision_boundary",
+                event_type=event_type,
+                trading_impact=_decision_trading_impact(milestone),
+                timing_kind="lag_from_minute_boundary",
+            )
+            self.groups[group_key] = group
+        group.add(lag_ms, row=row, live_event=live_event)
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = sorted(
+            (group.to_dict() for group in self.groups.values()),
+            key=lambda item: (
+                -int(item.get("p95_ms", 0) or 0),
+                -int(item.get("max_ms", 0) or 0),
+                -int(item.get("count", 0) or 0),
+                str(item.get("bot") or ""),
+                str(item.get("operation") or ""),
+            ),
+        )
+        return {
+            "minute_ms": 60_000,
+            "cycles": len(self.cycles_seen),
+            "cycles_with_write": len(self.cycles_with_write),
+            "events_without_cycle_id": int(self.events_without_cycle_id),
+            "total_groups": len(groups),
+            "groups_truncated": len(groups) > int(group_limit),
+            "groups": groups[: max(0, int(group_limit))],
+        }
+
+
 def _timings_map(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
@@ -474,6 +575,7 @@ def build_live_performance_report(
         )
 
     accumulator = _PerformanceAccumulator()
+    decision_boundary = _DecisionBoundaryAccumulator()
     records_total = 0
     live_events = 0
     legacy_events = 0
@@ -545,6 +647,7 @@ def build_live_performance_report(
                         row=row,
                         live_event=live_event,
                     )
+                    decision_boundary.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -576,6 +679,7 @@ def build_live_performance_report(
             for bot, count in sorted(bots.items(), key=lambda item: (-item[1], item[0]))
         ],
         "performance": accumulator.to_dict(group_limit=group_limit),
+        "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
     }
     if window_enabled:
         report["event_window"] = event_window
@@ -609,6 +713,20 @@ def summarize_live_performance_report(
             "groups": groups[: max(0, int(group_limit))],
         },
     }
+    if isinstance(report.get("decision_boundary_lag"), dict):
+        decision_lag = report["decision_boundary_lag"]
+        decision_groups = (
+            decision_lag.get("groups") if isinstance(decision_lag.get("groups"), list) else []
+        )
+        summary["decision_boundary_lag"] = {
+            "minute_ms": int(decision_lag.get("minute_ms") or 60_000),
+            "cycles": int(decision_lag.get("cycles") or 0),
+            "cycles_with_write": int(decision_lag.get("cycles_with_write") or 0),
+            "events_without_cycle_id": int(decision_lag.get("events_without_cycle_id") or 0),
+            "total_groups": int(decision_lag.get("total_groups") or 0),
+            "groups_truncated": bool(decision_lag.get("groups_truncated")),
+            "groups": decision_groups[: max(0, int(group_limit))],
+        }
     if report.get("event_window") is not None:
         summary["event_window"] = report.get("event_window")
     if report.get("filters") is not None:
