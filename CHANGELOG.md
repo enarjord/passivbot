@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added no-extra-call `exchange_surface_health` summaries to
+  `passivbot tool ticker-endpoint-probe`, interpreting already-recorded endpoint
+  outcomes into exchange/user-level notes for open-orders fallback, time-sync
+  support, fill-history pagination, and OHLCV tail shape.
 - Added no-extra-call endpoint latency health summaries to
   `passivbot tool ticker-endpoint-probe`, derived from existing probe outcomes.
 - Added opt-in bounded fill-history pagination sampling to

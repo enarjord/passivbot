@@ -1425,6 +1425,243 @@ def summarize_endpoint_latency_probe_collection(probes: list[dict[str, Any]]) ->
     }
 
 
+def _add_note(notes: set[str], note: str, condition: bool) -> None:
+    if condition:
+        notes.add(note)
+
+
+def _mapping_or_empty(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def summarize_exchange_surface_probe_health(probe: dict[str, Any]) -> dict[str, Any]:
+    """Summarize exchange-specific surface behavior from already-recorded outcomes."""
+    repeats = probe.get("repeats") if isinstance(probe.get("repeats"), list) else []
+    notes: set[str] = set()
+
+    open_total = 0
+    open_succeeded = 0
+    open_failed = 0
+    open_mode_counts: Counter[str] = Counter()
+    open_error_types: Counter[str] = Counter()
+    latest_open: dict[str, Any] | None = None
+    symbol_fallback_count = 0
+    all_symbols_failure_count = 0
+    for repeat in repeats:
+        outcome = repeat.get("fetch_open_orders_all") if isinstance(repeat, dict) else None
+        if not isinstance(outcome, dict):
+            continue
+        open_total += 1
+        mode = str(outcome.get("mode") or "unknown")
+        open_mode_counts[mode] += 1
+        if mode == "symbol_fallback":
+            symbol_fallback_count += 1
+        attempts = outcome.get("attempts") if isinstance(outcome.get("attempts"), dict) else {}
+        all_symbols = attempts.get("all_symbols") if isinstance(attempts, dict) else None
+        all_symbols_ok = bool(all_symbols.get("ok")) if isinstance(all_symbols, dict) else None
+        if all_symbols_ok is False:
+            all_symbols_failure_count += 1
+        ok = bool(outcome.get("ok"))
+        if ok:
+            open_succeeded += 1
+        else:
+            open_failed += 1
+            open_error_types[str(outcome.get("error_type") or "unknown")] += 1
+        latest_open = {
+            "ok": ok,
+            "mode": mode,
+            "all_symbols_ok": all_symbols_ok,
+            "fallback_symbol": outcome.get("fallback_symbol"),
+            "error_type": outcome.get("error_type") if not ok else None,
+        }
+    _add_note(notes, "open_orders_symbol_fallback_required", symbol_fallback_count > 0)
+    _add_note(notes, "open_orders_all_symbols_failed", all_symbols_failure_count > 0)
+    _add_note(notes, "open_orders_failed", open_failed > 0)
+
+    time_sync = summarize_time_sync_probe_health(probe)
+    _add_note(notes, "time_sync_unsupported", int(time_sync.get("unsupported") or 0) > 0)
+    _add_note(notes, "time_sync_failed", int(time_sync.get("failed") or 0) > 0)
+
+    fill_history = summarize_fill_history_probe_health(probe)
+    terminal_reasons: Counter[str] = Counter()
+    fill_missing_timestamp_count = 0
+    fill_page_count = 0
+    fill_requested_pages = 0
+    fill_call_count = 0
+    latest_fill = fill_history.get("latest") if isinstance(fill_history.get("latest"), dict) else None
+    for repeat in repeats:
+        outcome = (
+            repeat.get("fetch_my_trades_first_symbol")
+            if isinstance(repeat, dict)
+            else None
+        )
+        if not isinstance(outcome, dict):
+            continue
+        reason = outcome.get("terminal_reason")
+        if reason is not None:
+            terminal_reasons[str(reason)] += 1
+        fill_page_count += int(outcome.get("page_count") or 0)
+        fill_requested_pages += int(outcome.get("requested_pages") or 0)
+        fill_call_count += int(outcome.get("call_count") or 0)
+        value = outcome.get("value") if isinstance(outcome.get("value"), dict) else {}
+        fill_missing_timestamp_count += int(value.get("missing_timestamp_count") or 0)
+    _add_note(notes, "fill_history_short_page", terminal_reasons["short_page"] > 0)
+    _add_note(
+        notes,
+        "fill_history_requested_pages_exhausted",
+        terminal_reasons["requested_pages_exhausted"] > 0,
+    )
+    _add_note(
+        notes,
+        "fill_history_timestamp_issue",
+        any(
+            terminal_reasons[reason] > 0
+            for reason in ("missing_page_timestamp", "non_advancing_timestamp")
+        )
+        or fill_missing_timestamp_count > 0,
+    )
+    _add_note(notes, "fill_history_failed", int(fill_history.get("failed") or 0) > 0)
+
+    candle = summarize_candle_freshness_probe_health(probe)
+    _add_note(
+        notes,
+        "ohlcv_tail_current_incomplete",
+        int(candle.get("current_incomplete_symbols") or 0) > 0,
+    )
+    _add_note(
+        notes,
+        "ohlcv_tail_missing_timestamp",
+        int(candle.get("missing_timestamp_symbols") or 0) > 0,
+    )
+    _add_note(notes, "ohlcv_tail_failed", int(candle.get("failed_symbols") or 0) > 0)
+
+    return {
+        "exchange": probe.get("exchange"),
+        "user": probe.get("user"),
+        "notes": sorted(notes),
+        "open_orders": {
+            "enabled": bool(probe.get("include_private", True)),
+            "total": open_total,
+            "succeeded": open_succeeded,
+            "failed": open_failed,
+            "failure_pct": _pct(open_failed, open_total),
+            "mode_counts": _counter_to_sorted_dict(open_mode_counts),
+            "symbol_fallback_count": symbol_fallback_count,
+            "all_symbols_failure_count": all_symbols_failure_count,
+            "error_types": _counter_to_sorted_dict(open_error_types),
+            "latest": latest_open,
+        },
+        "time_sync": {
+            "enabled": bool(time_sync.get("enabled")),
+            "total": int(time_sync.get("total") or 0),
+            "succeeded": int(time_sync.get("succeeded") or 0),
+            "failed": int(time_sync.get("failed") or 0),
+            "unsupported": int(time_sync.get("unsupported") or 0),
+            "failure_pct": time_sync.get("failure_pct"),
+            "latest": time_sync.get("latest"),
+        },
+        "fill_history": {
+            "enabled": bool(fill_history.get("enabled")),
+            "total": int(fill_history.get("total") or 0),
+            "succeeded": int(fill_history.get("succeeded") or 0),
+            "failed": int(fill_history.get("failed") or 0),
+            "failure_pct": fill_history.get("failure_pct"),
+            "terminal_reasons": _counter_to_sorted_dict(terminal_reasons),
+            "requested_pages": fill_requested_pages,
+            "page_count": fill_page_count,
+            "call_count": fill_call_count,
+            "missing_timestamp_count": fill_missing_timestamp_count,
+            "latest": latest_fill,
+        },
+        "candle_tail": {
+            "enabled": bool(candle.get("enabled")),
+            "total_symbols": int(candle.get("total_symbols") or 0),
+            "succeeded_symbols": int(candle.get("succeeded_symbols") or 0),
+            "failed_symbols": int(candle.get("failed_symbols") or 0),
+            "failure_pct": candle.get("failure_pct"),
+            "missing_timestamp_symbols": int(candle.get("missing_timestamp_symbols") or 0),
+            "current_incomplete_symbols": int(candle.get("current_incomplete_symbols") or 0),
+            "worst": candle.get("worst"),
+        },
+    }
+
+
+def summarize_exchange_surface_probe_collection(probes: list[dict[str, Any]]) -> dict[str, Any]:
+    users = []
+    exchange_groups: dict[str, dict[str, Any]] = {}
+    note_counts: Counter[str] = Counter()
+    for probe in probes:
+        summary = probe.get("exchange_surface_health")
+        if not isinstance(summary, dict):
+            summary = summarize_exchange_surface_probe_health(probe)
+        notes = [str(note) for note in summary.get("notes") or []]
+        note_counts.update(notes)
+        open_orders = _mapping_or_empty(summary.get("open_orders"))
+        time_sync = _mapping_or_empty(summary.get("time_sync"))
+        fill_history = _mapping_or_empty(summary.get("fill_history"))
+        candle_tail = _mapping_or_empty(summary.get("candle_tail"))
+        user_summary = {
+            "user": probe.get("user"),
+            "exchange": probe.get("exchange"),
+            "notes": notes,
+            "open_orders_mode_counts": _mapping_or_empty(open_orders.get("mode_counts")),
+            "open_orders_symbol_fallback_count": int(
+                open_orders.get("symbol_fallback_count") or 0
+            ),
+            "open_orders_failed": int(open_orders.get("failed") or 0),
+            "time_sync_unsupported": int(time_sync.get("unsupported") or 0),
+            "time_sync_failed": int(time_sync.get("failed") or 0),
+            "fill_history_terminal_reasons": _mapping_or_empty(
+                fill_history.get("terminal_reasons")
+            ),
+            "fill_history_failed": int(fill_history.get("failed") or 0),
+            "candle_tail_failed_symbols": int(candle_tail.get("failed_symbols") or 0),
+            "candle_tail_current_incomplete_symbols": int(
+                candle_tail.get("current_incomplete_symbols") or 0
+            ),
+        }
+        users.append(user_summary)
+        exchange = str(probe.get("exchange") or "unknown")
+        group = exchange_groups.setdefault(
+            exchange,
+            {
+                "user_count": 0,
+                "note_counts": Counter(),
+                "open_orders_symbol_fallback_count": 0,
+                "open_orders_failed": 0,
+                "time_sync_unsupported": 0,
+                "time_sync_failed": 0,
+                "fill_history_failed": 0,
+                "candle_tail_failed_symbols": 0,
+                "candle_tail_current_incomplete_symbols": 0,
+            },
+        )
+        group["user_count"] += 1
+        group["note_counts"].update(notes)
+        for key in (
+            "open_orders_symbol_fallback_count",
+            "open_orders_failed",
+            "time_sync_unsupported",
+            "time_sync_failed",
+            "fill_history_failed",
+            "candle_tail_failed_symbols",
+            "candle_tail_current_incomplete_symbols",
+        ):
+            group[key] += int(user_summary[key])
+    exchanges = {
+        exchange: {
+            **{key: value for key, value in group.items() if key != "note_counts"},
+            "note_counts": _counter_to_sorted_dict(group["note_counts"]),
+        }
+        for exchange, group in sorted(exchange_groups.items())
+    }
+    return {
+        "users": users,
+        "exchanges": exchanges,
+        "note_counts": _counter_to_sorted_dict(note_counts),
+    }
+
+
 async def _timed_load_markets(exchange) -> tuple[dict[str, Any], dict[str, Any]]:
     outcome = await _timed_call(exchange.load_markets())
     markets = outcome["value"] if outcome["ok"] and isinstance(outcome["value"], dict) else {}
@@ -1973,6 +2210,7 @@ async def probe_exchange_ticker_endpoints(
     out["fill_history_health"] = summarize_fill_history_probe_health(out)
     out["rate_limit_health"] = summarize_rate_limit_probe_health(out)
     out["endpoint_latency_health"] = summarize_endpoint_latency_probe_health(out)
+    out["exchange_surface_health"] = summarize_exchange_surface_probe_health(out)
     return out
 
 
@@ -2160,6 +2398,9 @@ async def async_main() -> int:
         result["probes"]
     )
     result["endpoint_latency_health"] = summarize_endpoint_latency_probe_collection(
+        result["probes"]
+    )
+    result["exchange_surface_health"] = summarize_exchange_surface_probe_collection(
         result["probes"]
     )
     out_path = Path(args.out) if args.out else Path("tmp") / f"ccxt_ticker_probe_{started_ms}.json"

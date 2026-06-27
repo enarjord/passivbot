@@ -16,6 +16,8 @@ from tools.probe_ccxt_ticker_endpoints import (
     summarize_candle_freshness_probe_health,
     summarize_endpoint_latency_probe_collection,
     summarize_endpoint_latency_probe_health,
+    summarize_exchange_surface_probe_collection,
+    summarize_exchange_surface_probe_health,
     summarize_fill_history_probe_collection,
     summarize_fill_history_probe_health,
     summarize_my_trades,
@@ -411,6 +413,11 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert out["endpoint_latency_health"]["endpoints"]["fetch_open_orders"]["total"] == 1
     assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["total"] == 1
     assert out["endpoint_latency_health"]["slowest"]["endpoint"] in out["endpoint_latency_health"]["endpoints"]
+    assert out["exchange_surface_health"]["notes"] == ["fill_history_short_page"]
+    assert out["exchange_surface_health"]["open_orders"]["mode_counts"] == {"all_symbols": 1}
+    assert out["exchange_surface_health"]["fill_history"]["terminal_reasons"] == {
+        "short_page": 1
+    }
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
 
 
@@ -523,6 +530,11 @@ async def test_probe_exchange_ticker_endpoints_opt_in_fill_history_pagination():
     assert out["endpoint_latency_health"]["total"] == 6
     assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["total"] == 2
     assert out["endpoint_latency_health"]["endpoints"]["fetch_my_trades_first_symbol"]["failed"] == 0
+    assert out["exchange_surface_health"]["notes"] == ["fill_history_short_page"]
+    assert out["exchange_surface_health"]["fill_history"]["call_count"] == 2
+    assert out["exchange_surface_health"]["fill_history"]["terminal_reasons"] == {
+        "short_page": 1
+    }
     assert "raw-trade-id" not in str(out)
     assert "raw-order-id" not in str(out)
     assert "raw-trade-id" not in str(out["fill_history_health"])
@@ -663,6 +675,158 @@ def test_endpoint_latency_probe_collection_aggregates_raw_probe_latencies():
     assert collection["endpoints"]["fetch_balance"]["error_types"] == {
         "RequestTimeout": 1
     }
+
+
+def test_exchange_surface_probe_health_summarizes_exchange_quirks_without_raw_errors():
+    summary = summarize_exchange_surface_probe_health(
+        {
+            "user": "binance_01",
+            "exchange": "binance",
+            "include_private": True,
+            "include_time_sync": True,
+            "include_public": True,
+            "include_ohlcv": True,
+            "include_my_trades": True,
+            "repeats": [
+                {
+                    "fetch_time": {
+                        "ok": False,
+                        "supported": False,
+                        "skipped": True,
+                        "error_type": "UnsupportedEndpoint",
+                        "error": "raw time error should not appear",
+                    },
+                    "fetch_open_orders_all": {
+                        "ok": True,
+                        "mode": "symbol_fallback",
+                        "fallback_symbol": "BTC/USDT:USDT",
+                        "attempts": {
+                            "all_symbols": {
+                                "ok": False,
+                                "elapsed_ms": 0.5,
+                                "error_type": "ExchangeError",
+                                "error": "raw open-orders warning should not appear",
+                            },
+                            "symbol": {
+                                "symbol": "BTC/USDT:USDT",
+                                "outcome": {"ok": True, "elapsed_ms": 5.0},
+                            },
+                        },
+                    },
+                    "fetch_my_trades_first_symbol": {
+                        "ok": True,
+                        "call_count": 2,
+                        "requested_pages": 2,
+                        "page_count": 2,
+                        "terminal_reason": "requested_pages_exhausted",
+                        "value": {
+                            "count": 4,
+                            "timestamp_count": 3,
+                            "missing_timestamp_count": 1,
+                        },
+                    },
+                    "fetch_ohlcv_1m_tail": {
+                        "symbols": {
+                            "BTC/USDT:USDT": {
+                                "ok": True,
+                                "value": {
+                                    "last_timestamp": 1_000_000,
+                                    "last_age_ms": 30_000,
+                                    "last_datetime": "fresh",
+                                    "last_is_current_incomplete_minute": True,
+                                },
+                            }
+                        }
+                    },
+                }
+            ],
+        }
+    )
+
+    assert summary["exchange"] == "binance"
+    assert summary["notes"] == [
+        "fill_history_requested_pages_exhausted",
+        "fill_history_timestamp_issue",
+        "ohlcv_tail_current_incomplete",
+        "open_orders_all_symbols_failed",
+        "open_orders_symbol_fallback_required",
+        "time_sync_unsupported",
+    ]
+    assert summary["open_orders"]["mode_counts"] == {"symbol_fallback": 1}
+    assert summary["open_orders"]["symbol_fallback_count"] == 1
+    assert summary["open_orders"]["all_symbols_failure_count"] == 1
+    assert summary["open_orders"]["latest"] == {
+        "ok": True,
+        "mode": "symbol_fallback",
+        "all_symbols_ok": False,
+        "fallback_symbol": "BTC/USDT:USDT",
+        "error_type": None,
+    }
+    assert summary["time_sync"]["unsupported"] == 1
+    assert summary["fill_history"]["terminal_reasons"] == {
+        "requested_pages_exhausted": 1
+    }
+    assert summary["fill_history"]["missing_timestamp_count"] == 1
+    assert summary["candle_tail"]["current_incomplete_symbols"] == 1
+    assert "raw open-orders warning" not in str(summary)
+    assert "raw time error" not in str(summary)
+
+
+def test_exchange_surface_probe_collection_aggregates_by_exchange_and_note():
+    collection = summarize_exchange_surface_probe_collection(
+        [
+            {
+                "user": "binance_01",
+                "exchange": "binance",
+                "exchange_surface_health": {
+                    "notes": [
+                        "open_orders_symbol_fallback_required",
+                        "time_sync_unsupported",
+                    ],
+                    "open_orders": {
+                        "mode_counts": {"symbol_fallback": 1},
+                        "symbol_fallback_count": 1,
+                        "failed": 0,
+                    },
+                    "time_sync": {"unsupported": 1, "failed": 0},
+                    "fill_history": {"terminal_reasons": {"short_page": 1}, "failed": 0},
+                    "candle_tail": {
+                        "failed_symbols": 0,
+                        "current_incomplete_symbols": 1,
+                    },
+                },
+            },
+            {
+                "user": "kucoin_01",
+                "exchange": "kucoinfutures",
+                "exchange_surface_health": {
+                    "notes": ["open_orders_failed"],
+                    "open_orders": {
+                        "mode_counts": {"all_symbols_and_symbol_failed": 1},
+                        "symbol_fallback_count": 0,
+                        "failed": 1,
+                    },
+                    "time_sync": {"unsupported": 0, "failed": 0},
+                    "fill_history": {"terminal_reasons": {}, "failed": 1},
+                    "candle_tail": {
+                        "failed_symbols": 2,
+                        "current_incomplete_symbols": 0,
+                    },
+                },
+            },
+        ]
+    )
+
+    assert collection["note_counts"] == {
+        "open_orders_failed": 1,
+        "open_orders_symbol_fallback_required": 1,
+        "time_sync_unsupported": 1,
+    }
+    assert collection["exchanges"]["binance"]["user_count"] == 1
+    assert collection["exchanges"]["binance"]["open_orders_symbol_fallback_count"] == 1
+    assert collection["exchanges"]["kucoinfutures"]["open_orders_failed"] == 1
+    assert collection["exchanges"]["kucoinfutures"]["candle_tail_failed_symbols"] == 2
+    assert collection["users"][0]["open_orders_mode_counts"] == {"symbol_fallback": 1}
 
 
 def test_account_critical_probe_collection_aggregates_user_summaries():
