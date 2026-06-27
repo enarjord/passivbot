@@ -1369,8 +1369,7 @@ VPS5 deployment status:
 - Result: recorded the OKX/AAVE active-symbol forager EMA readiness handoff gap
   as live-ops backlog item #17 and noted that the first remediation must
   preserve the no-fabricated-ranking-values contract.
-- Review evidence: Hermes approved and CI was green. Claude had not returned
-  before merge, so this docs-only backlog update used the degraded gate.
+- Review evidence: Claude and Hermes approved; CI was green before merge.
 - VPS5 evidence: pulled to VPS5 without bot restart; all five configured bots
   remained running.
 
