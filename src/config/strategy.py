@@ -45,8 +45,22 @@ TRAILING_GRID_V7_FLAT_ONLY_KEYS = {
     "entry_volatility_ema_span_hours",
 }
 
+TRAILING_MARTINGALE_EMA_GATE_MODES = frozenset({"disabled", "all", "initial", "reentry"})
+
 
 def _normalize_strategy_side_value(key: str, value, *, strategy_kind: str, pside: str):
+    if strategy_kind == DEFAULT_STRATEGY_KIND and key == "entry.ema_gate_mode":
+        if not isinstance(value, str):
+            raise TypeError(
+                f"bot.{pside}.strategy.{strategy_kind}.entry.ema_gate_mode must be a string"
+            )
+        normalized = value.strip().lower()
+        if normalized not in TRAILING_MARTINGALE_EMA_GATE_MODES:
+            allowed = ", ".join(sorted(TRAILING_MARTINGALE_EMA_GATE_MODES))
+            raise ValueError(
+                f"bot.{pside}.strategy.{strategy_kind}.entry.ema_gate_mode must be one of: {allowed}"
+            )
+        return normalized
     return value
 
 

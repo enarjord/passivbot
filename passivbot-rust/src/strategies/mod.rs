@@ -21,6 +21,26 @@ pub enum StrategyKind {
     TrailingGridV7,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum EmaGateMode {
+    Disabled,
+    All,
+    #[default]
+    Initial,
+    Reentry,
+}
+
+impl EmaGateMode {
+    pub fn gates_initial(self) -> bool {
+        matches!(self, Self::All | Self::Initial)
+    }
+
+    pub fn gates_reentry(self) -> bool {
+        matches!(self, Self::All | Self::Reentry)
+    }
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleParams {
@@ -36,6 +56,7 @@ pub struct TrailingMartingaleParams {
 #[serde(default, deny_unknown_fields)]
 pub struct TrailingMartingaleEntryParams {
     pub double_down_factor: f64,
+    pub ema_gate_mode: EmaGateMode,
     pub initial_ema_dist: f64,
     pub initial_qty_pct: f64,
     pub threshold_base_pct: f64,

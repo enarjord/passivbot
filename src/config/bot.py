@@ -145,6 +145,10 @@ def validate_bot_config(result: dict) -> None:
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
             path=f"bot.{pside}.unstuck.enabled",
         )
+        _validate_bool(
+            get_grouped_bot_value(bot_side, "unstuck_ema_gating_enabled"),
+            path=f"bot.{pside}.unstuck.ema_gating_enabled",
+        )
         validate_unstuck_ema_dist_value(
             get_grouped_bot_value(bot_side, "unstuck_ema_dist"),
             path=f"bot.{pside}.unstuck_ema_dist",

@@ -47,6 +47,7 @@ def _get_shared_bot_defaults():
             "unstuck": {
                 "close_pct": 0.089,
                 "ema_dist": -0.033,
+                "ema_gating_enabled": True,
                 "enabled": True,
                 "loss_allowance_pct": 0.0252,
                 "threshold": 0.408,
@@ -89,6 +90,7 @@ def _get_shared_bot_defaults():
             "unstuck": {
                 "close_pct": 0.05,
                 "ema_dist": -0.2,
+                "ema_gating_enabled": True,
                 "enabled": True,
                 "loss_allowance_pct": 0.005,
                 "threshold": 0.4,

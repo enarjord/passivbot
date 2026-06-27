@@ -41,8 +41,12 @@ entry_retracement_we_term = (wel / wel_base) * entry.retracement_we_weight
 entry_retracement_multiplier = max(1, 1 + entry_retracement_vol_term + entry_retracement_we_term)
 
 initial_price(pside) =
-    long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
-    short : max(best_ask, EMA_high * (1 + entry_initial_ema_dist))
+    if entry.ema_gate_mode gates initial entries:
+        long  : min(best_bid, EMA_low * (1 - entry_initial_ema_dist))
+        short : max(best_ask, EMA_high * (1 + entry_initial_ema_dist))
+    else:
+        long  : best_bid
+        short : best_ask
 
 initial_qty(balance) =
     max(min_qty,
@@ -58,6 +62,10 @@ next_entry_price(pside) =
     long  : pos.price * (1 - effective_entry_threshold)
     short : pos.price * (1 + effective_entry_threshold)
 
+if entry.ema_gate_mode gates re-entries:
+    next_entry_price(long)  = min(next_entry_price(long), EMA_low * (1 - entry_initial_ema_dist))
+    next_entry_price(short) = max(next_entry_price(short), EMA_high * (1 + entry_initial_ema_dist))
+
 next_entry_qty(last_fill_qty) =
     last_fill_qty * entry.double_down_factor
 ```
@@ -72,6 +80,11 @@ next_entry_qty(last_fill_qty) =
   order is emitted after retracement confirmation.
 * Re-entries are only normal or cropped. Near the effective exposure cap, the bot keeps the
   current order literal instead of pulling future size forward into an inflated terminal step.
+* `entry.ema_gate_mode` is fixed config, not optimized. `initial` is the default and preserves the
+  previous behavior. `disabled` gates no entries, `all` gates initial, partial-initial, and
+  re-entry orders, and `reentry` gates re-entries only.
+* In one-way mode, if both sides are flat and otherwise eligible, the long-vs-short tie-break still
+  uses EMA-band distance even when `entry.ema_gate_mode = "disabled"`. Missing EMA inputs fail.
 
 Trailing extrema are reset for the coin+pside after any fill. Passivbot tracks its own trailing
 state from 1m OHLCVs and does not use exchange-native trailing order types.
@@ -118,6 +131,10 @@ V8 strategy contract.
 
 Auto unstuck is controlled by `bot.<side>.unstuck.enabled`. When disabled, the
 unstuck thresholds remain in the config but do not create orders.
+
+`bot.<side>.unstuck.ema_gating_enabled` controls only the EMA trigger/readiness check for
+auto-unstuck. It defaults to `true`. When false, auto-unstuck may trigger without EMA bands, but it
+still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 
 When aggregated realised PnL falls below the peak by more than
 `unstuck_loss_allowance_pct * total_wallet_exposure_limit`, one position at a time is

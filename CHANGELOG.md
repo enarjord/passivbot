@@ -260,6 +260,14 @@ All notable user-facing changes will be documented in this file.
   preventing a leading non-finite candle sample from poisoning log-range EMAs.
 - Added `strategy_eq_underwater_pct_mean` and `strategy_eq_underwater_pct_median`
   backtest metrics for average and median daily-worst strategy-equity drawdown.
+- Added `bot.<side>.strategy.trailing_martingale.entry.ema_gate_mode` with
+  `disabled`, `all`, `initial`, and `reentry` modes for controlling which entry
+  orders are EMA-gated. The fixed enum is not optimized; one-way flat
+  long-vs-short tie-breaking still requires EMA bands even when emitted entry
+  EMA gating is disabled.
+- Added `bot.<side>.unstuck.ema_gating_enabled` as a fixed auto-unstuck toggle.
+  When false, auto-unstuck skips the EMA trigger while keeping loss allowance,
+  exposure threshold, and sizing checks intact.
 - Changed the v8 default backtest candle interval to 1 minute and added
   `bot.<side>.risk.we_excess_allowance_mode`. V8 defaults to bounded excess
   allowance; migrated v7 trailing-grid configs also force v7-absent entry

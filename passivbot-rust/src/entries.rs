@@ -127,6 +127,76 @@ fn calc_entry_retracement_multiplier(
     })
 }
 
+fn calc_initial_entry_price_bid(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    entry_params: &TrailingMartingaleEntryParams,
+) -> f64 {
+    if entry_params.ema_gate_mode.gates_initial() {
+        calc_ema_price_bid(
+            exchange_params.price_step,
+            state_params.order_book.bid,
+            state_params.ema_bands.lower,
+            entry_params.initial_ema_dist,
+        )
+    } else {
+        state_params.order_book.bid
+    }
+}
+
+fn calc_initial_entry_price_ask(
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    entry_params: &TrailingMartingaleEntryParams,
+) -> f64 {
+    if entry_params.ema_gate_mode.gates_initial() {
+        calc_ema_price_ask(
+            exchange_params.price_step,
+            state_params.order_book.ask,
+            state_params.ema_bands.upper,
+            entry_params.initial_ema_dist,
+        )
+    } else {
+        state_params.order_book.ask
+    }
+}
+
+fn gate_reentry_price_bid(
+    price: f64,
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    entry_params: &TrailingMartingaleEntryParams,
+) -> f64 {
+    if entry_params.ema_gate_mode.gates_reentry() {
+        price.min(calc_ema_price_bid(
+            exchange_params.price_step,
+            state_params.order_book.bid,
+            state_params.ema_bands.lower,
+            entry_params.initial_ema_dist,
+        ))
+    } else {
+        price
+    }
+}
+
+fn gate_reentry_price_ask(
+    price: f64,
+    exchange_params: &ExchangeParams,
+    state_params: &StateParams,
+    entry_params: &TrailingMartingaleEntryParams,
+) -> f64 {
+    if entry_params.ema_gate_mode.gates_reentry() {
+        price.max(calc_ema_price_ask(
+            exchange_params.price_step,
+            state_params.order_book.ask,
+            state_params.ema_bands.upper,
+            entry_params.initial_ema_dist,
+        ))
+    } else {
+        price
+    }
+}
+
 pub fn calc_cropped_reentry_qty(
     exchange_params: &ExchangeParams,
     bot_params: &BotParams,
@@ -292,12 +362,8 @@ pub fn calc_grid_entry_long(
     {
         return Order::default();
     }
-    let initial_entry_price = calc_ema_price_bid(
-        exchange_params.price_step,
-        state_params.order_book.bid,
-        state_params.ema_bands.lower,
-        entry_params.initial_ema_dist,
-    );
+    let initial_entry_price =
+        calc_initial_entry_price_bid(exchange_params, state_params, entry_params);
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
@@ -355,7 +421,9 @@ pub fn calc_grid_entry_long(
         state_params.volatility_ema_1m,
         effective_wallet_exposure_limit,
     );
-    if reentry_price <= 0.0 {
+    let reentry_price =
+        gate_reentry_price_bid(reentry_price, exchange_params, state_params, entry_params);
+    if reentry_price <= exchange_params.price_step {
         return Order::default();
     }
     let reentry_qty = f64::max(
@@ -447,12 +515,8 @@ pub fn calc_trailing_entry_long(
     trailing_price_bundle: &TrailingPriceBundle,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    let initial_entry_price = calc_ema_price_bid(
-        exchange_params.price_step,
-        state_params.order_book.bid,
-        state_params.ema_bands.lower,
-        entry_params.initial_ema_dist,
-    );
+    let initial_entry_price =
+        calc_initial_entry_price_bid(exchange_params, state_params, entry_params);
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
@@ -560,6 +624,11 @@ pub fn calc_trailing_entry_long(
             order_type: OrderType::EntryTrailingNormalLong,
         };
     }
+    reentry_price =
+        gate_reentry_price_bid(reentry_price, exchange_params, state_params, entry_params);
+    if reentry_price <= exchange_params.price_step {
+        return Order::default();
+    }
     let reentry_qty = f64::max(
         calc_reentry_qty(
             reentry_price,
@@ -614,12 +683,8 @@ pub fn calc_grid_entry_short(
     {
         return Order::default();
     }
-    let initial_entry_price = calc_ema_price_ask(
-        exchange_params.price_step,
-        state_params.order_book.ask,
-        state_params.ema_bands.upper,
-        entry_params.initial_ema_dist,
-    );
+    let initial_entry_price =
+        calc_initial_entry_price_ask(exchange_params, state_params, entry_params);
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
@@ -681,7 +746,9 @@ pub fn calc_grid_entry_short(
         state_params.volatility_ema_1m,
         effective_wallet_exposure_limit,
     );
-    if reentry_price <= 0.0 {
+    let reentry_price =
+        gate_reentry_price_ask(reentry_price, exchange_params, state_params, entry_params);
+    if reentry_price <= exchange_params.price_step {
         return Order::default();
     }
     let reentry_qty = f64::max(
@@ -733,12 +800,8 @@ pub fn calc_trailing_entry_short(
     trailing_price_bundle: &TrailingPriceBundle,
     wallet_exposure_limit_cap: f64,
 ) -> Order {
-    let initial_entry_price = calc_ema_price_ask(
-        exchange_params.price_step,
-        state_params.order_book.ask,
-        state_params.ema_bands.upper,
-        entry_params.initial_ema_dist,
-    );
+    let initial_entry_price =
+        calc_initial_entry_price_ask(exchange_params, state_params, entry_params);
     if initial_entry_price <= exchange_params.price_step {
         return Order::default();
     }
@@ -849,6 +912,11 @@ pub fn calc_trailing_entry_short(
             price: 0.0,
             order_type: OrderType::EntryTrailingNormalShort,
         };
+    }
+    reentry_price =
+        gate_reentry_price_ask(reentry_price, exchange_params, state_params, entry_params);
+    if reentry_price <= exchange_params.price_step {
+        return Order::default();
     }
     let reentry_qty = f64::max(
         calc_reentry_qty(
@@ -1067,6 +1135,7 @@ pub fn calc_entries_short(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::strategies::EmaGateMode;
 
     fn make_runtime_context() -> RuntimeOrderContext {
         RuntimeOrderContext {
@@ -1132,6 +1201,7 @@ mod tests {
     fn make_entry_params() -> TrailingMartingaleEntryParams {
         TrailingMartingaleEntryParams {
             double_down_factor: 1.0,
+            ema_gate_mode: EmaGateMode::Initial,
             threshold_base_pct: 0.01,
             initial_ema_dist: 0.0,
             initial_qty_pct: 0.01,

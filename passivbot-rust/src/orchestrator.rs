@@ -34,7 +34,7 @@ mod core {
     };
     use crate::constants::{LONG, SHORT};
     use crate::entries::{
-        calc_min_entry_qty, effective_we_excess_allowance_pct,
+        calc_initial_entry_qty, calc_min_entry_qty, effective_we_excess_allowance_pct,
         wallet_exposure_limit_with_allowance_from_base,
     };
     use crate::risk::{
@@ -45,12 +45,13 @@ mod core {
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
         strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
         strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-        strategy_offset_volatility_span_minutes, NextStepHint, PeekBehavior, StrategyKind,
-        StrategyRequest, StrategySide,
+        strategy_offset_volatility_span_minutes, EmaGateMode, NextStepHint, PeekBehavior,
+        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
-        RuntimeBudgetState, StateParams, TrailingPriceBundle, TwelEnforcerPolicy,
+        RuntimeBudgetState, RuntimeOrderContext, StateParams, TrailingPriceBundle,
+        TwelEnforcerPolicy,
     };
     use crate::utils::{
         calc_new_psize_pprice, calc_order_price_diff_ask, calc_order_price_diff_bid, calc_pnl_long,
@@ -1893,6 +1894,62 @@ mod core {
         }
     }
 
+    fn strategy_order_generation_needs_ema_for_symbol_side(
+        params: &StrategyParams,
+        pside: PositionSide,
+        wants_entries: bool,
+        wants_closes: bool,
+        position: &Position,
+        exchange: &ExchangeParams,
+        order_book: &OrderBook,
+        bot_params: &BotParams,
+        runtime_budget: RuntimeBudgetState,
+        balance: f64,
+    ) -> bool {
+        match params {
+            StrategyParams::TrailingMartingale(params) => {
+                if !wants_entries {
+                    return false;
+                }
+                match params.entry.ema_gate_mode {
+                    EmaGateMode::Disabled => false,
+                    EmaGateMode::All => true,
+                    EmaGateMode::Initial => true,
+                    EmaGateMode::Reentry => {
+                        if position.size == 0.0 {
+                            return false;
+                        }
+                        let initial_price = match pside {
+                            PositionSide::Long => order_book.bid,
+                            PositionSide::Short => order_book.ask,
+                        };
+                        if !initial_price.is_finite() || initial_price <= exchange.price_step {
+                            return false;
+                        }
+                        let runtime_context = RuntimeOrderContext {
+                            effective_wallet_exposure_limit: runtime_budget
+                                .effective_wallet_exposure_limit,
+                        };
+                        let initial_qty = calc_initial_entry_qty(
+                            exchange,
+                            bot_params,
+                            &runtime_context,
+                            &params.entry,
+                            balance,
+                            initial_price,
+                        )
+                        .abs();
+                        !initial_qty.is_finite()
+                            || initial_qty <= 0.0
+                            || position.size.abs() >= initial_qty * 0.8
+                    }
+                }
+            }
+            StrategyParams::EmaAnchor(_) => wants_entries || wants_closes,
+            StrategyParams::TrailingGridV7(_) => wants_entries || wants_closes,
+        }
+    }
+
     fn effective_mode(mode: Option<TradingMode>, has_pos: bool) -> TradingMode {
         match mode {
             Some(TradingMode::GracefulStop) if has_pos => TradingMode::Normal,
@@ -2618,41 +2675,32 @@ mod core {
                         StrategySide::Short,
                         &s.short,
                     );
-                    let ema_bands_long = strategy_params_long.as_ref().ok().and_then(|params| {
-                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, params).ok()
-                    });
-                    let ema_bands_short = strategy_params_short.as_ref().ok().and_then(|params| {
-                        cached_ema_bands(&mut workspace.derived_short, idx, &s.emas, params).ok()
-                    });
+                    let params_long = strategy_params_long?;
+                    let params_short = strategy_params_short?;
+                    let bands_long =
+                        cached_ema_bands(&mut workspace.derived_long, idx, &s.emas, &params_long)?;
+                    let bands_short = cached_ema_bands(
+                        &mut workspace.derived_short,
+                        idx,
+                        &s.emas,
+                        &params_short,
+                    )?;
 
-                    if let (
-                        Some(bands_long),
-                        Some(bands_short),
-                        Ok(params_long),
-                        Ok(params_short),
-                    ) = (
-                        ema_bands_long,
-                        ema_bands_short,
-                        strategy_params_long,
-                        strategy_params_short,
-                    ) {
-                        let entry_threshold_long =
-                            bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
-                        let entry_threshold_short = bands_short.upper
-                            * (1.0 + strategy_initial_entry_offset(&params_short));
+                    let entry_threshold_long =
+                        bands_long.lower * (1.0 - strategy_initial_entry_offset(&params_long));
+                    let entry_threshold_short =
+                        bands_short.upper * (1.0 + strategy_initial_entry_offset(&params_short));
 
-                        let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
-                        let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
+                    let dist_long = entry_threshold_long / s.order_book.bid - 1.0;
+                    let dist_short = 1.0 - entry_threshold_short / s.order_book.ask;
 
-                        // Block the side that's farther from triggering (smaller distance).
-                        // Tie-break: favor long.
-                        if dist_long >= dist_short {
-                            workspace.one_way_block_initial_short[idx] = true;
-                        } else {
-                            workspace.one_way_block_initial_long[idx] = true;
-                        }
+                    // Block the side that's farther from triggering (smaller distance).
+                    // Tie-break: favor long.
+                    if dist_long >= dist_short {
+                        workspace.one_way_block_initial_short[idx] = true;
+                    } else {
+                        workspace.one_way_block_initial_long[idx] = true;
                     }
-                    // If EMA bands can't be derived, allow both (no blocking)
                 }
             }
         }
@@ -2739,12 +2787,28 @@ mod core {
                             StrategySide::Long,
                             &s.long,
                         )?;
-                        let ema_bands = cached_ema_bands(
-                            &mut workspace.derived_long,
-                            s.symbol_idx,
-                            &s.emas,
+                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
+                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
                             &strategy_params,
-                        )?;
+                            PositionSide::Long,
+                            wants_entries,
+                            wants_closes,
+                            &s.long.position,
+                            &s.exchange,
+                            &s.order_book,
+                            &s.long.bot_params,
+                            runtime_budget,
+                            input.balance,
+                        ) {
+                            cached_ema_bands(
+                                &mut workspace.derived_long,
+                                s.symbol_idx,
+                                &s.emas,
+                                &strategy_params,
+                            )?
+                        } else {
+                            EMABands::default()
+                        };
                         let volatility_ema_1h = cached_volatility_ema_1h(
                             &mut workspace.derived_long,
                             s.symbol_idx,
@@ -2764,7 +2828,6 @@ mod core {
                             volatility_ema_1m,
                             volatility_ema_1h,
                         };
-                        let runtime_budget = workspace.runtime_budget_long[s.symbol_idx];
                         let generated = generate_strategy_orders(
                             strategy_kind_for_symbol_side(&input.global),
                             StrategySide::Long,
@@ -2889,12 +2952,28 @@ mod core {
                             StrategySide::Short,
                             &s.short,
                         )?;
-                        let ema_bands = cached_ema_bands(
-                            &mut workspace.derived_short,
-                            s.symbol_idx,
-                            &s.emas,
+                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
+                        let ema_bands = if strategy_order_generation_needs_ema_for_symbol_side(
                             &strategy_params,
-                        )?;
+                            PositionSide::Short,
+                            wants_entries,
+                            wants_closes,
+                            &s.short.position,
+                            &s.exchange,
+                            &s.order_book,
+                            &s.short.bot_params,
+                            runtime_budget,
+                            input.balance,
+                        ) {
+                            cached_ema_bands(
+                                &mut workspace.derived_short,
+                                s.symbol_idx,
+                                &s.emas,
+                                &strategy_params,
+                            )?
+                        } else {
+                            EMABands::default()
+                        };
                         let volatility_ema_1h = cached_volatility_ema_1h(
                             &mut workspace.derived_short,
                             s.symbol_idx,
@@ -2914,7 +2993,6 @@ mod core {
                             volatility_ema_1m,
                             volatility_ema_1h,
                         };
-                        let runtime_budget = workspace.runtime_budget_short[s.symbol_idx];
                         let generated = generate_strategy_orders(
                             strategy_kind_for_symbol_side(&input.global),
                             StrategySide::Short,
@@ -2987,19 +3065,23 @@ mod core {
             if !enabled {
                 continue;
             }
-            let strategy_params = cached_strategy_params_for_symbol_side(
-                &mut workspace.derived_long,
-                s.symbol_idx,
-                input.global.strategy_kind,
-                StrategySide::Long,
-                &sym.long,
-            )?;
-            let ema_bands = cached_ema_bands(
-                &mut workspace.derived_long,
-                s.symbol_idx,
-                &sym.emas,
-                &strategy_params,
-            )?;
+            let ema_bands = if bot.unstuck_ema_gating_enabled {
+                let strategy_params = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Long,
+                    &sym.long,
+                )?;
+                cached_ema_bands(
+                    &mut workspace.derived_long,
+                    s.symbol_idx,
+                    &sym.emas,
+                    &strategy_params,
+                )?
+            } else {
+                EMABands::default()
+            };
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: LONG,
@@ -3012,6 +3094,7 @@ mod core {
                 ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
+                unstuck_ema_gating_enabled: bot.unstuck_ema_gating_enabled,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
                 unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
                 total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
@@ -3039,19 +3122,23 @@ mod core {
             if !enabled {
                 continue;
             }
-            let strategy_params = cached_strategy_params_for_symbol_side(
-                &mut workspace.derived_short,
-                s.symbol_idx,
-                input.global.strategy_kind,
-                StrategySide::Short,
-                &sym.short,
-            )?;
-            let ema_bands = cached_ema_bands(
-                &mut workspace.derived_short,
-                s.symbol_idx,
-                &sym.emas,
-                &strategy_params,
-            )?;
+            let ema_bands = if bot.unstuck_ema_gating_enabled {
+                let strategy_params = cached_strategy_params_for_symbol_side(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    input.global.strategy_kind,
+                    StrategySide::Short,
+                    &sym.short,
+                )?;
+                cached_ema_bands(
+                    &mut workspace.derived_short,
+                    s.symbol_idx,
+                    &sym.emas,
+                    &strategy_params,
+                )?
+            } else {
+                EMABands::default()
+            };
             workspace.unstuck_inputs.push(UnstuckPositionInput {
                 idx: s.symbol_idx,
                 side: SHORT,
@@ -3064,6 +3151,7 @@ mod core {
                 ),
                 unstuck_threshold: bot.unstuck_threshold,
                 unstuck_close_pct: bot.unstuck_close_pct,
+                unstuck_ema_gating_enabled: bot.unstuck_ema_gating_enabled,
                 unstuck_ema_dist: bot.unstuck_ema_dist,
                 unstuck_loss_allowance_pct: bot.unstuck_loss_allowance_pct,
                 total_wallet_exposure_limit: bot.total_wallet_exposure_limit,
@@ -3627,6 +3715,7 @@ mod core {
                 volatility_ema_span_1m: bot_params.entry_volatility_ema_span_1m,
                 entry: crate::strategies::TrailingMartingaleEntryParams {
                     double_down_factor: bot_params.entry_grid_double_down_factor,
+                    ema_gate_mode: crate::strategies::EmaGateMode::Initial,
                     initial_ema_dist: bot_params.entry_initial_ema_dist,
                     initial_qty_pct: bot_params.entry_initial_qty_pct,
                     threshold_base_pct: bot_params.entry_grid_spacing_pct,

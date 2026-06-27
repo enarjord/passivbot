@@ -267,6 +267,12 @@ Clean migrations write canonical v8 shape with `live.strategy_kind = "trailing_g
   - Long initial entry/short unstuck close prices are lower EMA band minus offset.
   - Short initial entry/long unstuck close prices are upper EMA band plus offset.
   - See `ema_span_0`/`ema_span_1`.
+- **strategy.trailing_martingale.entry.ema_gate_mode**:
+  - Fixed enum, not optimized. Allowed values are `disabled`, `all`, `initial`, and `reentry`.
+  - `initial` is the default: normal initial and partial initial entries are EMA-gated; re-entries are not.
+  - `disabled` places initial/partial-initial entries at best bid/ask and leaves re-entries to normal threshold/retracement logic.
+  - `all` gates initial, partial-initial, and re-entry orders. `reentry` gates re-entries only.
+  - In one-way mode, when both sides are flat and otherwise eligible, EMA bands are still required for the long-vs-short tie-break even if entry EMA gating is disabled.
 - **strategy.trailing_martingale.entry.initial_qty_pct**:
   - `initial_entry_cost = balance * wallet_exposure_limit * initial_qty_pct`
   - This is the initial sizing fraction used by min-effective-cost checks when
@@ -311,6 +317,9 @@ If a position is stuck, the bot uses profits from other positions to realize los
   - Distance from EMA band to place unstucking order:
     - `long_unstuck_close_price = upper_EMA_band * (1 + unstuck_ema_dist)`
     - `short_unstuck_close_price = lower_EMA_band * (1 - unstuck_ema_dist)`
+- **unstuck.ema_gating_enabled**:
+  - Fixed boolean toggle for the auto-unstuck EMA trigger. Default is `true`.
+  - When `false`, auto-unstuck skips the EMA trigger/readiness check but still requires loss allowance, exposure threshold, close sizing, and valid market/exchange inputs.
 - **unstuck_loss_allowance_pct**:
   - Weighted percentage below past peak balance to allow losses.
   - `loss_allowance = past_peak_balance * (1 - unstuck_loss_allowance_pct * total_wallet_exposure_limit)`

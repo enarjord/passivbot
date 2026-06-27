@@ -318,6 +318,7 @@ pub struct UnstuckPositionInput {
     pub effective_we_excess_allowance_pct: f64,
     pub unstuck_threshold: f64,
     pub unstuck_close_pct: f64,
+    pub unstuck_ema_gating_enabled: bool,
     pub unstuck_ema_dist: f64,
     pub unstuck_loss_allowance_pct: f64,
     pub total_wallet_exposure_limit: f64,
@@ -424,46 +425,50 @@ where
             0.0
         };
 
-        let ema_price = match input.side {
-            LONG => {
-                if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
-                    continue;
+        if input.unstuck_ema_gating_enabled {
+            let ema_price = match input.side {
+                LONG => {
+                    if !input.ema_band_upper.is_finite() || input.ema_band_upper <= 0.0 {
+                        continue;
+                    }
+                    let target = input.ema_band_upper * (1.0 + input.unstuck_ema_dist);
+                    let rounded = if price_step > 0.0 {
+                        round_up(target, price_step)
+                    } else {
+                        target
+                    };
+                    if !rounded.is_finite() || rounded <= 0.0 {
+                        continue;
+                    }
+                    rounded
                 }
-                let target = input.ema_band_upper * (1.0 + input.unstuck_ema_dist);
-                let rounded = if price_step > 0.0 {
-                    round_up(target, price_step)
-                } else {
-                    target
-                };
-                if !rounded.is_finite() || rounded <= 0.0 {
-                    continue;
+                SHORT => {
+                    if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
+                        continue;
+                    }
+                    let target = input.ema_band_lower * (1.0 - input.unstuck_ema_dist);
+                    let rounded = if price_step > 0.0 {
+                        round_dn(target, price_step)
+                    } else {
+                        target
+                    };
+                    if !rounded.is_finite() || rounded <= 0.0 {
+                        continue;
+                    }
+                    rounded
                 }
-                rounded
-            }
-            SHORT => {
-                if !input.ema_band_lower.is_finite() || input.ema_band_lower <= 0.0 {
-                    continue;
-                }
-                let target = input.ema_band_lower * (1.0 - input.unstuck_ema_dist);
-                let rounded = if price_step > 0.0 {
-                    round_dn(target, price_step)
-                } else {
-                    target
-                };
-                if !rounded.is_finite() || rounded <= 0.0 {
-                    continue;
-                }
-                rounded
-            }
-            _ => continue,
-        };
+                _ => continue,
+            };
 
-        let meets_trigger = match input.side {
-            LONG => input.current_price >= ema_price,
-            SHORT => input.current_price <= ema_price,
-            _ => false,
-        };
-        if !meets_trigger {
+            let meets_trigger = match input.side {
+                LONG => input.current_price >= ema_price,
+                SHORT => input.current_price <= ema_price,
+                _ => false,
+            };
+            if !meets_trigger {
+                continue;
+            }
+        } else if input.side != LONG && input.side != SHORT {
             continue;
         }
 

@@ -83,7 +83,7 @@ def _strategy_leaf_path(param: dict) -> tuple[str, ...] | None:
 def get_strategy_param_keys(strategy_kind: str) -> tuple[str, ...]:
     spec = get_strategy_spec(strategy_kind)
     keys: list[str] = []
-    for param in spec.get("parameters", []):
+    for param in [*spec.get("parameters", []), *spec.get("fixed_parameters", [])]:
         if not isinstance(param, dict):
             continue
         leaf_path = _strategy_leaf_path(param)
@@ -96,7 +96,7 @@ def get_strategy_defaults(strategy_kind: str) -> dict:
     normalized_kind = normalize_strategy_kind(strategy_kind)
     spec = get_strategy_spec(normalized_kind)
     result = {pside: {} for pside in BOT_POSITION_SIDES}
-    for param in spec.get("parameters", []):
+    for param in [*spec.get("parameters", []), *spec.get("fixed_parameters", [])]:
         if not isinstance(param, dict):
             continue
         pside = param.get("side")
@@ -179,7 +179,7 @@ def strategy_optimize_key_path_map(strategy_kind: str) -> dict[str, tuple[str, .
 def strategy_field_names_by_side(strategy_kind: str) -> dict[str, set[str]]:
     spec = get_strategy_spec(strategy_kind)
     fields = {pside: set() for pside in BOT_POSITION_SIDES}
-    for param in spec.get("parameters", []):
+    for param in [*spec.get("parameters", []), *spec.get("fixed_parameters", [])]:
         if not isinstance(param, dict):
             continue
         side = param.get("side")

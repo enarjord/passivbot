@@ -76,6 +76,7 @@ def adaptive_strategy_params(**overrides):
         "volatility_ema_span_1m": 60.0,
         "entry": {
             "double_down_factor": 1.0,
+            "ema_gate_mode": "initial",
             "initial_ema_dist": 0.0,
             "initial_qty_pct": 0.1,
             "threshold_base_pct": 0.02,
@@ -132,6 +133,7 @@ def bot_params(**overrides):
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
         "risk_entry_cooldown_minutes": 0.0,
+        "unstuck_ema_gating_enabled": True,
         "unstuck_close_pct": 0.0,
         "unstuck_ema_dist": 0.0,
         "unstuck_loss_allowance_pct": 0.0,
@@ -334,6 +336,170 @@ def test_json_rejects_missing_ema():
         balance=1_000.0,
         symbols=[make_symbol(0, bid=100.0, ask=100.0, emas=ema_bundle(m1_close=[]))],
     )
+    with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, inp)
+
+
+def test_ema_gate_mode_disabled_initial_long_uses_best_bid_without_ema():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                long_strategy=adaptive_strategy_params(
+                    entry={"ema_gate_mode": "disabled", "initial_ema_dist": -0.25}
+                ),
+                emas=ema_bundle(m1_close=[]),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    initial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long")
+    assert initial["price"] == pytest.approx(100.0)
+
+
+def test_ema_gate_mode_reentry_leaves_flat_initial_at_best_bid_without_ema():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                long_strategy=adaptive_strategy_params(
+                    entry={"ema_gate_mode": "reentry", "initial_ema_dist": -0.25}
+                ),
+                emas=ema_bundle(m1_close=[]),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    initial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_normal_long")
+    assert initial["price"] == pytest.approx(100.0)
+
+
+def test_ema_gate_mode_reentry_leaves_partial_initial_at_best_bid_without_ema():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                long_pos_size=0.5,
+                long_pos_price=100.0,
+                long_strategy=adaptive_strategy_params(
+                    entry={"ema_gate_mode": "reentry", "initial_ema_dist": -0.25}
+                ),
+                emas=ema_bundle(m1_close=[]),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    partial = next(o for o in out["orders"] if o["order_type"] == "entry_initial_partial_long")
+    assert partial["price"] == pytest.approx(100.0)
+
+
+def test_ema_gate_mode_all_gates_long_reentry_price():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=adaptive_strategy_params(
+                    entry={"ema_gate_mode": "all", "threshold_base_pct": 0.02}
+                ),
+                emas=ema_bundle(
+                    m1_close=[
+                        [10.0, 95.0],
+                        [20.0, 95.0],
+                        [math.sqrt(10.0 * 20.0), 95.0],
+                    ]
+                ),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    out = compute(pbr, inp)
+
+    reentry = next(o for o in out["orders"] if o["order_type"] == "entry_grid_normal_long")
+    assert reentry["price"] == pytest.approx(95.0)
+
+
+def test_ema_gate_mode_reentry_requires_ema_for_true_reentry():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_pos_size=1.0,
+                long_pos_price=100.0,
+                long_strategy=adaptive_strategy_params(entry={"ema_gate_mode": "reentry"}),
+                emas=ema_bundle(m1_close=[]),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = True
+
+    with pytest.raises(ValueError, match="MissingEma"):
+        compute(pbr, inp)
+
+
+def test_one_way_flat_tie_break_requires_ema_even_when_entry_gate_disabled():
+    import passivbot_rust as pbr
+
+    side_enabled = {"n_positions": 1, "total_wallet_exposure_limit": 1.0}
+    disabled_strategy = adaptive_strategy_params(entry={"ema_gate_mode": "disabled"})
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(short_overrides=side_enabled),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                short_bp=side_enabled,
+                long_strategy=disabled_strategy,
+                short_strategy=disabled_strategy,
+                emas=ema_bundle(m1_close=[]),
+            )
+        ],
+    )
+    inp["global"]["hedge_mode"] = False
+
     with pytest.raises(ValueError, match="MissingEma"):
         compute(pbr, inp)
 
@@ -1429,6 +1595,41 @@ def test_auto_unstuck_allowed_gate_blocks_symbol_allowance():
     out = compute(pbr, inp)
 
     assert all(o["order_type"] != "close_unstuck_long" for o in out["orders"])
+
+
+def test_unstuck_ema_gating_disabled_skips_missing_ema_requirement():
+    import passivbot_rust as pbr
+
+    long_bp = {
+        "total_wallet_exposure_limit": 1.5,
+        "wallet_exposure_limit": 1.5,
+        "unstuck_close_pct": 0.5,
+        "unstuck_ema_gating_enabled": False,
+        "unstuck_threshold": 0.001,
+        "unstuck_ema_dist": 0.0,
+        "unstuck_loss_allowance_pct": 0.005,
+    }
+    sym = make_symbol(
+        0,
+        bid=120.0,
+        ask=120.0,
+        long_pos_size=10.0,
+        long_pos_price=130.0,
+        long_bp=long_bp,
+        long_strategy=adaptive_strategy_params(entry={"ema_gate_mode": "disabled"}),
+        emas=ema_bundle(m1_close=[]),
+    )
+    inp = make_input(
+        balance=2_000.0,
+        global_bp=bot_params_pair(long_overrides=long_bp),
+        symbols=[sym],
+    )
+    inp["global"]["hedge_mode"] = True
+    inp["global"]["unstuck_allowance_long"] = 1e9
+
+    out = compute(pbr, inp)
+
+    assert any(o["order_type"] == "close_unstuck_long" for o in out["orders"])
 
 
 def test_orders_include_entries_and_closes():
