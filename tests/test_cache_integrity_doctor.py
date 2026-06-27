@@ -141,9 +141,10 @@ def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_cove
         ),
         encoding="utf-8",
     )
-    (fill_dir / "2026-01-02.json").write_text(
-        json.dumps(
-            [
+    (fill_dir / "2026-01-02.ndjson").write_text(
+        "\n".join(
+            json.dumps(row)
+            for row in [
                 {
                     "id": "a",
                     "timestamp": 1767312000000,
@@ -156,7 +157,8 @@ def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_cove
                     "pnl_contract": "legacy_contract",
                 },
             ]
-        ),
+        )
+        + "\n",
         encoding="utf-8",
     )
 

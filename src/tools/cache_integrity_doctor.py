@@ -188,19 +188,6 @@ def _read_json_payload(path: Path) -> Any | None:
         return None
 
 
-def _read_ndjson_payload(path: Path) -> list[Any] | None:
-    payload: list[Any] = []
-    try:
-        with path.open("r", encoding="utf-8") as handle:
-            for line in handle:
-                raw = line.strip()
-                if raw:
-                    payload.append(json.loads(raw))
-    except (UnicodeDecodeError, json.JSONDecodeError, OSError):
-        return None
-    return payload
-
-
 def _cache_family(root: Path, path: Path) -> str:
     try:
         rel = path.relative_to(root)
@@ -507,6 +494,34 @@ def _fill_contract_bucket(value: Any) -> str:
     return "legacy"
 
 
+def _add_fill_record_metadata(out: dict[str, Any], record: dict[str, Any]) -> bool:
+    if "timestamp" not in record and "pnl_contract" not in record:
+        return False
+    out["record_count"] += 1
+    bucket = _fill_contract_bucket(record.get("pnl_contract"))
+    out[f"{bucket}_pnl_contract_count"] += 1
+    _update_min_max_ms(
+        out,
+        first_key="first_event_ms",
+        last_key="last_event_ms",
+        value=record.get("timestamp"),
+    )
+    return True
+
+
+def _finish_record_sample(
+    out: dict[str, Any],
+    sample: dict[str, Any],
+) -> dict[str, Any] | None:
+    if int(out["record_count"]) == 0:
+        return None
+    sample["record_count"] = out["record_count"]
+    sample["first_event_ms"] = out["first_event_ms"]
+    sample["last_event_ms"] = out["last_event_ms"]
+    _add_limited_sample(out["artifact_samples"], sample, MAX_METADATA_ARTIFACT_SAMPLES)
+    return out
+
+
 def _summarize_fill_payload(path: Path, payload: Any) -> dict[str, Any] | None:
     out = _metadata_summary_entry()
     out["artifact_count"] = 1
@@ -564,21 +579,51 @@ def _summarize_fill_payload(path: Path, payload: Any) -> dict[str, Any] | None:
     for record in records:
         if not isinstance(record, dict):
             continue
-        out["record_count"] += 1
-        bucket = _fill_contract_bucket(record.get("pnl_contract"))
-        out[f"{bucket}_pnl_contract_count"] += 1
-        _update_min_max_ms(
-            out,
-            first_key="first_event_ms",
-            last_key="last_event_ms",
-            value=record.get("timestamp"),
-        )
+        _add_fill_record_metadata(out, record)
     if records:
         sample["record_count"] = out["record_count"]
         sample["first_event_ms"] = out["first_event_ms"]
         sample["last_event_ms"] = out["last_event_ms"]
     _add_limited_sample(out["artifact_samples"], sample, MAX_METADATA_ARTIFACT_SAMPLES)
     return out
+
+
+def _summarize_fill_ndjson_payload(path: Path) -> dict[str, Any] | None:
+    out = _metadata_summary_entry()
+    out["artifact_count"] = 1
+    sample: dict[str, Any] = {"path": str(path), "kind": "fill_records"}
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                record = json.loads(raw)
+                if isinstance(record, dict):
+                    _add_fill_record_metadata(out, record)
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+        return None
+    return _finish_record_sample(out, sample)
+
+
+def _add_risk_timestamp_metadata(
+    out: dict[str, Any],
+    payload: Any,
+    timestamp_fields: list[dict[str, Any]],
+) -> None:
+    for key, ts_ms in _iter_timestamp_fields(payload):
+        out["timestamp_field_count"] += 1
+        _update_min_max_ms(
+            out,
+            first_key="first_event_ms",
+            last_key="last_event_ms",
+            value=ts_ms,
+        )
+        _add_limited_sample(
+            timestamp_fields,
+            {"field": key, "timestamp_ms": ts_ms, "date": _format_ms(ts_ms)},
+            MAX_METADATA_ARTIFACT_SAMPLES,
+        )
 
 
 def _summarize_risk_payload(path: Path, payload: Any) -> dict[str, Any] | None:
@@ -599,19 +644,37 @@ def _summarize_risk_payload(path: Path, payload: Any) -> dict[str, Any] | None:
         return None
 
     timestamp_fields: list[dict[str, Any]] = []
-    for key, ts_ms in _iter_timestamp_fields(payload):
-        out["timestamp_field_count"] += 1
-        _update_min_max_ms(
-            out,
-            first_key="first_event_ms",
-            last_key="last_event_ms",
-            value=ts_ms,
-        )
-        _add_limited_sample(
-            timestamp_fields,
-            {"field": key, "timestamp_ms": ts_ms, "date": _format_ms(ts_ms)},
-            MAX_METADATA_ARTIFACT_SAMPLES,
-        )
+    _add_risk_timestamp_metadata(out, payload, timestamp_fields)
+    if timestamp_fields:
+        sample["timestamp_fields"] = timestamp_fields
+        sample["first_timestamp_ms"] = out["first_event_ms"]
+        sample["last_timestamp_ms"] = out["last_event_ms"]
+    _add_limited_sample(out["artifact_samples"], sample, MAX_METADATA_ARTIFACT_SAMPLES)
+    return out
+
+
+def _summarize_risk_ndjson_payload(path: Path) -> dict[str, Any] | None:
+    out = _metadata_summary_entry()
+    out["artifact_count"] = 1
+    sample: dict[str, Any] = {"path": str(path), "kind": "risk_records"}
+    if any(token in str(path).lower() for token in ("hsl", "equity_hard_stop")):
+        sample["hsl_related"] = True
+    timestamp_fields: list[dict[str, Any]] = []
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                record = json.loads(raw)
+                if not isinstance(record, dict):
+                    continue
+                out["record_count"] += 1
+                _add_risk_timestamp_metadata(out, record, timestamp_fields)
+    except (UnicodeDecodeError, json.JSONDecodeError, OSError):
+        return None
+    if int(out["record_count"]) == 0:
+        return None
     if timestamp_fields:
         sample["timestamp_fields"] = timestamp_fields
         sample["first_timestamp_ms"] = out["first_event_ms"]
@@ -624,17 +687,21 @@ def _inspect_metadata_artifact(path: Path, family: str) -> dict[str, Any] | None
     suffix = path.suffix.lower()
     if suffix == ".json":
         payload = _read_json_payload(path)
-    elif suffix == ".ndjson":
-        payload = _read_ndjson_payload(path)
+        if payload is None:
+            return None
+        if family == "fills":
+            return _summarize_fill_payload(path, payload)
+        if family == "risk":
+            return _summarize_risk_payload(path, payload)
+        return None
+    if suffix == ".ndjson":
+        if family == "fills":
+            return _summarize_fill_ndjson_payload(path)
+        if family == "risk":
+            return _summarize_risk_ndjson_payload(path)
+        return None
     else:
         return None
-    if payload is None:
-        return None
-    if family == "fills":
-        return _summarize_fill_payload(path, payload)
-    if family == "risk":
-        return _summarize_risk_payload(path, payload)
-    return None
 
 
 def _merge_metadata(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
