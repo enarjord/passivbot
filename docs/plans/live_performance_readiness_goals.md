@@ -19,7 +19,7 @@ blocking reconstruction.
 ## Current Evidence
 
 Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
-`54a909b`.
+`b5e08986`.
 
 1. HSL coin-mode startup replay is the current P0 latency gap.
    - Binance incident on 2026-06-26: coin HSL replay loaded at `16:19:33Z`
@@ -68,8 +68,23 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
      events.
    - A follow-up slice added initial input-staleness groups from existing
      account packet, snapshot, EMA bundle, and Rust-call events.
+   - A follow-up slice added HSL coin replay pair classification, applied-row,
+     elapsed, and rows-per-second fields to structured replay events.
    - Missing pieces: candle close age, market price age, config age, and
      complete coverage for every order/write/shutdown stage.
+
+5. VPS5 restart evidence after the HSL replay timing slice confirms the new
+   fields are live, while also confirming the underlying speed problem remains.
+   - Binance loaded `pairs=26`, `held_pairs=1`, `cooldown_pairs=1`,
+     `required_pairs=20`, and `timeline_rows=43201`, then progressed at roughly
+     `850-950` applied rows/s after the first minute.
+   - GateIO loaded `pairs=29`, `held_pairs=1`, `cooldown_pairs=0`,
+     `required_pairs=24`, and `timeline_rows=43201`; early progress peaked
+     above `5000` rows/s before settling lower as replay advanced.
+   - OKX loaded `pairs=27`, `held_pairs=1`, `cooldown_pairs=0`,
+     `required_pairs=21`, and `timeline_rows=43201`.
+   - These fields make the next optimization measurable, but they do not yet
+     split protective readiness from full replay.
 
 ## Performance Checklist
 
@@ -162,9 +177,12 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     exact protective readiness.
 
 - [ ] Add structured replay timing fields.
-  - Required fields: `timeline_rows`, `pairs`, `held_pairs`, `cooldown_pairs`,
-    `applied_rows`, `skipped_pairs`, `rows_per_second`, `protective_elapsed_s`,
+  - Done: current full-replay events include `timeline_rows`, `pairs`,
+    `held_pairs`, `cooldown_pairs`, `required_pairs`, `applied_rows`,
+    `total_applied_rows`, `skipped_pairs` on completion, `rows_per_second`,
     `full_elapsed_s`, and `startup_blocking_elapsed_s`.
+  - Remaining: add true `protective_elapsed_s` once protective readiness is
+    split from full replay.
 
 - [ ] Set concrete performance acceptance targets after the first optimized
   implementation.
