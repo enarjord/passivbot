@@ -73,6 +73,35 @@ _EXECUTION_CONFIRMATION_TERMINALS = {
     "execution.confirmation_satisfied",
     "execution.confirmation_timeout",
 }
+_HSL_REPLAY_STRING_FIELDS = (
+    "signal_mode",
+    "stage",
+)
+_HSL_REPLAY_BOOL_FIELDS = (
+    "is_held_pair",
+    "is_cooldown_pair",
+)
+_HSL_REPLAY_NUMERIC_FIELDS = (
+    "lookback_days",
+    "symbols",
+    "pairs",
+    "held_pairs",
+    "cooldown_pairs",
+    "required_pairs",
+    "timeline_rows",
+    "fill_events",
+    "panic_events",
+    "skipped_unsupported_symbols",
+    "pair_idx",
+    "applied_rows",
+    "total_applied_rows",
+    "rows",
+    "skipped_pairs",
+    "rows_per_second",
+    "elapsed_s",
+    "full_elapsed_s",
+    "startup_blocking_elapsed_s",
+)
 
 
 def _open_text(path: Path):
@@ -169,6 +198,13 @@ def _elapsed_s_to_ms(value: Any) -> int | None:
     if number is None or number < 0:
         return None
     return int(round(number * 1000.0))
+
+
+def _rounded_float(value: float, ndigits: int = 3) -> float | int:
+    rounded = round(float(value), int(ndigits))
+    if rounded.is_integer():
+        return int(rounded)
+    return rounded
 
 
 def _percentile(sorted_values: list[int], pct: float) -> int | None:
@@ -814,6 +850,177 @@ class _StartupReadinessAccumulator:
             "hsl_replay_active_count": int(hsl_active_count),
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
+        }
+
+
+def _bounded_hsl_replay_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _HSL_REPLAY_STRING_FIELDS:
+        value = data.get(key)
+        if value is not None:
+            out[key] = str(value)
+    for key in _HSL_REPLAY_BOOL_FIELDS:
+        if key in data:
+            out[key] = bool(data.get(key))
+    for key in _HSL_REPLAY_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _hsl_replay_observed_rows(data: dict[str, Any]) -> int | None:
+    for key in ("total_applied_rows", "applied_rows", "rows"):
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            return int(value)
+    return None
+
+
+def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
+    timeline_rows = _non_negative_number(data.get("timeline_rows"))
+    pairs = _non_negative_number(data.get("pairs"))
+    required_pairs = _non_negative_number(data.get("required_pairs"))
+    held_pairs = _non_negative_number(data.get("held_pairs"))
+    cooldown_pairs = _non_negative_number(data.get("cooldown_pairs"))
+    observed_rows = _hsl_replay_observed_rows(data)
+    out: dict[str, Any] = {}
+    if timeline_rows is not None and pairs is not None:
+        dense_work = int(timeline_rows) * int(pairs)
+        out["estimated_dense_pair_row_work"] = dense_work
+        if observed_rows is not None and dense_work > 0:
+            out["observed_work_pct"] = _rounded_float(
+                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work)))
+            )
+    if timeline_rows is not None and required_pairs is not None:
+        out["estimated_required_pair_row_work"] = int(timeline_rows) * int(required_pairs)
+    if timeline_rows is not None and held_pairs is not None:
+        out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
+    if timeline_rows is not None and cooldown_pairs is not None:
+        out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
+    if observed_rows is not None:
+        out["observed_applied_rows"] = int(observed_rows)
+    for source_key, target_key in (
+        ("elapsed_s", "latest_elapsed_ms"),
+        ("full_elapsed_s", "full_elapsed_ms"),
+        ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
+    ):
+        value_ms = _elapsed_s_to_ms(data.get(source_key))
+        if value_ms is not None:
+            out[target_key] = value_ms
+    if data.get("startup_blocking_elapsed_s") is not None:
+        out["startup_blocking"] = True
+    return out
+
+
+class _HslReplayProfileAccumulator:
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+        self.total_events = 0
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if not event_type.startswith("hsl.replay."):
+            return
+        data = _bounded_hsl_replay_data(live_event.get("data"))
+        if not data:
+            return
+        bot = _bot_key(row, live_event)
+        state = self.bots.get(bot)
+        if state is None:
+            state = {
+                "bot": bot,
+                "event_types": Counter(),
+                "total_events": 0,
+                "latest_ts": None,
+            }
+            self.bots[bot] = state
+        self.total_events += 1
+        self.event_types[event_type] += 1
+        state["total_events"] = int(state["total_events"]) + 1
+        state["event_types"][event_type] += 1
+        ts = _record_ts(row)
+        latest_changed = ts is None or state.get("latest_ts") is None
+        if ts is not None and state.get("latest_ts") is not None:
+            latest_changed = int(ts) >= int(state["latest_ts"])
+        record = {
+            key: value
+            for key, value in {
+                "event_type": event_type,
+                "status": live_event.get("status"),
+                "reason_code": live_event.get("reason_code"),
+                "ts": int(ts) if ts is not None else None,
+                "symbol": live_event.get("symbol") or row.get("symbol"),
+                "pside": live_event.get("pside") or row.get("pside"),
+                "data": data,
+                "derived": _derive_hsl_replay_profile(data),
+            }.items()
+            if value not in (None, {}, [])
+        }
+        stage = str(data.get("stage") or "")
+        if event_type == "hsl.replay.progress" and stage == "loaded":
+            state["loaded"] = record
+        elif event_type == "hsl.replay.completed":
+            state["completed"] = record
+        elif event_type == "hsl.replay.progress":
+            state["progress"] = record
+        elif event_type == "hsl.replay.started":
+            state["started"] = record
+        if latest_changed:
+            if ts is not None:
+                state["latest_ts"] = int(ts)
+            state["latest"] = record
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = []
+        for bot, state in self.bots.items():
+            group = {
+                "bot": bot,
+                "total_events": int(state.get("total_events") or 0),
+                "latest_ts": state.get("latest_ts"),
+                "event_types": dict(state["event_types"].most_common())
+                if isinstance(state.get("event_types"), Counter)
+                else {},
+                "latest": state.get("latest"),
+                "started": state.get("started"),
+                "loaded": state.get("loaded"),
+                "progress": state.get("progress"),
+                "completed": state.get("completed"),
+            }
+            groups.append({key: value for key, value in group.items() if value not in (None, {}, [])})
+        groups = sorted(
+            groups,
+            key=lambda item: (
+                -int(
+                    (
+                        item.get("latest", {})
+                        .get("derived", {})
+                        .get("startup_blocking_elapsed_ms", 0)
+                    )
+                    or 0
+                ),
+                -int(
+                    (
+                        item.get("latest", {})
+                        .get("derived", {})
+                        .get("latest_elapsed_ms", 0)
+                    )
+                    or 0
+                ),
+                -int(item.get("latest_ts", 0) or 0),
+                str(item.get("bot") or ""),
+            ),
+        )
+        limit = max(0, int(group_limit))
+        return {
+            "total_events": int(self.total_events),
+            "bot_count": len(groups),
+            "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(groups) > limit,
+            "groups": groups[:limit],
         }
 
 
@@ -1506,6 +1713,7 @@ def build_live_performance_report(
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
+    hsl_replay_profile = _HslReplayProfileAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
@@ -1593,6 +1801,7 @@ def build_live_performance_report(
                         cycle_scope=cycle_scope,
                     )
                     startup_readiness.add(row=row, live_event=live_event)
+                    hsl_replay_profile.add(row=row, live_event=live_event)
                     resource_pressure.add(row=row, live_event=live_event)
                     shutdown_latency.add(row=row, live_event=live_event)
                     execution_timing.add(
@@ -1638,6 +1847,7 @@ def build_live_performance_report(
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
+        "hsl_replay_profile": hsl_replay_profile.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
@@ -1731,6 +1941,17 @@ def summarize_live_performance_report(
         if len(startup_bots) > max(0, int(group_limit)):
             startup_readiness["bots_truncated"] = True
         summary["startup_readiness"] = startup_readiness
+    if isinstance(report.get("hsl_replay_profile"), dict):
+        hsl_replay_profile = dict(report["hsl_replay_profile"])
+        hsl_groups = (
+            hsl_replay_profile.get("groups")
+            if isinstance(hsl_replay_profile.get("groups"), list)
+            else []
+        )
+        hsl_replay_profile["groups"] = hsl_groups[: max(0, int(group_limit))]
+        if len(hsl_groups) > max(0, int(group_limit)):
+            hsl_replay_profile["groups_truncated"] = True
+        summary["hsl_replay_profile"] = hsl_replay_profile
     if isinstance(report.get("resource_pressure"), dict):
         resource_pressure = dict(report["resource_pressure"])
         pressure_groups = (

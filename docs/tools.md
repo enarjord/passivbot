@@ -192,6 +192,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   duration, without copying shutdown error text. The `execution_timing` section derives
   aggregate exchange-action latency groups from existing order-wave, order create/cancel,
   and confirmation events with missing/unpaired counters, without exposing raw order payloads.
+  The `hsl_replay_profile` section derives bounded HSL replay work/progress summaries from
+  existing `hsl.replay.*` events, including pair counts, timeline rows, rows/s, estimated
+  dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
+  available.
 
 ## Exchange Helpers
 

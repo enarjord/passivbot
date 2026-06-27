@@ -967,6 +967,184 @@ def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
     assert summary["startup_readiness"]["ready_count"] == 1
 
 
+def test_live_performance_report_hsl_replay_profile(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.started",
+                seq=1,
+                ts=1000,
+                component="risk.hsl",
+                status="started",
+                reason_code="coin_history_replay",
+                data={"signal_mode": "coin", "lookback_days": 30},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=2,
+                ts=2000,
+                component="risk.hsl",
+                status="started",
+                reason_code="history_loaded",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "loaded",
+                    "symbols": 5,
+                    "pairs": 4,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 3,
+                    "timeline_rows": 10,
+                    "fill_events": 7,
+                    "panic_events": 2,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=3,
+                ts=3000,
+                component="risk.hsl",
+                status="started",
+                reason_code="pair_replay_progress",
+                symbol="XLM/USDT:USDT",
+                pside="long",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "pair_replay",
+                    "pair_idx": 2,
+                    "pairs": 4,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 3,
+                    "timeline_rows": 10,
+                    "applied_rows": 8,
+                    "total_applied_rows": 12,
+                    "rows_per_second": 123.4567,
+                    "is_held_pair": True,
+                    "is_cooldown_pair": False,
+                    "elapsed_s": 2.5,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=4,
+                ts=4000,
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="coin_history_replay_completed",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "pairs": 4,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 3,
+                    "timeline_rows": 10,
+                    "rows": 30,
+                    "applied_rows": 30,
+                    "skipped_pairs": 1,
+                    "rows_per_second": 40,
+                    "full_elapsed_s": 7.5,
+                    "startup_blocking_elapsed_s": 7.5,
+                    "elapsed_s": 7.5,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    profile = report["hsl_replay_profile"]
+    group = profile["groups"][0]
+
+    assert profile["total_events"] == 4
+    assert profile["bot_count"] == 1
+    assert profile["event_types"] == {
+        "hsl.replay.started": 1,
+        "hsl.replay.progress": 2,
+        "hsl.replay.completed": 1,
+    }
+    assert group["bot"] == "binance/binance_01"
+    assert group["event_types"]["hsl.replay.progress"] == 2
+    assert group["loaded"]["data"]["symbols"] == 5
+    assert group["progress"]["data"]["is_held_pair"] is True
+    assert group["progress"]["derived"]["observed_work_pct"] == 30
+    assert group["progress"]["derived"]["estimated_dense_pair_row_work"] == 40
+    assert group["progress"]["derived"]["estimated_held_pair_row_work"] == 10
+    assert group["progress"]["derived"]["estimated_required_pair_row_work"] == 30
+    assert group["progress"]["derived"]["latest_elapsed_ms"] == 2500
+    assert group["completed"]["derived"]["startup_blocking_elapsed_ms"] == 7500
+    assert group["completed"]["derived"]["startup_blocking"] is True
+    assert group["completed"]["derived"]["observed_work_pct"] == 75
+
+
+def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=1,
+                ts=1000,
+                component="risk.hsl",
+                data={
+                    "stage": "pair_replay",
+                    "pairs": 1,
+                    "timeline_rows": 10,
+                    "balance": 1000.0,
+                    "equity": 999.0,
+                    "raw_payload": {"leak_marker": "raw"},
+                    "api_key": "secret",
+                    "drawdown_raw": 0.1,
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    rendered = json.dumps(report["hsl_replay_profile"], sort_keys=True)
+
+    assert report["hsl_replay_profile"]["groups"][0]["progress"]["data"] == {
+        "pairs": 1,
+        "stage": "pair_replay",
+        "timeline_rows": 10,
+    }
+    assert "balance" not in rendered
+    assert "equity" not in rendered
+    assert "raw_payload" not in rendered
+    assert "leak_marker" not in rendered
+    assert "api_key" not in rendered
+    assert "secret" not in rendered
+    assert "drawdown_raw" not in rendered
+
+
+def test_live_performance_report_hsl_replay_profile_summary_is_bounded(tmp_path):
+    for index in range(2):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="hsl.replay.progress",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                    component="risk.hsl",
+                    data={"stage": "loaded", "pairs": 1, "timeline_rows": 10},
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["hsl_replay_profile"]["bot_count"] == 2
+    assert len(summary["hsl_replay_profile"]["groups"]) == 1
+    assert summary["hsl_replay_profile"]["groups_truncated"] is True
+
+
 def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
