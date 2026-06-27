@@ -362,6 +362,11 @@ Related detailed plans:
       already-scanned candle/fill/HSL metadata, including core evidence labels,
       reasons, missing families, suspicious gap counts, and per-family
       timestamp context without making startup or trading decisions.
+    - 2026-06-27: Added deeper report-only metadata compatibility evidence for
+      cache-integrity-doctor, including candle `index.json` known-gap
+      no-trade reason counts, fill current-contract coverage proof labels, and
+      HSL artifact/timestamp compatibility fields without repair or startup
+      enforcement.
 
     Remaining refinements: add deeper candle/fill/HSL metadata compatibility
     checks and synthetic/no-trade assumptions without making trading decisions.

@@ -108,6 +108,75 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     ]
 
 
+def test_cache_integrity_report_summarizes_candle_no_trade_gap_metadata(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "kucoin" / "1m" / "ETH_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    expected_rows = 44_640
+    valid = np.ones(expected_rows, dtype=bool)
+    valid[3:5] = False
+    np.save(month_dir / "01.valid.npy", valid)
+    (month_dir.parent / "index.json").write_text(
+        json.dumps(
+            {
+                "meta": {
+                    "known_gaps": [
+                        {
+                            "start_ts": 1767225780000,
+                            "end_ts": 1767225840000,
+                            "reason": "no_trades",
+                            "retry_count": 0,
+                        },
+                        [1767226200000, 1767226260000],
+                    ],
+                    "last_refresh_ms": 1767312000000,
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    candles = report["summary"]["by_family"]["candles"]
+    metadata = candles["metadata"]
+    assert metadata["compatibility"] == "known_gaps_unclassified_or_non_no_trade"
+    assert metadata["known_gap_count"] == 2
+    assert metadata["known_gap_reason_counts"] == {
+        "legacy_unclassified": 1,
+        "no_trades": 1,
+    }
+    assert metadata["no_trade_known_gap_count"] == 1
+    assert metadata["unclassified_known_gap_count"] == 1
+    coverage = candles["coverage"]
+    assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
+    readiness = report["summary"]["warm_cache_readiness"]["families"]["candles"]
+    assert readiness["no_trade_gap_evidence"] == "no_trade_known_gaps_observed"
+    assert readiness["known_gap_count"] == 2
+    assert readiness["known_gap_reason_counts"] == {
+        "legacy_unclassified": 1,
+        "no_trades": 1,
+    }
+    assert "candle_no_trade_known_gaps_observed" in readiness["reasons"]
+
+
+def test_cache_integrity_report_marks_candle_gaps_without_no_trade_evidence(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    expected_rows = 44_640
+    valid = np.ones(expected_rows, dtype=bool)
+    valid[10:12] = False
+    np.save(month_dir / "01.valid.npy", valid)
+
+    report = build_cache_integrity_report([root])
+
+    readiness = report["summary"]["warm_cache_readiness"]["families"]["candles"]
+    assert readiness["readiness"] == "attention"
+    assert readiness["no_trade_gap_evidence"] == "no_local_no_trade_gap_evidence"
+    assert "candle_synthetic_no_trade_evidence_unproven" in readiness["reasons"]
+
+
 def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "okx" / "1h" / "ETH_USDT" / "2026"
@@ -211,6 +280,36 @@ def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_cove
     assert metadata["last_refresh_date"] == "2026-01-04T00:00:00+00:00"
 
 
+def test_cache_integrity_report_marks_current_fill_contract_with_unproven_coverage(tmp_path):
+    root = tmp_path / "caches"
+    fill_dir = root / "fill_events" / "binance" / "user_01"
+    fill_dir.mkdir(parents=True)
+    current_contract = "gross_pnl_quote_fee_best_effort_v2"
+    (fill_dir / "metadata.json").write_text(
+        json.dumps(
+            {
+                "pnl_contract": current_contract,
+                "history_scope": "partial",
+                "newest_event_ts": 1767398400000,
+                "last_refresh_ms": 1767484800000,
+                "known_gaps": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    report = build_cache_integrity_report([root])
+
+    metadata = report["summary"]["by_family"]["fills"]["metadata"]
+    assert metadata["compatibility"] == "current_pnl_contract_unproven_coverage"
+    readiness = report["summary"]["warm_cache_readiness"]["families"]["fills"]
+    assert readiness["readiness"] == "attention"
+    assert readiness["history_scope_all_count"] == 0
+    assert "fill_history_scope_all_missing" in readiness["reasons"]
+    assert "fill_covered_start_missing" in readiness["reasons"]
+    assert "fill_records_missing" in readiness["reasons"]
+
+
 def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
     root = tmp_path / "caches"
     hsl_dir = root / "equity_hard_stop" / "binance"
@@ -232,6 +331,8 @@ def test_cache_integrity_report_summarizes_hsl_state_metadata(tmp_path):
 
     metadata = report["summary"]["by_family"]["risk"]["metadata"]
     assert metadata["compatibility"] == "local_state_with_timestamps"
+    assert metadata["hsl_compatibility"] == "hsl_state_with_timestamps"
+    assert metadata["hsl_artifact_count"] == 1
     assert metadata["artifact_count"] == 1
     assert metadata["timestamp_field_count"] == 2
     assert metadata["first_event_date"] == "2026-01-02T00:00:00+00:00"

@@ -34,6 +34,7 @@ TIMESTAMP_FIELD_NAMES = {
     "cooldown_until_ms",
     "pending_red_since_ms",
 }
+NO_TRADE_GAP_REASONS = {"no_trades"}
 
 
 def _timeframe_interval_ms(timeframe: str) -> int | None:
@@ -247,6 +248,10 @@ def _metadata_summary_entry() -> dict[str, Any]:
         "missing_pnl_contract_count": 0,
         "history_scope_counts": Counter(),
         "known_gap_count": 0,
+        "known_gap_reason_counts": Counter(),
+        "no_trade_known_gap_count": 0,
+        "unclassified_known_gap_count": 0,
+        "hsl_artifact_count": 0,
         "first_event_ms": None,
         "last_event_ms": None,
         "covered_start_ms": None,
@@ -628,6 +633,82 @@ def _summarize_fill_payload(path: Path, payload: Any) -> dict[str, Any] | None:
     return out
 
 
+def _iter_known_gap_entries(payload: Any) -> Iterable[dict[str, Any]]:
+    if not isinstance(payload, dict):
+        return
+    meta = payload.get("meta")
+    if not isinstance(meta, dict):
+        return
+    known_gaps = meta.get("known_gaps")
+    if not isinstance(known_gaps, list):
+        return
+    for gap in known_gaps:
+        if isinstance(gap, dict):
+            start_ts = _int_ms(gap.get("start_ts"))
+            end_ts = _int_ms(gap.get("end_ts"))
+            if start_ts is None or end_ts is None or start_ts > end_ts:
+                continue
+            reason = str(gap.get("reason") or "unclassified")
+            yield {
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "reason": reason,
+                "retry_count": gap.get("retry_count"),
+            }
+        elif isinstance(gap, (list, tuple)) and len(gap) >= 2:
+            start_ts = _int_ms(gap[0])
+            end_ts = _int_ms(gap[1])
+            if start_ts is None or end_ts is None or start_ts > end_ts:
+                continue
+            yield {
+                "start_ts": start_ts,
+                "end_ts": end_ts,
+                "reason": "legacy_unclassified",
+                "retry_count": None,
+            }
+
+
+def _summarize_candle_payload(path: Path, payload: Any) -> dict[str, Any] | None:
+    if path.name != "index.json" or not isinstance(payload, dict):
+        return None
+    gaps = list(_iter_known_gap_entries(payload))
+    meta = payload.get("meta") if isinstance(payload.get("meta"), dict) else {}
+    if not gaps and not any(_timestamp_field_name(str(key)) for key in meta):
+        return None
+    out = _metadata_summary_entry()
+    out["artifact_count"] = 1
+    out["metadata_file_count"] = 1
+    sample: dict[str, Any] = {
+        "path": str(path),
+        "kind": "candle_index_metadata",
+        "known_gap_count": len(gaps),
+    }
+    if gaps:
+        reason_counts = Counter(str(gap["reason"]) for gap in gaps)
+        out["known_gap_count"] = len(gaps)
+        out["known_gap_reason_counts"].update(reason_counts)
+        out["no_trade_known_gap_count"] = sum(
+            count for reason, count in reason_counts.items() if reason in NO_TRADE_GAP_REASONS
+        )
+        out["unclassified_known_gap_count"] = sum(
+            count for reason, count in reason_counts.items() if "unclassified" in reason
+        )
+        sample["known_gap_reason_counts"] = dict(sorted(reason_counts.items()))
+        sample["synthetic_no_trade_evidence"] = (
+            "no_trade_known_gaps_observed"
+            if out["no_trade_known_gap_count"]
+            else "known_gaps_without_no_trade_reason"
+        )
+    else:
+        sample["synthetic_no_trade_evidence"] = "no_known_gaps"
+    timestamp_fields: list[dict[str, Any]] = []
+    _add_risk_timestamp_metadata(out, meta, timestamp_fields)
+    if timestamp_fields:
+        sample["timestamp_fields"] = timestamp_fields
+    _add_limited_sample(out["artifact_samples"], sample, MAX_METADATA_ARTIFACT_SAMPLES)
+    return out
+
+
 def _summarize_fill_ndjson_payload(path: Path) -> dict[str, Any] | None:
     out = _metadata_summary_entry()
     out["artifact_count"] = 1
@@ -677,6 +758,7 @@ def _summarize_risk_payload(path: Path, payload: Any) -> dict[str, Any] | None:
         ]
         if any(token in str(path).lower() for token in ("hsl", "equity_hard_stop")):
             sample["hsl_related"] = True
+            out["hsl_artifact_count"] = 1
     elif isinstance(payload, list):
         sample["kind"] = "risk_records"
         out["record_count"] = sum(1 for item in payload if isinstance(item, dict))
@@ -699,6 +781,7 @@ def _summarize_risk_ndjson_payload(path: Path) -> dict[str, Any] | None:
     sample: dict[str, Any] = {"path": str(path), "kind": "risk_records"}
     if any(token in str(path).lower() for token in ("hsl", "equity_hard_stop")):
         sample["hsl_related"] = True
+        out["hsl_artifact_count"] = 1
     timestamp_fields: list[dict[str, Any]] = []
     try:
         with path.open("r", encoding="utf-8") as handle:
@@ -731,6 +814,8 @@ def _inspect_metadata_artifact(path: Path, family: str) -> dict[str, Any] | None
             return None
         if family == "fills":
             return _summarize_fill_payload(path, payload)
+        if family == "candles":
+            return _summarize_candle_payload(path, payload)
         if family == "risk":
             return _summarize_risk_payload(path, payload)
         return None
@@ -754,10 +839,14 @@ def _merge_metadata(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
         "legacy_pnl_contract_count",
         "missing_pnl_contract_count",
         "known_gap_count",
+        "no_trade_known_gap_count",
+        "unclassified_known_gap_count",
         "timestamp_field_count",
+        "hsl_artifact_count",
     ):
         metadata[key] += int(artifact[key])
     metadata["history_scope_counts"].update(artifact["history_scope_counts"])
+    metadata["known_gap_reason_counts"].update(artifact["known_gap_reason_counts"])
     for key in ("first_event_ms", "covered_start_ms"):
         value = artifact[key]
         if value is not None and (metadata[key] is None or int(value) < int(metadata[key])):
@@ -784,10 +873,14 @@ def _merge_finalized_metadata(summary: dict[str, Any], metadata_report: dict[str
         "legacy_pnl_contract_count",
         "missing_pnl_contract_count",
         "known_gap_count",
+        "no_trade_known_gap_count",
+        "unclassified_known_gap_count",
         "timestamp_field_count",
+        "hsl_artifact_count",
     ):
         metadata[key] += int(metadata_report[key])
     metadata["history_scope_counts"].update(metadata_report["history_scope_counts"])
+    metadata["known_gap_reason_counts"].update(metadata_report["known_gap_reason_counts"])
     for key in ("first_event_ms", "covered_start_ms"):
         value = metadata_report[key]
         if value is not None and (metadata[key] is None or int(value) < int(metadata[key])):
@@ -815,6 +908,11 @@ def _finalize_metadata(
     missing_count = int(metadata["missing_pnl_contract_count"])
     current_count = int(metadata["current_pnl_contract_count"])
     record_count = int(metadata["record_count"])
+    history_scope_counts = metadata["history_scope_counts"]
+    metadata_file_count = int(metadata["metadata_file_count"])
+    known_gap_count = int(metadata["known_gap_count"])
+    no_trade_known_gap_count = int(metadata["no_trade_known_gap_count"])
+    hsl_artifact_count = int(metadata["hsl_artifact_count"])
     if artifact_count == 0:
         compatibility = "no_local_metadata"
     elif issue_count:
@@ -822,23 +920,45 @@ def _finalize_metadata(
     elif family == "fills" and (legacy_count or missing_count):
         compatibility = "legacy_or_missing_pnl_contract"
     elif family == "fills" and current_count:
-        compatibility = "current_pnl_contract"
+        if metadata_file_count and history_scope_counts.get("all") and metadata["covered_start_ms"]:
+            compatibility = "current_pnl_contract"
+        elif metadata_file_count:
+            compatibility = "current_pnl_contract_unproven_coverage"
+        else:
+            compatibility = "current_pnl_contract_records_only"
     elif family == "fills":
         compatibility = "no_pnl_contract_evidence"
+    elif family == "candles" and known_gap_count and no_trade_known_gap_count == known_gap_count:
+        compatibility = "known_no_trade_gaps"
+    elif family == "candles" and known_gap_count:
+        compatibility = "known_gaps_unclassified_or_non_no_trade"
     elif int(metadata["timestamp_field_count"]):
         compatibility = "local_state_with_timestamps"
     else:
         compatibility = "local_state_observed"
+    hsl_compatibility = None
+    if family == "risk":
+        if hsl_artifact_count and int(metadata["timestamp_field_count"]):
+            hsl_compatibility = "hsl_state_with_timestamps"
+        elif hsl_artifact_count:
+            hsl_compatibility = "hsl_state_without_timestamps"
+        else:
+            hsl_compatibility = "no_local_hsl_metadata"
     return {
         "compatibility": compatibility,
         "artifact_count": artifact_count,
-        "metadata_file_count": int(metadata["metadata_file_count"]),
+        "metadata_file_count": metadata_file_count,
         "record_count": record_count,
         "current_pnl_contract_count": current_count,
         "legacy_pnl_contract_count": legacy_count,
         "missing_pnl_contract_count": missing_count,
-        "history_scope_counts": dict(sorted(metadata["history_scope_counts"].items())),
-        "known_gap_count": int(metadata["known_gap_count"]),
+        "history_scope_counts": dict(sorted(history_scope_counts.items())),
+        "known_gap_count": known_gap_count,
+        "known_gap_reason_counts": dict(sorted(metadata["known_gap_reason_counts"].items())),
+        "no_trade_known_gap_count": no_trade_known_gap_count,
+        "unclassified_known_gap_count": int(metadata["unclassified_known_gap_count"]),
+        "hsl_artifact_count": hsl_artifact_count,
+        "hsl_compatibility": hsl_compatibility,
         "first_event_ms": metadata["first_event_ms"],
         "last_event_ms": metadata["last_event_ms"],
         "first_event_date": _format_ms(metadata["first_event_ms"]),
@@ -903,13 +1023,28 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
             "readiness": "missing",
             "reason": "candle_coverage_missing",
         }
+    metadata = _family_mapping_value(families, "candles", "metadata")
+    metadata = metadata if isinstance(metadata, dict) else {}
     evidence = str(coverage["warm_cache_evidence"])
     attention = evidence != "coverage_observed"
     reasons = [f"candle_{evidence}"]
     gap_count = int(coverage["gap_count"])
     length_mismatch_count = int(coverage["length_mismatch_count"])
+    known_gap_count = int(metadata.get("known_gap_count") or 0)
+    no_trade_known_gap_count = int(metadata.get("no_trade_known_gap_count") or 0)
+    known_gap_reason_counts = dict(metadata.get("known_gap_reason_counts") or {})
+    if no_trade_known_gap_count:
+        no_trade_gap_evidence = "no_trade_known_gaps_observed"
+        reasons.append("candle_no_trade_known_gaps_observed")
+    elif known_gap_count:
+        no_trade_gap_evidence = "known_gaps_without_no_trade_reason"
+        reasons.append("candle_known_gaps_without_no_trade_reason")
+    else:
+        no_trade_gap_evidence = "no_local_no_trade_gap_evidence"
     if gap_count:
         reasons.append("candle_suspicious_gaps_present")
+        if not no_trade_known_gap_count:
+            reasons.append("candle_synthetic_no_trade_evidence_unproven")
     if length_mismatch_count:
         reasons.append("candle_length_mismatch_present")
     return {
@@ -927,6 +1062,10 @@ def _warm_cache_candle_report(families: dict[str, Any]) -> dict[str, Any]:
         "last_valid_date": coverage["last_valid_date"],
         "suspicious_gap_count": gap_count,
         "max_gap_rows": int(coverage["max_gap_rows"]),
+        "no_trade_gap_evidence": no_trade_gap_evidence,
+        "known_gap_count": known_gap_count,
+        "known_gap_reason_counts": known_gap_reason_counts,
+        "no_trade_known_gap_count": no_trade_known_gap_count,
     }
 
 
@@ -947,12 +1086,15 @@ def _warm_cache_fill_report(families: dict[str, Any]) -> dict[str, Any]:
         reasons.append("fill_known_gaps_present")
     if covered_start_ms is None:
         reasons.append("fill_covered_start_missing")
+    if int(metadata["metadata_file_count"]) and not history_scope_counts.get("all"):
+        reasons.append("fill_history_scope_all_missing")
     if record_count == 0:
         reasons.append("fill_records_missing")
     attention = (
         compatibility != "current_pnl_contract"
         or known_gap_count > 0
         or covered_start_ms is None
+        or record_count == 0
     )
     return {
         "readiness": "attention" if attention else "observed",
@@ -965,6 +1107,7 @@ def _warm_cache_fill_report(families: dict[str, Any]) -> dict[str, Any]:
         "legacy_pnl_contract_count": int(metadata["legacy_pnl_contract_count"]),
         "missing_pnl_contract_count": int(metadata["missing_pnl_contract_count"]),
         "history_scope_counts": dict(history_scope_counts),
+        "history_scope_all_count": int(history_scope_counts.get("all") or 0),
         "covered_start_ms": covered_start_ms,
         "covered_start_date": metadata["covered_start_date"],
         "first_event_ms": metadata["first_event_ms"],
@@ -990,6 +1133,8 @@ def _warm_cache_risk_report(families: dict[str, Any]) -> dict[str, Any]:
         "readiness": "attention_optional" if attention else "observed_optional",
         "reasons": [f"risk_{compatibility}"],
         "compatibility": compatibility,
+        "hsl_compatibility": metadata.get("hsl_compatibility"),
+        "hsl_artifact_count": int(metadata["hsl_artifact_count"]),
         "artifact_count": int(metadata["artifact_count"]),
         "record_count": int(metadata["record_count"]),
         "timestamp_field_count": int(metadata["timestamp_field_count"]),
