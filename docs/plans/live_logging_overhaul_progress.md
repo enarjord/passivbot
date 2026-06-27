@@ -1290,22 +1290,38 @@ VPS5 deployment status:
   `git diff --check`, and touched-file silent-handling audit passed. Claude did
   not return before merge, so this opt-in observability slice used the degraded
   gate.
+- VPS5 evidence: deployed together with PRs #731 and #732 at `9bc2c37f`.
+  Settled 5-minute smoke returned `ok=true`, no hard failures, no log hard
+  matches, all five expected bots matched, clean tracked repository state, no
+  failed remote calls, no failed account-critical remote calls, and no monitor
+  errors or warnings. Remaining attention was non-hard Hyperliquid EMA/candle
+  readiness.
 
-### Pending PR: Execution Debug Profile
+### PR #732: Execution Debug Profile
 
 - Branch: `codex/v8-execution-debug-profile`.
 - Scope: Phase 5/6 opt-in structured debug enrichment.
-- Result: in progress. Add `execution` debug-profile enrichment to existing
+- Result: added `execution` debug-profile enrichment to existing
   order-wave, order-write, create-filter, and confirmation events with bounded
   key-shape/counter metadata. Default execution event payloads and console
   output remain unchanged, and raw order payload values are not added.
+- Review evidence: Hermes found and then approved the raw-order-value leak fix
+  at `cb1f2c23`; after rebasing onto current `v8`, CI was green and focused
+  execution/live-event tests, compileall, and `git diff --check` passed. Claude
+  did not return before merge, so this opt-in observability slice used the
+  degraded gate.
+- VPS5 evidence: deployed together with PRs #730 and #731 at `9bc2c37f`.
+  Settled 5-minute smoke returned `ok=true`, no hard failures, no log hard
+  matches, all five expected bots matched, clean tracked repository state, no
+  failed remote calls, no failed account-critical remote calls, and no monitor
+  errors or warnings.
 
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug
    profile slice without increasing default console noise. Likely candidates
-   are HSL preview/status debug enrichment or more order/risk transition
-   coverage.
+   are more order/risk transition coverage or focused profile refinements only
+   when live diagnostics need deeper evidence.
 2. Continue active read-only exchange health probes beyond account-critical
    basics. PR #701 added account-critical health summaries and PR #703 added
    `--account-only` plus symbol fallback for open-orders. Remaining useful
