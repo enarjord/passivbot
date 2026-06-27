@@ -66,6 +66,7 @@ SHUTDOWN_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 EMA_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_GROUP_LIMIT = 20
+EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -1271,6 +1272,180 @@ def _summarize_staged_readiness_health(
     }
 
 
+def _safe_counter_mapping(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, raw in value.items():
+        parsed = _non_negative_int(raw)
+        if parsed is not None:
+            out[str(key)] = int(parsed)
+    return out
+
+
+def _event_pipeline_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any] | None:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    observed_keys = {
+        "event_queue_depth",
+        "event_queue_maxsize",
+        "event_queue_unfinished_tasks",
+        "event_dropped_total",
+        "event_drop_counts",
+        "event_sink_error_total",
+        "event_sink_error_counts",
+        "event_degraded_count",
+        "event_pipeline_stopping",
+        "event_pipeline_worker_alive",
+    }
+    if not any(key in payload for key in observed_keys):
+        return None
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_queue_depth": _non_negative_int(payload.get("event_queue_depth")),
+        "latest_queue_maxsize": _non_negative_int(payload.get("event_queue_maxsize")),
+        "latest_queue_unfinished_tasks": _non_negative_int(
+            payload.get("event_queue_unfinished_tasks")
+        ),
+        "latest_dropped_total": _non_negative_int(payload.get("event_dropped_total")),
+        "latest_drop_counts": _safe_counter_mapping(payload.get("event_drop_counts")),
+        "latest_sink_error_total": _non_negative_int(
+            payload.get("event_sink_error_total")
+        ),
+        "latest_sink_error_counts": _safe_counter_mapping(
+            payload.get("event_sink_error_counts")
+        ),
+        "latest_degraded_count": _non_negative_int(payload.get("event_degraded_count")),
+        "latest_pipeline_stopping": (
+            bool(payload.get("event_pipeline_stopping"))
+            if "event_pipeline_stopping" in payload
+            else None
+        ),
+        "latest_worker_alive": (
+            bool(payload.get("event_pipeline_worker_alive"))
+            if "event_pipeline_worker_alive" in payload
+            else None
+        ),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_event_pipeline_health_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (group.get("bot"),)
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_queue_depth",
+            "latest_queue_maxsize",
+            "latest_queue_unfinished_tasks",
+            "latest_dropped_total",
+            "latest_drop_counts",
+            "latest_sink_error_total",
+            "latest_sink_error_counts",
+            "latest_degraded_count",
+            "latest_pipeline_stopping",
+            "latest_worker_alive",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_event_pipeline_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_dropped_total")) or 0),
+            -int(_non_negative_int(item.get("latest_sink_error_total")) or 0),
+            -int(_non_negative_int(item.get("latest_degraded_count")) or 0),
+            -int(_non_negative_int(item.get("latest_queue_depth")) or 0),
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:EVENT_PIPELINE_HEALTH_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > EVENT_PIPELINE_HEALTH_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len({group.get("bot") for group in groups.values()}),
+        "latest_queue_depth_total": sum(
+            int(group.get("latest_queue_depth") or 0) for group in groups.values()
+        ),
+        "latest_queue_unfinished_total": sum(
+            int(group.get("latest_queue_unfinished_tasks") or 0)
+            for group in groups.values()
+        ),
+        "latest_dropped_total": sum(
+            int(group.get("latest_dropped_total") or 0) for group in groups.values()
+        ),
+        "latest_sink_error_total": sum(
+            int(group.get("latest_sink_error_total") or 0)
+            for group in groups.values()
+        ),
+        "latest_degraded_total": sum(
+            int(group.get("latest_degraded_count") or 0) for group in groups.values()
+        ),
+        "latest_worker_not_alive_count": sum(
+            1 for group in groups.values() if group.get("latest_worker_alive") is False
+        ),
+        "latest_stopping_count": sum(
+            1 for group in groups.values() if group.get("latest_pipeline_stopping") is True
+        ),
+        "groups": compact_groups,
+    }
+
+
 def _risk_event_group(
     *,
     bot_key: str,
@@ -2267,6 +2442,8 @@ def _scan_events(
     ema_readiness_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
+    event_pipeline_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    event_pipeline_health_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -2373,6 +2550,20 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type == EventTypes.HEALTH_SUMMARY:
+                        event_pipeline_health_group = _event_pipeline_health_group(
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
+                        if event_pipeline_health_group is not None:
+                            event_pipeline_health_event_type_counts[str(event_type)] += 1
+                            _merge_event_pipeline_health_group(
+                                event_pipeline_health_groups,
+                                event_pipeline_health_group,
+                            )
                     if event_type in RISK_EVENT_TYPES:
                         risk_event_type_counts[str(event_type)] += 1
                         _merge_risk_event_group(
@@ -2478,6 +2669,10 @@ def _scan_events(
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
             staged_readiness_event_type_counts,
+        ),
+        "event_pipeline_health": _summarize_event_pipeline_health(
+            event_pipeline_health_groups,
+            event_pipeline_health_event_type_counts,
         ),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
@@ -2806,6 +3001,20 @@ def build_live_smoke_report(
                 "latest_invalid_surface_total": 0,
                 "groups": [],
             },
+            "event_pipeline_health": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "bots": 0,
+                "latest_queue_depth_total": 0,
+                "latest_queue_unfinished_total": 0,
+                "latest_dropped_total": 0,
+                "latest_sink_error_total": 0,
+                "latest_degraded_total": 0,
+                "latest_worker_not_alive_count": 0,
+                "latest_stopping_count": 0,
+                "groups": [],
+            },
             "risk_events": {
                 "total": 0,
                 "groups_truncated": False,
@@ -2882,6 +3091,7 @@ def build_live_smoke_report(
         "remote_call_timings": event_scan["remote_call_timings"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
         "staged_readiness_health": event_scan["staged_readiness_health"],
+        "event_pipeline_health": event_scan["event_pipeline_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
@@ -2922,6 +3132,17 @@ def _summary_limited_groups(
             "latest_optional_drop_total": summary.get("latest_optional_drop_total"),
             "latest_missing_surface_total": summary.get("latest_missing_surface_total"),
             "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
+            "latest_queue_depth_total": summary.get("latest_queue_depth_total"),
+            "latest_queue_unfinished_total": summary.get(
+                "latest_queue_unfinished_total"
+            ),
+            "latest_dropped_total": summary.get("latest_dropped_total"),
+            "latest_sink_error_total": summary.get("latest_sink_error_total"),
+            "latest_degraded_total": summary.get("latest_degraded_total"),
+            "latest_worker_not_alive_count": summary.get(
+                "latest_worker_not_alive_count"
+            ),
+            "latest_stopping_count": summary.get("latest_stopping_count"),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
             "groups": groups[:limit],
@@ -2968,6 +3189,11 @@ def summarize_live_smoke_report(
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
+        else {}
+    )
+    event_pipeline_health = (
+        report.get("event_pipeline_health")
+        if isinstance(report.get("event_pipeline_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -3077,6 +3303,10 @@ def summarize_live_smoke_report(
             staged_readiness_health,
             limit=max_groups,
         ),
+        "event_pipeline_health": _summary_limited_groups(
+            event_pipeline_health,
+            limit=max_groups,
+        ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
@@ -3131,6 +3361,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
+        else {}
+    )
+    event_pipeline_health = (
+        report.get("event_pipeline_health")
+        if isinstance(report.get("event_pipeline_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -3243,6 +3478,32 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 staged_readiness_health.get("latest_invalid_surface_total")
             ),
             "event_types": staged_readiness_health.get("event_types") or {},
+        },
+        "event_pipeline": {
+            "total": _count_value(event_pipeline_health.get("total")),
+            "bots": _count_value(event_pipeline_health.get("bots")),
+            "latest_queue_depth_total": _count_value(
+                event_pipeline_health.get("latest_queue_depth_total")
+            ),
+            "latest_queue_unfinished_total": _count_value(
+                event_pipeline_health.get("latest_queue_unfinished_total")
+            ),
+            "latest_dropped_total": _count_value(
+                event_pipeline_health.get("latest_dropped_total")
+            ),
+            "latest_sink_error_total": _count_value(
+                event_pipeline_health.get("latest_sink_error_total")
+            ),
+            "latest_degraded_total": _count_value(
+                event_pipeline_health.get("latest_degraded_total")
+            ),
+            "latest_worker_not_alive_count": _count_value(
+                event_pipeline_health.get("latest_worker_not_alive_count")
+            ),
+            "latest_stopping_count": _count_value(
+                event_pipeline_health.get("latest_stopping_count")
+            ),
+            "event_types": event_pipeline_health.get("event_types") or {},
         },
         "risk_events": {
             "total": _count_value(risk_events.get("total")),
