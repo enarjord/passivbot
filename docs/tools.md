@@ -180,7 +180,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   The startup-readiness section summarizes latest per-bot startup phase timings and HSL
   replay state from existing lifecycle/replay events. The `slowest_blockers` section ranks
   non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
-  delays are visible without scanning every timing group.
+  delays are visible without scanning every timing group. The `resource_pressure` section
+  summarizes whitelisted process and event-pipeline health fields from existing
+  `health.summary` events, including RSS, memory percent, file descriptors, load average,
+  event queue depth, dropped-event counters, and sink-error counters without exposing raw
+  account or financial payloads.
 
 ## Exchange Helpers
 

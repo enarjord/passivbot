@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `resource_pressure` summaries to
+  `passivbot tool live-performance-report`, projecting whitelisted
+  `health.summary` process and event-pipeline fields without raw account or
+  financial payloads.
 - Improved cold `passivbot backtest` materialization by batching legacy OHLCV
   imports by month, vectorizing chunk writes, staging HLCV cache writes with
   rollback on publish failure, and honoring Ctrl+C between expensive

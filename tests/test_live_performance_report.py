@@ -922,6 +922,152 @@ def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
     assert summary["startup_readiness"]["ready_count"] == 1
 
 
+def test_live_performance_report_resource_pressure_from_health_summary(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": 1000,
+                    "memory_percent": 5.5,
+                    "open_fds": 11,
+                    "loadavg_1m": 0.25,
+                    "cpu_count": 1,
+                    "event_queue_depth": 3,
+                    "event_dropped_total": 1,
+                    "event_sink_error_total": 0,
+                    "event_degraded_count": 2,
+                    "event_drop_counts": {"queue_full": 1},
+                    "event_sink_error_counts": {"disk": 0},
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=2000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": 1500,
+                    "memory_percent": 6.5,
+                    "open_fds": 13,
+                    "loadavg_1m": 0.75,
+                    "cpu_count": 1,
+                    "event_queue_depth": 5,
+                    "event_dropped_total": 4,
+                    "event_sink_error_total": 1,
+                    "event_degraded_count": 3,
+                    "event_drop_counts": {"queue_full": 4},
+                    "event_sink_error_counts": {"disk": 1},
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    pressure = report["resource_pressure"]
+    group = pressure["groups"][0]
+
+    assert pressure["total"] == 2
+    assert pressure["bots"] == 1
+    assert pressure["event_types"] == {"health.summary": 2}
+    assert group["bot"] == "binance/binance_01"
+    assert group["count"] == 2
+    assert group["latest_ts"] == 2000
+    assert group["fields"]["rss_bytes"] == {
+        "latest": 1500,
+        "min": 1000,
+        "max": 1500,
+        "mean": 1250,
+    }
+    assert group["fields"]["memory_percent"]["latest"] == 6.5
+    assert group["fields"]["event_queue_depth"]["max"] == 5
+    assert group["fields"]["event_dropped_total"]["latest"] == 4
+    assert group["fields"]["event_sink_error_total"]["latest"] == 1
+    assert group["fields"]["event_degraded_count"]["latest"] == 3
+    assert group["latest_event_drop_counts"] == {"queue_full": 4}
+    assert group["latest_event_sink_error_counts"] == {"disk": 1}
+    assert group["latest_event_pipeline_stopping"] is False
+    assert group["latest_event_pipeline_worker_alive"] is True
+
+
+def test_live_performance_report_resource_pressure_whitelists_health_fields(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                component="monitor.health",
+                data={
+                    "rss_bytes": 1000,
+                    "balance_raw": {"leak_marker": "raw-balance"},
+                    "balance_snapped": {"leak_marker": "snapped-balance"},
+                    "equity": "leak-equity",
+                    "pnl": "leak-pnl",
+                    "raw_payload": {"leak_marker": "raw-payload"},
+                    "event_drop_counts": {"queue_full": 1},
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    rendered = json.dumps(report["resource_pressure"], sort_keys=True)
+
+    assert report["resource_pressure"]["groups"][0]["fields"]["rss_bytes"]["latest"] == 1000
+    assert "balance_raw" not in rendered
+    assert "balance_snapped" not in rendered
+    assert "leak-equity" not in rendered
+    assert "leak-pnl" not in rendered
+    assert "raw-balance" not in rendered
+    assert "snapped-balance" not in rendered
+    assert "raw-payload" not in rendered
+
+
+def test_live_performance_report_resource_pressure_summary_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "mixed" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                seq=1,
+                ts=1000,
+                exchange="binance",
+                user="binance_01",
+                data={"rss_bytes": 1000, "event_queue_depth": 1},
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=2,
+                ts=2000,
+                exchange="okx",
+                user="okx_faisal",
+                data={"rss_bytes": 2000, "event_queue_depth": 2},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["resource_pressure"]["bots"] == 2
+    assert len(summary["resource_pressure"]["groups"]) == 1
+    assert summary["resource_pressure"]["groups_truncated"] is True
+    assert summary["resource_pressure"]["groups"][0]["bot"] == "okx/okx_faisal"
+
+
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

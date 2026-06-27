@@ -25,6 +25,7 @@ Update policy:
 Related detailed plans:
 
 - `docs/plans/live_logging_overhaul_plan.md`
+- `docs/plans/live_performance_readiness_goals.md`
 - `docs/plans/live_restart_shutdown_and_warm_cache_handoff.md`
 
 ## High-Value Follow-Ups
