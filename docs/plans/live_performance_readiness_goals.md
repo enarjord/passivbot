@@ -47,6 +47,12 @@ Use this as a living performance scorecard:
 Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
 `b5e08986`.
 
+Latest incident driver: Binance `hsl_signal_mode=coin` XLM panic on
+2026-06-26, with fill-event timestamp `1782492486000`. The observed startup
+path spent roughly 27 minutes in HSL history reconstruction before the
+protective close was posted. That is a safety-critical performance failure even
+if the final replay result is correct.
+
 1. HSL coin-mode startup replay is the current P0 latency gap.
    - Binance incident on 2026-06-26: coin HSL replay loaded at `16:19:33Z`
      with `symbols=24 pairs=24 rows=43201 fills=2704`, completed at
@@ -141,10 +147,31 @@ classification when enough source events exist.
   pipeline overhead.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
+  - Status: partial. The report now derives order-wave total duration,
+    create/cancel sent-to-terminal response duration, confirmation duration,
+    missing-id counts, unpaired-terminal counts, and pending-start counts from
+    existing structured events. Remaining work: distinguish close/panic
+    subclasses and tie execution delays back to exact order class once those
+    fields are consistently available in the event stream.
 - [ ] Resource pressure: CPU/load, RSS, memory percent, open FDs, event queue
   depth, dropped event counters, sink errors, loop lag where available.
 - [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
   final monitor flush, process exit.
+
+Minimum report questions the operator must be able to answer:
+
+- [ ] How long after process start could the bot safely panic-close each held
+  position?
+- [ ] How long after process start could the bot safely place fresh entries?
+- [ ] Which exact input or phase delayed the first possible protective action?
+- [ ] Which exact input or phase delayed the first possible fresh entry?
+- [ ] Was a delay caused by exchange/network IO, local cache proof, local CPU,
+  disk IO, Python replay logic, Rust planning, exchange write/confirmation, or
+  monitor/event-pipeline overhead?
+- [ ] Did any slow background task share the critical path with protective
+  actions when it should have been decoupled?
+- [ ] For each restart, did warm local cache/checkpoint proof actually reduce
+  startup time, or did the bot repeat broad reconstruction unnecessarily?
 
 Trading-impact labels:
 
@@ -275,6 +302,23 @@ Trading-impact labels:
   - Confirm whether unrelated flat pairs can delay held-pair protective
     readiness.
 
+- [ ] Prove whether coin-mode HSL needs cross-coin synchronization.
+  - If one coin's HSL state depends only on that coin's fill/PnL and candle
+    series, the held coin must not wait for unrelated coins to finish replay.
+  - If any shared state exists, document it explicitly and test the dependency.
+  - This decision should drive whether the first optimization is priority
+    scheduling, sparse per-pair replay, multiprocessing, or a single vectorized
+    pass.
+
+- [ ] Separate cache-read speed from replay-compute speed.
+  - Measure local artifact discovery, JSON/NDJSON/NPY decode, fill indexing,
+    candle/timeline materialization, and replay compute separately.
+  - A warm restart with complete local proof should not spend most startup time
+    on exchange backfill or broad artifact rescan.
+  - If disk cache reads are fast but replay is slow, optimize the replay loop.
+  - If cache proof or decode is slow, add metadata indexes/checkpoints before
+    changing trading logic.
+
 - [ ] Identify the current bottleneck with a focused profile.
   - Measure time spent in fill indexing, candle/timeline construction, pair
     iteration, EMA update, drawdown/tier update, event emission, and disk/cache
@@ -358,6 +402,18 @@ Trading-impact labels:
   - Checkpoint invalidation must be conservative: if any required proof is
     ambiguous, discard or bypass the checkpoint and emit the reason.
 
+- [ ] Treat checkpoints as resumable proof, not as authority.
+  - On every startup, validate the checkpoint against config, code/schema,
+    fill coverage, candle coverage where required, market metadata, and last
+    processed timestamp before using it.
+  - Resume only from the validated boundary and replay new exchange/cache data
+    after that boundary.
+  - Emit checkpoint load/resume/bypass/write events with elapsed time and
+    reason codes.
+  - Acceptance: a warm restart with a valid checkpoint reaches held-position
+    protective readiness quickly, while an invalid checkpoint falls back to
+    exact replay loudly and safely.
+
 ### P1: General Live Performance Report
 
 - [x] Add `passivbot tool live-performance-report`.
@@ -401,6 +457,17 @@ Trading-impact labels:
     exchange write eligibility, and full background replay complete.
   - Group by exchange/user/bot so VPS-class regressions are visible before a
     panic incident.
+
+- [ ] Add a full live-operation duration table.
+  - Include startup, account refresh, fill refresh, cache proof, HSL replay,
+    candle/EMA readiness, forager feature readiness, Rust planning,
+    reconciliation/gating, order execution, confirmation refresh, monitor flush,
+    event-pipeline enqueue/write, and shutdown.
+  - Each group should include min, max, mean, p50, p95, count, latest sample,
+    bot/exchange/user, and trading-impact label.
+  - The table should be usable after a live incident to identify whether the
+    critical delay was before risk classification, before planning, before
+    exchange write, or after exchange write.
 
 - [ ] Add a "slowest blockers" view.
   - Rank operations by elapsed time and trading impact.

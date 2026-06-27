@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `execution_timing` summaries to
+  `passivbot tool live-performance-report`, deriving bounded exchange-action
+  latency groups from existing order-wave, create/cancel, and confirmation
+  events without exposing raw order payloads.
 - Added `shutdown_latency` summaries to
   `passivbot tool live-performance-report`, projecting existing lifecycle
   shutdown events into per-stage and total shutdown timing groups without

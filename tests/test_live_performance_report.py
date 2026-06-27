@@ -922,6 +922,209 @@ def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
     assert summary["startup_readiness"]["ready_count"] == 1
 
 
+def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="order_wave.started",
+                seq=1,
+                ts=1000,
+                status="started",
+                component="order_wave",
+                ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+                data={"planned_create": 1, "planned_cancel": 1},
+            ),
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=2,
+                ts=1100,
+                status="started",
+                component="execution.order_write",
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "ow_1",
+                    "action_id": "ow_1:create:0",
+                },
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={"client_order_id_short": "cid-short"},
+            ),
+            _monitor_row(
+                event_type="execution.create_succeeded",
+                seq=3,
+                ts=1450,
+                status="succeeded",
+                component="execution.order_write",
+                reason_code="exchange_acknowledged",
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "ow_1",
+                    "action_id": "ow_1:create:0",
+                },
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={"raw_order_payload": {"secret": "must-not-leak"}},
+            ),
+            _monitor_row(
+                event_type="execution.cancel_sent",
+                seq=4,
+                ts=1500,
+                status="started",
+                component="execution.order_write",
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "ow_1",
+                    "action_id": "ow_1:cancel:0",
+                },
+                symbol="ETH/USDT:USDT",
+                pside="short",
+            ),
+            _monitor_row(
+                event_type="execution.cancel_ambiguous_terminal",
+                seq=5,
+                ts=2100,
+                status="degraded",
+                component="execution.order_write",
+                reason_code="requires_full_authoritative_confirmation",
+                ids={
+                    "cycle_id": "cy_1",
+                    "order_wave_id": "ow_1",
+                    "action_id": "ow_1:cancel:0",
+                },
+                symbol="ETH/USDT:USDT",
+                pside="short",
+            ),
+            _monitor_row(
+                event_type="execution.confirmation_requested",
+                seq=6,
+                ts=2200,
+                status="started",
+                component="execution.confirmation",
+                ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+            ),
+            _monitor_row(
+                event_type="execution.confirmation_satisfied",
+                seq=7,
+                ts=3400,
+                status="succeeded",
+                component="execution.confirmation",
+                ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+                data={"confirm_ms": 975, "elapsed_ms": 1200},
+            ),
+            _monitor_row(
+                event_type="order_wave.completed",
+                seq=8,
+                ts=3500,
+                status="succeeded",
+                component="order_wave",
+                ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+                data={"elapsed_ms": 2450},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    execution = report["execution_timing"]
+    groups = {
+        group["operation"]: group
+        for group in execution["groups"]
+    }
+    rendered = json.dumps(execution, sort_keys=True)
+
+    assert execution["total_events"] == 8
+    assert execution["timing_observations"] == {
+        "execution.cancel_response": 1,
+        "execution.confirmation": 1,
+        "execution.create_response": 1,
+        "order_wave.total": 1,
+    }
+    assert execution["pending_start_counts"] == {}
+    assert groups["execution.create_response"]["max_ms"] == 350
+    assert groups["execution.cancel_response"]["max_ms"] == 600
+    assert groups["execution.confirmation"]["max_ms"] == 975
+    assert groups["order_wave.total"]["max_ms"] == 2450
+    assert groups["execution.cancel_response"]["statuses"] == {"degraded": 1}
+    assert groups["execution.create_response"]["symbols_sample"] == ["BTC/USDT:USDT"]
+    assert "must-not-leak" not in rendered
+    assert "raw_order_payload" not in rendered
+    assert "ow_1:create:0" not in rendered
+    assert "cid-short" not in rendered
+
+
+def test_live_performance_report_execution_timing_counts_missing_and_unpaired_ids(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                seq=1,
+                ts=1000,
+                status="started",
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                seq=2,
+                ts=1200,
+                status="failed",
+                ids={"cycle_id": "cy_1", "action_id": "missing_start"},
+            ),
+            _monitor_row(
+                event_type="execution.cancel_sent",
+                seq=3,
+                ts=1300,
+                status="started",
+                ids={"cycle_id": "cy_1", "action_id": "pending_cancel"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    execution = report["execution_timing"]
+
+    assert execution["total_events"] == 3
+    assert execution["missing_id_counts"] == {"execution.create_response": 1}
+    assert execution["unpaired_terminal_counts"] == {"execution.create_response": 1}
+    assert execution["pending_start_counts"] == {"execution.write_response": 1}
+    assert execution["total_groups"] == 0
+
+
+def test_live_performance_report_execution_timing_summary_is_bounded(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="order_wave.completed",
+                seq=1,
+                ts=1000,
+                component="order_wave",
+                ids={"order_wave_id": "ow_1"},
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="execution.confirmation_satisfied",
+                seq=2,
+                ts=2000,
+                component="execution.confirmation",
+                ids={"order_wave_id": "ow_1"},
+                data={"confirm_ms": 2000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert summary["execution_timing"]["total_groups"] == 2
+    assert summary["execution_timing"]["groups_truncated"] is True
+    assert len(summary["execution_timing"]["groups"]) == 1
+    assert summary["slowest_blockers"]["total_groups"] >= 2
+
+
 def test_live_performance_report_resource_pressure_from_health_summary(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
