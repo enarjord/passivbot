@@ -405,6 +405,118 @@ async def test_probe_exchange_ticker_endpoints_records_all_endpoint_shapes():
     assert exchange.fetch_tickers_calls == [None, ["BTC/USDT:USDT", "ETH/USDT:USDT"]]
 
 
+@pytest.mark.asyncio
+async def test_probe_exchange_ticker_endpoints_opt_in_fill_history_pagination():
+    class FakeExchange:
+        id = "fake"
+        rateLimit = 100
+        enableRateLimit = True
+        has = {
+            "fetchBalance": True,
+            "fetchMyTrades": True,
+            "fetchOpenOrders": True,
+            "fetchPositions": True,
+        }
+
+        def __init__(self):
+            self.my_trades_calls = []
+
+        async def load_markets(self):
+            return {
+                "BTC/USDT:USDT": {
+                    "base": "BTC",
+                    "quote": "USDT",
+                    "active": True,
+                    "swap": True,
+                    "linear": True,
+                }
+            }
+
+        async def fetch_balance(self):
+            return {"USDT": {"total": 100.0}}
+
+        async def fetch_positions(self):
+            return []
+
+        async def fetch_open_orders(self):
+            return []
+
+        async def fetch_my_trades(self, symbol=None, since=None, limit=None):
+            self.my_trades_calls.append((symbol, since, limit))
+            if since is None:
+                return [
+                    {
+                        "id": "raw-trade-id-1",
+                        "order": "raw-order-id-1",
+                        "timestamp": 1_000,
+                        "symbol": symbol,
+                        "side": "buy",
+                    },
+                    {
+                        "id": "raw-trade-id-2",
+                        "order": "raw-order-id-2",
+                        "timestamp": 2_000,
+                        "symbol": symbol,
+                        "side": "sell",
+                    },
+                ]
+            return [
+                {
+                    "id": "raw-trade-id-3",
+                    "order": "raw-order-id-3",
+                    "timestamp": 3_000,
+                    "symbol": symbol,
+                    "side": "buy",
+                }
+            ]
+
+    exchange = FakeExchange()
+
+    out = await probe_exchange_ticker_endpoints(
+        exchange,
+        user="fake_user",
+        user_info={"quote": "USDT"},
+        symbols=[],
+        coins=[],
+        quote=None,
+        max_symbols=1,
+        repeats=1,
+        sleep_between_seconds=0.0,
+        include_public=False,
+        include_order_book=False,
+        include_ohlcv=False,
+        include_time_sync=False,
+        fill_history_pages=3,
+        fill_history_page_limit=2,
+    )
+
+    outcome = out["repeats"][0]["fetch_my_trades_first_symbol"]
+    assert exchange.my_trades_calls == [
+        ("BTC/USDT:USDT", None, 2),
+        ("BTC/USDT:USDT", 2_001, 2),
+    ]
+    assert outcome["ok"] is True
+    assert outcome["call_count"] == 2
+    assert outcome["requested_pages"] == 3
+    assert outcome["page_limit"] == 2
+    assert outcome["page_count"] == 2
+    assert outcome["terminal_reason"] == "short_page"
+    assert outcome["value"]["count"] == 3
+    assert outcome["value"]["id_present_count"] == 3
+    assert outcome["value"]["order_present_count"] == 3
+    assert out["fill_history_health"]["latest"]["call_count"] == 2
+    assert out["fill_history_health"]["latest"]["page_count"] == 2
+    assert out["fill_history_health"]["latest"]["terminal_reason"] == "short_page"
+    assert out["fill_history_health"]["latest"]["trade_count"] == 3
+    assert out["rate_limit_health"]["observed_call_count"] == 6
+    assert out["rate_limit_health"]["private_call_count"] == 5
+    assert out["rate_limit_health"]["endpoint_counts"]["fetch_my_trades_first_symbol"] == 2
+    assert "raw-trade-id" not in str(out)
+    assert "raw-order-id" not in str(out)
+    assert "raw-trade-id" not in str(out["fill_history_health"])
+    assert "raw-order-id" not in str(out["fill_history_health"])
+
+
 def test_account_critical_probe_health_summarizes_failures_without_raw_errors():
     summary = summarize_account_critical_probe_health(
         {

@@ -717,6 +717,18 @@ def summarize_fill_history_probe_health(probe: dict[str, Any]) -> dict[str, Any]
                 "symbol": outcome.get("symbol") if isinstance(outcome, dict) else None,
                 "elapsed_ms": elapsed_ms,
                 "error_type": error_type,
+                "call_count": int(outcome.get("call_count") or 0)
+                if isinstance(outcome, dict)
+                else 0,
+                "requested_pages": int(outcome.get("requested_pages") or 0)
+                if isinstance(outcome, dict)
+                else 0,
+                "page_count": int(outcome.get("page_count") or 0)
+                if isinstance(outcome, dict)
+                else 0,
+                "terminal_reason": outcome.get("terminal_reason")
+                if isinstance(outcome, dict)
+                else None,
             }
             continue
         value = outcome.get("value")
@@ -738,6 +750,11 @@ def summarize_fill_history_probe_health(probe: dict[str, Any]) -> dict[str, Any]
             "ok": True,
             "symbol": outcome.get("symbol"),
             "elapsed_ms": elapsed_ms,
+            "call_count": int(outcome.get("call_count") or 0),
+            "requested_pages": int(outcome.get("requested_pages") or 0),
+            "page_limit": int(outcome.get("page_limit") or 0),
+            "page_count": int(outcome.get("page_count") or 0),
+            "terminal_reason": outcome.get("terminal_reason"),
             "trade_count": trade_count,
             "timestamp_count": int(value.get("timestamp_count") or 0),
             "missing_timestamp_count": int(value.get("missing_timestamp_count") or 0),
@@ -799,6 +816,9 @@ def summarize_fill_history_probe_collection(probes: list[dict[str, Any]]) -> dic
             "failure_pct": summary.get("failure_pct"),
             "latest_symbol": latest.get("symbol"),
             "latest_trade_count": int(latest.get("trade_count") or 0),
+            "latest_page_count": int(latest.get("page_count") or 0),
+            "latest_call_count": int(latest.get("call_count") or 0),
+            "latest_terminal_reason": latest.get("terminal_reason"),
             "newest_trade_timestamp": (
                 summary_newest.get("last_timestamp") if summary_newest else None
             ),
@@ -849,6 +869,9 @@ def _non_negative_float(value: Any) -> float | None:
 def _probe_outcome_call_count(outcome: Any) -> int:
     if not isinstance(outcome, dict) or bool(outcome.get("skipped")):
         return 0
+    call_count = outcome.get("call_count")
+    if isinstance(call_count, int) and not isinstance(call_count, bool) and call_count >= 0:
+        return int(call_count)
     return 1
 
 
@@ -1248,6 +1271,109 @@ async def _timed_method(exchange, method_name: str, *args, summary=None) -> dict
     return outcome
 
 
+async def _fetch_my_trades_sample(
+    exchange,
+    symbol: str,
+    *,
+    pages: int,
+    page_limit: int,
+) -> dict[str, Any]:
+    requested_pages = max(1, int(pages))
+    limit = max(1, int(page_limit))
+    started_ms = int(utc_ms())
+    page_summaries: list[dict[str, Any]] = []
+    combined_trades: list[Any] = []
+    since: int | None = None
+    terminal_reason = "requested_pages_exhausted"
+    call_count = 0
+    for page_index in range(requested_pages):
+        outcome = await _timed_call(exchange.fetch_my_trades(symbol, since, limit))
+        call_count += 1
+        page_summary: dict[str, Any] = {
+            "page_index": page_index,
+            "since": since,
+            "limit": limit,
+            "ok": bool(outcome.get("ok")),
+            "elapsed_ms": _elapsed_ms(outcome),
+        }
+        if not outcome.get("ok"):
+            page_summary["error_type"] = str(outcome.get("error_type") or "unknown")
+            page_summaries.append(page_summary)
+            elapsed_ms = int(max(0, utc_ms() - started_ms))
+            return {
+                "ok": False,
+                "elapsed_ms": elapsed_ms,
+                "symbol": symbol,
+                "call_count": call_count,
+                "requested_pages": requested_pages,
+                "page_limit": limit,
+                "page_count": len(page_summaries),
+                "pages": page_summaries,
+                "terminal_reason": "page_failed",
+                "error_type": outcome.get("error_type"),
+                "error": outcome.get("error"),
+                "value": summarize_my_trades(combined_trades),
+            }
+        trades = outcome.get("value")
+        if not isinstance(trades, list):
+            page_summary["ok"] = False
+            page_summary["error_type"] = "ValueError"
+            page_summaries.append(page_summary)
+            elapsed_ms = int(max(0, utc_ms() - started_ms))
+            return {
+                "ok": False,
+                "elapsed_ms": elapsed_ms,
+                "symbol": symbol,
+                "call_count": call_count,
+                "requested_pages": requested_pages,
+                "page_limit": limit,
+                "page_count": len(page_summaries),
+                "pages": page_summaries,
+                "terminal_reason": "invalid_page_shape",
+                "error_type": "ValueError",
+                "error": "fetch_my_trades returned non-list page",
+                "value": summarize_my_trades(combined_trades),
+            }
+        page_value = summarize_my_trades(trades)
+        page_summary.update(
+            {
+                "trade_count": int(page_value.get("count") or 0),
+                "timestamp_count": int(page_value.get("timestamp_count") or 0),
+                "first_timestamp": page_value.get("first_timestamp"),
+                "first_datetime": page_value.get("first_datetime"),
+                "last_timestamp": page_value.get("last_timestamp"),
+                "last_datetime": page_value.get("last_datetime"),
+            }
+        )
+        page_summaries.append(page_summary)
+        combined_trades.extend(trades)
+        last_ts = _int_timestamp(page_value.get("last_timestamp"))
+        if len(trades) < limit:
+            terminal_reason = "short_page"
+            break
+        if last_ts is None:
+            terminal_reason = "missing_page_timestamp"
+            break
+        next_since = last_ts + 1
+        if since is not None and next_since <= since:
+            terminal_reason = "non_advancing_timestamp"
+            break
+        since = next_since
+    elapsed_ms = int(max(0, utc_ms() - started_ms))
+    return {
+        "ok": True,
+        "elapsed_ms": elapsed_ms,
+        "symbol": symbol,
+        "call_count": call_count,
+        "requested_pages": requested_pages,
+        "page_limit": limit,
+        "page_count": len(page_summaries),
+        "pages": page_summaries,
+        "terminal_reason": terminal_reason,
+        "value": summarize_my_trades(combined_trades),
+    }
+
+
 def _with_present_fields(out: dict[str, Any], **fields) -> dict[str, Any]:
     for key, value in fields.items():
         if value is not None:
@@ -1322,6 +1448,8 @@ async def probe_exchange_ticker_endpoints(
     include_ohlcv: bool = True,
     include_my_trades: bool = True,
     include_time_sync: bool = True,
+    fill_history_pages: int = 1,
+    fill_history_page_limit: int = 10,
     progress: bool = False,
 ) -> dict[str, Any]:
     exchange_id = getattr(exchange, "id", str(user_info.get("exchange") or ""))
@@ -1350,6 +1478,8 @@ async def probe_exchange_ticker_endpoints(
         "include_ohlcv": bool(include_ohlcv),
         "include_my_trades": bool(include_my_trades),
         "include_time_sync": bool(include_time_sync),
+        "fill_history_pages": max(1, int(fill_history_pages)),
+        "fill_history_page_limit": max(1, int(fill_history_page_limit)),
         "sleep_between_seconds": float(sleep_between_seconds),
         "exchange_rate_limit_ms": getattr(exchange, "rateLimit", None),
         "exchange_enable_rate_limit": getattr(exchange, "enableRateLimit", None),
@@ -1513,16 +1643,17 @@ async def probe_exchange_ticker_endpoints(
                 enabled=progress,
             )
             if include_my_trades:
-                emit_progress(f"{repeat_label} fetch_my_trades(first symbol)", enabled=progress)
-                repeat["fetch_my_trades_first_symbol"] = await _timed_method(
-                    exchange,
-                    "fetch_my_trades",
-                    resolved_symbols[0],
-                    None,
-                    10,
-                    summary=summarize_my_trades,
+                emit_progress(
+                    f"{repeat_label} fetch_my_trades(first symbol) "
+                    f"pages={max(1, int(fill_history_pages))}",
+                    enabled=progress,
                 )
-                repeat["fetch_my_trades_first_symbol"]["symbol"] = resolved_symbols[0]
+                repeat["fetch_my_trades_first_symbol"] = await _fetch_my_trades_sample(
+                    exchange,
+                    resolved_symbols[0],
+                    pages=max(1, int(fill_history_pages)),
+                    page_limit=max(1, int(fill_history_page_limit)),
+                )
                 emit_progress(
                     f"{repeat_label} fetch_my_trades(first symbol) "
                     f"{format_outcome(repeat['fetch_my_trades_first_symbol'])}",
@@ -1561,6 +1692,8 @@ async def probe_user_ticker_endpoints(
     include_ohlcv: bool = True,
     include_my_trades: bool = True,
     include_time_sync: bool = True,
+    fill_history_pages: int = 1,
+    fill_history_page_limit: int = 10,
     progress: bool = False,
 ) -> dict[str, Any]:
     emit_progress(f"[{user}] loading api key config", enabled=progress)
@@ -1587,6 +1720,8 @@ async def probe_user_ticker_endpoints(
             include_ohlcv=include_ohlcv,
             include_my_trades=include_my_trades,
             include_time_sync=include_time_sync,
+            fill_history_pages=fill_history_pages,
+            fill_history_page_limit=fill_history_page_limit,
             progress=progress,
         )
     finally:
@@ -1629,6 +1764,21 @@ def build_parser() -> argparse.ArgumentParser:
         help="skip authenticated fetch_my_trades probe",
     )
     parser.add_argument(
+        "--fill-history-pages",
+        type=int,
+        default=1,
+        help=(
+            "bounded first-symbol fetch_my_trades page sample; default 1 preserves "
+            "the low-impact single-call probe"
+        ),
+    )
+    parser.add_argument(
+        "--fill-history-page-limit",
+        type=int,
+        default=10,
+        help="per-page fetch_my_trades limit for the bounded pagination sample",
+    )
+    parser.add_argument(
         "--skip-time-sync",
         action="store_true",
         help="skip read-only fetch_time clock-skew probe",
@@ -1667,6 +1817,8 @@ async def async_main() -> int:
         "include_ohlcv": not bool(args.skip_ohlcv) and not bool(args.account_only),
         "include_my_trades": not bool(args.skip_my_trades) and not bool(args.account_only),
         "include_time_sync": not bool(args.skip_time_sync),
+        "fill_history_pages": max(1, int(args.fill_history_pages)),
+        "fill_history_page_limit": max(1, int(args.fill_history_page_limit)),
         "probes": [],
     }
     for user in users:
@@ -1687,6 +1839,8 @@ async def async_main() -> int:
                 include_ohlcv=not bool(args.skip_ohlcv) and not bool(args.account_only),
                 include_my_trades=not bool(args.skip_my_trades) and not bool(args.account_only),
                 include_time_sync=not bool(args.skip_time_sync),
+                fill_history_pages=max(1, int(args.fill_history_pages)),
+                fill_history_page_limit=max(1, int(args.fill_history_page_limit)),
                 progress=not bool(args.quiet),
             )
         )
