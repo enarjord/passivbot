@@ -372,6 +372,25 @@ Related detailed plans:
     callback races are grouped with surrounding reconnect context instead of
     requiring manual log inspection.
 
+17. [ ] Forager active-symbol EMA readiness handoff.
+    Status: open.
+
+    VPS5 smoke after PR #735 caught an OKX recovery case where `AAVE` was
+    selected/posted as a forager initial entry, filled, and became an active
+    long while its forager volume/log-range EMA basis was still warming. The
+    next execution loop raised one hard error:
+    `missing required forager EMA for active/normal symbol AAVE/USDT:USDT:
+    volume_spans= log_range_spans=996`. The bot recovered after background
+    warmup completed, and the settled 2-minute smoke returned `ok=true`, but
+    the transient hard restart/backoff is undesirable.
+
+    Clarify and implement the handoff contract for a flat symbol that becomes
+    active during or just after forager selection: either block the create until
+    required active-symbol forager EMA inputs are provably ready, or explicitly
+    carry forward bounded/stale forager feature values through the first active
+    cycle with structured readiness metadata. Do not fabricate neutral
+    volume/log-range values, and do not weaken protective/risk actions.
+
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |
@@ -417,7 +436,7 @@ Related detailed plans:
 | 2026-06-27 | #13 Cache integrity doctor | PR #725 / `1ed9c466` | Added read-only fill/HSL metadata summaries from local JSON/NDJSON artifacts | Deeper metadata compatibility, synthetic/no-trade assumptions, and warm-cache readiness |
 | 2026-06-27 | #13 Cache integrity doctor | PR #727 / `d8dd7246` | Added report-only warm-cache readiness evidence from already-scanned candle/fill/HSL cache metadata | Deeper metadata compatibility and synthetic/no-trade assumptions |
 | 2026-06-27 | #7 Live config preflight/linter | PR #731 / `3cc2d229` | Added optional read-only `--compare` diff reporting for local two-config preflights, including HSL signal/enabled changes, universe deltas, forager slots/staleness, identity hints, and cache live settings | Deeper cache compatibility checks and live startup enforcement remain open |
-| 2026-06-27 | #4 Startup phase budget tracking | pending PR | Added report-only startup budget projections to `live-smoke-report` phase summaries using prior local p95 baselines from existing monitor events | Explicit durable budget config/events |
+| 2026-06-27 | #4 Startup phase budget tracking | PR #735 / `6f415777` | Added report-only startup budget projections to `live-smoke-report` phase summaries using prior local p95 baselines from existing monitor events; VPS5 deploy kept all five bots running and the settled smoke returned `ok=true` after unrelated transient HSL/EMA events aged out | Explicit durable budget config/events |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #701 / `fcda70f5` | Added `ticker-endpoint-probe` `account_critical_health` summaries for read-only balance/positions/open-orders outcomes; VPS5 Binance probe validated the summary and exposed an open-orders shape follow-up | Lower-impact/account-only mode, exchange-aware open-orders probing, clock skew/rate-limit/fill/candle probes |
 | 2026-06-26 | #6 Exchange health and contract probes | PR #703 / `8fefce4b` | Added `ticker-endpoint-probe --account-only`, `--skip-my-trades`, and open-orders symbol fallback; VPS5 Binance account-only probe returned account-critical total=3, succeeded=3, and smoke stayed green | Clock skew/rate-limit/fill-pagination/candle-freshness probes |
 | 2026-06-25 | #3 Live restart/smoke automation | PR #639 / `86afd3b3` | Added read-only `passivbot tool live-smoke-report` | Safe pull/stop/start orchestration still open |
@@ -434,12 +453,13 @@ Related detailed plans:
 
 Near-term highest leverage:
 
-1. Exchange health and contract probes.
-2. Live restart/smoke automation.
-3. Operator console redesign from events.
-4. Startup phase budget tracking.
-5. HSL dry-run preview.
-6. Cache integrity doctor coverage/readiness refinements.
+1. Forager active-symbol EMA readiness handoff.
+2. Exchange health and contract probes.
+3. Live restart/smoke automation.
+4. Operator console redesign from events.
+5. Startup phase budget tracking.
+6. HSL dry-run preview.
+7. Cache integrity doctor coverage/readiness refinements.
 
 These make every later live debugging session cheaper and provide direct
 feedback on whether the event stream is actually answering operator questions.
