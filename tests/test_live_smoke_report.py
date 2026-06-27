@@ -19,6 +19,8 @@ def _monitor_row(
     event_type: str,
     seq: int,
     ts: int,
+    exchange: str = "binance",
+    user: str = "binance_01",
     status: str = "succeeded",
     level: str = "info",
     reason_code: str = "test",
@@ -35,8 +37,8 @@ def _monitor_row(
         "level": level,
         "source": "live",
         "component": "test",
-        "exchange": "binance",
-        "user": "binance_01",
+        "exchange": exchange,
+        "user": user,
         "symbol": symbol,
         "pside": pside,
         "status": status,
@@ -47,8 +49,8 @@ def _monitor_row(
     if message is not None:
         live_event["message"] = message
     return {
-        "exchange": "binance",
-        "user": "binance_01",
+        "exchange": exchange,
+        "user": user,
         "kind": event_type,
         "tags": ["test"],
         "payload": {"_live_event": live_event},
@@ -1267,6 +1269,124 @@ def test_live_smoke_report_summarizes_event_pipeline_health(tmp_path):
         "latest_worker_not_alive_count": 1,
         "latest_stopping_count": 1,
         "event_types": {"health.summary": 2},
+    }
+
+
+def test_live_smoke_report_event_pipeline_health_aggregates_multi_bot_queue_overflow(tmp_path):
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=1,
+                ts=1000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "okx_old"},
+                data={
+                    "event_queue_depth": 4,
+                    "event_queue_unfinished_tasks": 5,
+                    "event_dropped_total": 1,
+                    "event_drop_counts": {"order.created": 1},
+                    "event_sink_error_total": 0,
+                    "event_degraded_count": 1,
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                exchange="okx",
+                user="okx_01",
+                seq=2,
+                ts=2000,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "okx_latest"},
+                data={
+                    "event_queue_depth": 8,
+                    "event_queue_unfinished_tasks": 9,
+                    "event_dropped_total": 7,
+                    "event_drop_counts": {"order.created": 5, "health.summary": 2},
+                    "event_sink_error_total": 1,
+                    "event_sink_error_counts": {"monitor": 1},
+                    "event_degraded_count": 2,
+                    "event_pipeline_stopping": False,
+                    "event_pipeline_worker_alive": True,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="health.summary",
+                exchange="gateio",
+                user="gateio_01",
+                seq=3,
+                ts=1500,
+                level="debug",
+                reason_code="periodic_health_summary",
+                ids={"cycle_id": "gateio_latest"},
+                data={
+                    "event_queue_depth": 3,
+                    "event_queue_unfinished_tasks": 4,
+                    "event_dropped_total": 0,
+                    "event_sink_error_total": 2,
+                    "event_sink_error_counts": {"structured": 2},
+                    "event_degraded_count": 4,
+                    "event_pipeline_stopping": True,
+                    "event_pipeline_worker_alive": False,
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+
+    health = report["event_pipeline_health"]
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["latest_queue_depth_total"] == 11
+    assert health["latest_queue_unfinished_total"] == 13
+    assert health["latest_dropped_total"] == 7
+    assert health["latest_sink_error_total"] == 3
+    assert health["latest_degraded_total"] == 6
+    assert health["latest_worker_not_alive_count"] == 1
+    assert health["latest_stopping_count"] == 1
+    assert [group["bot"] for group in health["groups"]] == [
+        "okx/okx_01",
+        "gateio/gateio_01",
+    ]
+    assert health["groups"][0]["latest_ids"] == {"cycle_id": "okx_latest"}
+    assert health["groups"][0]["latest_drop_counts"] == {
+        "health.summary": 2,
+        "order.created": 5,
+    }
+    assert health["groups"][1]["latest_sink_error_counts"] == {"structured": 2}
+    assert report["ok"] is True
+    assert report["attention"] is False
+    assert summary["event_pipeline_health"]["total"] == 3
+    assert summary["event_pipeline_health"]["groups_truncated"] is True
+    assert summary["event_pipeline_health"]["groups"][0]["bot"] == "okx/okx_01"
+    assert brief["event_pipeline"] == {
+        "total": 3,
+        "bots": 2,
+        "latest_queue_depth_total": 11,
+        "latest_queue_unfinished_total": 13,
+        "latest_dropped_total": 7,
+        "latest_sink_error_total": 3,
+        "latest_degraded_total": 6,
+        "latest_worker_not_alive_count": 1,
+        "latest_stopping_count": 1,
+        "event_types": {"health.summary": 3},
     }
 
 
