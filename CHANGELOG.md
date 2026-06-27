@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added explicit hard-failure and attention source breakdowns to
+  `passivbot tool live-smoke-report`, so red or attention smokes identify
+  monitor parse errors, invalid rows, structured events, log matches, and
+  process liveness contributions without changing verdict logic.
 - Added risk/HSL log-match counters to `passivbot tool live-smoke-report`, so
   CRITICAL risk-state log lines can be distinguished from non-risk hard log
   matches without changing smoke verdict logic.
