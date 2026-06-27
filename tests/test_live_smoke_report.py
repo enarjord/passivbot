@@ -812,6 +812,14 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert brief["remote_calls"]["failed"] == 1
     assert brief["account_critical_remote_calls"]["total"] == 1
     assert brief["account_critical_remote_calls"]["failed"] == 1
+    assert brief["ema_readiness"] == {
+        "total": 1,
+        "bots": 1,
+        "latest_candidate_unavailable_total": 1,
+        "latest_unavailable_total": 0,
+        "latest_optional_drop_total": 0,
+        "event_types": {"ema.unavailable": 1},
+    }
     assert "bots" not in brief
     assert "matches" not in brief["logs"]
     assert "groups" not in brief["remote_calls"]
@@ -962,6 +970,154 @@ def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path)
         == "GET https://example.test/candles?api_key=[redacted]&signature=[redacted]"
     )
     assert "ignored_extra" not in latest_data
+
+
+def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_ema_1"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 1,
+                        "sample": ["ZEC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 3,
+                        "sample": ["ZEC/USDT:USDT", "NEAR/USDT:USDT"],
+                        "truncated": 1,
+                    },
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 1,
+                                "sample": ["ZEC/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                            "error_types": ["MissingCloseEma"],
+                        }
+                    ],
+                    "unavailable_reasons": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 1,
+                                "sample": ["ZEC/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                        },
+                        {
+                            "reason": "never_fetched_cache_only",
+                            "symbols": {
+                                "count": 2,
+                                "sample": ["NEAR/USDT:USDT", "AVAX/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                        },
+                    ],
+                },
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_ema_2"},
+                data={
+                    "optional_drop_count": 2,
+                    "candidate_unavailable": {
+                        "count": 2,
+                        "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 5,
+                        "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                        "truncated": 3,
+                    },
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 2,
+                                "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                            "error_types": ["MissingLogRangeEma"],
+                        }
+                    ],
+                    "unavailable_reasons": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 2,
+                                "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                        },
+                        {
+                            "reason": "never_fetched_cache_only",
+                            "symbols": {
+                                "count": 3,
+                                "sample": ["SUI/USDT:USDT"],
+                                "truncated": 2,
+                            },
+                        },
+                    ],
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    health = report["ema_readiness_health"]
+    assert health["total"] == 2
+    assert health["bots"] == 1
+    assert health["latest_candidate_unavailable_total"] == 2
+    assert health["latest_unavailable_total"] == 5
+    assert health["latest_optional_drop_total"] == 2
+    assert health["event_types"] == {"ema.unavailable": 2}
+    assert health["groups"][0]["count"] == 2
+    assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_ema_2"}
+    assert health["groups"][0]["latest_candidate_unavailable_count"] == 2
+    assert health["groups"][0]["latest_unavailable_count"] == 5
+    assert health["groups"][0]["candidate_reason_counts"] == {
+        "cache_only_fetch_failed": 2
+    }
+    assert health["groups"][0]["unavailable_reason_counts"] == {
+        "never_fetched_cache_only": 3,
+        "cache_only_fetch_failed": 2,
+    }
+    assert health["groups"][0]["candidate_error_type_counts"] == {
+        "MissingLogRangeEma": 1
+    }
+    assert summary["ema_readiness_health"]["total"] == 2
+    assert summary["ema_readiness_health"]["groups"][0]["latest_ids"] == {
+        "cycle_id": "cy_ema_2"
+    }
+    assert brief["ema_readiness"] == {
+        "total": 2,
+        "bots": 1,
+        "latest_candidate_unavailable_total": 2,
+        "latest_unavailable_total": 5,
+        "latest_optional_drop_total": 2,
+        "event_types": {"ema.unavailable": 2},
+    }
 
 
 def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_path):

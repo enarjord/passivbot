@@ -150,6 +150,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
   Startup timing summaries include report-only budget projections from prior local p95
   phase baselines when enough monitor evidence exists.
+  Existing structured EMA readiness degradation events are summarized as
+  `ema_readiness_health` in full/summary output and `ema_readiness` in brief output,
+  including latest candidate/unavailable counts and bounded reason/error group evidence.
   Existing structured shutdown events are also summarized as `shutdown_events`,
   so recent Ctrl+C/restart behavior can be inspected from the same smoke output.
   With `--supervisor-config`, the read-only process section compares configured
