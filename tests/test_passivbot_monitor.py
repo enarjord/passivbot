@@ -3174,6 +3174,9 @@ def test_execution_debug_profile_adds_bounded_order_write_shape():
     assert "raw-exchange-order-id-456" not in serialized_debug
     assert "raw-result-order-id-789" not in serialized_debug
     assert "raw-result-client-order-id-999" not in serialized_debug
+    assert "BTC/USDT:USDT" not in serialized_debug
+    assert "\"buy\"" not in serialized_debug
+    assert "\"long\"" not in serialized_debug
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

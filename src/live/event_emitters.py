@@ -243,9 +243,6 @@ def _execution_debug_payload(
             order.get("custom_id") or order.get("clientOrderId")
         )
         debug["has_exchange_order_id"] = bool(order.get("id") or order.get("order_id"))
-        for key in ("symbol", "side", "position_side", "pb_order_type", "type"):
-            if order.get(key) is not None:
-                debug[f"order_{key}"] = str(order.get(key))
     if isinstance(result, dict):
         debug["result_keys"] = _mapping_key_sample(result, limit=limit)
         debug["has_result_order_id"] = bool(result.get("id") or result.get("order_id"))
