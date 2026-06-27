@@ -2568,6 +2568,8 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     bot._unstuck_allowance_log_snap_by_pside = {}
     bot._unstuck_last_status_signature = None
     bot._unstuck_last_status_info_ms = 0
+    captured_events = []
+    bot._emit_unstuck_status_event = lambda **kwargs: captured_events.append(kwargs)
     now = [5 * 60 * 1000]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
 
@@ -2611,6 +2613,12 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
         record.message for record in caplog.records if "[unstuck]" in record.message
     ]
     assert len(unstuck_logs) == 3
+    assert len(captured_events) == 3
+    assert [event["changed"] for event in captured_events] == [True, True, False]
+    assert captured_events[0]["side_statuses"]["long"]["allowance"] == pytest.approx(
+        -41.01
+    )
+    assert captured_events[0]["side_statuses"]["short"]["status"] == "disabled"
 
 
 def test_hysteresis_snapped_unstuck_allowance_updates_only_after_threshold():
@@ -2674,6 +2682,8 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
     bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
     bot._unstuck_last_selection_signature = None
     bot._unstuck_last_selection_info_ms = 0
+    captured_events = []
+    bot._emit_unstuck_selection_event = lambda **kwargs: captured_events.append(kwargs)
     now = [0]
     monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
 
@@ -2716,6 +2726,10 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
         if "[unstuck] selecting" in record.message
     ]
     assert len(unstuck_logs) == 3
+    assert len(captured_events) == 3
+    assert [event["changed"] for event in captured_events] == [True, False, True]
+    assert captured_events[0]["symbol"] == "SUI/USDT:USDT"
+    assert captured_events[2]["symbol"] == "ADA/USDT:USDT"
 
 
 @pytest.mark.asyncio

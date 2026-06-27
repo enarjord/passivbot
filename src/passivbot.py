@@ -633,6 +633,8 @@ class Passivbot:
     )
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
     _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
+    _emit_unstuck_status_event = live_event_emitters.emit_unstuck_status_event
+    _emit_unstuck_selection_event = live_event_emitters.emit_unstuck_selection_event
     _emit_forager_feature_unavailable_event = (
         live_event_emitters.emit_forager_feature_unavailable_event
     )
@@ -3177,12 +3179,16 @@ class Passivbot:
             "override_allowances": override_allowances,
         }
 
-    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
-        """Build the current unstuck status log line and a comparable signature."""
+    def _get_unstuck_status_snapshot_parts_and_signature(
+        self,
+    ) -> tuple[dict[str, dict], list[str], tuple]:
+        """Build the current unstuck status snapshot, log line, and signature."""
+        side_infos = {}
         parts = []
         signature_parts = []
         for pside in ["long", "short"]:
             info = self._calc_unstuck_allowance_for_logging(pside)
+            side_infos[pside] = dict(info or {})
             status = info.get("status")
             if status == "disabled":
                 parts.append(f"{pside}: disabled")
@@ -3220,7 +3226,16 @@ class Passivbot:
                         tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
                     )
                 )
-        return parts, tuple(signature_parts)
+        return side_infos, parts, tuple(signature_parts)
+
+    def _get_unstuck_status_parts_and_signature(self) -> tuple[list[str], tuple]:
+        """Build the current unstuck status log line and a comparable signature."""
+        (
+            _side_infos,
+            parts,
+            signature,
+        ) = self._get_unstuck_status_snapshot_parts_and_signature()
+        return parts, signature
 
     def _get_hysteresis_snapped_unstuck_allowance(
         self, pside: str, allowance_raw: float
@@ -3248,7 +3263,11 @@ class Passivbot:
         if (now_ms - self._unstuck_last_log_ms) < self._unstuck_log_interval_ms:
             return
         self._unstuck_last_log_ms = now_ms
-        parts, signature = self._get_unstuck_status_parts_and_signature()
+        (
+            side_infos,
+            parts,
+            signature,
+        ) = self._get_unstuck_status_snapshot_parts_and_signature()
         status_changed = signature != getattr(
             self, "_unstuck_last_status_signature", None
         )
@@ -3258,6 +3277,10 @@ class Passivbot:
             or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms
         ):
             logging.info("[unstuck] %s", " | ".join(parts))
+            self._emit_unstuck_status_event(
+                side_statuses=side_infos,
+                changed=status_changed,
+            )
             self._unstuck_last_status_info_ms = now_ms
             self._unstuck_last_status_signature = signature
 
@@ -3274,6 +3297,7 @@ class Passivbot:
         now_ms = utc_ms()
         signature = (symbol, pside, round(float(allowance), 2))
         last_signature = getattr(self, "_unstuck_last_selection_signature", None)
+        changed = signature != last_signature
         last_info_ms = int(getattr(self, "_unstuck_last_selection_info_ms", 0) or 0)
         if (
             signature == last_signature
@@ -3296,6 +3320,14 @@ class Passivbot:
             sign,
             price_diff_pct,
             allowance,
+        )
+        self._emit_unstuck_selection_event(
+            symbol=symbol,
+            pside=pside,
+            entry_price=entry_price,
+            current_price=current_price,
+            allowance=allowance,
+            changed=changed,
         )
         self._unstuck_last_selection_signature = signature
         self._unstuck_last_selection_info_ms = now_ms
