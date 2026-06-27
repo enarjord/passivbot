@@ -11,6 +11,7 @@ from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
 SIDES = ("long", "short")
+_MISSING = object()
 CACHE_LIVE_KEYS = (
     "defer_broad_candle_warmup",
     "enable_archive_candle_fetch",
@@ -31,6 +32,29 @@ FORAGER_LIVE_KEYS = (
     "forager_score_hysteresis_pct",
     "max_forager_candle_refresh_seconds",
     "max_forager_candle_staleness_minutes",
+)
+DIFF_SETTING_PATHS = (
+    ("identity", "live.user", ("live", "user")),
+    ("identity", "live.exchange", ("live", "exchange")),
+    ("identity", "backtest.exchanges", ("backtest", "exchanges")),
+    ("hsl", "live.hsl_signal_mode", ("live", "hsl_signal_mode")),
+    (
+        "hsl",
+        "live.hsl_position_during_cooldown_policy",
+        ("live", "hsl_position_during_cooldown_policy"),
+    ),
+    ("hsl", "bot.long.hsl.enabled", ("bot", "long", "hsl", "enabled")),
+    ("hsl", "bot.short.hsl.enabled", ("bot", "short", "hsl", "enabled")),
+    ("forager", "bot.long.risk.n_positions", ("bot", "long", "risk", "n_positions")),
+    ("forager", "bot.short.risk.n_positions", ("bot", "short", "risk", "n_positions")),
+    *(
+        ("forager", f"live.{key}", ("live", key))
+        for key in FORAGER_LIVE_KEYS
+    ),
+    *(
+        ("cache", f"live.{key}", ("live", key))
+        for key in CACHE_LIVE_KEYS
+    ),
 )
 
 
@@ -77,6 +101,74 @@ def _string_sample(values: list[Any], *, limit: int) -> list[str]:
     return sample
 
 
+def _display_value(value: Any) -> dict[str, Any]:
+    if value is _MISSING:
+        return {"present": False}
+    return {"present": True, "value": value}
+
+
+def _path_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
+    value: Any = config
+    for part in path:
+        if not isinstance(value, dict) or part not in value:
+            return _MISSING
+        value = value[part]
+    return value
+
+
+def _load_json_object(
+    path: Path,
+    *,
+    label: str,
+) -> tuple[dict[str, Any] | None, str, list[dict[str, Any]]]:
+    display_path = _user_safe_display_path(path)
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        detail = getattr(exc, "strerror", None) or type(exc).__name__
+        return (
+            None,
+            display_path,
+            [
+                _issue(
+                    "error",
+                    f"{label}_read_failed",
+                    f"could not read {label} config {display_path}: {detail}",
+                    path=display_path,
+                )
+            ],
+        )
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return (
+            None,
+            display_path,
+            [
+                _issue(
+                    "error",
+                    f"{label}_json_decode_failed",
+                    f"invalid {label} JSON at line {exc.lineno} column {exc.colno}: {exc.msg}",
+                    path=display_path,
+                )
+            ],
+        )
+    if not isinstance(parsed, dict):
+        return (
+            None,
+            display_path,
+            [
+                _issue(
+                    "error",
+                    f"{label}_config_root_invalid",
+                    f"{label} config root must be a JSON object",
+                    path=display_path,
+                )
+            ],
+        )
+    return parsed, display_path, []
+
+
 def _coin_list_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
     if value is None:
         return {
@@ -117,6 +209,15 @@ def _coin_list_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
         "sample": [],
         "truncated": 0,
     }
+
+
+def _coin_list_diff_value(value: Any) -> tuple[dict[str, Any], set[str] | None]:
+    summary = _coin_list_summary(value, sample_size=0)
+    if isinstance(value, list):
+        return summary, {str(item) for item in value}
+    if isinstance(value, str) and value.lower() != "all":
+        return summary, {value}
+    return summary, None
 
 
 def _side_coin_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
@@ -198,6 +299,122 @@ def _identity_report(config: dict[str, Any], live: dict[str, Any]) -> dict[str, 
     }
 
 
+def _coin_value_for_side(config: dict[str, Any], group_name: str, side: str) -> Any:
+    live = config["live"] if isinstance(config.get("live"), dict) else {}
+    group = (
+        live[group_name]
+        if isinstance(live.get(group_name), dict)
+        else live.get(group_name)
+    )
+    if isinstance(group, dict):
+        return group[side] if side in group else None
+    return group
+
+
+def _universe_diff_changes(
+    baseline: dict[str, Any],
+    target: dict[str, Any],
+    *,
+    sample_size: int,
+) -> list[dict[str, Any]]:
+    changes: list[dict[str, Any]] = []
+    for group_name in ("approved_coins", "ignored_coins"):
+        for side in SIDES:
+            before_summary, before_set = _coin_list_diff_value(
+                _coin_value_for_side(baseline, group_name, side)
+            )
+            after_summary, after_set = _coin_list_diff_value(
+                _coin_value_for_side(target, group_name, side)
+            )
+            if before_summary == after_summary and before_set == after_set:
+                continue
+            change = {
+                "category": "universe",
+                "field": f"live.{group_name}.{side}",
+                "before": {
+                    "present": before_summary["present"],
+                    "mode": before_summary["mode"],
+                    "count": before_summary["count"],
+                },
+                "after": {
+                    "present": after_summary["present"],
+                    "mode": after_summary["mode"],
+                    "count": after_summary["count"],
+                },
+            }
+            if before_set is not None and after_set is not None:
+                added = sorted(after_set - before_set)
+                removed = sorted(before_set - after_set)
+                change["added_count"] = len(added)
+                change["removed_count"] = len(removed)
+                change["added_sample"] = _string_sample(added, limit=sample_size)
+                change["removed_sample"] = _string_sample(removed, limit=sample_size)
+                change["added_truncated"] = max(0, len(added) - sample_size)
+                change["removed_truncated"] = max(0, len(removed) - sample_size)
+            changes.append(change)
+    return changes
+
+
+def build_live_config_diff_report(
+    baseline_config_path: str | Path,
+    target_config_path: str | Path,
+    *,
+    sample_size: int = DEFAULT_SAMPLE_SIZE,
+) -> dict[str, Any]:
+    sample_size = max(0, int(sample_size))
+    baseline, baseline_display_path, baseline_issues = _load_json_object(
+        Path(baseline_config_path).expanduser(),
+        label="baseline",
+    )
+    target, target_display_path, target_issues = _load_json_object(
+        Path(target_config_path).expanduser(),
+        label="target",
+    )
+    issues = baseline_issues + target_issues
+    if baseline is None or target is None:
+        return {
+            "ok": False,
+            "baseline_config_path": baseline_display_path,
+            "target_config_path": target_display_path,
+            "issues": issues,
+            "summary": {"change_count": 0, "category_counts": {}},
+        }
+
+    changes: list[dict[str, Any]] = []
+    for category, field, path in DIFF_SETTING_PATHS:
+        before = _path_value(baseline, path)
+        after = _path_value(target, path)
+        if before != after:
+            changes.append(
+                {
+                    "category": category,
+                    "field": field,
+                    "before": _display_value(before),
+                    "after": _display_value(after),
+                }
+            )
+    changes.extend(
+        _universe_diff_changes(baseline, target, sample_size=sample_size)
+    )
+    category_counts = Counter(change["category"] for change in changes)
+    return {
+        "ok": True,
+        "baseline_config_path": baseline_display_path,
+        "target_config_path": target_display_path,
+        "issues": [],
+        "changes": changes,
+        "summary": {
+            "change_count": len(changes),
+            "category_counts": dict(sorted(category_counts.items())),
+        },
+        "notes": [
+            "offline_read_only_config_diff",
+            "does_not_load_credentials_or_contact_exchanges",
+            "does_not_enforce_live_startup_policy",
+        ],
+    }
+
+
 def _collect_shape_warnings(
     *,
     approved: dict[str, Any],
@@ -224,6 +441,7 @@ def build_live_config_preflight_report(
     config_path: str | Path,
     *,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
+    compare_config_path: str | Path | None = None,
 ) -> dict[str, Any]:
     path = Path(config_path).expanduser()
     display_path = _user_safe_display_path(path)
@@ -300,7 +518,7 @@ def build_live_config_preflight_report(
         if isinstance(value, (int, float))
     ]
     severity_counts = Counter(issue["severity"] for issue in issues)
-    return {
+    report = {
         "ok": "error" not in severity_counts,
         "config_path": display_path,
         "config_version": parsed.get("config_version"),
@@ -336,6 +554,21 @@ def build_live_config_preflight_report(
             "does_not_enforce_live_startup_policy",
         ],
     }
+    if compare_config_path is not None:
+        diff_report = build_live_config_diff_report(
+            compare_config_path,
+            path,
+            sample_size=sample_size,
+        )
+        report["diff"] = diff_report
+        issues.extend(diff_report["issues"])
+        severity_counts = Counter(issue["severity"] for issue in issues)
+        report["ok"] = "error" not in severity_counts
+        report["summary"] = {
+            "error_count": int(severity_counts["error"]),
+            "warning_count": int(severity_counts["warning"]),
+        }
+    return report
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -351,6 +584,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum approved/ignored coin sample size per side.",
     )
     parser.add_argument(
+        "--compare",
+        dest="compare_config_path",
+        help="Optional baseline live config JSON file for read-only diff reporting.",
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -364,6 +602,7 @@ def main(argv: list[str] | None = None) -> int:
     report = build_live_config_preflight_report(
         args.config_path,
         sample_size=int(args.sample_size),
+        compare_config_path=args.compare_config_path,
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
