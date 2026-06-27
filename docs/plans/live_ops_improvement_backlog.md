@@ -29,6 +29,32 @@ Related detailed plans:
 
 ## High-Value Follow-Ups
 
+0. [ ] Critical: HSL startup replay latency before protective panic.
+   Status: open. Binance VPS5 incident evidence from 2026-06-26 shows
+   `hsl_signal_mode=coin` startup history reconstruction loaded
+   `symbols=24 pairs=24 rows=43201 fills=2704 panic_events=0` at
+   `16:19:33Z`, then completed at `16:46:37Z` after replaying `985965` rows
+   in `1623.4s`. The XLM protective close was not posted until `16:48:06Z`.
+   This is too slow for a live safety path: correctness from exhaustive replay
+   is valuable, but not at the cost of delaying panic/protective action by
+   tens of minutes while a held coin may already be beyond red threshold.
+
+   Target contract: startup must prioritize fast protective HSL classification
+   for currently held positions. Full historical replay can continue for
+   cooldown reconstruction, diagnostics, or non-urgent precision, but it must
+   not block a conservative current-red check for held symbols. Candidate
+   solutions should preserve statelessness, exchange-derived truth, and the
+   current HSL semantics, while making the startup panic path bounded and
+   observable.
+
+   Investigation directions: fast-path coin-mode current drawdown from fill/PnL
+   cumsum for currently held coins; position-first replay before flat-symbol
+   replay; incremental/checkpointed replay artifacts that are performance
+   caches only; replay indexing/vectorization; early stop once current held
+   coin state proves red; and separate cooldown discovery from immediate panic
+   eligibility. Any implementation must include targeted tests and structured
+   startup timing evidence.
+
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
    `passivbot tool live-incident-bundle` collects local monitor event reports,
