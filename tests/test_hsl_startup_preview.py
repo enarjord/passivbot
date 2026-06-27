@@ -115,6 +115,7 @@ def test_hsl_startup_preview_reports_config_and_latest_local_hsl_status(tmp_path
                     "drawdown_score": 0.04,
                     "dist_to_red": 0.06,
                     "red_threshold": 0.10,
+                    "cooldown_remaining": {"secret": "nested-must-not-render"},
                     "slot_budget": 25.0,
                     "realized_pnl": -1.0,
                     "peak_realized_pnl": 2.0,
@@ -165,6 +166,56 @@ def test_hsl_startup_preview_reports_config_and_latest_local_hsl_status(tmp_path
     assert report["startup_panic_orders"]["available"] is False
     assert "super-secret-api-key" not in rendered
     assert "must-not-render" not in rendered
+    assert "nested-must-not-render" not in rendered
+
+
+def test_hsl_startup_preview_reports_flat_hsl_config(tmp_path):
+    config = _sample_config()
+    config["bot"]["long"] = {
+        "hsl_enabled": True,
+        "hsl_red_threshold": 0.10,
+        "hsl_cooldown_minutes_after_red": 45,
+        "hsl_no_restart_drawdown_threshold": 0.20,
+        "hsl_ema_span_minutes": 120,
+        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.8},
+        "hsl_orange_tier_mode": "tp_only",
+        "hsl_panic_close_order_type": "limit",
+    }
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = hsl_startup_preview.build_hsl_startup_preview_report(
+        config_path,
+        monitor_root="",
+        now_ms=62_000,
+    )
+
+    assert report["ok"] is True
+    assert report["config"]["hsl"]["sides"]["long"] == {
+        "present": True,
+        "enabled": True,
+        "red_threshold": 0.10,
+        "cooldown_minutes_after_red": 45,
+        "no_restart_drawdown_threshold": 0.20,
+        "ema_span_minutes": 120,
+        "tier_ratios": {"yellow": 0.5, "orange": 0.8},
+        "orange_tier_mode": "tp_only",
+        "panic_close_order_type": "limit",
+    }
+
+
+def test_hsl_startup_preview_missing_config_path_is_user_safe():
+    report = hsl_startup_preview.build_hsl_startup_preview_report(
+        "/root/passivbot/configs/missing.json",
+        monitor_root="",
+        now_ms=62_000,
+    )
+    rendered = json.dumps(report, sort_keys=True)
+
+    assert report["ok"] is False
+    assert report["config_path"] == "~/passivbot/configs/missing.json"
+    assert report["issues"][0]["path"] == "~/passivbot/configs/missing.json"
+    assert "/root" not in rendered
 
 
 def test_hsl_startup_preview_config_only_marks_runtime_inputs_unavailable(tmp_path):

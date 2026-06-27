@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
+from config.shared_bot import BOT_GROUP_FIELD_MAP, get_grouped_bot_value
 from live.smoke_report import _user_safe_display_path
 
 
@@ -108,6 +109,14 @@ def _display_value(value: Any) -> dict[str, Any]:
 
 
 def _path_value(config: dict[str, Any], path: tuple[str, ...]) -> Any:
+    if len(path) == 4 and path[0] == "bot" and path[1] in SIDES:
+        group_name = path[2]
+        local_key = path[3]
+        flat_key = BOT_GROUP_FIELD_MAP.get(group_name, {}).get(local_key)
+        bot = config.get("bot")
+        side_config = bot.get(path[1]) if isinstance(bot, dict) else None
+        if flat_key is not None:
+            return get_grouped_bot_value(side_config, flat_key, default=_MISSING)
     value: Any = config
     for part in path:
         if not isinstance(value, dict) or part not in value:
@@ -234,45 +243,60 @@ def _side_coin_summary(value: Any, *, sample_size: int) -> dict[str, Any]:
 
 
 def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
-    hsl = side_config["hsl"] if isinstance(side_config.get("hsl"), dict) else {}
-    tier_ratios = hsl["tier_ratios"] if isinstance(hsl.get("tier_ratios"), dict) else {}
+    hsl_values = {
+        key: get_grouped_bot_value(side_config, flat_key, default=None)
+        for key, flat_key in (
+            ("enabled", "hsl_enabled"),
+            ("red_threshold", "hsl_red_threshold"),
+            ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
+            ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
+            ("ema_span_minutes", "hsl_ema_span_minutes"),
+            ("tier_ratios", "hsl_tier_ratios"),
+            ("orange_tier_mode", "hsl_orange_tier_mode"),
+            ("panic_close_order_type", "hsl_panic_close_order_type"),
+        )
+    }
+    tier_ratios = (
+        hsl_values["tier_ratios"] if isinstance(hsl_values.get("tier_ratios"), dict) else {}
+    )
+    present = any(value is not None for value in hsl_values.values())
     return {
-        "present": bool(hsl),
-        "enabled": hsl.get("enabled"),
-        "red_threshold": hsl.get("red_threshold"),
-        "cooldown_minutes_after_red": hsl.get("cooldown_minutes_after_red"),
-        "no_restart_drawdown_threshold": hsl.get("no_restart_drawdown_threshold"),
-        "ema_span_minutes": hsl.get("ema_span_minutes"),
+        "present": present,
+        "enabled": hsl_values["enabled"],
+        "red_threshold": hsl_values["red_threshold"],
+        "cooldown_minutes_after_red": hsl_values["cooldown_minutes_after_red"],
+        "no_restart_drawdown_threshold": hsl_values["no_restart_drawdown_threshold"],
+        "ema_span_minutes": hsl_values["ema_span_minutes"],
         "tier_ratios": {
             key: tier_ratios[key]
             for key in ("yellow", "orange")
             if key in tier_ratios
         },
-        "orange_tier_mode": hsl.get("orange_tier_mode"),
-        "panic_close_order_type": hsl.get("panic_close_order_type"),
+        "orange_tier_mode": hsl_values["orange_tier_mode"],
+        "panic_close_order_type": hsl_values["panic_close_order_type"],
     }
 
 
 def _forager_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
-    risk = side_config["risk"] if isinstance(side_config.get("risk"), dict) else {}
-    forager = (
-        side_config["forager"]
-        if isinstance(side_config.get("forager"), dict)
-        else {}
-    )
-    report = {
-        "n_positions": risk.get("n_positions"),
-        "forager_present": bool(forager),
+    forager_values = {
+        key: get_grouped_bot_value(side_config, flat_key, default=None)
+        for key, flat_key in (
+            ("volatility_ema_span_1m", "forager_volatility_ema_span_1m"),
+            ("volume_drop_pct", "forager_volume_drop_pct"),
+            ("volume_ema_span_1m", "forager_volume_ema_span_1m"),
+        )
     }
-    if forager:
+    report = {
+        "n_positions": get_grouped_bot_value(
+            side_config, "n_positions", default=None
+        ),
+        "forager_present": any(value is not None for value in forager_values.values()),
+    }
+    if report["forager_present"]:
         report["settings"] = {
-            key: forager[key]
-            for key in (
-                "volatility_ema_span_1m",
-                "volume_drop_pct",
-                "volume_ema_span_1m",
-            )
-            if key in forager
+            key: value
+            for key, value in forager_values.items()
+            if value is not None
         }
     return report
 

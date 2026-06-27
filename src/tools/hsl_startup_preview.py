@@ -8,8 +8,10 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from config.shared_bot import get_grouped_bot_value
 from live.event_bus import EventTypes, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import discover_event_files
+from live.smoke_report import _user_safe_display_path
 
 
 SIDES = ("long", "short")
@@ -69,12 +71,13 @@ def _load_config(config_path: str | Path) -> tuple[dict[str, Any] | None, list[d
     try:
         raw = path.read_text(encoding="utf-8")
     except OSError as exc:
+        detail = getattr(exc, "strerror", None) or type(exc).__name__
         return None, [
             _issue(
                 "error",
                 "config_read_failed",
-                f"could not read config: {exc}",
-                path=str(path),
+                f"could not read config: {detail}",
+                path=_user_safe_display_path(path),
             )
         ]
     try:
@@ -85,7 +88,7 @@ def _load_config(config_path: str | Path) -> tuple[dict[str, Any] | None, list[d
                 "error",
                 "config_json_decode_failed",
                 f"invalid JSON at line {exc.lineno} column {exc.colno}: {exc.msg}",
-                path=str(path),
+                path=_user_safe_display_path(path),
             )
         ]
     if not isinstance(parsed, dict):
@@ -102,22 +105,37 @@ def _section(value: Any) -> dict[str, Any]:
 def _hsl_side_config(config: dict[str, Any], pside: str) -> dict[str, Any]:
     bot = _section(config.get("bot"))
     side_config = _section(bot.get(pside))
-    hsl = _section(side_config.get("hsl"))
-    tier_ratios = _section(hsl.get("tier_ratios"))
+    hsl_values = {
+        key: get_grouped_bot_value(side_config, flat_key, default=None)
+        for key, flat_key in (
+            ("enabled", "hsl_enabled"),
+            ("red_threshold", "hsl_red_threshold"),
+            ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
+            ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
+            ("ema_span_minutes", "hsl_ema_span_minutes"),
+            ("tier_ratios", "hsl_tier_ratios"),
+            ("orange_tier_mode", "hsl_orange_tier_mode"),
+            ("panic_close_order_type", "hsl_panic_close_order_type"),
+        )
+    }
+    tier_ratios = (
+        hsl_values["tier_ratios"] if isinstance(hsl_values.get("tier_ratios"), dict) else {}
+    )
+    present = any(value is not None for value in hsl_values.values())
     return {
-        "present": bool(hsl),
-        "enabled": hsl.get("enabled"),
-        "red_threshold": hsl.get("red_threshold"),
-        "cooldown_minutes_after_red": hsl.get("cooldown_minutes_after_red"),
-        "no_restart_drawdown_threshold": hsl.get("no_restart_drawdown_threshold"),
-        "ema_span_minutes": hsl.get("ema_span_minutes"),
+        "present": present,
+        "enabled": hsl_values["enabled"],
+        "red_threshold": hsl_values["red_threshold"],
+        "cooldown_minutes_after_red": hsl_values["cooldown_minutes_after_red"],
+        "no_restart_drawdown_threshold": hsl_values["no_restart_drawdown_threshold"],
+        "ema_span_minutes": hsl_values["ema_span_minutes"],
         "tier_ratios": {
             key: tier_ratios[key]
             for key in ("yellow", "orange")
             if key in tier_ratios
         },
-        "orange_tier_mode": hsl.get("orange_tier_mode"),
-        "panic_close_order_type": hsl.get("panic_close_order_type"),
+        "orange_tier_mode": hsl_values["orange_tier_mode"],
+        "panic_close_order_type": hsl_values["panic_close_order_type"],
     }
 
 
@@ -170,7 +188,21 @@ def _bot_key(live_event: dict[str, Any], row: dict[str, Any]) -> str:
 def _bounded_hsl_data(live_event: dict[str, Any]) -> dict[str, Any]:
     data = live_event.get("data")
     payload = data if isinstance(data, dict) else {}
-    return {key: payload[key] for key in HSL_DATA_KEYS if payload.get(key) is not None}
+    out: dict[str, Any] = {}
+    for key in HSL_DATA_KEYS:
+        value = payload.get(key)
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            out[key] = value
+        elif isinstance(value, int):
+            out[key] = value
+        elif isinstance(value, float):
+            if value == value and value not in (float("inf"), float("-inf")):
+                out[key] = value
+        elif isinstance(value, str):
+            out[key] = value[:160] + "...<truncated>" if len(value) > 160 else value
+    return out
 
 
 def _target_key(record: dict[str, Any]) -> tuple[str, str, str]:
@@ -398,7 +430,7 @@ def build_hsl_startup_preview_report(
         return {
             "ok": False,
             "tool": "hsl-startup-preview",
-            "config_path": str(Path(config_path).expanduser()),
+            "config_path": _user_safe_display_path(config_path),
             "issues": config_issues,
         }
 
@@ -434,12 +466,12 @@ def build_hsl_startup_preview_report(
     return {
         "ok": not any(issue.get("severity") == "error" for issue in issues),
         "tool": "hsl-startup-preview",
-        "config_path": str(Path(config_path).expanduser()),
+        "config_path": _user_safe_display_path(config_path),
         "preview_time_ms": int(now_ms),
         "inputs": {
             "config": {
                 "available": True,
-                "path": str(Path(config_path).expanduser()),
+                "path": _user_safe_display_path(config_path),
             },
             "monitor_events": {
                 key: event_scan.get(key)
