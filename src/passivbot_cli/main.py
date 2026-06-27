@@ -118,6 +118,10 @@ TOOL_COMMANDS: dict[str, CommandSpec] = {
         "tools.live_smoke_report",
         "summarize local live monitor events and text logs",
     ),
+    "live-restart-smoke-plan": CommandSpec(
+        "tools.live_restart_smoke_plan",
+        "build a read-only dry-run live restart smoke plan",
+    ),
     "inspect-ohlcvs": CommandSpec(
         "tools.inspect_ohlcvs",
         "inspect v2 OHLCV cache metadata and gaps (requires full install)",

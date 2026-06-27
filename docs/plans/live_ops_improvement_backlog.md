@@ -83,6 +83,15 @@ Related detailed plans:
    event counts, startup timings, and resource usage. This should be safe,
    explicit, and produce a reviewable smoke report.
 
+   Work log:
+   - 2026-06-26: Added first-slice plan-only
+     `passivbot tool live-restart-smoke-plan`, which parses a tmuxp-style
+     supervisor config and emits a structured dry-run restart/smoke plan with
+     bot commands, stop/start/check phases, timeouts, escalation ladder, repo
+     checks, and smoke-report command wiring. It explicitly rejects execution
+     and does not signal processes, invoke tmux, SSH, pull code, start bots,
+     contact exchanges, or load credentials.
+
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
    should target missing smoke fields rather than larger chat-facing payloads.
