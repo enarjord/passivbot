@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b5e08986` after PR #782, `Add HSL replay timing fields`.
+- `ef75d210` after PR #783, `Update logging progress after HSL timing`.
 
 Current review gate:
 
@@ -2058,6 +2058,18 @@ VPS5 deployment status:
   expected bots running with no hard failures and no failed account-critical
   remote calls. Direct event query showed the new HSL replay fields in live
   Binance, GateIO, and OKX replay progress events.
+
+### PR #783: Progress Update After HSL Timing
+
+- Branch: `codex/v8-progress-after-hsl-timing`.
+- Scope: docs-only progress/readiness ledger update after PRs #781 and #782.
+- Result: progress docs now record the deployed input-staleness and HSL replay
+  timing slices, their VPS5 smoke evidence, and the remaining gap that true
+  `protective_elapsed_s` still requires a protective/full replay split.
+- Review evidence: Claude and Hermes approved with no findings; CI was green.
+- VPS5 evidence: deployed at `ef75d210` without bot restart because this was a
+  docs-only update. The pull was a clean fast-forward and all five configured
+  `passivbot live` processes remained running afterward.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
