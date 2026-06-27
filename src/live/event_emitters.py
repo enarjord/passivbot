@@ -104,6 +104,49 @@ def _remote_fetch_payload_key(payload: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
+def _mapping_key_sample(value: Any, *, limit: int = 32) -> list[str]:
+    if not isinstance(value, dict):
+        return []
+    return sorted(str(key) for key in value)[:limit]
+
+
+def _remote_call_debug_payload(
+    data: dict[str, Any],
+    *,
+    matched_start: bool | None = None,
+    limit: int = 32,
+) -> dict[str, Any]:
+    debug: dict[str, Any] = {
+        "data_keys": _mapping_key_sample(data, limit=limit),
+    }
+    if isinstance(data.get("params"), dict):
+        debug["param_keys"] = _mapping_key_sample(data.get("params"), limit=limit)
+    if matched_start is not None:
+        debug["matched_start"] = bool(matched_start)
+    for key in (
+        "kind",
+        "surface",
+        "stage",
+        "tf",
+        "timeframe",
+        "since_ts",
+        "end_ts",
+        "limit",
+        "rows",
+        "first_ts",
+        "last_ts",
+        "elapsed_ms",
+        "state_epoch",
+        "url_hash",
+        "error_type",
+    ):
+        if key in data:
+            debug[key] = data.get(key)
+    if isinstance(data.get("pending_confirmations"), list):
+        debug["pending_confirmation_count"] = len(data["pending_confirmations"])
+    return debug
+
+
 def _remote_call_map_max(bot: Any) -> int:
     try:
         raw = getattr(bot, "_live_event_remote_call_map_max", None)
@@ -198,6 +241,12 @@ def emit_candle_remote_fetch_event(bot: Any, payload: dict[str, Any]) -> Any:
     data = _sanitize_remote_fetch_payload(payload)
     if stage != "start" and not matched_start:
         data["orphan_result"] = True
+    if live_event_debug_profile_enabled(bot, "remote_calls"):
+        data["debug_profile"] = "remote_calls"
+        data["debug"] = _remote_call_debug_payload(
+            data,
+            matched_start=matched_start if stage != "start" else None,
+        )
     return bot._emit_live_event(
         event_type,
         level=level,
@@ -293,6 +342,9 @@ def _emit_authoritative_remote_call_event_unchecked(
         data["error_repr"] = _sanitize_remote_text(repr(error), max_len=500)
     elif stage != "start":
         data.update(_authoritative_result_summary(surface, result))
+    if live_event_debug_profile_enabled(bot, "remote_calls"):
+        data["debug_profile"] = "remote_calls"
+        data["debug"] = _remote_call_debug_payload(data)
     emit(
         event_type,
         level=level,
