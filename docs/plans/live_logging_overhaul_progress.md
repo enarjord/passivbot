@@ -1277,6 +1277,15 @@ VPS5 deployment status:
   bots matched, clean tracked repository state, no failed remote calls, and no
   failed account-critical remote calls.
 
+### Pending PR: HSL Debug Profile
+
+- Branch: `codex/v8-hsl-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment.
+- Result: in progress. Add `hsl` debug-profile enrichment to existing HSL
+  status, transition, replay, red-trigger, and cooldown events with bounded
+  event key, metric key, and HSL latch/cooldown state-shape metadata. Default
+  HSL events and console output remain unchanged.
+
 ## Current Next Steps
 
 1. Continue Phase 5/6 by adding the next high-value event producer or debug

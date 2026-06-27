@@ -1479,11 +1479,12 @@ def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatc
         _equity_hard_stop_emit_coin_status = Passivbot._equity_hard_stop_emit_coin_status
         _hsl_coin_state = Passivbot._hsl_coin_state
 
-        def __init__(self, *, has_position: bool):
+        def __init__(self, *, has_position: bool, debug_profiles=()):
             self.exchange = "bybit"
             self.user = "bybit_01"
             self.bot_id = "bot_coin_hsl"
             self._live_event_current_cycle_id = "cy_hsl_coin"
+            self.live_event_debug_profiles = tuple(debug_profiles)
             self._live_event_pipeline = LiveEventPipeline(
                 structured_sinks=[sink],
                 monitor_sinks=[],
@@ -1493,9 +1494,16 @@ def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatc
                 "long": {
                     "NEAR/USDT:USDT": {
                         "last_status_log_ms": 0,
-                        "cooldown_until_ms": None,
-                        "last_stop_event": None,
-                        "pending_red_since_ms": None,
+                        "cooldown_until_ms": 90_000,
+                        "last_stop_event": {
+                            "stop_event_timestamp_ms": 7_000,
+                        },
+                        "pending_stop_event": {
+                            "stop_event_timestamp_ms": 8_000,
+                        },
+                        "pending_red_since_ms": 6_000,
+                        "red_trigger_event_emitted": True,
+                        "cooldown_intervention_active": True,
                     }
                 },
                 "short": {},
@@ -1531,6 +1539,40 @@ def test_coin_hsl_status_logs_distance_only_for_open_position(caplog, monkeypatc
     assert event.symbol == "NEAR/USDT:USDT"
     assert event.pside == "long"
     assert event.data["dist_to_red"] == pytest.approx(0.04)
+    assert "debug_profile" not in event.data
+    assert "debug" not in event.data
+
+    sink.events.clear()
+    debug_bot = FakeBot(has_position=True, debug_profiles=("hsl",))
+    debug_bot._equity_hard_stop_emit_coin_status(
+        "long",
+        "NEAR/USDT:USDT",
+        metrics | {"timestamp_ms": 40_000},
+    )
+
+    assert debug_bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.HSL_STATUS
+    assert event.data["debug_profile"] == "hsl"
+    debug = event.data["debug"]
+    assert debug["event_type"] == EventTypes.HSL_STATUS
+    assert debug["reason_code"] == "yellow"
+    assert debug["status"] == "succeeded"
+    assert debug["tier"] == "yellow"
+    assert "dist_to_red" in debug["data_keys"]
+    assert debug["state"] == {
+        "halted": False,
+        "no_restart_latched": False,
+        "cooldown_until_present": True,
+        "pending_red": True,
+        "has_pending_stop_event": True,
+        "has_last_stop_event": True,
+        "red_trigger_event_emitted": True,
+        "cooldown_intervention_active": True,
+        "cooldown_repanic_reset_pending": False,
+        "cooldown_unresolved_residue": False,
+        "pnl_reset_timestamp_present": False,
+    }
 
     caplog.clear()
     sink.events.clear()
