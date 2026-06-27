@@ -70,11 +70,11 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
     month_dir.mkdir(parents=True)
-    np.save(month_dir / "01.npy", np.full((8, 4), 1.0, dtype=np.float32))
-    np.save(
-        month_dir / "01.valid.npy",
-        np.array([False, True, True, False, False, True, True, False], dtype=bool),
-    )
+    expected_rows = 44_640
+    valid = np.zeros(expected_rows, dtype=bool)
+    valid[[1, 2, 5, 6]] = True
+    np.save(month_dir / "01.npy", np.full((expected_rows, 4), 1.0, dtype=np.float32))
+    np.save(month_dir / "01.valid.npy", valid)
 
     report = build_cache_integrity_report([root])
 
@@ -82,7 +82,9 @@ def test_cache_integrity_report_summarizes_candle_coverage_windows_and_gaps(tmp_
     assert coverage["warm_cache_evidence"] == "coverage_with_gaps"
     assert coverage["artifact_count"] == 1
     assert coverage["covered_artifact_count"] == 1
-    assert coverage["row_count"] == 8
+    assert coverage["length_mismatch_count"] == 0
+    assert coverage["row_count"] == expected_rows
+    assert coverage["expected_row_count"] == expected_rows
     assert coverage["valid_row_count"] == 4
     assert coverage["gap_count"] == 1
     assert coverage["max_gap_rows"] == 2
@@ -110,7 +112,8 @@ def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     root = tmp_path / "caches"
     month_dir = root / "ohlcv" / "data" / "okx" / "1h" / "ETH_USDT" / "2026"
     month_dir.mkdir(parents=True)
-    np.save(month_dir / "02.valid.npy", np.zeros(3, dtype=bool))
+    expected_rows = 672
+    np.save(month_dir / "02.valid.npy", np.zeros(expected_rows, dtype=bool))
 
     report = build_cache_integrity_report([root])
 
@@ -118,8 +121,35 @@ def test_cache_integrity_report_marks_empty_candle_coverage_masks(tmp_path):
     assert coverage["warm_cache_evidence"] == "no_valid_rows"
     assert coverage["artifact_count"] == 1
     assert coverage["covered_artifact_count"] == 0
+    assert coverage["length_mismatch_count"] == 0
+    assert coverage["row_count"] == expected_rows
+    assert coverage["expected_row_count"] == expected_rows
     assert coverage["first_valid_date"] is None
     assert coverage["last_valid_date"] is None
+
+
+def test_cache_integrity_report_flags_truncated_candle_coverage_masks(tmp_path):
+    root = tmp_path / "caches"
+    month_dir = root / "ohlcv" / "data" / "binance" / "1m" / "BTC_USDT" / "2026"
+    month_dir.mkdir(parents=True)
+    np.save(month_dir / "01.valid.npy", np.ones(8, dtype=bool))
+
+    report = build_cache_integrity_report([root])
+
+    coverage = report["summary"]["by_family"]["candles"]["coverage"]
+    assert report["ok"] is True
+    assert coverage["warm_cache_evidence"] == "coverage_length_mismatch"
+    assert coverage["length_mismatch_count"] == 1
+    assert coverage["row_count"] == 8
+    assert coverage["expected_row_count"] == 44_640
+    assert coverage["gap_count"] == 1
+    assert coverage["gap_samples"][0]["boundary"] == "trailing_shortfall"
+    assert coverage["gap_samples"][0]["rows"] == 44_632
+    assert coverage["artifact_samples"][0]["length_mismatch"] is True
+    issue = report["issues"][0]
+    assert issue["severity"] == "warning"
+    assert issue["code"] == "coverage_length_mismatch"
+    assert issue["family"] == "candles"
 
 
 def test_cache_integrity_report_summarizes_fill_cache_metadata_contract_and_coverage(tmp_path):

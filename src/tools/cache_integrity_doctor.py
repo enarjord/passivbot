@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+from ohlcv_store import month_start_ts, rows_in_month, timeframe_to_interval_ms
+
 
 NUMPY_CACHE_SUFFIXES = {".npy"}
 DEFAULT_ROOTS = ("caches",)
@@ -33,11 +35,10 @@ TIMESTAMP_FIELD_NAMES = {
 
 
 def _timeframe_interval_ms(timeframe: str) -> int | None:
-    normalized = str(timeframe).strip().lower()
-    if normalized == "1m":
-        return 60_000
-    if normalized == "1h":
-        return 60 * 60_000
+    try:
+        return int(timeframe_to_interval_ms(str(timeframe)))
+    except ValueError:
+        return None
     return None
 
 
@@ -48,7 +49,7 @@ def _format_ms(ts_ms: int | None) -> str | None:
 
 
 def _month_start_ms(year: int, month: int) -> int:
-    return int(datetime(int(year), int(month), 1, tzinfo=timezone.utc).timestamp() * 1000)
+    return int(month_start_ts(int(year), int(month)))
 
 
 def _int_ms(value: Any) -> int | None:
@@ -220,7 +221,9 @@ def _coverage_summary_entry() -> dict[str, Any]:
     return {
         "artifact_count": 0,
         "covered_artifact_count": 0,
+        "length_mismatch_count": 0,
         "row_count": 0,
+        "expected_row_count": 0,
         "valid_row_count": 0,
         "gap_count": 0,
         "max_gap_rows": 0,
@@ -323,8 +326,16 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
         return None
     valid_indices = np.flatnonzero(valid)
     row_count = int(valid.shape[0])
+    expected_row_count = int(
+        rows_in_month(
+            int(metadata["year"]),
+            int(metadata["month"]),
+            metadata["timeframe"],
+        )
+    )
     valid_row_count = int(valid_indices.size)
     interval_ms = int(metadata["interval_ms"])
+    length_mismatch = row_count != expected_row_count
     first_valid_idx: int | None = None
     last_valid_idx: int | None = None
     first_valid_ms: int | None = None
@@ -359,6 +370,27 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
                     "duration_ms": int(gap_rows * interval_ms),
                 }
             )
+    if row_count < expected_row_count:
+        gap_start_idx = row_count
+        gap_end_idx = expected_row_count - 1
+        gap_rows = gap_end_idx - gap_start_idx + 1
+        gap_start_ms = int(metadata["month_start_ms"]) + gap_start_idx * interval_ms
+        gap_end_ms = int(metadata["month_start_ms"]) + gap_end_idx * interval_ms
+        gaps.append(
+            {
+                "path": str(path),
+                "exchange": metadata["exchange"],
+                "timeframe": metadata["timeframe"],
+                "symbol": metadata["symbol"],
+                "start_ms": gap_start_ms,
+                "end_ms": gap_end_ms,
+                "start_date": _format_ms(gap_start_ms),
+                "end_date": _format_ms(gap_end_ms),
+                "rows": int(gap_rows),
+                "duration_ms": int(gap_rows * interval_ms),
+                "boundary": "trailing_shortfall",
+            }
+        )
     max_gap_rows = max((int(gap["rows"]) for gap in gaps), default=0)
     return {
         "path": str(path),
@@ -369,6 +401,8 @@ def _inspect_coverage_artifact(root: Path, path: Path, family: str) -> dict[str,
         "month": metadata["month"],
         "interval_ms": interval_ms,
         "row_count": row_count,
+        "expected_row_count": expected_row_count,
+        "length_mismatch": length_mismatch,
         "valid_row_count": valid_row_count,
         "first_valid_ms": first_valid_ms,
         "last_valid_ms": last_valid_ms,
@@ -396,6 +430,8 @@ def _merge_coverage(summary: dict[str, Any], artifact: dict[str, Any]) -> None:
     coverage = summary["coverage"]
     coverage["artifact_count"] += 1
     coverage["row_count"] += int(artifact["row_count"])
+    coverage["expected_row_count"] += int(artifact["expected_row_count"])
+    coverage["length_mismatch_count"] += int(bool(artifact["length_mismatch"]))
     coverage["valid_row_count"] += int(artifact["valid_row_count"])
     coverage["gap_count"] += int(artifact["gap_count"])
     coverage["max_gap_rows"] = max(int(coverage["max_gap_rows"]), int(artifact["max_gap_rows"]))
@@ -421,7 +457,9 @@ def _merge_finalized_coverage(summary: dict[str, Any], coverage_report: dict[str
     coverage = summary["coverage"]
     coverage["artifact_count"] += int(coverage_report["artifact_count"])
     coverage["covered_artifact_count"] += int(coverage_report["covered_artifact_count"])
+    coverage["length_mismatch_count"] += int(coverage_report["length_mismatch_count"])
     coverage["row_count"] += int(coverage_report["row_count"])
+    coverage["expected_row_count"] += int(coverage_report["expected_row_count"])
     coverage["valid_row_count"] += int(coverage_report["valid_row_count"])
     coverage["gap_count"] += int(coverage_report["gap_count"])
     coverage["max_gap_rows"] = max(
@@ -818,8 +856,11 @@ def _finalize_coverage(coverage: dict[str, Any], issue_count: int) -> dict[str, 
     artifact_count = int(coverage["artifact_count"])
     valid_row_count = int(coverage["valid_row_count"])
     gap_count = int(coverage["gap_count"])
+    length_mismatch_count = int(coverage["length_mismatch_count"])
     if artifact_count == 0:
         evidence = "no_coverage_metadata"
+    elif length_mismatch_count:
+        evidence = "coverage_length_mismatch"
     elif issue_count:
         evidence = "issues_present"
     elif valid_row_count == 0:
@@ -832,7 +873,9 @@ def _finalize_coverage(coverage: dict[str, Any], issue_count: int) -> dict[str, 
         "warm_cache_evidence": evidence,
         "artifact_count": artifact_count,
         "covered_artifact_count": int(coverage["covered_artifact_count"]),
+        "length_mismatch_count": length_mismatch_count,
         "row_count": int(coverage["row_count"]),
+        "expected_row_count": int(coverage["expected_row_count"]),
         "valid_row_count": valid_row_count,
         "gap_count": gap_count,
         "max_gap_rows": int(coverage["max_gap_rows"]),
@@ -957,6 +1000,21 @@ def _scan_root(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]]:
         coverage_artifact = _inspect_coverage_artifact(root, entry, family)
         if coverage_artifact is not None:
             _merge_coverage(family_summary, coverage_artifact)
+            if coverage_artifact["length_mismatch"]:
+                family_summary["issue_count"] += 1
+                issues.append(
+                    _issue(
+                        "warning",
+                        "coverage_length_mismatch",
+                        entry,
+                        (
+                            "candle valid mask length does not match canonical "
+                            f"month rows: actual={coverage_artifact['row_count']} "
+                            f"expected={coverage_artifact['expected_row_count']}"
+                        ),
+                        family=family,
+                    )
+                )
         metadata_artifact = _inspect_metadata_artifact(entry, family)
         if metadata_artifact is not None:
             _merge_metadata(family_summary, metadata_artifact)
