@@ -65,6 +65,7 @@ RISK_EVENT_GROUP_LIMIT = 20
 SHUTDOWN_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 EMA_READINESS_GROUP_LIMIT = 20
+STAGED_READINESS_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -1096,6 +1097,180 @@ def _summarize_ema_readiness_health(
     }
 
 
+def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
+    if (live_event.get("event_type") or "") != EventTypes.CYCLE_DEGRADED:
+        return False
+    reason_code = str(live_event.get("reason_code") or "")
+    return reason_code.startswith("staged_execution")
+
+
+def _string_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, list):
+        return {}
+    counts: Counter[str] = Counter()
+    for item in value:
+        if item is not None:
+            counts[str(item)] += 1
+    return dict(counts.most_common())
+
+
+def _invalid_surface_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    counts: Counter[str] = Counter()
+    for key, rows in value.items():
+        if isinstance(rows, list):
+            counts[str(key)] += max(1, len(rows))
+        else:
+            counts[str(key)] += 1
+    return dict(counts.most_common())
+
+
+def _completed_candle_mismatch_counts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    rows = value.get("completed_candles")
+    if not isinstance(rows, list):
+        return {}
+    counts: Counter[str] = Counter()
+    for row in rows:
+        if isinstance(row, dict):
+            counts[str(row.get("mismatch_type") or "unknown")] += 1
+    return dict(counts.most_common())
+
+
+def _staged_readiness_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    details = payload.get("details")
+    detail_payload = details if isinstance(details, dict) else {}
+    ids = _event_ids(live_event)
+    invalid = detail_payload.get("invalid")
+    missing_surfaces = _string_counts(detail_payload.get("missing"))
+    invalid_surfaces = _invalid_surface_counts(invalid)
+    return {
+        "bot": bot_key,
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_context": detail_payload.get("context"),
+        "latest_defer_reason": detail_payload.get("defer_reason"),
+        "latest_missing_surfaces": missing_surfaces,
+        "latest_invalid_surfaces": invalid_surfaces,
+        "latest_completed_candle_mismatch_counts": _completed_candle_mismatch_counts(
+            invalid
+        ),
+        "latest_missing_surface_count": sum(missing_surfaces.values()),
+        "latest_invalid_surface_count": sum(invalid_surfaces.values()),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+            if ids.get(key) is not None
+        },
+        "latest_data": _compact_problem_event_data(live_event),
+    }
+
+
+def _merge_staged_readiness_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("reason_code"),
+        group.get("status"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_context",
+            "latest_defer_reason",
+            "latest_missing_surfaces",
+            "latest_invalid_surfaces",
+            "latest_completed_candle_mismatch_counts",
+            "latest_missing_surface_count",
+            "latest_invalid_surface_count",
+            "latest_ids",
+            "latest_data",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_staged_readiness_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            -int(item.get("latest_invalid_surface_count") or 0),
+            -int(item.get("latest_missing_surface_count") or 0),
+            -int(item.get("count") or 0),
+            str(item.get("bot") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:STAGED_READINESS_GROUP_LIMIT]
+    ]
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > STAGED_READINESS_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len({group.get("bot") for group in groups.values()}),
+        "latest_missing_surface_total": sum(
+            int(group.get("latest_missing_surface_count") or 0)
+            for group in groups.values()
+        ),
+        "latest_invalid_surface_total": sum(
+            int(group.get("latest_invalid_surface_count") or 0)
+            for group in groups.values()
+        ),
+        "groups": compact_groups,
+    }
+
+
 def _risk_event_group(
     *,
     bot_key: str,
@@ -2090,6 +2265,8 @@ def _scan_events(
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_event_type_counts: Counter[str] = Counter()
+    staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    staged_readiness_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -2177,6 +2354,18 @@ def _scan_events(
                         _merge_ema_readiness_group(
                             ema_readiness_groups,
                             _ema_readiness_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
+                    if _staged_readiness_event(live_event):
+                        staged_readiness_event_type_counts[str(event_type)] += 1
+                        _merge_staged_readiness_group(
+                            staged_readiness_groups,
+                            _staged_readiness_group(
                                 bot_key=bot_key,
                                 row=row,
                                 live_event=live_event,
@@ -2285,6 +2474,10 @@ def _scan_events(
         "ema_readiness_health": _summarize_ema_readiness_health(
             ema_readiness_groups,
             ema_readiness_event_type_counts,
+        ),
+        "staged_readiness_health": _summarize_staged_readiness_health(
+            staged_readiness_groups,
+            staged_readiness_event_type_counts,
         ),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
@@ -2604,6 +2797,15 @@ def build_live_smoke_report(
                 "latest_optional_drop_total": 0,
                 "groups": [],
             },
+            "staged_readiness_health": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "bots": 0,
+                "latest_missing_surface_total": 0,
+                "latest_invalid_surface_total": 0,
+                "groups": [],
+            },
             "risk_events": {
                 "total": 0,
                 "groups_truncated": False,
@@ -2679,6 +2881,7 @@ def build_live_smoke_report(
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
+        "staged_readiness_health": event_scan["staged_readiness_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
@@ -2717,6 +2920,8 @@ def _summary_limited_groups(
             ),
             "latest_unavailable_total": summary.get("latest_unavailable_total"),
             "latest_optional_drop_total": summary.get("latest_optional_drop_total"),
+            "latest_missing_surface_total": summary.get("latest_missing_surface_total"),
+            "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
             "groups": groups[:limit],
@@ -2758,6 +2963,11 @@ def summarize_live_smoke_report(
     ema_readiness_health = (
         report.get("ema_readiness_health")
         if isinstance(report.get("ema_readiness_health"), dict)
+        else {}
+    )
+    staged_readiness_health = (
+        report.get("staged_readiness_health")
+        if isinstance(report.get("staged_readiness_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -2863,6 +3073,10 @@ def summarize_live_smoke_report(
             ema_readiness_health,
             limit=max_groups,
         ),
+        "staged_readiness_health": _summary_limited_groups(
+            staged_readiness_health,
+            limit=max_groups,
+        ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
@@ -2912,6 +3126,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     ema_readiness_health = (
         report.get("ema_readiness_health")
         if isinstance(report.get("ema_readiness_health"), dict)
+        else {}
+    )
+    staged_readiness_health = (
+        report.get("staged_readiness_health")
+        if isinstance(report.get("staged_readiness_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -3013,6 +3232,17 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 ema_readiness_health.get("latest_optional_drop_total")
             ),
             "event_types": ema_readiness_health.get("event_types") or {},
+        },
+        "staged_readiness": {
+            "total": _count_value(staged_readiness_health.get("total")),
+            "bots": _count_value(staged_readiness_health.get("bots")),
+            "latest_missing_surface_total": _count_value(
+                staged_readiness_health.get("latest_missing_surface_total")
+            ),
+            "latest_invalid_surface_total": _count_value(
+                staged_readiness_health.get("latest_invalid_surface_total")
+            ),
+            "event_types": staged_readiness_health.get("event_types") or {},
         },
         "risk_events": {
             "total": _count_value(risk_events.get("total")),

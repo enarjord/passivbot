@@ -820,6 +820,13 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "latest_optional_drop_total": 0,
         "event_types": {"ema.unavailable": 1},
     }
+    assert brief["staged_readiness"] == {
+        "total": 0,
+        "bots": 0,
+        "latest_missing_surface_total": 0,
+        "latest_invalid_surface_total": 0,
+        "event_types": {},
+    }
     assert "bots" not in brief
     assert "matches" not in brief["logs"]
     assert "groups" not in brief["remote_calls"]
@@ -1161,6 +1168,122 @@ def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_pat
             "missing": ["completed_candles"],
             "required": ["positions", "balance"],
         },
+    }
+
+
+def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "hyperliquid" / "tradfi" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=1,
+                ts=1000,
+                status="degraded",
+                level="debug",
+                reason_code="staged_execution_not_ready",
+                ids={"cycle_id": "cy_stage_1"},
+                data={
+                    "details": {
+                        "context": "market snapshot refresh",
+                        "defer_reason": "staged_planner_inputs_not_fresh",
+                        "missing": ["completed_candles"],
+                        "invalid": {
+                            "completed_candles": [
+                                {
+                                    "mismatch_type": "completed_candle_target_changed",
+                                    "changed_count": 2,
+                                    "changed_symbols": [
+                                        "XYZ-NVDA/USDC:USDC",
+                                        "XYZ-SPCX/USDC:USDC",
+                                    ],
+                                }
+                            ]
+                        },
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="debug",
+                reason_code="staged_execution_not_ready",
+                ids={"cycle_id": "cy_stage_2"},
+                data={
+                    "details": {
+                        "context": "rust order calculation",
+                        "defer_reason": "staged_planner_inputs_not_fresh",
+                        "missing": ["completed_candles", "market_prices"],
+                        "invalid": {
+                            "completed_candles": [
+                                {
+                                    "mismatch_type": "completed_candle_target_changed",
+                                    "changed_count": 1,
+                                    "changed_symbols": ["WLD/USDT:USDT"],
+                                },
+                                {
+                                    "mismatch_type": "completed_candle_target_changed",
+                                    "changed_count": 1,
+                                    "changed_symbols": ["AAVE/USDT:USDT"],
+                                },
+                            ],
+                            "market_prices": [
+                                {"mismatch_type": "epoch_stale", "missing_count": 1}
+                            ],
+                        },
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=3,
+                ts=3000,
+                status="degraded",
+                level="error",
+                reason_code="InvalidNonce",
+                ids={"cycle_id": "cy_nonce"},
+                data={"details": {"missing": ["positions"]}},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    health = report["staged_readiness_health"]
+    assert health["total"] == 2
+    assert health["bots"] == 1
+    assert health["latest_missing_surface_total"] == 2
+    assert health["latest_invalid_surface_total"] == 3
+    assert health["event_types"] == {"cycle.degraded": 2}
+    assert health["groups"][0]["count"] == 2
+    assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_stage_2"}
+    assert health["groups"][0]["latest_context"] == "rust order calculation"
+    assert health["groups"][0]["latest_missing_surfaces"] == {
+        "completed_candles": 1,
+        "market_prices": 1,
+    }
+    assert health["groups"][0]["latest_invalid_surfaces"] == {
+        "completed_candles": 2,
+        "market_prices": 1,
+    }
+    assert health["groups"][0]["latest_completed_candle_mismatch_counts"] == {
+        "completed_candle_target_changed": 2
+    }
+    assert summary["staged_readiness_health"]["total"] == 2
+    assert summary["staged_readiness_health"]["groups"][0]["latest_ids"] == {
+        "cycle_id": "cy_stage_2"
+    }
+    assert brief["staged_readiness"] == {
+        "total": 2,
+        "bots": 1,
+        "latest_missing_surface_total": 2,
+        "latest_invalid_surface_total": 3,
+        "event_types": {"cycle.degraded": 2},
     }
 
 

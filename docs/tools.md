@@ -153,6 +153,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Existing structured EMA readiness degradation events are summarized as
   `ema_readiness_health` in full/summary output and `ema_readiness` in brief output,
   including latest candidate/unavailable counts and bounded reason/error group evidence.
+  Existing staged execution readiness degradations are summarized as
+  `staged_readiness_health` in full/summary output and `staged_readiness` in brief output,
+  including latest missing/invalid surface counts and bounded completed-candle mismatch evidence.
   Existing structured shutdown events are also summarized as `shutdown_events`,
   so recent Ctrl+C/restart behavior can be inspected from the same smoke output.
   With `--supervisor-config`, the read-only process section compares configured
