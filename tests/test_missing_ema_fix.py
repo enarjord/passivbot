@@ -939,6 +939,57 @@ async def test_active_forager_required_features_use_bounded_cached_carry_forward
 
 
 @pytest.mark.asyncio
+async def test_active_forager_open_tail_uses_cached_ranking_not_projected_values():
+    try:
+        import passivbot as pb_mod
+    except ImportError:
+        pytest.skip("passivbot module not importable in test environment")
+
+    symbol = "AAVE/USDT:USDT"
+    span0 = 10.0
+    span1 = 20.0
+    span2 = (span0 * span1) ** 0.5
+    bot = _BundleReproBot(
+        symbol,
+        close_mode="value",
+        project_open_tail=True,
+        projected_close_ema={span0: 101.0, span1: 102.0, span2: 103.0},
+        projected_qv_ema={10.0: 999999.0},
+        projected_log_range_ema={10.0: 0.0099},
+        qv_mode="nan",
+        lr1m_mode="nan",
+        cached_qv_ema={10.0: 250000.0},
+        cached_log_range_ema={10.0: 0.0015},
+    )
+    bot.projected_open_tail_called = False
+    _enable_forager_required_ranking(bot)
+    mode_overrides = {"long": {symbol: "normal"}, "short": {symbol: "manual"}}
+
+    (
+        m1_close_emas,
+        m1_volume_emas,
+        m1_log_range_emas,
+        _h1_log_range_emas,
+        volumes_long,
+        log_ranges_long,
+    ) = await pb_mod.Passivbot._load_orchestrator_ema_bundle(
+        bot, [symbol], mode_overrides
+    )
+
+    assert bot.projected_open_tail_called is True
+    assert m1_close_emas[symbol][span0] == pytest.approx(101.0)
+    assert m1_volume_emas[symbol][10.0] == pytest.approx(250000.0)
+    assert m1_log_range_emas[symbol][10.0] == pytest.approx(0.0015)
+    assert volumes_long[symbol] == pytest.approx(250000.0)
+    assert log_ranges_long[symbol] == pytest.approx(0.0015)
+    assert volumes_long[symbol] != pytest.approx(999999.0)
+    assert log_ranges_long[symbol] != pytest.approx(0.0099)
+    assert bot._orchestrator_ema_unavailable_symbols == set()
+    assert bot._orchestrator_ema_projection_symbols == {symbol}
+    assert {call["timeframe"] for call in bot.cached_metric_calls} == {"1m"}
+
+
+@pytest.mark.asyncio
 async def test_candidate_only_missing_required_forager_features_marks_unavailable(caplog):
     try:
         import passivbot as pb_mod
