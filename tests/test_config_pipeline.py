@@ -2143,3 +2143,22 @@ def test_prepare_config_normalizes_all_zero_long_forager_weights_to_ema_readines
     }
     assert prepared["bot"]["long"]["forager"]["volume_ema_span_1m"] == 0.0
     assert prepared["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 0.0
+
+
+def test_prepare_config_preserves_disabled_all_zero_short_forager_weights():
+    source = get_template_config()
+    source["bot"]["short"]["risk"]["total_wallet_exposure_limit"] = 0.0
+    source["bot"]["short"]["risk"]["n_positions"] = 1
+    source["bot"]["short"]["forager"]["score_weights"] = {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["short"]["forager"]["score_weights"] == {
+        "volume": 0.0,
+        "ema_readiness": 0.0,
+        "volatility": 0.0,
+    }
