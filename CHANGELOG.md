@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `hsl_replay_health` summaries to
+  `passivbot tool live-smoke-report`, so smoke reports show active,
+  completed, and failed HSL startup replay state from existing
+  `hsl.replay.*` events.
 - Updated the canonical v8 trailing-martingale default config profile, including
   the 41-coin universe, per-coin HSL signal mode, refreshed optimizer
   scoring/limits/bounds, `bot.long.risk.n_positions = 5`, and

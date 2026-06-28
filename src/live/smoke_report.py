@@ -71,6 +71,7 @@ PROBLEM_EVENT_GROUP_LIMIT = 20
 EMA_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_GROUP_LIMIT = 20
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
+HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -85,6 +86,11 @@ SHUTDOWN_EVENT_TYPES = {
     EventTypes.BOT_STOPPING,
     EventTypes.BOT_SHUTDOWN_STAGE,
     EventTypes.BOT_STOPPED,
+}
+HSL_REPLAY_EVENT_TYPES = {
+    EventTypes.HSL_REPLAY_STARTED,
+    EventTypes.HSL_REPLAY_PROGRESS,
+    EventTypes.HSL_REPLAY_COMPLETED,
 }
 REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -1730,6 +1736,287 @@ def _redact_log_text(value: str, *, max_len: int = 500) -> str:
     return text
 
 
+def _numeric_value(value: Any) -> int | float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        return None if value != value else round(value, 6)
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed:
+        return None
+    if parsed.is_integer():
+        return int(parsed)
+    return round(parsed, 6)
+
+
+def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("signal_mode", "stage"):
+        value = data.get(key)
+        if isinstance(value, str) and value:
+            out[key] = _redact_log_text(value, max_len=80)
+    for key in ("is_held_pair", "is_cooldown_pair"):
+        value = data.get(key)
+        if isinstance(value, bool):
+            out[key] = value
+    for key in (
+        "lookback_days",
+        "symbols",
+        "pairs",
+        "held_pairs",
+        "cooldown_pairs",
+        "required_pairs",
+        "timeline_rows",
+        "fill_events",
+        "panic_events",
+        "skipped_unsupported_symbols",
+        "pair_idx",
+        "applied_rows",
+        "total_applied_rows",
+        "rows",
+        "skipped_pairs",
+        "rows_per_second",
+        "elapsed_s",
+        "full_elapsed_s",
+        "startup_blocking_elapsed_s",
+    ):
+        value = _numeric_value(data.get(key))
+        if value is not None:
+            out[key] = value
+    return out
+
+
+def _hsl_observed_rows(data: dict[str, Any]) -> int | None:
+    for key in ("total_applied_rows", "rows", "applied_rows"):
+        value = _non_negative_int(data.get(key))
+        if value is not None:
+            return value
+    return None
+
+
+def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
+    timeline_rows = _non_negative_int(data.get("timeline_rows"))
+    pairs = _non_negative_int(data.get("pairs"))
+    observed_rows = _hsl_observed_rows(data)
+    out: dict[str, Any] = {}
+    if timeline_rows is not None and pairs is not None:
+        dense_work = int(timeline_rows) * int(pairs)
+        out["estimated_dense_pair_row_work"] = dense_work
+        if observed_rows is not None and dense_work > 0:
+            out["observed_work_pct"] = round(
+                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work))),
+                3,
+            )
+    for source_key, target_key in (
+        ("elapsed_s", "latest_elapsed_ms"),
+        ("full_elapsed_s", "full_elapsed_ms"),
+        ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
+    ):
+        value = data.get(source_key)
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError):
+            continue
+        if parsed == parsed and parsed >= 0.0:
+            out[target_key] = int(round(parsed * 1000.0))
+    return out
+
+
+def _hsl_replay_record(
+    *,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = _compact_hsl_replay_data(live_event)
+    ids = _event_ids(live_event)
+    return {
+        key: value
+        for key, value in {
+            "event_type": live_event.get("event_type") or row.get("kind"),
+            "reason_code": live_event.get("reason_code"),
+            "status": live_event.get("status"),
+            "level": live_event.get("level"),
+            "component": live_event.get("component"),
+            "ts": row.get("ts"),
+            "seq": row.get("seq"),
+            "path": str(path),
+            "line": int(line_no),
+            "symbol": live_event.get("symbol") or row.get("symbol"),
+            "pside": live_event.get("pside") or row.get("pside"),
+            "data": data,
+            "derived": _hsl_replay_derived(data),
+            "ids": {
+                key: ids.get(key)
+                for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
+                if ids.get(key) is not None
+            },
+        }.items()
+        if value not in (None, {}, [])
+    }
+
+
+def _merge_hsl_replay_group(
+    groups: dict[str, dict[str, Any]],
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> None:
+    event_type = str(live_event.get("event_type") or row.get("kind") or "")
+    record = _hsl_replay_record(
+        row=row,
+        live_event=live_event,
+        path=path,
+        line_no=line_no,
+    )
+    group = groups.get(bot_key)
+    if group is None:
+        group = {
+            "bot": bot_key,
+            "count": 0,
+            "event_types": Counter(),
+            "latest": None,
+            "started": None,
+            "loaded": None,
+            "progress": None,
+            "completed": None,
+        }
+        groups[bot_key] = group
+    group["count"] = int(group.get("count", 0)) + 1
+    group["event_types"][event_type] += 1
+
+    def is_newer(candidate: dict[str, Any], existing: dict[str, Any] | None) -> bool:
+        if existing is None:
+            return True
+        return _sort_event_position_key(
+            ts=candidate.get("ts"),
+            seq=candidate.get("seq"),
+            path=candidate.get("path") or "",
+            line_no=int(candidate.get("line") or 0),
+        ) > _sort_event_position_key(
+            ts=existing.get("ts"),
+            seq=existing.get("seq"),
+            path=existing.get("path") or "",
+            line_no=int(existing.get("line") or 0),
+        )
+
+    if is_newer(record, group.get("latest")):
+        group["latest"] = record
+    data = record.get("data") if isinstance(record.get("data"), dict) else {}
+    if event_type == EventTypes.HSL_REPLAY_STARTED and is_newer(
+        record, group.get("started")
+    ):
+        group["started"] = record
+    elif (
+        event_type == EventTypes.HSL_REPLAY_PROGRESS
+        and data.get("stage") == "loaded"
+        and is_newer(record, group.get("loaded"))
+    ):
+        group["loaded"] = record
+    elif event_type == EventTypes.HSL_REPLAY_PROGRESS and is_newer(
+        record, group.get("progress")
+    ):
+        group["progress"] = record
+    elif event_type == EventTypes.HSL_REPLAY_COMPLETED and is_newer(
+        record, group.get("completed")
+    ):
+        group["completed"] = record
+
+
+def _public_hsl_replay_record(record: Any) -> dict[str, Any]:
+    if not isinstance(record, dict):
+        return {}
+    return {
+        key: value
+        for key, value in record.items()
+        if key not in {"path", "line", "seq"} and value not in (None, {}, [])
+    }
+
+
+def _hsl_replay_group_active(group: dict[str, Any]) -> bool:
+    latest = group.get("latest")
+    if not isinstance(latest, dict):
+        return False
+    return latest.get("event_type") != EventTypes.HSL_REPLAY_COMPLETED
+
+
+def _summarize_hsl_replay_health(
+    groups: dict[str, dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            0 if _hsl_replay_group_active(item) else 1,
+            -int(
+                (((item.get("latest") or {}).get("derived") or {}).get(
+                    "startup_blocking_elapsed_ms"
+                ))
+                or 0
+            ),
+            -int(((item.get("latest") or {}).get("ts")) or 0),
+            str(item.get("bot") or ""),
+        ),
+    )
+    compact_groups: list[dict[str, Any]] = []
+    active_bots = 0
+    completed_bots = 0
+    failed_bots = 0
+    for group in ordered:
+        active = _hsl_replay_group_active(group)
+        latest = _public_hsl_replay_record(group.get("latest"))
+        completed = _public_hsl_replay_record(group.get("completed"))
+        if active:
+            active_bots += 1
+        if completed:
+            if completed.get("status") == "succeeded":
+                completed_bots += 1
+            elif completed.get("status") == "failed":
+                failed_bots += 1
+        public_group = {
+            "bot": group.get("bot"),
+            "active": active,
+            "count": int(group.get("count") or 0),
+            "event_types": dict(group.get("event_types").most_common())
+            if isinstance(group.get("event_types"), Counter)
+            else {},
+            "latest": latest,
+            "started": _public_hsl_replay_record(group.get("started")),
+            "loaded": _public_hsl_replay_record(group.get("loaded")),
+            "progress": _public_hsl_replay_record(group.get("progress")),
+            "completed": completed,
+        }
+        compact_groups.append(
+            {
+                key: value
+                for key, value in public_group.items()
+                if value not in (None, {}, [])
+            }
+        )
+    return {
+        "total": sum(int(group.get("count", 0)) for group in groups.values()),
+        "groups_truncated": len(ordered) > HSL_REPLAY_HEALTH_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "bots": len(groups),
+        "active_bots": int(active_bots),
+        "completed_bots": int(completed_bots),
+        "failed_bots": int(failed_bots),
+        "groups": compact_groups[:HSL_REPLAY_HEALTH_GROUP_LIMIT],
+    }
+
+
 def _shell_tokens(value: str) -> list[str]:
     try:
         import shlex
@@ -2454,6 +2741,8 @@ def _scan_events(
     staged_readiness_event_type_counts: Counter[str] = Counter()
     event_pipeline_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     event_pipeline_health_event_type_counts: Counter[str] = Counter()
+    hsl_replay_health_groups: dict[str, dict[str, Any]] = {}
+    hsl_replay_health_event_type_counts: Counter[str] = Counter()
     risk_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     risk_event_type_counts: Counter[str] = Counter()
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -2574,6 +2863,16 @@ def _scan_events(
                                 event_pipeline_health_groups,
                                 event_pipeline_health_group,
                             )
+                    if event_type in HSL_REPLAY_EVENT_TYPES:
+                        hsl_replay_health_event_type_counts[str(event_type)] += 1
+                        _merge_hsl_replay_group(
+                            hsl_replay_health_groups,
+                            bot_key=bot_key,
+                            row=row,
+                            live_event=live_event,
+                            path=path,
+                            line_no=line_no,
+                        )
                     if event_type in RISK_EVENT_TYPES:
                         risk_event_type_counts[str(event_type)] += 1
                         _merge_risk_event_group(
@@ -2683,6 +2982,10 @@ def _scan_events(
         "event_pipeline_health": _summarize_event_pipeline_health(
             event_pipeline_health_groups,
             event_pipeline_health_event_type_counts,
+        ),
+        "hsl_replay_health": _summarize_hsl_replay_health(
+            hsl_replay_health_groups,
+            hsl_replay_health_event_type_counts,
         ),
         "risk_events": _summarize_risk_events(
             risk_event_groups,
@@ -3047,6 +3350,16 @@ def build_live_smoke_report(
                 "latest_stopping_count": 0,
                 "groups": [],
             },
+            "hsl_replay_health": {
+                "total": 0,
+                "groups_truncated": False,
+                "event_types": {},
+                "bots": 0,
+                "active_bots": 0,
+                "completed_bots": 0,
+                "failed_bots": 0,
+                "groups": [],
+            },
             "risk_events": {
                 "total": 0,
                 "groups_truncated": False,
@@ -3094,6 +3407,7 @@ def build_live_smoke_report(
         int(event_scan["problem_event_count"])
         + int(log_scan["attention_matches"])
         + int(log_scan.get("dropped_unparsed_attention_matches", 0))
+        + int(event_scan["hsl_replay_health"].get("active_bots") or 0)
     )
     hard_failure_sources = {
         "monitor_errors": int(event_report["error_count"]),
@@ -3103,6 +3417,9 @@ def build_live_smoke_report(
         "process_hard_failures": int(process_report["hard_failures"]),
         "total": int(hard_failures),
     }
+    hsl_replay_active_bots = int(
+        event_scan["hsl_replay_health"].get("active_bots") or 0
+    )
     attention_sources = {
         "problem_events": int(event_scan["problem_event_count"]),
         "log_attention_matches": int(log_scan["attention_matches"]),
@@ -3111,6 +3428,8 @@ def build_live_smoke_report(
         ),
         "total": int(attention_count),
     }
+    if hsl_replay_active_bots:
+        attention_sources["hsl_replay_active_bots"] = hsl_replay_active_bots
     return {
         "ok": hard_failures == 0,
         "attention": attention_count > 0,
@@ -3142,6 +3461,7 @@ def build_live_smoke_report(
         "ema_readiness_health": event_scan["ema_readiness_health"],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
+        "hsl_replay_health": event_scan["hsl_replay_health"],
         "risk_events": event_scan["risk_events"],
         "shutdown_events": event_scan["shutdown_events"],
         "event_window": event_scan["event_window"],
@@ -3175,6 +3495,9 @@ def _summary_limited_groups(
             "throttled_pct": summary.get("throttled_pct"),
             "event_types": summary.get("event_types"),
             "bots": summary.get("bots"),
+            "active_bots": summary.get("active_bots"),
+            "completed_bots": summary.get("completed_bots"),
+            "failed_bots": summary.get("failed_bots"),
             "latest_candidate_unavailable_total": summary.get(
                 "latest_candidate_unavailable_total"
             ),
@@ -3244,6 +3567,11 @@ def summarize_live_smoke_report(
     event_pipeline_health = (
         report.get("event_pipeline_health")
         if isinstance(report.get("event_pipeline_health"), dict)
+        else {}
+    )
+    hsl_replay_health = (
+        report.get("hsl_replay_health")
+        if isinstance(report.get("hsl_replay_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -3365,6 +3693,10 @@ def summarize_live_smoke_report(
             event_pipeline_health,
             limit=max_groups,
         ),
+        "hsl_replay_health": _summary_limited_groups(
+            hsl_replay_health,
+            limit=max_groups,
+        ),
         "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
@@ -3424,6 +3756,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     event_pipeline_health = (
         report.get("event_pipeline_health")
         if isinstance(report.get("event_pipeline_health"), dict)
+        else {}
+    )
+    hsl_replay_health = (
+        report.get("hsl_replay_health")
+        if isinstance(report.get("hsl_replay_health"), dict)
         else {}
     )
     shutdown_events = (
@@ -3580,6 +3917,14 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 event_pipeline_health.get("latest_stopping_count")
             ),
             "event_types": event_pipeline_health.get("event_types") or {},
+        },
+        "hsl_replay": {
+            "total": _count_value(hsl_replay_health.get("total")),
+            "bots": _count_value(hsl_replay_health.get("bots")),
+            "active_bots": _count_value(hsl_replay_health.get("active_bots")),
+            "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
+            "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
+            "event_types": hsl_replay_health.get("event_types") or {},
         },
         "risk_events": {
             "total": _count_value(risk_events.get("total")),

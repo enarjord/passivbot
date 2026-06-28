@@ -2015,6 +2015,167 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
+    _write_ndjson(
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.started",
+                seq=1,
+                ts=1000,
+                reason_code="coin_history_replay",
+                level="debug",
+                status="started",
+                data={"signal_mode": "coin", "lookback_days": 30.0},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=2,
+                ts=2000,
+                reason_code="history_loaded",
+                level="debug",
+                status="started",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "loaded",
+                    "symbols": 26,
+                    "pairs": 26,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 20,
+                    "timeline_rows": 43201,
+                    "fill_events": 2700,
+                    "secret": "must-not-render",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=3,
+                ts=3000,
+                reason_code="coin_history_replay_completed",
+                level="debug",
+                status="succeeded",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "rows": 985965,
+                    "pairs": 26,
+                    "timeline_rows": 43201,
+                    "full_elapsed_s": 1623.4,
+                    "startup_blocking_elapsed_s": 1623.4,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        tmp_path
+        / "monitor"
+        / "gateio"
+        / "gateio_01"
+        / "events"
+        / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.started",
+                seq=4,
+                ts=4000,
+                exchange="gateio",
+                user="gateio_01",
+                reason_code="coin_history_replay",
+                level="debug",
+                status="started",
+                data={"signal_mode": "coin", "lookback_days": 30.0},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=5,
+                ts=5000,
+                exchange="gateio",
+                user="gateio_01",
+                reason_code="pair_replay_progress",
+                level="debug",
+                status="started",
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                data={
+                    "signal_mode": "coin",
+                    "stage": "pair_replay",
+                    "pair_idx": 3,
+                    "pairs": 29,
+                    "timeline_rows": 43201,
+                    "applied_rows": 12000,
+                    "total_applied_rows": 64000,
+                    "rows_per_second": 318.415,
+                    "elapsed_s": 201.2,
+                    "is_held_pair": True,
+                    "is_cooldown_pair": False,
+                    "balance": 1234.56,
+                    "equity": 1200.0,
+                    "drawdown_score": 0.42,
+                    "error": "api_key=AKIA123",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is True
+    assert report["hard_failures"] == 0
+    assert report["attention_sources"]["hsl_replay_active_bots"] == 1
+    assert report["hsl_replay_health"]["active_bots"] == 1
+    assert report["hsl_replay_health"]["completed_bots"] == 1
+    assert report["hsl_replay_health"]["failed_bots"] == 0
+    assert report["hsl_replay_health"]["event_types"] == {
+        "hsl.replay.progress": 2,
+        "hsl.replay.started": 2,
+        "hsl.replay.completed": 1,
+    }
+    active_group = report["hsl_replay_health"]["groups"][0]
+    assert active_group["bot"] == "gateio/gateio_01"
+    assert active_group["active"] is True
+    assert active_group["latest"]["symbol"] == "ZEC/USDT:USDT"
+    assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
+        43201 * 29
+    )
+    assert active_group["latest"]["derived"]["observed_work_pct"] == pytest.approx(
+        5.108
+    )
+    assert "AKIA123" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
+    assert "must-not-render" not in json.dumps(
+        report["hsl_replay_health"],
+        sort_keys=True,
+    )
+    assert "balance" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
+    assert "equity" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
+    assert "drawdown_score" not in json.dumps(
+        report["hsl_replay_health"],
+        sort_keys=True,
+    )
+    assert summary["hsl_replay_health"]["active_bots"] == 1
+    assert summary["hsl_replay_health"]["groups"][0]["active"] is True
+    assert brief["hsl_replay"] == {
+        "total": 5,
+        "bots": 2,
+        "active_bots": 1,
+        "completed_bots": 1,
+        "failed_bots": 0,
+        "event_types": {
+            "hsl.replay.progress": 2,
+            "hsl.replay.started": 2,
+            "hsl.replay.completed": 1,
+        },
+    }
+
+
 def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     tmp_path,
 ):
