@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `eec38e60` after PR #826, `Update debug profile logging guide`.
+- `fb2268af` after PR #829, `Report account state change activity`.
 
 Current review gate:
 
@@ -30,6 +30,19 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #829 at `fb2268af`.
+- Bots were not restarted for PR #829 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #829 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice adds value-safe account-state activity summaries to
+  the read-only live performance report from existing `fill.ingested`,
+  `position.changed`, and `balance.changed` events only.
+- A 5-minute smoke after the PR #829 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=fb2268af`, and all hard failure sources at zero. Remaining
+  attention came from known non-hard structured problem events.
 - Repository pulled through PR #826 at `eec38e60`.
 - Bots were not restarted for PRs #826/#827 because the changes were docs-only
   and read-only performance-report tooling. All five configured
@@ -2915,6 +2928,30 @@ VPS5 deployment status:
   docs-only. A 5-minute smoke reported `ok=true`, `hard_failures=0`,
   `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
   and all hard failure sources at zero.
+
+### PR #829: Account State Change Performance Report
+
+- Branch: `codex/v8-live-performance-state-changes`.
+- Scope: read-only live performance report account-state activity projection
+  and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `account_state_changes`, derived only from existing `fill.ingested`,
+  `position.changed`, and `balance.changed` events. The section summarizes
+  event counts by bot and event type plus bounded status, reason, symbol,
+  pside, side, and component counters. It deliberately ignores event `data`,
+  so balances, equity, sizes, prices, PnL, fees, order ids, fill ids, raw
+  payloads, and client-order ids are not surfaced.
+- Review evidence: CI was green. Claude approved and Hermes approved with no
+  findings. Local validation covered the full
+  `tests/test_live_performance_report.py` suite, py_compile for touched files,
+  `git diff --check`, and a silent-handling scan of touched report/test files.
+  No event producers, exchange calls, cache mutation, readiness gates,
+  order/risk logic, console routing, monitor writes, or trading behavior
+  changed.
+- VPS5 evidence: deployed at `fb2268af` without bot restart because this is
+  read-only report tooling. A 5-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, and all hard failure sources at zero.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
