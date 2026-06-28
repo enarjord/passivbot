@@ -1892,19 +1892,39 @@ class _ResourcePressureAccumulator:
 
     @staticmethod
     def _field_stats(values: list[float | int], latest: Any) -> dict[str, Any]:
-        numeric = [float(value) for value in values]
+        numeric = sorted(float(value) for value in values)
         if not numeric:
             return {}
+        p95_index = (len(numeric) - 1) * 0.95
+        p95_lower = int(math.floor(p95_index))
+        p95_upper = int(math.ceil(p95_index))
+        if p95_lower == p95_upper:
+            p95 = numeric[p95_lower]
+        else:
+            p95_weight = p95_index - p95_lower
+            p95 = numeric[p95_lower] * (1.0 - p95_weight) + numeric[p95_upper] * p95_weight
+
+        integral_series = all(value.is_integer() for value in numeric)
+
+        def clean(value: Any) -> float | int:
+            number = float(value)
+            if integral_series:
+                return int(round(number))
+            rounded = round(number, 3)
+            if rounded.is_integer():
+                return int(rounded)
+            return rounded
+
         out: dict[str, Any] = {
-            "latest": latest,
-            "min": min(numeric),
-            "max": max(numeric),
-            "mean": statistics.fmean(numeric),
+            "latest": clean(latest),
+            "count": len(numeric),
+            "min": clean(numeric[0]),
+            "max": clean(numeric[-1]),
+            "mean": clean(statistics.fmean(numeric)),
+            "median": clean(statistics.median(numeric)),
+            "p95": clean(p95),
         }
-        return {
-            key: int(value) if isinstance(value, float) and value.is_integer() else value
-            for key, value in out.items()
-        }
+        return out
 
     def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
         groups = []

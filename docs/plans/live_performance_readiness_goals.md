@@ -326,6 +326,11 @@ classification when enough source events exist.
     fields are consistently available in the event stream.
 - [ ] Resource pressure: CPU/load, RSS, memory percent, open FDs, event queue
   depth, dropped event counters, sink errors, loop lag where available.
+  - Status: partial. Existing `health.summary` events are summarized by
+    `live-performance-report` as `resource_pressure`, including whitelisted
+    process and event-pipeline fields with count, latest, min, mean, median,
+    p95, and max values where present. Remaining work: CPU percent and loop lag
+    need source event support if they are not already emitted by the active bot.
 - [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
   final monitor flush, process exit.
 
