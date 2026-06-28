@@ -1798,6 +1798,11 @@ def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
         "execution.create_response": 1,
         "order_wave.total": 1,
     }
+    assert execution["terminal_outcome_counts"] == {
+        "cancel.ambiguous_terminal": 1,
+        "confirmation.satisfied": 1,
+        "create.succeeded": 1,
+    }
     assert execution["pending_start_counts"] == {}
     assert groups["execution.create_response"]["max_ms"] == 350
     assert groups["execution.cancel_response"]["max_ms"] == 600
@@ -1844,6 +1849,7 @@ def test_live_performance_report_execution_timing_counts_missing_and_unpaired_id
     execution = report["execution_timing"]
 
     assert execution["total_events"] == 3
+    assert execution["terminal_outcome_counts"] == {"create.failed": 1}
     assert execution["missing_id_counts"] == {"execution.create_response": 1}
     assert execution["unpaired_terminal_counts"] == {"execution.create_response": 1}
     assert execution["pending_start_counts"] == {"execution.write_response": 1}

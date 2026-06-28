@@ -2112,6 +2112,20 @@ class _ExecutionTimingAccumulator:
         self.starts_seen: Counter[str] = Counter()
         self.terminals_seen: Counter[str] = Counter()
         self.timing_observations: Counter[str] = Counter()
+        self.terminal_outcome_counts: Counter[str] = Counter()
+
+    def _record_terminal_outcome(self, event_type: str) -> None:
+        if event_type in _EXECUTION_CREATE_TERMINALS:
+            outcome = event_type.removeprefix("execution.create_")
+            self.terminal_outcome_counts[f"create.{outcome}"] += 1
+            return
+        if event_type in _EXECUTION_CANCEL_TERMINALS:
+            outcome = event_type.removeprefix("execution.cancel_")
+            self.terminal_outcome_counts[f"cancel.{outcome}"] += 1
+            return
+        if event_type in _EXECUTION_CONFIRMATION_TERMINALS:
+            outcome = event_type.removeprefix("execution.confirmation_")
+            self.terminal_outcome_counts[f"confirmation.{outcome}"] += 1
 
     def _add_timing(
         self,
@@ -2222,6 +2236,7 @@ class _ExecutionTimingAccumulator:
             return
 
         if event_type in _EXECUTION_CREATE_TERMINALS | _EXECUTION_CANCEL_TERMINALS:
+            self._record_terminal_outcome(event_type)
             operation = (
                 "execution.create_response"
                 if event_type in _EXECUTION_CREATE_TERMINALS
@@ -2251,6 +2266,7 @@ class _ExecutionTimingAccumulator:
             return
 
         if event_type in _EXECUTION_CONFIRMATION_TERMINALS:
+            self._record_terminal_outcome(event_type)
             operation = "execution.confirmation"
             self.terminals_seen[operation] += 1
             order_wave_id = _event_id_value(live_event, "order_wave_id")
@@ -2296,6 +2312,7 @@ class _ExecutionTimingAccumulator:
             "starts_seen": dict(sorted(self.starts_seen.items())),
             "terminals_seen": dict(sorted(self.terminals_seen.items())),
             "timing_observations": dict(sorted(self.timing_observations.items())),
+            "terminal_outcome_counts": dict(sorted(self.terminal_outcome_counts.items())),
             "missing_id_counts": dict(sorted(self.missing_id_counts.items())),
             "unpaired_terminal_counts": dict(sorted(self.unpaired_terminal_counts.items())),
             "pending_start_counts": dict(sorted(pending_starts.items())),
