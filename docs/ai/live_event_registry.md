@@ -8,6 +8,77 @@ Do not add aliases for temporary branch-local spellings. Prefer adding a new
 registry value only when operators or tools should be able to filter for it
 across time.
 
+## Event Types
+
+- `action.planned`
+- `balance.changed`
+- `bot.ready`
+- `bot.shutdown.stage`
+- `bot.started`
+- `bot.startup_timing`
+- `bot.stopped`
+- `bot.stopping`
+- `cache.flush.completed`
+- `cache.load.completed`
+- `cache.warmup_decision`
+- `candle.coverage_checked`
+- `candle.tail_projected`
+- `cycle.completed`
+- `cycle.degraded`
+- `cycle.started`
+- `data_packet.updated`
+- `ema.bundle.completed`
+- `ema.bundle.started`
+- `ema.fallback_used`
+- `ema.unavailable`
+- `exchange.time_sync`
+- `execution.ambiguous`
+- `execution.cancel_ambiguous_terminal`
+- `execution.cancel_failed`
+- `execution.cancel_sent`
+- `execution.cancel_succeeded`
+- `execution.confirmation_requested`
+- `execution.confirmation_satisfied`
+- `execution.confirmation_timeout`
+- `execution.create_deferred`
+- `execution.create_failed`
+- `execution.create_rejected`
+- `execution.create_sent`
+- `execution.create_skipped`
+- `execution.create_succeeded`
+- `fill.ingested`
+- `fills.refresh_summary`
+- `forager.feature_unavailable`
+- `forager.selection`
+- `health.summary`
+- `hsl.cooldown_ended`
+- `hsl.cooldown_started`
+- `hsl.red_triggered`
+- `hsl.replay.completed`
+- `hsl.replay.progress`
+- `hsl.replay.started`
+- `hsl.status`
+- `hsl.transition`
+- `order_wave.completed`
+- `order_wave.started`
+- `planning.defer_summary`
+- `planning.symbol_state`
+- `planning.unavailable`
+- `position.changed`
+- `remote_call.failed`
+- `remote_call.started`
+- `remote_call.succeeded`
+- `remote_call.throttled`
+- `risk.mode_changed`
+- `rust_orchestrator.called`
+- `rust_orchestrator.returned`
+- `sink.degraded`
+- `snapshot.built`
+- `state.refresh_progress`
+- `state.refresh_timing`
+- `unstuck.selection`
+- `unstuck.status`
+
 ## Event Tags
 
 - `account`

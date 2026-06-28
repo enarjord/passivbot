@@ -1,7 +1,7 @@
 from pathlib import Path
 import re
 
-from live.event_bus import EventTags, ReasonCodes
+from live.event_bus import EventTags, EventTypes, ReasonCodes
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -22,6 +22,10 @@ def _documented_values(section: str) -> list[str]:
     match = re.search(pattern, text, re.M | re.S)
     assert match is not None, f"missing registry doc section: {section}"
     return sorted(re.findall(r"^- `([^`]+)`$", match.group("body"), re.M))
+
+
+def test_live_event_type_docs_match_registry():
+    assert _documented_values("Event Types") == _registry_values(EventTypes)
 
 
 def test_live_event_tag_docs_match_registry():
