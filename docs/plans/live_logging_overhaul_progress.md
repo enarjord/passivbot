@@ -19,7 +19,7 @@ Last updated: 2026-06-27.
 
 Current `origin/v8` logging-overhaul head:
 
-- `87f22840` after PR #797, `Add HSL replay profile to performance report`.
+- `cb034e82` after PR #799, `Add cache warmup summaries to performance report`.
 
 Current review gate:
 
@@ -30,6 +30,22 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #799 at `cb034e82`.
+- Bots were not restarted for PR #799 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- A 2-minute smoke after the PR #799 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. The same window still showed non-hard EMA readiness
+  and HSL cooldown attention; those are live-state diagnostics, not deploy
+  hard failures.
+- A focused 5-minute performance report confirmed the new `cache_warmup`
+  section populated on VPS5 for all five bots. The section reported
+  `total_events=614`, with `cache.load.completed=469`,
+  `cache.flush.completed=140`, and `cache.warmup_decision=5`. Sample groups
+  showed OKX, Binance, and GateIO with bounded candle load/flush rows,
+  source/reason counters, warmup cold-path decisions, and elapsed summaries.
 - Repository pulled through PR #797 at `87f22840`.
 - Bots were not restarted for PRs #796/#797 because the changes were docs and
   read-only performance-report tooling. All five configured `passivbot live`
@@ -2252,6 +2268,36 @@ VPS5 deployment status:
   problem explicit: Binance/GateIO/OKX were still in coin-HSL replay after
   roughly `15-17m`, with about `1.1M-1.25M` estimated dense pair-rows each and
   only about `56-63%` observed work in the sampled window.
+
+### PR #799: Cache Warmup Performance Report
+
+- Branch: `codex/v8-live-performance-cache-warmup`.
+- Scope: read-only live performance report cache/warmup projection, docs, and
+  tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `cache_warmup`, derived only from existing `cache.warmup_decision`,
+  `cache.load.completed`, and `cache.flush.completed` events. The section
+  summarizes bounded warm-cache reuse/cold-path decisions, candle cache
+  load/flush rows, reason/source counters, symbol/timeframe samples, and
+  elapsed timing where present. Trading behavior, exchange calls, cache
+  mutation, event producers, and console routing are unchanged.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Both reviews verified that the section is report-only and uses explicit
+  scalar/counter whitelists that exclude raw cache paths, raw payloads, account
+  values, and secrets. Local validation covered performance-report,
+  event-query, and smoke-report tests, py_compile, `git diff --check`, local
+  compact CLI performance-report smoke, and a silent-handling scan of touched
+  report/test files.
+- VPS5 evidence: deployed at `cb034e82` without bot restart because this is
+  read-only report tooling. A 2-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused 5-minute performance report returned
+  `ok=true` and showed `cache_warmup` populated for all five bots, with
+  `total_events=614`, `cache.load.completed=469`,
+  `cache.flush.completed=140`, and `cache.warmup_decision=5`. Sample groups
+  showed OKX, Binance, and GateIO warmup cold-path decisions plus bounded
+  candle load/flush row counts and elapsed summaries.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
