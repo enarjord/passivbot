@@ -9,6 +9,7 @@ import pytest
 from passivbot_cli import main as cli_main
 from cli_utils import expand_help_all_argv, help_requested
 import ohlcv_download
+from passivbot_version import __version__
 
 
 def test_root_help_lists_primary_commands(capsys):
@@ -21,6 +22,15 @@ def test_root_help_lists_primary_commands(capsys):
     assert "download" in out
     assert "tool" in out
     assert 'python3 -m pip install -e ".[full]"' in out
+
+
+@pytest.mark.parametrize("flag", ["-V", "--version"])
+def test_root_version_flags_print_package_version(flag, capsys):
+    assert cli_main.main([flag]) == 0
+
+    captured = capsys.readouterr()
+    assert captured.out == f"passivbot {__version__}\n"
+    assert captured.err == ""
 
 
 def test_dispatch_core_command_forwards_module_and_prog(monkeypatch):

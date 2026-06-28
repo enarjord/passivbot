@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from cli_utils import help_requested
+from passivbot_version import __version__
 
 
 @dataclass(frozen=True)
@@ -246,6 +247,7 @@ FULL_INSTALL_MODULE_HINTS = {
 FULL_INSTALL_MARKER_MODULES = tuple(sorted(FULL_INSTALL_MODULE_HINTS | {"websockets"}))
 ENV_MISMATCH_IGNORE_ENV = "PASSIVBOT_IGNORE_ENV_MISMATCH"
 ENV_REEXEC_GUARD_ENV = "PASSIVBOT_ENV_REEXEC"
+VERSION_FLAGS = {"-V", "--version"}
 
 
 def _build_root_parser() -> argparse.ArgumentParser:
@@ -487,6 +489,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_root_parser()
     if not argv or argv[0] in {"-h", "--help"}:
         parser.print_help()
+        return 0
+    if argv[0] in VERSION_FLAGS:
+        if len(argv) > 1:
+            parser.exit(2, f"passivbot: {argv[0]} does not accept arguments\n")
+        print(f"passivbot {__version__}")
         return 0
 
     if argv[0] == "help":
