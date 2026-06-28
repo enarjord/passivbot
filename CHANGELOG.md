@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `--tag` filtering to `passivbot tool live-event-query`, so operator
+  event, timeline, trace-summary, order-trace, and cycle-trace reports can be
+  scoped by structured live-event tags.
 - Corrected `passivbot tool live-performance-report` `snapshot_to_rust`
   correlation so planning snapshot epochs are no longer mistaken for live
   cycle IDs; legacy snapshot events now use the latest preceding snapshot in

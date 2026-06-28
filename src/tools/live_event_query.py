@@ -120,6 +120,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--tag",
+        action="append",
+        help=(
+            "Return compact records matching one structured event tag. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--since-ms",
         type=int,
         help="Only include live events with monitor ts at or after this epoch-ms value.",
@@ -219,6 +227,7 @@ def main(argv: list[str] | None = None) -> int:
         pside=args.pside,
         reason_code=args.reason_code,
         status=args.status,
+        tag=args.tag,
         since_ms=since_ms,
         until_ms=args.until_ms,
         limit=args.limit,

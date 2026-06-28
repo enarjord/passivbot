@@ -380,6 +380,52 @@ def test_event_query_filters_by_ids_symbol_pside_reason_and_status(tmp_path):
     assert remote_report["query"]["events"][0]["event_type"] == "remote_call.failed"
 
 
+def test_event_query_filters_by_tags(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                tags=["execution", "order"],
+            ),
+            _monitor_row(
+                event_type="risk.hsl_status",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                tags=["risk", "summary"],
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+                tags=["remote_call", "exchange"],
+            ),
+        ],
+    )
+
+    report = build_event_report(tmp_path / "monitor", tag="execution,order")
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {"tags": ["execution", "order"]}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "execution.create_sent"
+
+    risk_report = build_event_report(tmp_path / "monitor", cycle_id="cy_1", tag="risk")
+
+    assert risk_report["cycle"]["filters"] == {
+        "cycle_id": "cy_1",
+        "tags": ["risk"],
+    }
+    assert risk_report["cycle"]["matched_events"] == 1
+    assert risk_report["cycle"]["events"][0]["event_type"] == "risk.hsl_status"
+
+
 def test_event_query_filters_by_remaining_event_ids(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -1410,6 +1456,8 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 str(tmp_path / "monitor"),
                 "--cycle-id",
                 "cy_7",
+                "--tag",
+                "order",
                 "--trace-summary",
             ]
         )
@@ -1417,6 +1465,7 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
     )
 
     report = json.loads(capsys.readouterr().out)
+    assert report["cycle"]["filters"] == {"cycle_id": "cy_7", "tags": ["order"]}
     summary = report["cycle"]["trace_summary"]
     assert summary["matched_events"] == 2
     assert summary["sources"] == {"executor": 2}

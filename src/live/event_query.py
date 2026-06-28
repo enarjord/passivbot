@@ -146,6 +146,7 @@ def _filter_report(
     psides: set[str],
     reason_codes: set[str],
     statuses: set[str],
+    tags: set[str],
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> dict[str, Any]:
@@ -180,6 +181,8 @@ def _filter_report(
         filters["reason_codes"] = sorted(reason_codes)
     if statuses:
         filters["statuses"] = sorted(statuses)
+    if tags:
+        filters["tags"] = sorted(tags)
     return filters
 
 
@@ -838,6 +841,7 @@ def build_event_report(
     pside: str | Iterable[str] | None = None,
     reason_code: str | Iterable[str] | None = None,
     status: str | Iterable[str] | None = None,
+    tag: str | Iterable[str] | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
     limit: int = 200,
@@ -915,6 +919,7 @@ def build_event_report(
     pside_filter = _normalize_filter_values(pside)
     reason_code_filter = _normalize_filter_values(reason_code)
     status_filter = _normalize_filter_values(status)
+    tag_filter = _normalize_filter_values(tag)
     has_non_cycle_filter = any(
         (
             event_type_filter,
@@ -929,6 +934,7 @@ def build_event_report(
             pside_filter,
             reason_code_filter,
             status_filter,
+            tag_filter,
         )
     )
     trace_without_cycle = (
@@ -1036,6 +1042,7 @@ def build_event_report(
                     record_pside = live_event.get("pside") or row.get("pside")
                     record_status = live_event.get("status")
                     record_reason_code = live_event.get("reason_code")
+                    record_tags = _event_tags(row, live_event)
                     event_type_matches = _filter_matches(
                         record_event_type, event_type_filter
                     )
@@ -1063,6 +1070,9 @@ def build_event_report(
                         record_reason_code, reason_code_filter
                     )
                     status_matches = _filter_matches(record_status, status_filter)
+                    tag_matches = not tag_filter or bool(
+                        set(record_tags).intersection(tag_filter)
+                    )
                     query_matches = (
                         event_type_matches
                         and cycle_matches
@@ -1077,6 +1087,7 @@ def build_event_report(
                         and pside_matches
                         and reason_code_matches
                         and status_matches
+                        and tag_matches
                     )
 
                     if has_query_filter and query_matches:
@@ -1192,6 +1203,7 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            tags=tag_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )
@@ -1226,6 +1238,7 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            tags=tag_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )
