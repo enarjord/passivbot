@@ -22,6 +22,9 @@ def _monitor_row(
     reason_code: str = "test",
     ids: dict | None = None,
     data: dict | None = None,
+    source: str = "live",
+    component: str = "test",
+    tags: list[str] | None = None,
     order_id: str | None = None,
     client_order_id: str | None = None,
 ) -> dict:
@@ -33,8 +36,8 @@ def _monitor_row(
         "event_id": f"evt_{seq}",
         "event_type": event_type,
         "level": "debug",
-        "source": "live",
-        "component": "test",
+        "source": source,
+        "component": component,
         "exchange": "binance",
         "user": "binance_01",
         "symbol": symbol,
@@ -53,7 +56,7 @@ def _monitor_row(
         "exchange": "binance",
         "user": "binance_01",
         "kind": event_type,
-        "tags": ["test"],
+        "tags": list(tags or ["test"]),
         "payload": payload,
         "seq": seq,
         "ts": ts,
@@ -377,6 +380,52 @@ def test_event_query_filters_by_ids_symbol_pside_reason_and_status(tmp_path):
     assert remote_report["query"]["events"][0]["event_type"] == "remote_call.failed"
 
 
+def test_event_query_filters_by_tags(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                tags=["execution", "order"],
+            ),
+            _monitor_row(
+                event_type="risk.hsl_status",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                tags=["risk", "summary"],
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+                tags=["remote_call", "exchange"],
+            ),
+        ],
+    )
+
+    report = build_event_report(tmp_path / "monitor", tag="execution,order")
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {"tags": ["execution", "order"]}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "execution.create_sent"
+
+    risk_report = build_event_report(tmp_path / "monitor", cycle_id="cy_1", tag="risk")
+
+    assert risk_report["cycle"]["filters"] == {
+        "cycle_id": "cy_1",
+        "tags": ["risk"],
+    }
+    assert risk_report["cycle"]["matched_events"] == 1
+    assert risk_report["cycle"]["events"][0]["event_type"] == "risk.hsl_status"
+
+
 def test_event_query_filters_by_remaining_event_ids(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -492,6 +541,51 @@ def test_event_query_filters_by_remaining_event_ids(tmp_path):
         "remote_call_id": "rc_1",
         "remote_call_group_id": "cy_1:candles",
     }
+
+
+def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                cycle_id=None,
+                seq=1,
+                ts=1000,
+                data={
+                    "snapshot_id": "snap_legacy",
+                    "cycle_id": 42,
+                    "ready_symbols": 3,
+                },
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                ids={"snapshot_id": "snap_2", "plan_id": "plan_2"},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        snapshot_id="snap_legacy",
+        include_data=True,
+        trace_summary=True,
+    )
+
+    assert report["query"]["filters"] == {"snapshot_ids": ["snap_legacy"]}
+    assert report["missing_cycle_id"] == 1
+    assert report["query"]["matched_events"] == 1
+    event = report["query"]["events"][0]
+    assert event["event_type"] == "snapshot.built"
+    assert event["ids"] == {"snapshot_id": "snap_legacy"}
+    assert event["data"]["cycle_id"] == 42
+    assert report["query"]["trace_summary"]["ids"]["snapshot_id"] == [
+        {"id": "snap_legacy", "events": 1}
+    ]
 
 
 def test_event_query_filters_by_inclusive_time_window(tmp_path):
@@ -1337,6 +1431,9 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 seq=1,
                 ts=1000,
                 status="started",
+                source="executor",
+                component="order_wave",
+                tags=["execution", "order", "wave"],
                 ids={"order_wave_id": "ow_7"},
             ),
             _monitor_row(
@@ -1345,6 +1442,9 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 seq=2,
                 ts=1100,
                 status="succeeded",
+                source="executor",
+                component="order_wave",
+                tags=["execution", "order", "summary"],
                 ids={"order_wave_id": "ow_7"},
             ),
         ],
@@ -1356,6 +1456,8 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 str(tmp_path / "monitor"),
                 "--cycle-id",
                 "cy_7",
+                "--tag",
+                "order",
                 "--trace-summary",
             ]
         )
@@ -1363,8 +1465,19 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
     )
 
     report = json.loads(capsys.readouterr().out)
+    assert report["cycle"]["filters"] == {"cycle_id": "cy_7", "tags": ["order"]}
     summary = report["cycle"]["trace_summary"]
     assert summary["matched_events"] == 2
+    assert summary["sources"] == {"executor": 2}
+    assert summary["components"] == {"order_wave": 2}
+    assert summary["tags"] == {
+        "execution": 2,
+        "order": 2,
+        "summary": 1,
+        "wave": 1,
+    }
+    assert summary["exchanges"] == {"binance": 2}
+    assert summary["users"] == {"binance_01": 2}
     assert summary["order_waves"]["ow_7"]["event_types"] == {
         "order_wave.completed": 1,
         "order_wave.started": 1,

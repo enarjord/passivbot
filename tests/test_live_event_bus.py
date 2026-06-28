@@ -605,6 +605,8 @@ def test_diagnostic_event_uses_pipeline_when_available_and_legacy_when_absent():
     assert emitted.exchange == "binance"
     assert emitted.user == "binance_01"
     assert emitted.bot_id == "bot_1"
+    assert emitted.cycle_id is None
+    assert emitted.snapshot_id is None
     assert emitted.data["apiKey"] == REDACTED
     assert emitted.data["reason"] == "stale"
     assert bot._live_event_pipeline.close(timeout=2.0) is True
@@ -624,6 +626,39 @@ def test_diagnostic_event_uses_pipeline_when_available_and_legacy_when_absent():
         ("planning",),
         {"apiKey": "secret", "reason": "stale"},
     )
+
+
+def test_diagnostic_event_carries_envelope_ids_to_pipeline():
+    class BotWithPipeline:
+        exchange = "binance"
+        bot_id = "bot_1"
+
+        def __init__(self):
+            self._live_event_pipeline = LiveEventPipeline(
+                context=LiveEventContext(user="binance_01"),
+                structured_sinks=[],
+                monitor_sinks=[],
+            )
+
+        def config_get(self, keys):
+            return "binance_01"
+
+    bot = BotWithPipeline()
+    event = DiagnosticEvent.build(
+        "snapshot.built",
+        ("diagnostic", "snapshot"),
+        {"snapshot_id": "snap_1"},
+        cycle_id="cy_7",
+        snapshot_id="snap_1",
+    )
+
+    emitted = event.emit(bot)
+
+    assert emitted.event_type == EventTypes.SNAPSHOT_BUILT
+    assert emitted.cycle_id == "cy_7"
+    assert emitted.snapshot_id == "snap_1"
+    assert emitted.data["snapshot_id"] == "snap_1"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def test_diagnostic_event_falls_back_to_legacy_recorder_when_pipeline_queue_is_full():

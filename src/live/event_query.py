@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Iterable as IterableABC
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -102,7 +103,12 @@ def _live_event_payload(row: dict[str, Any]) -> dict[str, Any] | None:
 
 def _event_ids(live_event: dict[str, Any]) -> dict[str, Any]:
     ids = live_event.get("ids")
-    return dict(ids) if isinstance(ids, dict) else {}
+    out = dict(ids) if isinstance(ids, dict) else {}
+    if out.get("snapshot_id") is None:
+        data = live_event.get("data")
+        if isinstance(data, dict) and data.get("snapshot_id") is not None:
+            out["snapshot_id"] = data["snapshot_id"]
+    return out
 
 
 def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
@@ -140,6 +146,7 @@ def _filter_report(
     psides: set[str],
     reason_codes: set[str],
     statuses: set[str],
+    tags: set[str],
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> dict[str, Any]:
@@ -174,6 +181,8 @@ def _filter_report(
         filters["reason_codes"] = sorted(reason_codes)
     if statuses:
         filters["statuses"] = sorted(statuses)
+    if tags:
+        filters["tags"] = sorted(tags)
     return filters
 
 
@@ -257,6 +266,16 @@ def _record_ts(row: dict[str, Any]) -> int | None:
         return int(row.get("ts"))
     except (TypeError, ValueError):
         return None
+
+
+def _event_tags(row: dict[str, Any], live_event: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for source in (row.get("tags"), live_event.get("tags")):
+        if isinstance(source, str):
+            tags.append(source)
+        elif isinstance(source, IterableABC):
+            tags.extend(str(item) for item in source if item is not None)
+    return sorted(set(tags))
 
 
 def _short_ref(value: Any, *, max_len: int = 32) -> str | None:
@@ -672,6 +691,11 @@ class _TraceSummaryBuilder:
         self.last_ts: Any = None
         self.event_types: Counter[str] = Counter()
         self.levels: Counter[str] = Counter()
+        self.sources: Counter[str] = Counter()
+        self.components: Counter[str] = Counter()
+        self.tags: Counter[str] = Counter()
+        self.exchanges: Counter[str] = Counter()
+        self.users: Counter[str] = Counter()
         self.statuses: Counter[str] = Counter()
         self.reason_codes: Counter[str] = Counter()
         self.symbols: set[str] = set()
@@ -708,12 +732,18 @@ class _TraceSummaryBuilder:
             self.event_types[str(event_type)] += 1
         for key, counter in (
             ("level", self.levels),
+            ("source", self.sources),
+            ("component", self.components),
+            ("exchange", self.exchanges),
+            ("user", self.users),
             ("status", self.statuses),
             ("reason_code", self.reason_codes),
         ):
             value = live_event.get(key)
             if value is not None:
                 counter[str(value)] += 1
+        for tag in _event_tags(row, live_event):
+            self.tags[tag] += 1
         symbol = live_event.get("symbol") or row.get("symbol")
         if symbol is not None:
             self.symbols.add(str(symbol))
@@ -773,6 +803,11 @@ class _TraceSummaryBuilder:
             "matched_events": int(self.events),
             "event_types": _sorted_counter(self.event_types),
             "levels": _sorted_counter(self.levels),
+            "sources": _sorted_counter(self.sources),
+            "components": _sorted_counter(self.components),
+            "tags": _sorted_counter(self.tags),
+            "exchanges": _sorted_counter(self.exchanges),
+            "users": _sorted_counter(self.users),
             "statuses": _sorted_counter(self.statuses),
             "reason_codes": _sorted_counter(self.reason_codes),
             "symbols": _sorted_values(self.symbols),
@@ -806,6 +841,7 @@ def build_event_report(
     pside: str | Iterable[str] | None = None,
     reason_code: str | Iterable[str] | None = None,
     status: str | Iterable[str] | None = None,
+    tag: str | Iterable[str] | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
     limit: int = 200,
@@ -883,6 +919,7 @@ def build_event_report(
     pside_filter = _normalize_filter_values(pside)
     reason_code_filter = _normalize_filter_values(reason_code)
     status_filter = _normalize_filter_values(status)
+    tag_filter = _normalize_filter_values(tag)
     has_non_cycle_filter = any(
         (
             event_type_filter,
@@ -897,6 +934,7 @@ def build_event_report(
             pside_filter,
             reason_code_filter,
             status_filter,
+            tag_filter,
         )
     )
     trace_without_cycle = (
@@ -1004,6 +1042,7 @@ def build_event_report(
                     record_pside = live_event.get("pside") or row.get("pside")
                     record_status = live_event.get("status")
                     record_reason_code = live_event.get("reason_code")
+                    record_tags = _event_tags(row, live_event)
                     event_type_matches = _filter_matches(
                         record_event_type, event_type_filter
                     )
@@ -1031,6 +1070,9 @@ def build_event_report(
                         record_reason_code, reason_code_filter
                     )
                     status_matches = _filter_matches(record_status, status_filter)
+                    tag_matches = not tag_filter or bool(
+                        set(record_tags).intersection(tag_filter)
+                    )
                     query_matches = (
                         event_type_matches
                         and cycle_matches
@@ -1045,6 +1087,7 @@ def build_event_report(
                         and pside_matches
                         and reason_code_matches
                         and status_matches
+                        and tag_matches
                     )
 
                     if has_query_filter and query_matches:
@@ -1160,6 +1203,7 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            tags=tag_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )
@@ -1194,6 +1238,7 @@ def build_event_report(
             psides=pside_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
+            tags=tag_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )

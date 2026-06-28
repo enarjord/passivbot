@@ -613,6 +613,7 @@ class _InputStalenessAccumulator:
         self.snapshots_seen = 0
         self.snapshot_surface_age_rows = 0
         self.snapshot_market_summaries_seen = 0
+        self.snapshot_market_stale_count = 0
         self.rust_calls_seen = 0
         self.packet_refs_missing = 0
         self.snapshot_to_rust_exact_matches = 0
@@ -703,6 +704,9 @@ class _InputStalenessAccumulator:
             if isinstance(market_summary, dict):
                 max_age_ms = _non_negative_ms(market_summary.get("max_age_ms"))
                 mean_age_ms = _non_negative_ms(market_summary.get("mean_age_ms"))
+                configured_max_age_ms = _non_negative_ms(
+                    market_summary.get("configured_max_age_ms")
+                )
                 if max_age_ms is not None:
                     self.snapshot_market_summaries_seen += 1
                     self._add_group(
@@ -713,6 +717,19 @@ class _InputStalenessAccumulator:
                         timing_kind="age_at_snapshot",
                         trading_impact="blocks_exchange_actions",
                     )
+                    if (
+                        configured_max_age_ms is not None
+                        and max_age_ms > configured_max_age_ms
+                    ):
+                        self.snapshot_market_stale_count += 1
+                        self._add_group(
+                            row=row,
+                            live_event=live_event,
+                            operation="input_staleness.market_snapshot.configured_excess",
+                            value_ms=max_age_ms - configured_max_age_ms,
+                            timing_kind="configured_age_excess",
+                            trading_impact="blocks_exchange_actions",
+                        )
                 if mean_age_ms is not None:
                     self._add_group(
                         row=row,
@@ -807,6 +824,7 @@ class _InputStalenessAccumulator:
             "snapshots_seen": int(self.snapshots_seen),
             "snapshot_surface_age_rows": int(self.snapshot_surface_age_rows),
             "snapshot_market_summaries_seen": int(self.snapshot_market_summaries_seen),
+            "snapshot_market_stale_count": int(self.snapshot_market_stale_count),
             "rust_calls_seen": int(self.rust_calls_seen),
             "packet_refs_missing": int(self.packet_refs_missing),
             "snapshot_to_rust_exact_matches": int(self.snapshot_to_rust_exact_matches),
@@ -2889,6 +2907,9 @@ def summarize_live_performance_report(
             ),
             "snapshot_market_summaries_seen": int(
                 input_staleness.get("snapshot_market_summaries_seen") or 0
+            ),
+            "snapshot_market_stale_count": int(
+                input_staleness.get("snapshot_market_stale_count") or 0
             ),
             "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
             "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),

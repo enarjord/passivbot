@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `2bb89cfa` after PR #807, `Fix snapshot-to-Rust performance correlation`.
+- `404063c6` after PR #815, `Summarize event taxonomy in trace queries`.
 
 Current review gate:
 
@@ -30,6 +30,70 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #815 at `404063c6`.
+- Bots were not restarted for PR #815 because the change was read-only
+  event-query tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #815 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `fe9f0fdc` with no
+  findings and CI was green; the slice is query-only and derives source,
+  component, tag, exchange, and user counters from already-persisted monitor
+  event rows/envelopes. It adds no event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, or trading
+  behavior.
+- A 3-minute smoke after the PR #815 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state at `repository.head=404063c6`,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard live readiness diagnostics.
+- Repository pulled through PR #813 at `11c1a847`.
+- Bots were not restarted for PR #813 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #813 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `a98c168ca` with no
+  findings and CI was green; the slice is report-only, derives values from
+  existing `snapshot.built` event data, and does not add event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior.
+- A 5-minute smoke after the PR #813 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state at `repository.head=11c1a847`,
+  `account_critical_remote_calls.failed=0`, and one non-hard general
+  `remote_calls.failed=1`. Remaining attention came from known non-hard live
+  readiness diagnostics.
+- A focused 30-minute performance report confirmed the new
+  `input_staleness.snapshot_market_stale_count` field populated on VPS5. It
+  reported `snapshots_seen=151`, `snapshot_surface_age_rows=906`,
+  `snapshot_market_summaries_seen=151`, `snapshot_market_stale_count=0`, and
+  `total_groups=52`. The top groups were existing account/input age groups, so
+  the market-snapshot excess-age projection added no new stale rows in that
+  window.
+- Repository pulled through PR #812 at `8e4712f6`.
+- Bots were not restarted for PR #812 because the change was docs-only. All
+  five configured `passivbot live` processes remained running.
+- PR #812 was merged under the documented degraded low-risk docs gate after
+  repeated Claude absence. Hermes approved current head `38da2ccf` with no
+  findings and CI was green.
+- A compact smoke after the PR #812 pull reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  remaining attention only from known non-hard EMA readiness events.
+- Repository pulled through PR #811 at `52f85e08`.
+- Bots were not restarted for PR #811 because the change was read-only
+  event-query tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #811 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `6ca8a602` with no
+  findings and CI was green; the slice is query-only, adds no event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior.
+- A 5-minute time-windowed smoke after the PR #811 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=52f85e08`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Remaining attention came from
+  known non-hard EMA readiness problem events.
 - Repository pulled through PR #807 at `2bb89cfa`.
 - Bots were not restarted for PR #807 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2478,6 +2542,125 @@ VPS5 deployment status:
   event cycle IDs. The report now uses exact envelope cycle IDs when present
   and otherwise falls back to the latest preceding snapshot in the same
   bot/restart scope, with match counters.
+
+### PR #807: Snapshot-to-Rust Correlation Fix
+
+- Branch: `codex/v8-live-performance-snapshot-correlation`.
+- Scope: read-only live performance report correlation fix, docs, and tests.
+- Result: `passivbot tool live-performance-report` now correlates
+  `snapshot_to_rust` timing from `snapshot.built` to
+  `rust_orchestrator.called` by exact live-event envelope cycle ID when
+  available, and otherwise falls back to the latest preceding snapshot in the
+  same bot/restart scope. It also reports exact-match, latest-snapshot-match,
+  missing, and ambiguous counters so report consumers can see when fallback
+  correlation was used. No event producers, exchange calls, cache mutation,
+  readiness gates, console routing, or trading behavior changed.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered the focused live performance report tests,
+  py_compile, `git diff --check`, and a compact local report smoke.
+- VPS5 evidence: deployed at `2bb89cfa` without bot restart because this is
+  read-only report tooling. A 10-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 30-minute performance
+  report confirmed corrected `snapshot_to_rust` values on VPS5: Binance p95
+  `1449ms`, GateIO p95 `1477ms`, OKX p95 `1712ms`, and Hyperliquid p95
+  `564ms`, with `snapshot_to_rust_latest_snapshot_matches=154`,
+  `snapshot_to_rust_exact_matches=0`, and one missing snapshot match at the
+  time-window boundary.
+
+### PR #811: Legacy Snapshot ID Query Fallback
+
+- Branch: `codex/v8-event-query-snapshot-data-fallback`.
+- Scope: read-only `live-event-query` compatibility for legacy
+  `snapshot.built` rows written before snapshot IDs were promoted into the
+  structured event envelope.
+- Result: `_event_ids()` now derives `snapshot_id` from
+  `_live_event.data.snapshot_id` when `ids.snapshot_id` is absent, so existing
+  ID filters, compact output, timelines, trace summaries, order traces, and
+  cycle traces can match older snapshot events. The fallback intentionally does
+  not promote `data.cycle_id`, because legacy `snapshot.built.data.cycle_id`
+  is a planning snapshot epoch rather than a live cycle ID.
+- Review evidence: CI was green. Hermes approved current head `6ca8a602` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered event-query tests, the adjacent CLI dispatch test, py_compile, and
+  `git diff --check`. No event producers, exchange calls, cache mutation,
+  readiness gates, console routing, or trading behavior changed.
+- VPS5 evidence: deployed at `52f85e08` without bot restart because this is
+  read-only query tooling. A 5-minute time-windowed smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness problem events.
+
+### PR #812: Event-Query Snapshot Fallback Progress
+
+- Branch: `codex/v8-progress-after-event-query-fallback`.
+- Scope: docs-only progress-ledger update for PR #811.
+- Result: recorded the legacy snapshot-ID query fallback, its degraded
+  low-risk merge gate, and VPS5 smoke evidence in this ledger. No code,
+  tooling, event producers, exchange calls, cache mutation, readiness gates,
+  console routing, or trading behavior changed.
+- Review evidence: CI was green. Hermes approved current head `38da2ccf` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk docs gate.
+- VPS5 evidence: deployed at `8e4712f6` without bot restart because this is
+  docs-only. A compact smoke after the pull reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  remaining attention only from known non-hard EMA readiness events.
+
+### PR #813: Market Snapshot Staleness Performance Report
+
+- Branch: `codex/v8-market-snapshot-staleness-report`.
+- Scope: read-only live performance report input-staleness projection and
+  tests.
+- Result: `passivbot tool live-performance-report` now derives
+  `input_staleness.snapshot_market_stale_count` from existing
+  `snapshot.built.data.market_snapshot_summary` rows and adds
+  `input_staleness.market_snapshot.configured_excess` timing groups when a
+  symbol's observed `max_age_ms` exceeds configured `configured_max_age_ms`.
+  The bounded summary includes the stale-count field. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior changed.
+- Review evidence: CI was green. Hermes approved current head `a98c168ca` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered the full `tests/test_live_performance_report.py` suite, py_compile,
+  `git diff --check`, and a focused silent-handling scan of touched report/test
+  files.
+- VPS5 evidence: deployed at `11c1a847` without bot restart because this is
+  read-only report tooling. A 5-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, `account_critical_remote_calls.failed=0`, and one non-hard
+  general `remote_calls.failed=1`. A focused 30-minute performance report
+  returned `ok=true` and showed `snapshots_seen=151`,
+  `snapshot_surface_age_rows=906`, `snapshot_market_summaries_seen=151`,
+  `snapshot_market_stale_count=0`, and `total_groups=52`; no market snapshot
+  excess-age group was present in that window.
+
+### PR #815: Event-Query Trace Taxonomy Summary
+
+- Branch: `codex/v8-event-query-trace-taxonomy`.
+- Scope: read-only `live-event-query` trace-summary taxonomy projection and
+  tests.
+- Result: `passivbot tool live-event-query --trace-summary` now includes
+  source, component, tag, exchange, and user counters for matched structured
+  live events. Tags are read from existing monitor rows and optional embedded
+  live-event tags, deduplicated per event before counting. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, monitor
+  writes, or trading behavior changed.
+- Review evidence: CI was green. Hermes approved current head `fe9f0fdc` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered `tests/test_live_event_query.py`, py_compile for touched files,
+  `git diff --check`, and a silent-handling scan of touched files.
+- VPS5 evidence: deployed at `404063c6` without bot restart because this is
+  read-only query tooling. A 3-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
