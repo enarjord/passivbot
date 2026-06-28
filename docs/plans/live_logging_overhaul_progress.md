@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `11c1a847` after PR #813, `Report stale market snapshot age excess`.
+- `404063c6` after PR #815, `Summarize event taxonomy in trace queries`.
 
 Current review gate:
 
@@ -30,6 +30,22 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #815 at `404063c6`.
+- Bots were not restarted for PR #815 because the change was read-only
+  event-query tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #815 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `fe9f0fdc` with no
+  findings and CI was green; the slice is query-only and derives source,
+  component, tag, exchange, and user counters from already-persisted monitor
+  event rows/envelopes. It adds no event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, or trading
+  behavior.
+- A 3-minute smoke after the PR #815 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state at `repository.head=404063c6`,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard live readiness diagnostics.
 - Repository pulled through PR #813 at `11c1a847`.
 - Bots were not restarted for PR #813 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2623,6 +2639,28 @@ VPS5 deployment status:
   `snapshot_surface_age_rows=906`, `snapshot_market_summaries_seen=151`,
   `snapshot_market_stale_count=0`, and `total_groups=52`; no market snapshot
   excess-age group was present in that window.
+
+### PR #815: Event-Query Trace Taxonomy Summary
+
+- Branch: `codex/v8-event-query-trace-taxonomy`.
+- Scope: read-only `live-event-query` trace-summary taxonomy projection and
+  tests.
+- Result: `passivbot tool live-event-query --trace-summary` now includes
+  source, component, tag, exchange, and user counters for matched structured
+  live events. Tags are read from existing monitor rows and optional embedded
+  live-event tags, deduplicated per event before counting. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, monitor
+  writes, or trading behavior changed.
+- Review evidence: CI was green. Hermes approved current head `fe9f0fdc` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered `tests/test_live_event_query.py`, py_compile for touched files,
+  `git diff --check`, and a silent-handling scan of touched files.
+- VPS5 evidence: deployed at `404063c6` without bot restart because this is
+  read-only query tooling. A 3-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
