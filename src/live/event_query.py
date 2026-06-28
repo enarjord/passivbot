@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+from collections.abc import Iterable as IterableABC
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -262,6 +263,16 @@ def _record_ts(row: dict[str, Any]) -> int | None:
         return int(row.get("ts"))
     except (TypeError, ValueError):
         return None
+
+
+def _event_tags(row: dict[str, Any], live_event: dict[str, Any]) -> list[str]:
+    tags: list[str] = []
+    for source in (row.get("tags"), live_event.get("tags")):
+        if isinstance(source, str):
+            tags.append(source)
+        elif isinstance(source, IterableABC):
+            tags.extend(str(item) for item in source if item is not None)
+    return sorted(set(tags))
 
 
 def _short_ref(value: Any, *, max_len: int = 32) -> str | None:
@@ -677,6 +688,11 @@ class _TraceSummaryBuilder:
         self.last_ts: Any = None
         self.event_types: Counter[str] = Counter()
         self.levels: Counter[str] = Counter()
+        self.sources: Counter[str] = Counter()
+        self.components: Counter[str] = Counter()
+        self.tags: Counter[str] = Counter()
+        self.exchanges: Counter[str] = Counter()
+        self.users: Counter[str] = Counter()
         self.statuses: Counter[str] = Counter()
         self.reason_codes: Counter[str] = Counter()
         self.symbols: set[str] = set()
@@ -713,12 +729,18 @@ class _TraceSummaryBuilder:
             self.event_types[str(event_type)] += 1
         for key, counter in (
             ("level", self.levels),
+            ("source", self.sources),
+            ("component", self.components),
+            ("exchange", self.exchanges),
+            ("user", self.users),
             ("status", self.statuses),
             ("reason_code", self.reason_codes),
         ):
             value = live_event.get(key)
             if value is not None:
                 counter[str(value)] += 1
+        for tag in _event_tags(row, live_event):
+            self.tags[tag] += 1
         symbol = live_event.get("symbol") or row.get("symbol")
         if symbol is not None:
             self.symbols.add(str(symbol))
@@ -778,6 +800,11 @@ class _TraceSummaryBuilder:
             "matched_events": int(self.events),
             "event_types": _sorted_counter(self.event_types),
             "levels": _sorted_counter(self.levels),
+            "sources": _sorted_counter(self.sources),
+            "components": _sorted_counter(self.components),
+            "tags": _sorted_counter(self.tags),
+            "exchanges": _sorted_counter(self.exchanges),
+            "users": _sorted_counter(self.users),
             "statuses": _sorted_counter(self.statuses),
             "reason_codes": _sorted_counter(self.reason_codes),
             "symbols": _sorted_values(self.symbols),

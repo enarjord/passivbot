@@ -22,6 +22,9 @@ def _monitor_row(
     reason_code: str = "test",
     ids: dict | None = None,
     data: dict | None = None,
+    source: str = "live",
+    component: str = "test",
+    tags: list[str] | None = None,
     order_id: str | None = None,
     client_order_id: str | None = None,
 ) -> dict:
@@ -33,8 +36,8 @@ def _monitor_row(
         "event_id": f"evt_{seq}",
         "event_type": event_type,
         "level": "debug",
-        "source": "live",
-        "component": "test",
+        "source": source,
+        "component": component,
         "exchange": "binance",
         "user": "binance_01",
         "symbol": symbol,
@@ -53,7 +56,7 @@ def _monitor_row(
         "exchange": "binance",
         "user": "binance_01",
         "kind": event_type,
-        "tags": ["test"],
+        "tags": list(tags or ["test"]),
         "payload": payload,
         "seq": seq,
         "ts": ts,
@@ -1382,6 +1385,9 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 seq=1,
                 ts=1000,
                 status="started",
+                source="executor",
+                component="order_wave",
+                tags=["execution", "order", "wave"],
                 ids={"order_wave_id": "ow_7"},
             ),
             _monitor_row(
@@ -1390,6 +1396,9 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
                 seq=2,
                 ts=1100,
                 status="succeeded",
+                source="executor",
+                component="order_wave",
+                tags=["execution", "order", "summary"],
                 ids={"order_wave_id": "ow_7"},
             ),
         ],
@@ -1410,6 +1419,16 @@ def test_live_event_query_cli_accepts_trace_summary(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     summary = report["cycle"]["trace_summary"]
     assert summary["matched_events"] == 2
+    assert summary["sources"] == {"executor": 2}
+    assert summary["components"] == {"order_wave": 2}
+    assert summary["tags"] == {
+        "execution": 2,
+        "order": 2,
+        "summary": 1,
+        "wave": 1,
+    }
+    assert summary["exchanges"] == {"binance": 2}
+    assert summary["users"] == {"binance_01": 2}
     assert summary["order_waves"]["ow_7"]["event_types"] == {
         "order_wave.completed": 1,
         "order_wave.started": 1,
