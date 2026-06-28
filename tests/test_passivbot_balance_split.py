@@ -5897,8 +5897,23 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
     snapshot_events = [
         event for event in events if event["kind"] == "snapshot.built"
     ]
-    assert snapshot_events[-1]["payload"]["snapshot_id"] == planning_snapshot.snapshot_id
-    availability = snapshot_events[-1]["payload"]["planning_availability"]
+    snapshot_payload = snapshot_events[-1]["payload"]
+    assert snapshot_payload["snapshot_id"] == planning_snapshot.snapshot_id
+    surface_age_names = {item["name"] for item in snapshot_payload["surface_ages"]}
+    assert {"balance", "positions", "open_orders", "completed_candles", "market_snapshot"} <= (
+        surface_age_names
+    )
+    market_summary = snapshot_payload["market_snapshot_summary"]
+    assert market_summary["count"] == 1
+    assert market_summary["symbol_count"] == 1
+    assert market_summary["missing_count"] == 0
+    assert market_summary["configured_max_age_ms"] == 10_000
+    assert market_summary["sources"] == ["test"]
+    rendered_snapshot = json.dumps(snapshot_payload, sort_keys=True)
+    assert "\"last\"" not in rendered_snapshot
+    assert "\"bid\"" not in rendered_snapshot
+    assert "\"ask\"" not in rendered_snapshot
+    availability = snapshot_payload["planning_availability"]
     assert availability["snapshot_id"] == planning_snapshot.snapshot_id
     assert availability["record_count"] == 18
     assert availability["status_counts"] == {"available": 18}

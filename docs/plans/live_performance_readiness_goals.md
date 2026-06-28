@@ -31,10 +31,174 @@ state the readiness contract explicitly. Speedups are acceptable only when they
 preserve the existing trading decision semantics or when the contract is
 deliberately changed and reviewed.
 
+Use this as a living performance scorecard:
+
+- [ ] Each observed slow path has a named owner section below.
+- [ ] Each performance PR updates this file with baseline, target, and result.
+- [ ] Each optimization proves whether it affects protective action, fresh
+  entry, diagnostics only, or no trading behavior.
+- [ ] Each live smoke leaves enough structured evidence to compare against the
+  previous baseline.
+- [ ] If an item is delegated, the delegate works from one checked subsection,
+  opens a PR, and does not touch unrelated live behavior.
+
+## Actionable Goal Checklist
+
+This is the implementation checklist for the performance/readiness goal. The
+rest of this document gives evidence, target contracts, and candidate PR
+slices.
+
+### Goal 1: Make The Slow Path Measurable
+
+- [ ] Add one reportable duration table for startup, state refresh,
+  candle/EMA readiness, HSL replay, Rust planning, Python reconciliation,
+  exchange writes, confirmation, monitor flush, event-pipeline overhead, and
+  shutdown.
+- [ ] For every duration group, report `count`, `min`, `mean`, `p50`, `p95`,
+  `max`, latest timestamp, bot identity, and trading-impact label.
+- [ ] Split startup into account-critical readiness, held-position protective
+  readiness, fresh-entry readiness, first cycle, first possible exchange write,
+  and full background replay.
+- [ ] Every long operation must answer whether it delayed protective action,
+  fresh entries, normal cycle cadence, or diagnostics only.
+- [ ] Acceptance: one `passivbot tool live-performance-report` run can explain
+  the dominant live-vs-backtest delay without SSH log archaeology.
+
+### Goal 2: Remove HSL Broad Replay From The Protective Critical Path
+
+- [ ] A held `coin+pside` must not wait behind unrelated flat coins before its
+  exact HSL state is known.
+- [ ] HSL startup must expose separate states for account-critical ready,
+  held-position protective ready, fresh-entry/cooldown eligibility unknown,
+  and full replay ready.
+- [ ] Current drawdown state takes precedence: a historical red crossing must
+  not trigger a new panic if the exact current state is no longer red.
+- [ ] Full historical/cooldown reconstruction may continue after held positions
+  are protectively ready, but fresh entries remain blocked for symbols whose
+  cooldown/trading eligibility is still unknown.
+- [ ] Acceptance: with 25-30 configured pairs and one held position,
+  held-position protective readiness is reached in seconds, not tens of
+  minutes, when required local/exchange proof is present.
+
+### Goal 3: Identify The HSL Replay Bottleneck
+
+- [ ] Measure cache discovery, cache decode, fill indexing, candle/timeline
+  materialization, pair iteration, EMA/drawdown update, event emission, and
+  exchange/backfill time separately.
+- [ ] Determine whether coin-mode replay is CPU-bound Python, disk/cache IO,
+  exchange backfill, repeated data conversion, or unnecessary serial dependency
+  between independent pairs.
+- [ ] Confirm whether all needed data was already cached in the slow Binance
+  XLM incident path; if yes, explain exactly why local replay still took about
+  27 minutes.
+- [ ] Add an offline deterministic fixture so rows/s, stage timings, and
+  equivalence can be checked without live exchange access.
+- [ ] Acceptance: before optimizing, the report identifies the dominant cost
+  category and provides a repeatable local benchmark.
+
+### Goal 4: Optimize Exact HSL Replay
+
+- [ ] Replay currently held pairs first, cooldown-affected symbols second, and
+  remaining flat symbols last or in background.
+- [ ] Replace avoidable `timeline_rows * pairs` work, repeated fill scans, and
+  repeated data conversions with indexed, sparse, vectorized, or single-pass
+  logic where exact equivalence is proven.
+- [ ] Keep panic/order-triggering decisions equivalent to the current HSL
+  contract unless an explicit contract change is reviewed.
+- [ ] Add equivalence tests against the current full replay for
+  `ema_span_minutes=1` and `ema_span_minutes>1`.
+- [ ] Acceptance: full HSL replay for 25-30 pairs over the configured lookback
+  is no longer a 20-40 minute operation on VPS5-class hardware.
+
+### Goal 5: Add Conservative HSL Checkpoints
+
+- [ ] Treat checkpoints as performance caches only, never as trading authority.
+- [ ] Validate exchange, user, signal mode, risk config, schema/code version,
+  fill coverage/hash, candle coverage/hash where required, market metadata, and
+  last processed timestamp before resume.
+- [ ] Resume only from a validated checkpoint boundary; replay exact
+  exchange/cache data after that boundary.
+- [ ] On any ambiguity, bypass the checkpoint and perform exact replay with a
+  structured reason event.
+- [ ] Acceptance: warm restart with valid proof reaches held-position
+  protective readiness quickly; invalid proof falls back loudly and safely.
+
+### Goal 6: Make Warm Restart Fast But Proven
+
+- [ ] Short downtime should not cause broad HSL, candle, or fill
+  reconstruction when coverage proof is still valid.
+- [ ] Warm restart should use proven local cache/checkpoint state before
+  scheduling broad repair.
+- [ ] A stale or missing proof for one symbol should trigger targeted repair,
+  not a broad stall for every unrelated held position or forager candidate.
+- [ ] Acceptance: a quick restart after a clean shutdown reuses valid local
+  state and reaches protective readiness much faster than cold start.
+
+### Goal 7: Make Shutdown Fast And Diagnosable
+
+- [ ] Ctrl+C should set the exit flag and cancel or interrupt non-critical long
+  work promptly.
+- [ ] Big candle fetches, background HSL replay, broad forager refresh, and
+  monitor scans must not block exit unless they are inside a clearly documented
+  critical cleanup section.
+- [ ] Slow shutdown should report the blocking task, stage, and elapsed time.
+- [ ] Acceptance: repeated Ctrl+C should not be required in the normal path;
+  when it is required, the reason is visible in structured events/logs.
+
+### Goal 8: Keep Forager Readiness Fast Without Random Fresh-Subset Bias
+
+- [ ] Refresh the stalest eligible forager symbols regularly in the background.
+- [ ] Allow bounded staleness for candidate ranking without disqualifying a
+  coin merely because it was not among the freshest arbitrary subset.
+- [ ] For stale-but-within-cap candidates, close EMA readiness may use bounded
+  flat-close projection, while quote-volume and log-range ranking should carry
+  forward latest known EMA values with age/source metadata.
+- [ ] Candidates with no prior feature basis, non-finite carried values, or age
+  beyond the cap are explicitly unavailable until refreshed.
+- [ ] Acceptance: forager selection is both rate-limit friendly and
+  non-random; stale candidate state is observable and does not weaken actual
+  entry readiness.
+
+### Goal 9: Keep Speed And Correctness Boundaries Explicit
+
+- [ ] Reports, probes, and cache doctors may expose gaps, but must not enforce
+  trading decisions unless a separate behavior PR changes the contract.
+- [ ] Any readiness fallback used by live trading must be bounded, observable,
+  and covered by tests.
+- [ ] No neutral defaults for missing HSL, fill, candle, account, EMA, market,
+  or cooldown proof.
+- [ ] Acceptance: every speedup PR states whether it affects protective action,
+  fresh entries, diagnostics only, or no trading behavior.
+
+## Definition Of Done
+
+- [ ] Held-position protective readiness is reached in seconds, not tens of
+  minutes, when required local/exchange proof is available.
+- [ ] Full HSL replay no longer blocks immediate protective action for current
+  positions.
+- [ ] Warm restart with valid proof reaches protective readiness quickly and
+  bypasses unnecessary broad reconstruction.
+- [ ] Invalid or stale cache/checkpoint proof falls back loudly to exact repair
+  without fabricating safe state.
+- [ ] One `passivbot tool live-performance-report` run can explain the main
+  delay categories for startup, cycle, exchange write, confirmation, and
+  shutdown.
+- [ ] Every merged performance slice updates this checklist with baseline,
+  target, result, and review/smoke evidence.
+
 ## Current Evidence
 
-Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
-`b5e08986`.
+Evidence source: VPS5 monitor/smoke data collected on 2026-06-27 while the
+logging/performance report work was being merged through `v8`. Treat the
+specific timings below as incident and baseline evidence, not as a guarantee
+that the latest local head has been re-profiled after every subsequent
+observability-only merge.
+
+Latest incident driver: Binance `hsl_signal_mode=coin` XLM panic on
+2026-06-26, with fill-event timestamp `1782492486000`. The observed startup
+path spent roughly 27 minutes in HSL history reconstruction before the
+protective close was posted. That is a safety-critical performance failure even
+if the final replay result is correct.
 
 1. HSL coin-mode startup replay is the current P0 latency gap.
    - Binance incident on 2026-06-26: coin HSL replay loaded at `16:19:33Z`
@@ -85,6 +249,15 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
      account packet, snapshot, EMA bundle, and Rust-call events.
    - A follow-up slice added HSL coin replay pair classification, applied-row,
      elapsed, and rows-per-second fields to structured replay events.
+   - A follow-up slice added an `operation_durations` table that collates
+     existing startup, cycle, state-refresh, remote-call, HSL replay, cache,
+     decision-boundary, input-staleness, execution, and shutdown timing groups
+     into one bounded report section.
+   - A follow-up slice corrected `snapshot_to_rust` correlation: planning
+     snapshot epochs are not live event cycle IDs, so legacy/current
+     `snapshot.built` events without envelope cycle IDs are matched to the
+     latest preceding snapshot in the same bot/restart scope and surfaced with
+     exact-vs-latest match counters.
    - Missing pieces: candle close age, market price age, config age, and
      complete coverage for every order/write/shutdown stage.
 
@@ -100,6 +273,104 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
      `required_pairs=21`, and `timeline_rows=43201`.
    - These fields make the next optimization measurable, but they do not yet
      split protective readiness from full replay.
+
+## Required Performance Report Matrix
+
+The live performance report should become the canonical answer to "where did
+the time go?" for a live bot. Every row below should expose `count`, `min`,
+`mean`, `p50`, `p95`, `max`, latest timestamp, bot identity, and trading-impact
+classification when enough source events exist.
+
+- [ ] Startup: process start to account-critical ready.
+- [ ] Startup: process start to held-position protective HSL ready.
+- [ ] Startup: process start to fresh-entry ready.
+- [ ] Startup: process start to first planning cycle started/completed.
+- [ ] Startup: process start to first possible exchange write.
+- [ ] HSL: fill/cache load time, replay build time, held-pair protective
+  replay time, full replay time, checkpoint load time, checkpoint write time,
+  rows/s, symbols/pairs/held pairs/cooldown pairs.
+  - Status: partial. Existing `hsl.replay.*` events are now summarized by
+    `live-performance-report` as `hsl_replay_profile`, including bounded pair
+    counts, timeline rows, rows/s, estimated dense pair-row work, observed
+    progress percentage, and startup-blocking elapsed time where present.
+    Remaining work: true protective-ready elapsed time and per-stage internal
+    replay CPU/IO profiling.
+- [ ] Cache readiness: fill cache coverage proof, candle coverage proof,
+  checkpoint compatibility decision, repair scope, repair elapsed time.
+  - Status: partial. Existing `cache.warmup_decision`,
+    `cache.load.completed`, and `cache.flush.completed` events are now
+    summarized by `live-performance-report` as `cache_warmup`, including
+    bounded warm-cache reuse/cold-path decisions, candle load/flush row counts,
+    source/reason counters, and elapsed timing where present. Remaining work:
+    fill-cache coverage proof, HSL/checkpoint compatibility decisions, repair
+    scope, and repair elapsed time.
+- [ ] Account state: balance, positions, open orders, fills, state-refresh wall
+  time, surface max/sum time, retry/degraded counts.
+- [ ] Market data: ticker/market price age, candle close age, EMA bundle age,
+  forager feature age, candle remote fetch latency, synthetic/no-trade gap
+  repair counts.
+  - Status: partial. New `snapshot.built` metadata and performance-report
+    groups expose planning surface ages plus market-snapshot max/mean age at
+    snapshot build. Existing `forager.selection`,
+    `forager.feature_unavailable`, `ema.unavailable`, and
+    `ema.fallback_used` events are now summarized as
+    `forager_ema_readiness`, including bounded selection counts,
+    feature-unavailable counts, EMA unavailable reasons, fallback counts,
+    symbol samples, configured age/budget fields where present, and latest
+    bounded event records. Remaining work: true candle close age, exact
+    forager feature age by symbol, and symbol-scoped stale-but-acceptable
+    candidate metadata.
+- [ ] Decision boundary: whole-minute lag to cycle start, Rust input snapshot,
+  Rust output, Python gate/filter, first exchange write, confirmation refresh.
+- [ ] Cycle phases: market state, account state, Rust planning,
+  reconciliation/gating, execution, confirmation, monitor flush, event
+  pipeline overhead.
+  - Status: partial. The report now includes an `operation_durations` table
+    that normalizes existing duration/staleness groups from performance,
+    decision-boundary, input-staleness, execution, and shutdown sections into
+    one sortable table with operation category, timing kind, trading impact, and
+    blocking scope. Remaining work: source events for event-pipeline overhead
+    and complete stage coverage where the live loop does not yet emit timings.
+- [ ] Exchange writes: create/cancel/close/panic write latency, exchange
+  response latency, ambiguous write rate, confirmation latency.
+  - Status: partial. The report now derives order-wave total duration,
+    create/cancel sent-to-terminal response duration, confirmation duration,
+    missing-id counts, unpaired-terminal counts, and pending-start counts from
+    existing structured events. Remaining work: distinguish close/panic
+    subclasses and tie execution delays back to exact order class once those
+    fields are consistently available in the event stream.
+- [ ] Resource pressure: CPU/load, RSS, memory percent, open FDs, event queue
+  depth, dropped event counters, sink errors, loop lag where available.
+  - Status: partial. Existing `health.summary` events are summarized by
+    `live-performance-report` as `resource_pressure`, including whitelisted
+    process and event-pipeline fields with count, latest, min, mean, median,
+    p95, and max values where present. Remaining work: CPU percent and loop lag
+    need source event support if they are not already emitted by the active bot.
+- [ ] Shutdown: signal to exit flag, cancellation request, blocking task names,
+  final monitor flush, process exit.
+
+Minimum report questions the operator must be able to answer:
+
+- [ ] How long after process start could the bot safely panic-close each held
+  position?
+- [ ] How long after process start could the bot safely place fresh entries?
+- [ ] Which exact input or phase delayed the first possible protective action?
+- [ ] Which exact input or phase delayed the first possible fresh entry?
+- [ ] Was a delay caused by exchange/network IO, local cache proof, local CPU,
+  disk IO, Python replay logic, Rust planning, exchange write/confirmation, or
+  monitor/event-pipeline overhead?
+- [ ] Did any slow background task share the critical path with protective
+  actions when it should have been decoupled?
+- [ ] For each restart, did warm local cache/checkpoint proof actually reduce
+  startup time, or did the bot repeat broad reconstruction unnecessarily?
+
+Trading-impact labels:
+
+- [ ] `protective_blocker`: can delay panic/reduce-only/risk protection.
+- [ ] `entry_blocker`: can delay fresh entries but not protective actions.
+- [ ] `cycle_delay`: delays the full loop after readiness is established.
+- [ ] `diagnostics_only`: affects logs/monitor/reporting only.
+- [ ] `unknown`: missing event data; should be treated as an observability gap.
 
 ## Outcome Targets
 
@@ -161,6 +432,17 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Full replay may continue after protective readiness, but fresh initial
     entries must remain blocked until cooldown/trading eligibility is known.
 
+- [ ] Define HSL startup states explicitly.
+  - `hsl_protective_unavailable`: required held-position proof is missing or
+    invalid; protective HSL cannot be evaluated yet.
+  - `hsl_protective_ready`: held positions have exact current HSL state and
+    panic/protective decisions may proceed.
+  - `hsl_entry_cooldown_unknown`: held positions are protected, but flat-symbol
+    cooldown reconstruction is incomplete, so fresh HSL-gated entries remain
+    blocked where affected.
+  - `hsl_full_ready`: cooldown and replay state are complete for the configured
+    HSL universe.
+
 - [ ] Coin mode must not make a held coin wait behind unrelated coins.
   - A currently held `coin+pside` pair should be classified before historical
     flat pairs.
@@ -201,6 +483,33 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     crossing must not cause a panic now if current replay state is no longer in
     the red zone.
 
+- [ ] Answer the current bottleneck question before broad rewrites.
+  - Is startup blocked on CPU-bound Python replay, disk/cache reads, exchange
+    backfill, monitor/event emission, or repeated data conversion?
+  - If all needed data is cached locally, explain why replay still takes
+    hundreds or thousands of seconds.
+  - Confirm whether coin-mode replay currently serializes independent
+    `coin+pside` pairs unnecessarily.
+  - Confirm whether unrelated flat pairs can delay held-pair protective
+    readiness.
+
+- [ ] Prove whether coin-mode HSL needs cross-coin synchronization.
+  - If one coin's HSL state depends only on that coin's fill/PnL and candle
+    series, the held coin must not wait for unrelated coins to finish replay.
+  - If any shared state exists, document it explicitly and test the dependency.
+  - This decision should drive whether the first optimization is priority
+    scheduling, sparse per-pair replay, multiprocessing, or a single vectorized
+    pass.
+
+- [ ] Separate cache-read speed from replay-compute speed.
+  - Measure local artifact discovery, JSON/NDJSON/NPY decode, fill indexing,
+    candle/timeline materialization, and replay compute separately.
+  - A warm restart with complete local proof should not spend most startup time
+    on exchange backfill or broad artifact rescan.
+  - If disk cache reads are fast but replay is slow, optimize the replay loop.
+  - If cache proof or decode is slow, add metadata indexes/checkpoints before
+    changing trading logic.
+
 - [ ] Identify the current bottleneck with a focused profile.
   - Measure time spent in fill indexing, candle/timeline construction, pair
     iteration, EMA update, drawdown/tier update, event emission, and disk/cache
@@ -212,6 +521,14 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Report whether the bottleneck is CPU-bound Python, disk/cache IO, event
     emission, or exchange/cache backfill.
 
+- [ ] Build a deterministic HSL replay benchmark fixture.
+  - Include 25-30 pairs, one or more held positions, at least one cooldown
+    candidate, 30 days of one-minute rows, and realistic fill density.
+  - Fixture should run offline and produce comparable output for current full
+    replay, optimized replay, and checkpoint resume.
+  - Output metrics: elapsed, rows/s, per-stage timings, current HSL state by
+    held pair, cooldown state by affected flat pair, and equivalence diff.
+
 - [ ] Index fill events once by `(pside, symbol)`.
   - Reuse that index for replay contracts, panic detection, position-size
     replay, realized-PnL peak/current calculations, and cooldown discovery.
@@ -222,6 +539,13 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     proof is established first.
   - Do not allow broad flat-pair replay to block a held pair that already has
     exact protective readiness.
+
+- [ ] Prefer priority ordering before parallelism.
+  - First replay currently held positions.
+  - Then replay coins with active cooldown implications.
+  - Then replay remaining eligible flat symbols in the background.
+  - This should improve safety even on a 1-vCPU VPS where parallelism has
+    limited value.
 
 - [ ] Add structured replay timing fields.
   - Done: current full-replay events include `timeline_rows`, `pairs`,
@@ -269,6 +593,18 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
   - Checkpoint invalidation must be conservative: if any required proof is
     ambiguous, discard or bypass the checkpoint and emit the reason.
 
+- [ ] Treat checkpoints as resumable proof, not as authority.
+  - On every startup, validate the checkpoint against config, code/schema,
+    fill coverage, candle coverage where required, market metadata, and last
+    processed timestamp before using it.
+  - Resume only from the validated boundary and replay new exchange/cache data
+    after that boundary.
+  - Emit checkpoint load/resume/bypass/write events with elapsed time and
+    reason codes.
+  - Acceptance: a warm restart with a valid checkpoint reaches held-position
+    protective readiness quickly, while an invalid checkpoint falls back to
+    exact replay loudly and safely.
+
 ### P1: General Live Performance Report
 
 - [x] Add `passivbot tool live-performance-report`.
@@ -312,6 +648,22 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
     exchange write eligibility, and full background replay complete.
   - Group by exchange/user/bot so VPS-class regressions are visible before a
     panic incident.
+
+- [ ] Add a full live-operation duration table.
+  - Include startup, account refresh, fill refresh, cache proof, HSL replay,
+    candle/EMA readiness, forager feature readiness, Rust planning,
+    reconciliation/gating, order execution, confirmation refresh, monitor flush,
+    event-pipeline enqueue/write, and shutdown.
+  - Each group should include min, max, mean, p50, p95, count, latest sample,
+    bot/exchange/user, and trading-impact label.
+  - The table should be usable after a live incident to identify whether the
+    critical delay was before risk classification, before planning, before
+    exchange write, or after exchange write.
+  - Status: partial. Cache warmup/load/flush event timings now participate in
+    the performance report and are also grouped in `cache_warmup`. Existing
+    forager/EMA readiness diagnostics are now grouped in
+    `forager_ema_readiness`, but true per-symbol feature-age timing still
+    needs source event support.
 
 - [ ] Add a "slowest blockers" view.
   - Rank operations by elapsed time and trading impact.
@@ -418,6 +770,53 @@ Snapshot source: VPS5 monitor/smoke data on 2026-06-27 after `v8` head
 - [ ] HSL checkpointing reduces warm-restart replay without weakening
   stateless correctness: checkpoints accelerate reconstruction only when their
   proof matches exchange/cache-derived inputs.
+
+## Candidate PR Slices
+
+These slices are intentionally small enough for normal review and live smoke.
+Each slice should update this checklist with its result.
+
+1. [ ] Performance-report coverage slice.
+   - Add missing report groups for resource pressure, HSL replay/protective
+     readiness, candle/market/config age, and shutdown stages as source events
+     become available.
+   - Acceptance: `passivbot tool live-performance-report` can produce a bounded
+     summary explaining the slowest startup and cycle blockers from local
+     monitor data only.
+
+2. [ ] HSL replay benchmark/profiling slice.
+   - Add an offline deterministic benchmark or fixture path for coin-mode HSL
+     replay using realistic pair count, fill count, and row count.
+   - Acceptance: report current elapsed, rows/s, and per-stage timing without
+     contacting exchanges or changing live behavior.
+   - Status: first report slice adds `hsl_replay_profile` from existing live
+     events. Offline deterministic replay fixtures and internal stage profiling
+     remain open.
+
+3. [ ] Held-position protective readiness slice.
+   - Classify currently held `coin+pside` pairs before unrelated flat pairs and
+     emit explicit `hsl_protective_*` state events.
+   - Acceptance: held-pair state matches existing full replay in tests, and a
+     held late-sorting symbol is no longer delayed by broad flat-symbol replay.
+
+4. [ ] Full replay lower-complexity slice.
+   - Replace avoidable nested scans and repeated fill/timeline work with exact
+     indexed/sparse replay.
+   - Acceptance: equivalence tests pass against the old replay contract and the
+     benchmark shows a material rows/s improvement.
+
+5. [ ] HSL checkpoint proof/resume slice.
+   - Write and resume from conservative performance checkpoints after exact
+     reconstruction.
+   - Acceptance: valid checkpoint warm restart is fast; stale/incompatible
+     checkpoint is bypassed with an observable reason; decisions remain
+     reproducible from exchange/cache-derived truth.
+
+6. [ ] Shutdown and restart latency slice.
+   - Make long non-critical startup/background work interruptible and report
+     shutdown blockers.
+   - Acceptance: repeated Ctrl+C should not be needed in the normal path, and
+     slow shutdown identifies the blocking stage.
 
 ## Suggested Implementation Order
 

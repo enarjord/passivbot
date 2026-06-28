@@ -15,11 +15,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-27.
+Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ef75d210` after PR #783, `Update logging progress after HSL timing`.
+- `2bb89cfa` after PR #807, `Fix snapshot-to-Rust performance correlation`.
 
 Current review gate:
 
@@ -30,6 +30,119 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #807 at `2bb89cfa`.
+- Bots were not restarted for PR #807 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #807 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice corrected `snapshot_to_rust` report correlation only;
+  no event producers, exchange calls, cache mutation, readiness gates, console
+  routing, or trading behavior changed.
+- A 10-minute time-windowed smoke after the PR #807 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state at
+  `repository.head=2bb89cfa`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness and HSL cooldown
+  groups.
+- A focused 30-minute performance report confirmed the corrected
+  `snapshot_to_rust` values on VPS5: Binance p95 `1449ms`, GateIO p95
+  `1477ms`, OKX p95 `1712ms`, and Hyperliquid p95 `564ms`. The same report
+  showed `snapshot_to_rust_latest_snapshot_matches=154`,
+  `snapshot_to_rust_exact_matches=0`, and one missing snapshot match at the
+  time-window boundary.
+- Repository pulled through PR #805 at `3d6e3fa7`.
+- Bots were not restarted for PR #805 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #805 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `4573fe59` with no
+  findings and CI was green; the slice is report-only, derives values from
+  already-collected timing groups, and does not add event producers, exchange
+  calls, cache mutation, readiness gates, console routing, or trading behavior.
+- A 5-minute time-windowed smoke after the PR #805 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state at
+  `repository.head=3d6e3fa7`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness and HSL cooldown
+  groups.
+- A focused 30-minute performance report confirmed the new
+  `operation_durations` section populated on VPS5. It reported `total_groups=161`
+  across cache, cycle, decision-boundary, input-staleness, remote-call, and
+  state-refresh categories. The top groups showed `input_staleness.snapshot_to_rust`
+  as the largest observed delay in that window, with the expected
+  `delays_cycle_decision` blocking scope. No raw payloads, account values, or
+  exchange response bodies were surfaced.
+- Repository pulled through PR #803 at `07f8e759`.
+- Bots were not restarted for PR #803 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #803 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `80bc42fd` with no
+  findings and CI was green; the slice is report-only, derives values from
+  existing `health.summary` events, and does not add event producers, exchange
+  calls, cache mutation, readiness gates, console routing, or trading behavior.
+- A 5-minute time-windowed smoke after the PR #803 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state at
+  `repository.head=07f8e759`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness and HSL cooldown
+  groups.
+- A focused 30-minute performance report confirmed the updated
+  `resource_pressure` section populated on VPS5. It reported `total=8` health
+  summary events across four bots, and sample groups for Hyperliquid and GateIO
+  showed whitelisted process/event-pipeline fields with `count`, `latest`,
+  `min`, `mean`, `median`, `p95`, and `max` values, including RSS, load
+  averages, loop duration, event queue depth, sink-error totals, dropped-event
+  totals, and worker state. No raw account or financial payload fields were
+  surfaced.
+- Repository pulled through PR #801 at `1fc77413`.
+- Bots were not restarted for PR #801 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- A 10-minute time-windowed smoke after the PR #801 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, `processes.ok=true`, and clean tracked repository
+  state at `repository.head=1fc77413`. The same window still showed non-hard
+  EMA readiness and HSL cooldown attention plus one recovered non-hard Kucoin
+  candle timeout; account-critical remote calls had `failed=0`.
+- A focused 10-minute performance report confirmed the new
+  `forager_ema_readiness` section populated on VPS5. It reported
+  `total_events=140`, with `ema.fallback_used=41`, `ema.unavailable=56`, and
+  `forager.selection=43`, grouped across Binance, GateIO, OKX, and
+  Hyperliquid. Sample groups showed bounded forager selection counts,
+  selected-symbol samples, EMA unavailable reason counters, and EMA fallback
+  counters without raw EMA error text or account/cache payloads.
+- Repository pulled through PR #799 at `cb034e82`.
+- Bots were not restarted for PR #799 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- A 2-minute smoke after the PR #799 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. The same window still showed non-hard EMA readiness
+  and HSL cooldown attention; those are live-state diagnostics, not deploy
+  hard failures.
+- A focused 5-minute performance report confirmed the new `cache_warmup`
+  section populated on VPS5 for all five bots. The section reported
+  `total_events=614`, with `cache.load.completed=469`,
+  `cache.flush.completed=140`, and `cache.warmup_decision=5`. Sample groups
+  showed OKX, Binance, and GateIO with bounded candle load/flush rows,
+  source/reason counters, warmup cold-path decisions, and elapsed summaries.
+- Repository pulled through PR #797 at `87f22840`.
+- Bots were not restarted for PRs #796/#797 because the changes were docs and
+  read-only performance-report tooling. All five configured `passivbot live`
+  processes remained running.
+- A 2-minute smoke after the PR #797 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`.
+- A focused 45-minute performance report confirmed the new
+  `hsl_replay_profile` section populated on VPS5. It showed four active HSL
+  replay profiles: GateIO about `1.25M` estimated dense pair-rows and `56.2%`
+  observed work, Binance about `1.12M` and `62.4%`, OKX about `1.17M` and
+  `62.9%`, and Kucoin with only the start event in the sampled window. This
+  validates the report slice and re-confirms that coin-HSL full replay remains
+  the dominant startup safety/performance gap.
 - Repository pulled through PR #696 at `d850daf5`.
 - Bots were restarted from `/root/bots_vps5.yaml` after PR #677 and left
   running. The old process set stopped after about 36 seconds before the tmuxp
@@ -450,7 +563,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, and initial input-staleness support, plus HSL replay pair/rate fields | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
@@ -2070,6 +2183,301 @@ VPS5 deployment status:
 - VPS5 evidence: deployed at `ef75d210` without bot restart because this was a
   docs-only update. The pull was a clean fast-forward and all five configured
   `passivbot live` processes remained running afterward.
+
+### PR #784: Startup Readiness Performance Summary
+
+- Branch: `codex/v8-live-startup-readiness-summary`.
+- Scope: read-only live performance report startup-readiness aggregation,
+  docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `startup_readiness`, derived from existing lifecycle/startup timing/HSL replay
+  events. The summary is generation-scoped across restarts, bounded by
+  `group_limit`, and copies only a fixed whitelist of HSL replay fields.
+- Review evidence: CI was green. Hermes approved the fixed head after a
+  generation-reset finding was addressed. Claude approved the slice and its
+  only bounding/value-safety suggestions were addressed with implementation
+  changes and regression tests. Local validation covered performance-report,
+  event-query, and smoke-report tests, py_compile, `git diff --check`, a
+  silent-handling audit, and a compact filtered CLI smoke.
+- VPS5 evidence: deployed at `f763a85a` without bot restart because this is
+  read-only report tooling. A focused Binance performance summary returned
+  `ok=true` and showed populated `startup_readiness`, including completed HSL
+  replay timing and startup phase timings. The immediate smoke caught a real
+  transient Binance `InvalidNonce` authoritative open-orders failure; a settled
+  2-minute smoke then reported `ok=true`, `hard_failures=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `matched_expected=5`, and `missing_expected=[]`.
+
+### PR #787: Live Performance Slowest Blockers View
+
+- Branch: `codex/v8-live-performance-slowest-blockers`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `slowest_blockers`, a bounded cross-section ranking derived from existing
+  performance, decision-boundary, and input-staleness metric groups. The view
+  excludes diagnostics-only/observability groups and copies only the existing
+  bounded metric fields plus `source_section` and `blocking_scope`.
+- Review evidence: CI was green. Claude approved the current head with no
+  findings. Hermes approved the equivalent pre-rebase code delta; the final
+  rebase only moved the branch over the already-merged progress-doc update.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, silent-handling audit, and a compact
+  filtered CLI smoke.
+- VPS5 evidence: deployed at `002fb965` without bot restart because this is
+  read-only report tooling. A focused Binance performance report returned
+  `ok=true` and showed `slowest_blockers` populated, with startup warmup and
+  HSL-related timings ranked above lower-impact groups. A 2-minute smoke
+  reported `ok=true`, `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`.
+
+### PR #789: Live Performance Resource Pressure Report
+
+- Branch: `codex/v8-live-performance-resource-pressure`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `resource_pressure`, derived only from existing `health.summary` events. The
+  section aggregates whitelisted process and event-pipeline fields such as RSS,
+  memory percent, open file descriptors, load averages, loop duration, event
+  queue depth, dropped-event counters, sink-error counters, degraded count, and
+  event-pipeline worker state. It does not surface raw account, balance,
+  equity, PnL, or other financial health payload fields.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Claude noted one optional non-blocking efficiency nit: the report accumulator
+  stores value lists for min/max/mean, which is acceptable for this one-shot
+  offline report and consistent with nearby report accumulators. Local
+  validation covered performance-report, event-query, and smoke-report tests,
+  py_compile, `git diff --check`, silent-handling audit, and a compact
+  filtered CLI smoke.
+- VPS5 evidence: deployed at `bc6e7f1d` without bot restart because this is
+  read-only report tooling. A compact smoke reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused performance summary showed
+  `resource_pressure` populated for GateIO and Hyperliquid with RSS, load
+  average, loop duration, event queue, sink-error, and worker-state fields.
+
+### PR #791: Live Performance Shutdown Latency Report
+
+- Branch: `codex/v8-live-performance-shutdown-latency`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `shutdown_latency`, derived only from existing `bot.stopping`,
+  `bot.shutdown.stage`, and `bot.stopped` events. The section summarizes
+  per-stage cumulative shutdown elapsed time and final total shutdown duration
+  while keeping the data out of trading blocker rankings and without copying
+  shutdown error text.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, silent-handling audit, and a compact
+  CLI performance-report smoke.
+- VPS5 evidence: deployed at `a04bc1ed` without bot restart because this is
+  read-only report tooling. A compact smoke reported `ok=true`,
+  `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused performance summary showed
+  `shutdown_latency` present; it was empty in the recent window because no
+  shutdown lifecycle events occurred during that window.
+
+### PR #793: Live Performance Execution Timing Report
+
+- Branch: `codex/v8-live-performance-execution-timing`.
+- Scope: read-only live performance report projection, docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `execution_timing`, derived only from existing order-wave, order create/cancel,
+  and confirmation events. The section reports bounded exchange-action latency
+  groups plus `starts_seen`, `terminals_seen`, `timing_observations`,
+  `missing_id_counts`, `unpaired_terminal_counts`, and `pending_start_counts`.
+  Pairing keys are used only internally; raw order payloads, action ids, and
+  client-order ids are not surfaced.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, and a compact synthetic CLI
+  performance-report smoke.
+- VPS5 evidence: deployed at `b5fc245b` without bot restart because this is
+  read-only report tooling. All five configured `passivbot live` processes
+  remained running after pull. A 5-minute smoke reported `hard_failures=0`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `matched_expected=5`, and `missing_expected=[]`. A 180-minute performance
+  summary returned `ok=true` and showed `execution_timing` present but empty
+  because no order-wave/write events occurred in that sampled window. Existing
+  slowest blockers were input-staleness and cycle-boundary lag groups, not
+  execution writes.
+
+### PR #796: Live Performance Readiness Checklist
+
+- Branch: `codex/v8-live-performance-readiness-checklist`.
+- Scope: docs-only performance/readiness plan structure.
+- Result: `docs/plans/live_performance_readiness_goals.md` now has a short
+  current-priority checklist and definition of done for fast but correct
+  readiness, HSL protective startup latency, replay profiling, exact
+  optimization, checkpoints, warm restarts, shutdown latency, and
+  observability-vs-trading boundaries.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  `git diff --check -- docs/plans/live_performance_readiness_goals.md` passed.
+- VPS5 evidence: deployed at `8bba0641` without bot restart because this was
+  docs-only. A 2-minute brief smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`.
+
+### PR #797: HSL Replay Profile Performance Report
+
+- Branch: `codex/v8-live-performance-hsl-profile`.
+- Scope: read-only live performance report HSL replay profiling, docs, and
+  tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `hsl_replay_profile`, derived only from existing `hsl.replay.*` events. The
+  section whitelists bounded replay metadata and derives estimated dense,
+  required, held, and cooldown pair-row work, observed applied rows/progress
+  percentage, elapsed timing, and startup-blocking timing when available.
+  Trading behavior, exchange calls, event emission, and raw HSL/account payloads
+  are unchanged.
+- Review evidence: CI was green. Claude approved the rebased head with no
+  findings. Hermes approved the identical report slice before the clean rebase;
+  the only old-vs-new tree difference was the separately approved PR #796 docs
+  context. Local validation covered `tests/test_live_performance_report.py`,
+  adjacent event-query and smoke-report tests, py_compile, `git diff --check`,
+  a local compact CLI performance-report smoke, and a silent-handling scan of
+  touched report/test files.
+- VPS5 evidence: deployed at `87f22840` without bot restart because this is
+  read-only report tooling. A 2-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected_count=0`. A focused 45-minute performance report returned
+  `ok=true` and showed `hsl_replay_profile` populated for Binance, GateIO,
+  OKX, and Kucoin. The populated groups made the current dense full-replay
+  problem explicit: Binance/GateIO/OKX were still in coin-HSL replay after
+  roughly `15-17m`, with about `1.1M-1.25M` estimated dense pair-rows each and
+  only about `56-63%` observed work in the sampled window.
+
+### PR #799: Cache Warmup Performance Report
+
+- Branch: `codex/v8-live-performance-cache-warmup`.
+- Scope: read-only live performance report cache/warmup projection, docs, and
+  tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `cache_warmup`, derived only from existing `cache.warmup_decision`,
+  `cache.load.completed`, and `cache.flush.completed` events. The section
+  summarizes bounded warm-cache reuse/cold-path decisions, candle cache
+  load/flush rows, reason/source counters, symbol/timeframe samples, and
+  elapsed timing where present. Trading behavior, exchange calls, cache
+  mutation, event producers, and console routing are unchanged.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Both reviews verified that the section is report-only and uses explicit
+  scalar/counter whitelists that exclude raw cache paths, raw payloads, account
+  values, and secrets. Local validation covered performance-report,
+  event-query, and smoke-report tests, py_compile, `git diff --check`, local
+  compact CLI performance-report smoke, and a silent-handling scan of touched
+  report/test files.
+- VPS5 evidence: deployed at `cb034e82` without bot restart because this is
+  read-only report tooling. A 2-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, and
+  `missing_expected=[]`. A focused 5-minute performance report returned
+  `ok=true` and showed `cache_warmup` populated for all five bots, with
+  `total_events=614`, `cache.load.completed=469`,
+  `cache.flush.completed=140`, and `cache.warmup_decision=5`. Sample groups
+  showed OKX, Binance, and GateIO warmup cold-path decisions plus bounded
+  candle load/flush row counts and elapsed summaries.
+
+### PR #801: Forager EMA Readiness Performance Report
+
+- Branch: `codex/v8-live-performance-forager-ema-readiness`.
+- Scope: read-only live performance report forager/EMA readiness projection,
+  docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `forager_ema_readiness`, derived only from existing `forager.selection`,
+  `forager.feature_unavailable`, `ema.unavailable`, and `ema.fallback_used`
+  events. The section summarizes bounded forager selection counts,
+  feature-unavailable counts, EMA unavailable reason/error-type counters, EMA
+  fallback counters, pside/status/reason-code counters, configured age/budget
+  fields where present, and bounded symbol samples. Trading behavior, exchange
+  calls, cache mutation, event producers, and console routing are unchanged.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Both reviews verified the section is report-only, standalone, and value-safe.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, a local compact CLI
+  performance-report smoke, and a silent-handling scan of touched report/test
+  files. Tests explicitly inject and reject raw top scores, raw EMA error text,
+  API-key markers, balance/equity fields, raw payload markers, and local paths.
+- VPS5 evidence: deployed at `1fc77413` without bot restart because this is
+  read-only report tooling. A 10-minute time-windowed smoke reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 10-minute performance
+  report returned `ok=true` and showed `forager_ema_readiness` populated with
+  `total_events=140`, including `ema.fallback_used=41`, `ema.unavailable=56`,
+  and `forager.selection=43`. The section grouped current readiness evidence
+  across Binance, GateIO, OKX, and Hyperliquid.
+
+### PR #803: Resource Pressure Percentiles
+
+- Branch: `codex/v8-resource-pressure-percentiles`.
+- Scope: read-only live performance report resource-pressure projection, docs,
+  and tests.
+- Result: `passivbot tool live-performance-report` `resource_pressure` field
+  stats now include `count`, `median`, and `p95` in addition to the prior
+  latest/min/max/mean values. Integer-only health series remain integer-valued,
+  while fractional fields such as load averages and memory percentage keep
+  bounded decimal precision. The section continues to derive only from existing
+  `health.summary` events and continues to use the existing whitelist of
+  process and event-pipeline fields.
+- Review evidence: CI was green. Hermes approved current head `80bc42fd` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered performance-report, event-query, and smoke-report tests, py_compile,
+  `git diff --check`, a local compact CLI performance-report smoke, and a
+  silent-handling scan of touched report/test files. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior changed.
+- VPS5 evidence: deployed at `07f8e759` without bot restart because this is
+  read-only report tooling. A 5-minute time-windowed smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 30-minute performance
+  report returned `ok=true` and showed `resource_pressure` populated with
+  `total=8` health summary events across four bots. Sample groups confirmed
+  resource fields now include count/latest/min/mean/median/p95/max values
+  without surfacing raw account or financial payload fields.
+
+### PR #805: Operation Duration Performance Summary
+
+- Branch: `codex/v8-live-performance-operation-durations`.
+- Scope: read-only live performance report operation-duration projection,
+  docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes an
+  `operation_durations` section that collates existing `performance`,
+  `decision_boundary_lag`, `input_staleness`, `execution_timing`, and
+  `shutdown_latency` timing groups into one bounded table. Each row carries the
+  source section, operation category, timing kind, trading-impact label, and
+  blocking scope so the operator can compare startup, cycle, state-refresh,
+  remote-call, HSL replay, cache, decision-boundary, input-staleness,
+  execution, and shutdown delays from one surface. The section reuses existing
+  bounded aggregates and does not copy raw event payloads.
+- Review evidence: CI was green. Hermes approved current head `4573fe59` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered performance-report, event-query, and smoke-report tests, py_compile,
+  `git diff --check`, a local compact CLI performance-report smoke, and a
+  silent-handling scan of touched report/test files. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior changed.
+- VPS5 evidence: deployed at `3d6e3fa7` without bot restart because this is
+  read-only report tooling. A 5-minute time-windowed smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 30-minute performance
+  report returned `ok=true` and showed `operation_durations` populated with
+  `total_groups=161` across cache, cycle, decision-boundary, input-staleness,
+  remote-call, and state-refresh categories. The top observed groups were
+  `input_staleness.snapshot_to_rust` delays in the `delays_cycle_decision`
+  scope. A follow-up investigation found those multi-minute
+  `snapshot_to_rust` durations were a report correlation artifact: planning
+  snapshot epochs in `snapshot.built.data.cycle_id` were being treated as live
+  event cycle IDs. The report now uses exact envelope cycle IDs when present
+  and otherwise falls back to the latest preceding snapshot in the same
+  bot/restart scope, with match counters.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 

@@ -7,6 +7,45 @@ All notable user-facing changes will be documented in this file.
 - Updated the canonical v8 trailing-martingale default config profile, including
   the 41-coin universe, per-coin HSL signal mode, refreshed optimizer
   scoring/limits/bounds, and `bot.long.risk.n_positions = 5`.
+- Corrected `passivbot tool live-performance-report` `snapshot_to_rust`
+  correlation so planning snapshot epochs are no longer mistaken for live
+  cycle IDs; legacy snapshot events now use the latest preceding snapshot in
+  the same bot/restart scope and expose match counters.
+- Added `operation_durations` summaries to
+  `passivbot tool live-performance-report`, collating existing startup, cycle,
+  state-refresh, remote-call, HSL replay, cache, decision-boundary,
+  input-staleness, execution, and shutdown timing groups into one bounded
+  trading-impact-ranked table without adding new live events or exchange calls.
+- Added `forager_ema_readiness` summaries to
+  `passivbot tool live-performance-report`, deriving bounded forager selection,
+  forager feature-unavailable, EMA unavailable, and EMA fallback evidence from
+  existing events without exposing raw EMA errors, top-score payloads, account
+  values, or cache paths.
+- Added `cache_warmup` summaries to
+  `passivbot tool live-performance-report`, deriving bounded warm-cache reuse,
+  cold-path, candle cache load, and candle cache flush evidence from existing
+  cache events without exposing raw cache paths or payloads.
+- Added `hsl_replay_profile` summaries to
+  `passivbot tool live-performance-report`, deriving bounded HSL replay
+  work/progress and startup-blocking timing context from existing
+  `hsl.replay.*` events.
+- Added snapshot surface and market-snapshot age breakdowns to
+  `passivbot tool live-performance-report`, using bounded metadata from
+  existing `snapshot.built` events without exposing market prices or raw
+  payloads.
+- Added `execution_timing` summaries to
+  `passivbot tool live-performance-report`, deriving bounded exchange-action
+  latency groups from existing order-wave, create/cancel, and confirmation
+  events without exposing raw order payloads.
+- Added `shutdown_latency` summaries to
+  `passivbot tool live-performance-report`, projecting existing lifecycle
+  shutdown events into per-stage and total shutdown timing groups without
+  copying shutdown error text.
+- Added `resource_pressure` summaries to
+  `passivbot tool live-performance-report`, projecting whitelisted
+  `health.summary` process and event-pipeline fields with count, min, mean,
+  median, p95, max, and latest values without raw account or financial
+  payloads.
 - Improved cold `passivbot backtest` materialization by batching legacy OHLCV
   imports by month, vectorizing chunk writes, staging HLCV cache writes with
   rollback on publish failure, and honoring Ctrl+C between expensive

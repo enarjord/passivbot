@@ -177,8 +177,38 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   confirmations, and completion. It also includes an input-staleness section derived from
   existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
   snapshot build plus snapshot/EMA age at the Rust call boundary when those events are present.
+  For `snapshot_to_rust`, the report uses exact event-envelope `cycle_id` matches when
+  available; for legacy/current `snapshot.built` events that only carry a planning snapshot
+  epoch in `data.cycle_id`, it uses the latest preceding snapshot in the same bot/restart scope
+  and exposes exact-vs-latest match counters.
+  Newer `snapshot.built` events also expose bounded surface-age and market-snapshot age
+  summaries, allowing the report to break down stale planning inputs without exposing market
+  prices.
   The startup-readiness section summarizes latest per-bot startup phase timings and HSL
-  replay state from existing lifecycle/replay events.
+  replay state from existing lifecycle/replay events. The `slowest_blockers` section ranks
+  non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
+  delays are visible without scanning every timing group. The `operation_durations` section
+  collates startup, cycle, state-refresh, remote-call, HSL replay, cache, decision-boundary,
+  input-staleness, execution, and shutdown timing groups into one bounded table with operation
+  category, trading-impact, blocking-scope, and timing-kind counters. The `resource_pressure` section
+  summarizes whitelisted process and event-pipeline health fields from existing
+  `health.summary` events, including RSS, memory percent, file descriptors, load average,
+  event queue depth, dropped-event counters, and sink-error counters with count, latest,
+  min, mean, median, p95, and max values without exposing raw account or financial
+  payloads. The `shutdown_latency` section summarizes existing
+  lifecycle shutdown events, including per-stage cumulative elapsed time and final shutdown
+  duration, without copying shutdown error text. The `execution_timing` section derives
+  aggregate exchange-action latency groups from existing order-wave, order create/cancel,
+  and confirmation events with missing/unpaired counters, without exposing raw order payloads.
+  The `hsl_replay_profile` section derives bounded HSL replay work/progress summaries from
+  existing `hsl.replay.*` events, including pair counts, timeline rows, rows/s, estimated
+  dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
+  available. The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
+  candle cache load, and candle cache flush summaries from existing cache events without
+  exposing raw cache paths or payloads. The `forager_ema_readiness` section derives bounded
+  forager selection, forager feature-unavailable, EMA unavailable, and EMA fallback summaries
+  from existing events without exposing raw EMA error text, top-score payloads, account values,
+  or cache paths.
 
 ## Exchange Helpers
 
