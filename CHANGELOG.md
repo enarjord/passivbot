@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `forager_ema_readiness` summaries to
+  `passivbot tool live-performance-report`, deriving bounded forager selection,
+  forager feature-unavailable, EMA unavailable, and EMA fallback evidence from
+  existing events without exposing raw EMA errors, top-score payloads, account
+  values, or cache paths.
 - Added `cache_warmup` summaries to
   `passivbot tool live-performance-report`, deriving bounded warm-cache reuse,
   cold-path, candle cache load, and candle cache flush evidence from existing

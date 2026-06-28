@@ -197,7 +197,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
   available. The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
   candle cache load, and candle cache flush summaries from existing cache events without
-  exposing raw cache paths or payloads.
+  exposing raw cache paths or payloads. The `forager_ema_readiness` section derives bounded
+  forager selection, forager feature-unavailable, EMA unavailable, and EMA fallback summaries
+  from existing events without exposing raw EMA error text, top-score payloads, account values,
+  or cache paths.
 
 ## Exchange Helpers
 
