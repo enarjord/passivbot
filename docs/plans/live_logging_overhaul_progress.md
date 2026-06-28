@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `c7bc5924` after PR #819, `Summarize HSL replay state in smoke report`.
+- `09f145f4` after PR #822, `Document live event debug profiles`.
 
 Current review gate:
 
@@ -30,6 +30,22 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #822 at `09f145f4`.
+- Bots were not restarted for PRs #821/#822 because the changes were docs and
+  tests only. All five configured `passivbot live` processes remained running.
+- PR #821 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice documents the stable `EventTypes` registry and adds a
+  docs-sync test so future event-type changes cannot drift silently from
+  `docs/ai/live_event_registry.md`.
+- PR #822 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice documents `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` and
+  adds a docs-sync test so future debug-profile additions/removals require a
+  matching registry doc update.
+- A 5-minute smoke after the PR #822 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=09f145f4`, and `hsl_replay_health.active_bots=0`. Remaining
+  attention came from known non-hard live readiness diagnostics.
 - Repository pulled through PR #819 at `c7bc5924`.
 - Bots were not restarted for PR #819 because the change was read-only smoke
   report tooling. All five configured `passivbot live` processes remained
@@ -2753,6 +2769,45 @@ VPS5 deployment status:
   coin-HSL startup replays and showed their long elapsed times; the hard
   entries in those wider windows were intended HSL RED ZEC risk events rather
   than software failures.
+
+### PR #821: Event Type Registry Docs
+
+- Branch: `codex/v8-live-event-type-registry-docs`.
+- Scope: docs/test-only live event registry synchronization.
+- Result: `docs/ai/live_event_registry.md` now documents the stable
+  `EventTypes` values in addition to tags and reason codes, and
+  `tests/test_live_event_registry_docs.py` asserts that the documented event
+  type section exactly matches `src/live/event_bus.py`. This makes event-type
+  filters and query-facing names easier to review and prevents future registry
+  drift.
+- Review evidence: CI was green. Claude approved the initial head and carried
+  approval over the clean rebase. Hermes approved the rebased head with no
+  findings. Local validation covered the focused registry-doc test and
+  `git diff --check`. No runtime code, event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, or trading
+  behavior changed.
+- VPS5 evidence: deployed at `81baddfa` without bot restart because this is
+  docs/test-only. A 10-minute smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
+  and `hsl_replay_health.active_bots=0`.
+
+### PR #822: Debug Profile Registry Docs
+
+- Branch: `codex/v8-live-event-debug-profile-docs`.
+- Scope: docs/test-only live event debug-profile registry synchronization.
+- Result: `docs/ai/live_event_registry.md` now documents
+  `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES`, the `all`/disabled-value semantics,
+  and the current bounded debug-profile names. The registry-doc test now asserts
+  that the documented profile list matches `LIVE_EVENT_DEBUG_PROFILES`.
+- Review evidence: CI was green. Claude approved and Hermes approved with no
+  findings. Local validation covered the focused registry-doc test and
+  `git diff --check`. No runtime code, event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, or trading
+  behavior changed.
+- VPS5 evidence: deployed at `09f145f4` without bot restart because this is
+  docs/test-only. A 5-minute smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
+  and `hsl_replay_health.active_bots=0`.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
