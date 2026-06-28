@@ -113,6 +113,11 @@ _FORAGER_EMA_READINESS_EVENT_TYPES = {
     "ema.unavailable",
     "ema.fallback_used",
 }
+_ACCOUNT_STATE_CHANGE_EVENT_TYPES = {
+    "fill.ingested",
+    "position.changed",
+    "balance.changed",
+}
 _CACHE_STRING_FIELDS = (
     "context",
     "timeframe",
@@ -2322,6 +2327,128 @@ class _ExecutionTimingAccumulator:
         }
 
 
+class _AccountStateChangeGroup:
+    def __init__(self, *, bot: str, event_type: str) -> None:
+        self.bot = bot
+        self.event_type = event_type
+        self.count = 0
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.symbols: Counter[str] = Counter()
+        self.psides: Counter[str] = Counter()
+        self.sides: Counter[str] = Counter()
+        self.components: Counter[str] = Counter()
+        self.latest_ts: int | None = None
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        self.count += 1
+        status = live_event.get("status")
+        if status is not None:
+            self.statuses[str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            self.reason_codes[str(reason_code)] += 1
+        symbol = live_event.get("symbol") or row.get("symbol")
+        if symbol is not None:
+            self.symbols[str(symbol)] += 1
+        pside = live_event.get("pside") or row.get("pside")
+        if pside is not None:
+            self.psides[str(pside)] += 1
+        side = live_event.get("side") or row.get("side")
+        if side is not None:
+            self.sides[str(side)] += 1
+        component = live_event.get("component")
+        if component is not None:
+            self.components[str(component)] += 1
+        ts = _record_ts(row)
+        if ts is not None and (self.latest_ts is None or ts > self.latest_ts):
+            self.latest_ts = ts
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "bot": self.bot,
+                "event_type": self.event_type,
+                "count": int(self.count),
+                "latest_ts": self.latest_ts,
+                "statuses": dict(sorted(self.statuses.items())),
+                "reason_codes": dict(sorted(self.reason_codes.items())),
+                "psides": dict(sorted(self.psides.items())),
+                "sides": dict(sorted(self.sides.items())),
+                "components": dict(sorted(self.components.items())),
+                "symbols_sample": [
+                    symbol
+                    for symbol, _count in sorted(
+                        self.symbols.items(), key=lambda item: (-item[1], item[0])
+                    )[:10]
+                ],
+                "symbols_count": len(self.symbols),
+            }.items()
+            if value not in (None, {}, [])
+        }
+
+
+class _AccountStateChangeAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str], _AccountStateChangeGroup] = {}
+        self.event_types: Counter[str] = Counter()
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.bot_counts: Counter[str] = Counter()
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _ACCOUNT_STATE_CHANGE_EVENT_TYPES:
+            return
+        bot = _bot_key(row, live_event)
+        self.event_types[event_type] += 1
+        self.bot_counts[bot] += 1
+        status = live_event.get("status")
+        if status is not None:
+            self.statuses[str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            self.reason_codes[str(reason_code)] += 1
+        key = (bot, event_type)
+        group = self.groups.get(key)
+        if group is None:
+            group = _AccountStateChangeGroup(bot=bot, event_type=event_type)
+            self.groups[key] = group
+        group.add(row=row, live_event=live_event)
+
+    def groups_list(self) -> list[dict[str, Any]]:
+        return sorted(
+            (group.to_dict() for group in self.groups.values()),
+            key=lambda item: (
+                -int(item.get("count", 0) or 0),
+                -int(item.get("latest_ts", 0) or 0),
+                str(item.get("bot") or ""),
+                str(item.get("event_type") or ""),
+            ),
+        )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = self.groups_list()
+        return {
+            "total_events": sum(self.event_types.values()),
+            "event_types": dict(sorted(self.event_types.items())),
+            "statuses": dict(sorted(self.statuses.items())),
+            "reason_codes": dict(sorted(self.reason_codes.items())),
+            "bot_count": len(self.bot_counts),
+            "bots": [
+                {"bot": bot, "events": int(count)}
+                for bot, count in sorted(
+                    self.bot_counts.items(), key=lambda item: (-item[1], item[0])
+                )[: max(0, int(group_limit))]
+            ],
+            "bots_truncated": len(self.bot_counts) > int(group_limit),
+            "total_groups": len(groups),
+            "groups_truncated": len(groups) > int(group_limit),
+            "groups": groups[: max(0, int(group_limit))],
+        }
+
+
 def _slowest_blockers(
     *,
     performance_groups: list[dict[str, Any]],
@@ -2748,6 +2875,7 @@ def build_live_performance_report(
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
+    account_state_changes = _AccountStateChangeAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -2842,6 +2970,7 @@ def build_live_performance_report(
                         live_event=live_event,
                         cycle_scope=cycle_scope,
                     )
+                    account_state_changes.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -2887,6 +3016,7 @@ def build_live_performance_report(
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
+        "account_state_changes": account_state_changes.to_dict(group_limit=group_limit),
         "operation_durations": _operation_duration_table(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
@@ -3060,6 +3190,25 @@ def summarize_live_performance_report(
         if len(execution_groups) > max(0, int(group_limit)):
             execution_timing["groups_truncated"] = True
         summary["execution_timing"] = execution_timing
+    if isinstance(report.get("account_state_changes"), dict):
+        account_state_changes = dict(report["account_state_changes"])
+        state_groups = (
+            account_state_changes.get("groups")
+            if isinstance(account_state_changes.get("groups"), list)
+            else []
+        )
+        state_bots = (
+            account_state_changes.get("bots")
+            if isinstance(account_state_changes.get("bots"), list)
+            else []
+        )
+        account_state_changes["groups"] = state_groups[: max(0, int(group_limit))]
+        account_state_changes["bots"] = state_bots[: max(0, int(group_limit))]
+        if len(state_groups) > max(0, int(group_limit)):
+            account_state_changes["groups_truncated"] = True
+        if len(state_bots) > max(0, int(group_limit)):
+            account_state_changes["bots_truncated"] = True
+        summary["account_state_changes"] = account_state_changes
     if isinstance(report.get("slowest_blockers"), dict):
         slowest_blockers = report["slowest_blockers"]
         blocker_groups = (

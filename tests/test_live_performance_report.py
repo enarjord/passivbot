@@ -22,6 +22,7 @@ def _monitor_row(
     reason_code: str = "test",
     symbol: str | None = None,
     pside: str | None = None,
+    side: str | None = None,
     ids: dict | None = None,
     data: dict | None = None,
 ) -> dict:
@@ -36,6 +37,7 @@ def _monitor_row(
         "user": user,
         "symbol": symbol,
         "pside": pside,
+        "side": side,
         "status": status,
         "reason_code": reason_code,
         "data": dict(data or {}),
@@ -54,6 +56,8 @@ def _monitor_row(
         row["symbol"] = symbol
     if pside is not None:
         row["pside"] = pside
+    if side is not None:
+        row["side"] = side
     return row
 
 
@@ -1890,6 +1894,119 @@ def test_live_performance_report_execution_timing_summary_is_bounded(tmp_path):
     assert summary["operation_durations"]["operation_category_counts"] == {"execution": 2}
     assert summary["operation_durations"]["blocking_scope_counts"] == {"exchange_io": 2}
     assert summary["slowest_blockers"]["total_groups"] >= 2
+
+
+def test_live_performance_report_account_state_changes_are_value_safe(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fill.ingested",
+                seq=1,
+                ts=1000,
+                component="fills.ingest",
+                reason_code="new_fill",
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                side="buy",
+                data={
+                    "fill_id_hash": "hash-must-not-surface",
+                    "client_order_id_short": "cid-must-not-surface",
+                    "qty": 1.2345,
+                    "price": 45678.9,
+                    "pnl": -12.34,
+                    "fee": 0.56,
+                    "raw_payload": {"secret_marker": "raw-fill-secret"},
+                },
+            ),
+            _monitor_row(
+                event_type="position.changed",
+                seq=2,
+                ts=2000,
+                component="account.position",
+                reason_code="increased",
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={
+                    "old_size": 0,
+                    "new_size": 1.2345,
+                    "new_price": 45678.9,
+                    "upnl": -23.45,
+                    "secret_marker": "position-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="balance.changed",
+                seq=3,
+                ts=3000,
+                component="account.balance",
+                reason_code="balance_changed",
+                data={
+                    "balance_raw": 98765.43,
+                    "balance_snapped": 98700,
+                    "equity": 98600,
+                    "secret_marker": "balance-secret",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    changes = report["account_state_changes"]
+    groups = {
+        group["event_type"]: group
+        for group in changes["groups"]
+    }
+    rendered = json.dumps(changes, sort_keys=True)
+
+    assert changes["total_events"] == 3
+    assert changes["event_types"] == {
+        "balance.changed": 1,
+        "fill.ingested": 1,
+        "position.changed": 1,
+    }
+    assert changes["bot_count"] == 1
+    assert groups["fill.ingested"]["symbols_sample"] == ["BTC/USDT:USDT"]
+    assert groups["fill.ingested"]["psides"] == {"long": 1}
+    assert groups["fill.ingested"]["sides"] == {"buy": 1}
+    assert groups["balance.changed"]["components"] == {"account.balance": 1}
+    assert "hash-must-not-surface" not in rendered
+    assert "cid-must-not-surface" not in rendered
+    assert "raw-fill-secret" not in rendered
+    assert "position-secret" not in rendered
+    assert "balance-secret" not in rendered
+    assert "98765.43" not in rendered
+    assert "45678.9" not in rendered
+
+
+def test_live_performance_report_account_state_changes_summary_is_bounded(tmp_path):
+    for index in range(2):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="position.changed",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                    component="account.position",
+                    reason_code="position_changed",
+                    symbol=f"COIN{index}/USDT:USDT",
+                    pside="long",
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["account_state_changes"]["bot_count"] == 2
+    assert len(summary["account_state_changes"]["groups"]) == 1
+    assert len(summary["account_state_changes"]["bots"]) == 1
+    assert summary["account_state_changes"]["groups_truncated"] is True
+    assert summary["account_state_changes"]["bots_truncated"] is True
 
 
 def test_live_performance_report_resource_pressure_from_health_summary(tmp_path):
