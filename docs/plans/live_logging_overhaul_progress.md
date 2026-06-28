@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `09f145f4` after PR #822, `Document live event debug profiles`.
+- `d1b3ca04` after PR #824, `Report startup debug profiles`.
 
 Current review gate:
 
@@ -30,6 +30,24 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #824 at `d1b3ca04`.
+- Bots were not restarted for PR #824 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #824 passed the normal review gate: Claude approved and carried approval
+  over the clean rebase, Hermes approved the same own-delta, CI was green, and
+  the final patch-id matched the reviewed pre-rebase patch. The slice derives
+  startup debug-profile visibility from existing `bot.started` / `bot.ready`
+  events only.
+- A 5-minute smoke after the PR #824 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=d1b3ca04`, and `hsl_replay_health.active_bots=0`. Remaining
+  attention came from known non-hard live readiness diagnostics.
+- A 120-minute performance report after deploy confirmed the
+  `startup_readiness.debug_profile_counts` field is present. No retained
+  startup lifecycle rows were present in that current-window report, so the
+  field was `{}` and no live debug profiles were inferred.
 - Repository pulled through PR #822 at `09f145f4`.
 - Bots were not restarted for PRs #821/#822 because the changes were docs and
   tests only. All five configured `passivbot live` processes remained running.
@@ -2808,6 +2826,31 @@ VPS5 deployment status:
   docs/test-only. A 5-minute smoke reported `ok=true`, `hard_failures=0`,
   `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
   and `hsl_replay_health.active_bots=0`.
+
+### PR #824: Startup Debug Profile Performance Report
+
+- Branch: `codex/v8-startup-debug-profile-report`.
+- Scope: read-only live performance report startup-readiness projection.
+- Result: `passivbot tool live-performance-report` now includes
+  `startup_readiness.debug_profiles` per bot and
+  `startup_readiness.debug_profile_counts` in aggregate, derived from existing
+  `bot.started` / `bot.ready` event data. Values are filtered through
+  `LIVE_EVENT_DEBUG_PROFILES`, so arbitrary or secret-looking event-data strings
+  are ignored instead of reflected into the report.
+- Review evidence: CI was green. Claude approved and carried approval over the
+  clean rebase. Hermes approved the same own-delta with no findings. Local
+  validation covered the full `tests/test_live_performance_report.py` suite,
+  py_compile for touched files, `git diff --check`, a silent-handling scan of
+  touched files, and a patch-id check proving the rebased own-delta matched the
+  reviewed patch. No event producers, exchange calls, cache mutation, readiness
+  gates, order/risk logic, console routing, monitor writes, or trading behavior
+  changed.
+- VPS5 evidence: deployed at `d1b3ca04` without bot restart because this is
+  read-only report tooling. A 5-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, and `hsl_replay_health.active_bots=0`. A 120-minute
+  performance report confirmed the new `debug_profile_counts` field is present,
+  with no startup lifecycle rows retained in that current-window report.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
