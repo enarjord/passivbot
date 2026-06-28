@@ -99,6 +99,19 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
     )
 
 
+def test_trailing_grid_v7_seed_profile_remains_compatibility_profile():
+    spec = pbr.get_strategy_spec("trailing_grid_v7")
+    defaults = _nested_strategy_values_from_spec(spec, "default")
+    bounds = spec["optimize_bounds"]
+
+    assert defaults["long"]["ema_span_0"] == pytest.approx(385.0)
+    assert defaults["short"]["ema_span_0"] == pytest.approx(300.0)
+    assert defaults["short"]["entry"]["grid_spacing_pct"] == pytest.approx(0.02)
+    assert defaults["short"]["close"]["trailing_threshold_pct"] == pytest.approx(0.005)
+    assert bounds["long_ema_span_0"] == [200.0, 1440.0, 1.0]
+    assert bounds["short_entry_grid_spacing_pct"] == [0.001, 0.03, 0.0001]
+
+
 def test_prepare_config_rejects_invalid_trailing_martingale_ema_gate_mode():
     source = get_template_config()
     source["bot"]["long"]["strategy"]["trailing_martingale"]["entry"]["ema_gate_mode"] = "re_entry"
