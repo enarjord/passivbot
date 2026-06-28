@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d1b3ca04` after PR #824, `Report startup debug profiles`.
+- `eec38e60` after PR #826, `Update debug profile logging guide`.
 
 Current review gate:
 
@@ -30,6 +30,28 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #826 at `eec38e60`.
+- Bots were not restarted for PRs #826/#827 because the changes were docs-only
+  and read-only performance-report tooling. All five configured
+  `passivbot live` processes remained running.
+- PR #827 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice adds bounded execution terminal outcome counts to the
+  read-only live performance report from existing execution event types only.
+- PR #826 passed the normal review gate after the reviewer nit was addressed:
+  Claude approved the current rebased head, Hermes approved the same docs patch
+  and dry-ran it into current `origin/v8`, and CI was green. The slice updates
+  the logging guide debug-profile summary to match the current registry,
+  including `forager`.
+- A 5-minute smoke after the PR #827 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=38f3a9e3`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard structured problem events.
+- A 5-minute smoke after the PR #826 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=eec38e60`, and all hard failure sources at zero. Remaining
+  attention came from known non-hard structured problem events.
 - Repository pulled through PR #824 at `d1b3ca04`.
 - Bots were not restarted for PR #824 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2851,6 +2873,48 @@ VPS5 deployment status:
   repository state, and `hsl_replay_health.active_bots=0`. A 120-minute
   performance report confirmed the new `debug_profile_counts` field is present,
   with no startup lifecycle rows retained in that current-window report.
+
+### PR #827: Execution Terminal Outcome Report
+
+- Branch: `codex/v8-execution-outcome-report`.
+- Scope: read-only live performance report execution-timing projection and
+  tests.
+- Result: `passivbot tool live-performance-report` `execution_timing` now
+  includes `terminal_outcome_counts`, derived only from fixed existing
+  execution terminal event types. The counters report bounded labels such as
+  `create.succeeded`, `cancel.ambiguous_terminal`, and
+  `confirmation.satisfied` even when timing correlation is missing or unpaired.
+  No order/action ids, raw order payloads, exchange data, account values, event
+  producers, exchange calls, cache mutation, readiness gates, order/risk logic,
+  console routing, monitor writes, or trading behavior changed.
+- Review evidence: CI was green. Claude approved and Hermes approved with no
+  findings. Local validation covered the full
+  `tests/test_live_performance_report.py` suite, py_compile for touched files,
+  `git diff --check`, and a silent-handling scan of touched report/test files.
+- VPS5 evidence: deployed at `38f3a9e3` without bot restart because this is
+  read-only report tooling. A 5-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, and `account_critical_remote_calls.failed=0`.
+
+### PR #826: Debug Profile Logging Guide
+
+- Branch: `codex/v8-debug-profile-guide-docs`.
+- Scope: docs-only logging-guide alignment.
+- Result: `docs/ai/logging_guide.md` now points supported live-event debug
+  profile names to `docs/ai/live_event_registry.md`, describes current
+  profile-family behavior, and states that debug summaries must not copy raw
+  exchange/account payloads, credentials, or unbounded row data. The final
+  reviewed patch includes `forager` in the bounded profile-family list.
+- Review evidence: CI was green. Claude approved the current rebased head.
+  Hermes approved the docs patch after the `forager` reviewer nit was fixed and
+  dry-ran the patch into current `origin/v8`. Local validation covered
+  `git diff --check`. No runtime code, event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior changed.
+- VPS5 evidence: deployed at `eec38e60` without bot restart because this is
+  docs-only. A 5-minute smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
+  and all hard failure sources at zero.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
