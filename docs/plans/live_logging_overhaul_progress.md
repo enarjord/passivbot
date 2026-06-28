@@ -15,11 +15,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-27.
+Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `cb034e82` after PR #799, `Add cache warmup summaries to performance report`.
+- `1fc77413` after PR #801, `Add forager EMA readiness performance report`.
 
 Current review gate:
 
@@ -30,6 +30,23 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #801 at `1fc77413`.
+- Bots were not restarted for PR #801 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- A 10-minute time-windowed smoke after the PR #801 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, `processes.ok=true`, and clean tracked repository
+  state at `repository.head=1fc77413`. The same window still showed non-hard
+  EMA readiness and HSL cooldown attention plus one recovered non-hard Kucoin
+  candle timeout; account-critical remote calls had `failed=0`.
+- A focused 10-minute performance report confirmed the new
+  `forager_ema_readiness` section populated on VPS5. It reported
+  `total_events=140`, with `ema.fallback_used=41`, `ema.unavailable=56`, and
+  `forager.selection=43`, grouped across Binance, GateIO, OKX, and
+  Hyperliquid. Sample groups showed bounded forager selection counts,
+  selected-symbol samples, EMA unavailable reason counters, and EMA fallback
+  counters without raw EMA error text or account/cache payloads.
 - Repository pulled through PR #799 at `cb034e82`.
 - Bots were not restarted for PR #799 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2298,6 +2315,36 @@ VPS5 deployment status:
   `cache.flush.completed=140`, and `cache.warmup_decision=5`. Sample groups
   showed OKX, Binance, and GateIO warmup cold-path decisions plus bounded
   candle load/flush row counts and elapsed summaries.
+
+### PR #801: Forager EMA Readiness Performance Report
+
+- Branch: `codex/v8-live-performance-forager-ema-readiness`.
+- Scope: read-only live performance report forager/EMA readiness projection,
+  docs, and tests.
+- Result: `passivbot tool live-performance-report` now includes
+  `forager_ema_readiness`, derived only from existing `forager.selection`,
+  `forager.feature_unavailable`, `ema.unavailable`, and `ema.fallback_used`
+  events. The section summarizes bounded forager selection counts,
+  feature-unavailable counts, EMA unavailable reason/error-type counters, EMA
+  fallback counters, pside/status/reason-code counters, configured age/budget
+  fields where present, and bounded symbol samples. Trading behavior, exchange
+  calls, cache mutation, event producers, and console routing are unchanged.
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Both reviews verified the section is report-only, standalone, and value-safe.
+  Local validation covered performance-report, event-query, and smoke-report
+  tests, py_compile, `git diff --check`, a local compact CLI
+  performance-report smoke, and a silent-handling scan of touched report/test
+  files. Tests explicitly inject and reject raw top scores, raw EMA error text,
+  API-key markers, balance/equity fields, raw payload markers, and local paths.
+- VPS5 evidence: deployed at `1fc77413` without bot restart because this is
+  read-only report tooling. A 10-minute time-windowed smoke reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 10-minute performance
+  report returned `ok=true` and showed `forager_ema_readiness` populated with
+  `total_events=140`, including `ema.fallback_used=41`, `ema.unavailable=56`,
+  and `forager.selection=43`. The section grouped current readiness evidence
+  across Binance, GateIO, OKX, and Hyperliquid.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
