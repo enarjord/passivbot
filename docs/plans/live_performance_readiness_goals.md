@@ -243,8 +243,15 @@ classification when enough source events exist.
   repair counts.
   - Status: partial. New `snapshot.built` metadata and performance-report
     groups expose planning surface ages plus market-snapshot max/mean age at
-    snapshot build. Remaining work: candle close age, forager feature age, and
-    symbol-scoped stale-but-acceptable candidate metadata.
+    snapshot build. Existing `forager.selection`,
+    `forager.feature_unavailable`, `ema.unavailable`, and
+    `ema.fallback_used` events are now summarized as
+    `forager_ema_readiness`, including bounded selection counts,
+    feature-unavailable counts, EMA unavailable reasons, fallback counts,
+    symbol samples, configured age/budget fields where present, and latest
+    bounded event records. Remaining work: true candle close age, exact
+    forager feature age by symbol, and symbol-scoped stale-but-acceptable
+    candidate metadata.
 - [ ] Decision boundary: whole-minute lag to cycle start, Rust input snapshot,
   Rust output, Python gate/filter, first exchange write, confirmation refresh.
 - [ ] Cycle phases: market state, account state, Rust planning,
@@ -574,7 +581,10 @@ Trading-impact labels:
     critical delay was before risk classification, before planning, before
     exchange write, or after exchange write.
   - Status: partial. Cache warmup/load/flush event timings now participate in
-    the performance report and are also grouped in `cache_warmup`.
+    the performance report and are also grouped in `cache_warmup`. Existing
+    forager/EMA readiness diagnostics are now grouped in
+    `forager_ema_readiness`, but true per-symbol feature-age timing still
+    needs source event support.
 
 - [ ] Add a "slowest blockers" view.
   - Rank operations by elapsed time and trading impact.

@@ -1278,9 +1278,230 @@ def test_live_performance_report_cache_warmup_whitelists_values(tmp_path):
     assert "/home/operator" not in rendered
     assert "/root/passivbot" not in rendered
     assert "secret" not in rendered
+
+
+def test_live_performance_report_forager_ema_readiness_from_existing_events(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.selection",
+                seq=1,
+                ts=1000,
+                component="forager.selection",
+                pside="long",
+                reason_code="selected",
+                data={
+                    "candidate_count": 40,
+                    "eligible_count": 38,
+                    "selected_count": 3,
+                    "selected_symbols": ["XLM/USDT:USDT", "ZEC/USDT:USDT"],
+                    "incumbent_count": 1,
+                    "incumbent_symbols": ["XRP/USDT:USDT"],
+                    "slots_open": True,
+                    "max_n_positions": 3,
+                    "slots_to_fill": 1,
+                    "max_age_ms": 300000,
+                    "fetch_budget": 4,
+                    "source": "python_filter",
+                    "feature_unavailable_count": 7,
+                    "volatility_dropped_count": 2,
+                    "hysteresis_event_count": 1,
+                },
+            ),
+            _monitor_row(
+                event_type="forager.feature_unavailable",
+                seq=2,
+                ts=2000,
+                component="forager.selection",
+                pside="long",
+                status="skipped",
+                reason_code="ranking_features_unavailable",
+                data={
+                    "candidate_count": 40,
+                    "unavailable": ["NEAR/USDT:USDT", "ATOM/USDT:USDT"],
+                    "volume_count": 35,
+                    "log_range_count": 34,
+                    "max_age_ms": 300000,
+                    "fetch_budget": 4,
+                },
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=3,
+                ts=3000,
+                component="ema.bundle",
+                status="degraded",
+                reason_code="required_ema_unavailable",
+                data={
+                    "optional_drop_count": 2,
+                    "optional_drop_groups": [
+                        {
+                            "ema_type": "m1_volume",
+                            "reason": "optional stale",
+                            "symbols": ["DOGE/USDT:USDT"],
+                            "spans": [100],
+                        }
+                    ],
+                    "candidate_unavailable": ["NEAR/USDT:USDT"],
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "missing feature basis",
+                            "symbols": ["NEAR/USDT:USDT"],
+                            "error_types": ["ValueError"],
+                            "example_error": "raw detail omitted",
+                        }
+                    ],
+                    "unavailable": ["ATOM/USDT:USDT"],
+                    "unavailable_reasons": [
+                        {"reason": "missing required m1_close EMA", "symbols": ["ATOM/USDT:USDT"]}
+                    ],
+                },
+            ),
+            _monitor_row(
+                event_type="ema.fallback_used",
+                seq=4,
+                ts=4000,
+                component="ema.bundle",
+                status="recovered",
+                reason_code="ema_fallback_used",
+                data={
+                    "close_recovered_count": 3,
+                    "close_recovered_symbols": ["XLM/USDT:USDT"],
+                    "close_fallback_count": 1,
+                    "close_fallback_symbols": ["ZEC/USDT:USDT"],
+                    "forager_cached_fallback_count": 2,
+                    "forager_cached_fallback_symbols": ["NEAR/USDT:USDT"],
+                    "examples": {"raw": "not copied"},
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    readiness = report["forager_ema_readiness"]
+    group = readiness["groups"][0]
+
+    assert readiness["total_events"] == 4
+    assert readiness["event_types"] == {
+        "ema.fallback_used": 1,
+        "ema.unavailable": 1,
+        "forager.feature_unavailable": 1,
+        "forager.selection": 1,
+    }
+    assert group["bot"] == "binance/binance_01"
+    assert group["psides"] == {"long": 2}
+    assert group["forager_selection"]["candidate_count"]["max"] == 40
+    assert group["forager_selection"]["selected_count"]["max"] == 3
+    assert group["forager_selection"]["feature_unavailable_count"]["max"] == 7
+    assert group["forager_selection"]["selected_symbols"] == {
+        "count": 2,
+        "sample": ["XLM/USDT:USDT", "ZEC/USDT:USDT"],
+    }
+    assert group["forager_feature_unavailable"]["unavailable_symbols"] == {
+        "count": 2,
+        "sample": ["NEAR/USDT:USDT", "ATOM/USDT:USDT"],
+    }
+    assert group["forager_feature_unavailable"]["volume_count"]["max"] == 35
+    assert group["forager_feature_unavailable"]["log_range_count"]["max"] == 34
+    assert group["ema_unavailable"]["optional_drop_count"] == 2
+    assert group["ema_unavailable"]["candidate_symbol_sample_count"] == 1
+    assert group["ema_unavailable"]["unavailable_symbol_sample_count"] == 1
+    assert group["ema_unavailable"]["candidate_reasons"] == {"missing feature basis": 1}
+    assert group["ema_unavailable"]["unavailable_reasons"] == {
+        "missing required m1_close EMA": 1
+    }
+    assert group["ema_unavailable"]["optional_drop_reasons"] == {"optional stale": 1}
+    assert group["ema_unavailable"]["error_types"] == {"ValueError": 1}
+    assert group["ema_fallback"]["close_recovered_count"] == 3
+    assert group["ema_fallback"]["close_fallback_count"] == 1
+    assert group["ema_fallback"]["forager_cached_fallback_count"] == 2
+    assert group["latest"]["event_type"] == "ema.fallback_used"
+
+
+def test_live_performance_report_forager_ema_readiness_whitelists_values(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="forager.selection",
+                seq=1,
+                ts=1000,
+                component="forager.selection",
+                data={
+                    "candidate_count": 1,
+                    "selected_symbols": ["XLM/USDT:USDT"],
+                    "top_scores": [{"symbol": "XLM/USDT:USDT", "score": 0.9}],
+                    "path": "/home/operator/private/cache.json",
+                    "raw_payload": {"leak_marker": "raw"},
+                    "api_key": "secret",
+                    "balance": 1000,
+                    "equity": 999,
+                },
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                component="ema.bundle",
+                data={
+                    "candidate_unavailable": ["XLM/USDT:USDT"],
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "missing feature basis",
+                            "symbols": ["XLM/USDT:USDT"],
+                            "error_types": ["RuntimeError"],
+                            "example_error": "raw exception with /root/passivbot secret",
+                        }
+                    ],
+                    "debug": {"raw": "not copied"},
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    rendered = json.dumps(report["forager_ema_readiness"], sort_keys=True)
+
+    assert "top_scores" not in rendered
+    assert "score" not in rendered
+    assert "/home/operator" not in rendered
+    assert "/root/passivbot" not in rendered
+    assert "raw_payload" not in rendered
     assert "leak_marker" not in rendered
+    assert "api_key" not in rendered
+    assert "secret" not in rendered
     assert "balance" not in rendered
     assert "equity" not in rendered
+    assert "example_error" not in rendered
+    assert "raw exception" not in rendered
+
+
+def test_live_performance_report_forager_ema_readiness_summary_is_bounded(tmp_path):
+    for index in range(2):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="forager.selection",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                    component="forager.selection",
+                    data={"candidate_count": 10, "selected_count": 1},
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["forager_ema_readiness"]["bot_count"] == 2
+    assert len(summary["forager_ema_readiness"]["groups"]) == 1
+    assert summary["forager_ema_readiness"]["groups_truncated"] is True
 
 
 def test_live_performance_report_cache_warmup_summary_is_bounded(tmp_path):

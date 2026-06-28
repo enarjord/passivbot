@@ -107,6 +107,12 @@ _CACHE_EVENT_TYPES = {
     "cache.flush.completed",
     "cache.warmup_decision",
 }
+_FORAGER_EMA_READINESS_EVENT_TYPES = {
+    "forager.selection",
+    "forager.feature_unavailable",
+    "ema.unavailable",
+    "ema.fallback_used",
+}
 _CACHE_STRING_FIELDS = (
     "context",
     "timeframe",
@@ -142,6 +148,34 @@ _CACHE_NUMERIC_FIELDS = (
 _CACHE_COUNTER_FIELDS = (
     "source_days",
     "reason_counts",
+)
+_FORAGER_SELECTION_NUMERIC_FIELDS = (
+    "candidate_count",
+    "eligible_count",
+    "selected_count",
+    "incumbent_count",
+    "max_n_positions",
+    "slots_to_fill",
+    "max_age_ms",
+    "fetch_budget",
+    "feature_unavailable_count",
+    "volatility_dropped_count",
+    "hysteresis_event_count",
+)
+_FORAGER_FEATURE_UNAVAILABLE_NUMERIC_FIELDS = (
+    "candidate_count",
+    "volume_count",
+    "log_range_count",
+    "max_age_ms",
+    "fetch_budget",
+)
+_EMA_UNAVAILABLE_NUMERIC_FIELDS = (
+    "optional_drop_count",
+)
+_EMA_FALLBACK_NUMERIC_FIELDS = (
+    "close_recovered_count",
+    "close_fallback_count",
+    "forager_cached_fallback_count",
 )
 
 
@@ -231,6 +265,22 @@ def _safe_counter_mapping(value: Any) -> dict[str, int]:
         number = _finite_float(raw)
         if number is not None and number >= 0:
             out[str(key)] = int(number)
+    return out
+
+
+def _safe_string_list(value: Any, *, limit: int = 12) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for item in value:
+        if item is None:
+            continue
+        text = str(item)
+        if not text:
+            continue
+        out.append(text)
+        if len(out) >= int(limit):
+            break
     return out
 
 
@@ -934,6 +984,137 @@ def _bounded_cache_event_data(data: Any) -> dict[str, Any]:
     return out
 
 
+def _bounded_forager_selection_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _FORAGER_SELECTION_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    for key in ("slots_open",):
+        if key in data:
+            out[key] = bool(data.get(key))
+    for key in ("source",):
+        value = data.get(key)
+        if value is not None:
+            out[key] = str(value)
+    for key in ("selected_symbols", "incumbent_symbols"):
+        values = _safe_string_list(data.get(key), limit=12)
+        if values:
+            out[key] = values
+    return out
+
+
+def _bounded_forager_feature_unavailable_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _FORAGER_FEATURE_UNAVAILABLE_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    unavailable = _safe_string_list(data.get("unavailable"), limit=12)
+    if unavailable:
+        out["unavailable"] = unavailable
+    return out
+
+
+def _bounded_ema_unavailable_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _EMA_UNAVAILABLE_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    for key in ("candidate_unavailable", "unavailable"):
+        values = _safe_string_list(data.get(key), limit=12)
+        if values:
+            out[key] = values
+    candidate_groups = []
+    raw_candidate_groups = data.get("candidate_unavailable_groups")
+    if isinstance(raw_candidate_groups, list):
+        for item in raw_candidate_groups[:8]:
+            if not isinstance(item, dict):
+                continue
+            group = {
+                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "symbols": _safe_string_list(item.get("symbols"), limit=12),
+                "error_types": _safe_string_list(item.get("error_types"), limit=4),
+            }
+            candidate_groups.append(
+                {key: value for key, value in group.items() if value not in (None, [], {})}
+            )
+    if candidate_groups:
+        out["candidate_unavailable_groups"] = candidate_groups
+    unavailable_reasons = []
+    raw_unavailable_reasons = data.get("unavailable_reasons")
+    if isinstance(raw_unavailable_reasons, list):
+        for item in raw_unavailable_reasons[:8]:
+            if not isinstance(item, dict):
+                continue
+            group = {
+                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "symbols": _safe_string_list(item.get("symbols"), limit=12),
+            }
+            unavailable_reasons.append(
+                {key: value for key, value in group.items() if value not in (None, [], {})}
+            )
+    if unavailable_reasons:
+        out["unavailable_reasons"] = unavailable_reasons
+    optional_groups = []
+    raw_optional_groups = data.get("optional_drop_groups")
+    if isinstance(raw_optional_groups, list):
+        for item in raw_optional_groups[:8]:
+            if not isinstance(item, dict):
+                continue
+            group = {
+                "ema_type": (
+                    str(item.get("ema_type")) if item.get("ema_type") is not None else None
+                ),
+                "reason": str(item.get("reason")) if item.get("reason") is not None else None,
+                "symbols": _safe_string_list(item.get("symbols"), limit=12),
+            }
+            optional_groups.append(
+                {key: value for key, value in group.items() if value not in (None, [], {})}
+            )
+    if optional_groups:
+        out["optional_drop_groups"] = optional_groups
+    return out
+
+
+def _bounded_ema_fallback_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _EMA_FALLBACK_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    for key in (
+        "close_recovered_symbols",
+        "close_fallback_symbols",
+        "forager_cached_fallback_symbols",
+    ):
+        values = _safe_string_list(data.get(key), limit=12)
+        if values:
+            out[key] = values
+    return out
+
+
+def _bounded_forager_ema_readiness_data(event_type: str, data: Any) -> dict[str, Any]:
+    if event_type == "forager.selection":
+        return _bounded_forager_selection_data(data)
+    if event_type == "forager.feature_unavailable":
+        return _bounded_forager_feature_unavailable_data(data)
+    if event_type == "ema.unavailable":
+        return _bounded_ema_unavailable_data(data)
+    if event_type == "ema.fallback_used":
+        return _bounded_ema_fallback_data(data)
+    return {}
+
+
 def _number_summary(values: list[int]) -> dict[str, Any]:
     sorted_values = sorted(int(value) for value in values)
     if not sorted_values:
@@ -1307,6 +1488,337 @@ class _CacheWarmupAccumulator:
                     ((item.get("load", {}) or {}).get("elapsed_ms", {}) or {}).get(
                         "p95", 0
                     )
+                    or 0
+                ),
+                -int(item.get("latest_ts", 0) or 0),
+                str(item.get("bot") or ""),
+            ),
+        )
+        limit = max(0, int(group_limit))
+        return {
+            "total_events": int(self.total_events),
+            "bot_count": len(groups),
+            "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(groups) > limit,
+            "groups": groups[:limit],
+        }
+
+
+class _ForagerEmaReadinessAccumulator:
+    def __init__(self) -> None:
+        self.bots: dict[str, dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+        self.total_events = 0
+
+    def _bot_state(self, bot: str) -> dict[str, Any]:
+        state = self.bots.get(bot)
+        if state is None:
+            state = {
+                "bot": bot,
+                "event_types": Counter(),
+                "statuses": Counter(),
+                "reason_codes": Counter(),
+                "psides": Counter(),
+                "total_events": 0,
+                "latest_ts": None,
+                "selected_symbols": Counter(),
+                "incumbent_symbols": Counter(),
+                "feature_unavailable_symbols": Counter(),
+                "ema_candidate_symbols": Counter(),
+                "ema_unavailable_symbols": Counter(),
+                "fallback_symbols": Counter(),
+                "selection_events": 0,
+                "selection_candidate_counts": [],
+                "selection_eligible_counts": [],
+                "selection_selected_counts": [],
+                "selection_feature_unavailable_counts": [],
+                "selection_volatility_dropped_counts": [],
+                "selection_max_age_ms": [],
+                "selection_fetch_budget": [],
+                "feature_unavailable_events": 0,
+                "feature_unavailable_candidate_counts": [],
+                "feature_unavailable_volume_counts": [],
+                "feature_unavailable_log_range_counts": [],
+                "feature_unavailable_max_age_ms": [],
+                "feature_unavailable_fetch_budget": [],
+                "ema_unavailable_events": 0,
+                "ema_optional_drop_count": 0,
+                "ema_candidate_unavailable_count": 0,
+                "ema_unavailable_count": 0,
+                "ema_candidate_reasons": Counter(),
+                "ema_unavailable_reasons": Counter(),
+                "ema_optional_drop_reasons": Counter(),
+                "ema_error_types": Counter(),
+                "ema_fallback_events": 0,
+                "close_recovered_count": 0,
+                "close_fallback_count": 0,
+                "forager_cached_fallback_count": 0,
+            }
+            self.bots[bot] = state
+        return state
+
+    @staticmethod
+    def _add_number(container: list[int], value: Any) -> None:
+        number = _non_negative_number(value)
+        if number is not None:
+            container.append(int(number))
+
+    @staticmethod
+    def _add_counter(counter: Counter[str], values: Any) -> None:
+        for value in _safe_string_list(values, limit=12):
+            counter[value] += 1
+
+    @staticmethod
+    def _symbols_summary(counter: Counter[str], *, limit: int = 10) -> dict[str, Any]:
+        if not counter:
+            return {}
+        return {
+            "count": len(counter),
+            "sample": [symbol for symbol, _count in counter.most_common(limit)],
+        }
+
+    @staticmethod
+    def _latest_changed(state: dict[str, Any], ts: int | None) -> bool:
+        if ts is None or state.get("latest_ts") is None:
+            return True
+        return int(ts) >= int(state["latest_ts"])
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _FORAGER_EMA_READINESS_EVENT_TYPES:
+            return
+        data = _bounded_forager_ema_readiness_data(event_type, live_event.get("data"))
+        if not data:
+            return
+        bot = _bot_key(row, live_event)
+        state = self._bot_state(bot)
+        self.total_events += 1
+        self.event_types[event_type] += 1
+        state["total_events"] = int(state["total_events"]) + 1
+        state["event_types"][event_type] += 1
+        status = live_event.get("status")
+        if status is not None:
+            state["statuses"][str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            state["reason_codes"][str(reason_code)] += 1
+        pside = live_event.get("pside") or row.get("pside")
+        if pside is not None:
+            state["psides"][str(pside)] += 1
+        ts = _record_ts(row)
+        record = {
+            key: value
+            for key, value in {
+                "event_type": event_type,
+                "status": status,
+                "reason_code": reason_code,
+                "ts": int(ts) if ts is not None else None,
+                "pside": str(pside) if pside is not None else None,
+                "data": data,
+            }.items()
+            if value not in (None, {}, [])
+        }
+
+        if event_type == "forager.selection":
+            state["selection_events"] = int(state["selection_events"]) + 1
+            for field, bucket in (
+                ("candidate_count", "selection_candidate_counts"),
+                ("eligible_count", "selection_eligible_counts"),
+                ("selected_count", "selection_selected_counts"),
+                ("feature_unavailable_count", "selection_feature_unavailable_counts"),
+                ("volatility_dropped_count", "selection_volatility_dropped_counts"),
+                ("max_age_ms", "selection_max_age_ms"),
+                ("fetch_budget", "selection_fetch_budget"),
+            ):
+                self._add_number(state[bucket], data.get(field))
+            self._add_counter(state["selected_symbols"], data.get("selected_symbols"))
+            self._add_counter(state["incumbent_symbols"], data.get("incumbent_symbols"))
+            state["latest_selection"] = record
+        elif event_type == "forager.feature_unavailable":
+            state["feature_unavailable_events"] = int(state["feature_unavailable_events"]) + 1
+            for field, bucket in (
+                ("candidate_count", "feature_unavailable_candidate_counts"),
+                ("volume_count", "feature_unavailable_volume_counts"),
+                ("log_range_count", "feature_unavailable_log_range_counts"),
+                ("max_age_ms", "feature_unavailable_max_age_ms"),
+                ("fetch_budget", "feature_unavailable_fetch_budget"),
+            ):
+                self._add_number(state[bucket], data.get(field))
+            self._add_counter(state["feature_unavailable_symbols"], data.get("unavailable"))
+            state["latest_feature_unavailable"] = record
+        elif event_type == "ema.unavailable":
+            state["ema_unavailable_events"] = int(state["ema_unavailable_events"]) + 1
+            state["ema_optional_drop_count"] = int(state["ema_optional_drop_count"]) + int(
+                _non_negative_number(data.get("optional_drop_count")) or 0
+            )
+            candidate_symbols = data.get("candidate_unavailable")
+            unavailable_symbols = data.get("unavailable")
+            state["ema_candidate_unavailable_count"] = int(
+                state["ema_candidate_unavailable_count"]
+            ) + len(_safe_string_list(candidate_symbols, limit=12))
+            state["ema_unavailable_count"] = int(state["ema_unavailable_count"]) + len(
+                _safe_string_list(unavailable_symbols, limit=12)
+            )
+            self._add_counter(state["ema_candidate_symbols"], candidate_symbols)
+            self._add_counter(state["ema_unavailable_symbols"], unavailable_symbols)
+            for item in data.get("candidate_unavailable_groups") or []:
+                if not isinstance(item, dict):
+                    continue
+                reason = item.get("reason")
+                if reason is not None:
+                    state["ema_candidate_reasons"][str(reason)] += 1
+                for error_type in _safe_string_list(item.get("error_types"), limit=4):
+                    state["ema_error_types"][error_type] += 1
+            for item in data.get("unavailable_reasons") or []:
+                if isinstance(item, dict) and item.get("reason") is not None:
+                    state["ema_unavailable_reasons"][str(item["reason"])] += 1
+            for item in data.get("optional_drop_groups") or []:
+                if isinstance(item, dict) and item.get("reason") is not None:
+                    state["ema_optional_drop_reasons"][str(item["reason"])] += 1
+            state["latest_ema_unavailable"] = record
+        elif event_type == "ema.fallback_used":
+            state["ema_fallback_events"] = int(state["ema_fallback_events"]) + 1
+            for field in _EMA_FALLBACK_NUMERIC_FIELDS:
+                state[field] = int(state[field]) + int(_non_negative_number(data.get(field)) or 0)
+            for key in (
+                "close_recovered_symbols",
+                "close_fallback_symbols",
+                "forager_cached_fallback_symbols",
+            ):
+                self._add_counter(state["fallback_symbols"], data.get(key))
+            state["latest_ema_fallback"] = record
+
+        if self._latest_changed(state, ts):
+            if ts is not None:
+                state["latest_ts"] = int(ts)
+            state["latest"] = record
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = []
+        for bot, state in self.bots.items():
+            selection = {}
+            if int(state.get("selection_events") or 0):
+                selection = {
+                    "events": int(state.get("selection_events") or 0),
+                    "candidate_count": _number_summary(state["selection_candidate_counts"]),
+                    "eligible_count": _number_summary(state["selection_eligible_counts"]),
+                    "selected_count": _number_summary(state["selection_selected_counts"]),
+                    "feature_unavailable_count": _number_summary(
+                        state["selection_feature_unavailable_counts"]
+                    ),
+                    "volatility_dropped_count": _number_summary(
+                        state["selection_volatility_dropped_counts"]
+                    ),
+                    "max_age_ms": _number_summary(state["selection_max_age_ms"]),
+                    "fetch_budget": _number_summary(state["selection_fetch_budget"]),
+                    "selected_symbols": self._symbols_summary(state["selected_symbols"]),
+                    "incumbent_symbols": self._symbols_summary(state["incumbent_symbols"]),
+                    "latest": state.get("latest_selection"),
+                }
+            feature_unavailable = {}
+            if int(state.get("feature_unavailable_events") or 0):
+                feature_unavailable = {
+                    "events": int(state.get("feature_unavailable_events") or 0),
+                    "candidate_count": _number_summary(
+                        state["feature_unavailable_candidate_counts"]
+                    ),
+                    "volume_count": _number_summary(state["feature_unavailable_volume_counts"]),
+                    "log_range_count": _number_summary(
+                        state["feature_unavailable_log_range_counts"]
+                    ),
+                    "max_age_ms": _number_summary(state["feature_unavailable_max_age_ms"]),
+                    "fetch_budget": _number_summary(state["feature_unavailable_fetch_budget"]),
+                    "unavailable_symbols": self._symbols_summary(
+                        state["feature_unavailable_symbols"]
+                    ),
+                    "latest": state.get("latest_feature_unavailable"),
+                }
+            ema_unavailable = {}
+            if int(state.get("ema_unavailable_events") or 0):
+                ema_unavailable = {
+                    "events": int(state.get("ema_unavailable_events") or 0),
+                    "optional_drop_count": int(state.get("ema_optional_drop_count") or 0),
+                    "candidate_symbol_sample_count": int(
+                        state.get("ema_candidate_unavailable_count") or 0
+                    ),
+                    "unavailable_symbol_sample_count": int(
+                        state.get("ema_unavailable_count") or 0
+                    ),
+                    "candidate_reasons": dict(state["ema_candidate_reasons"].most_common()),
+                    "unavailable_reasons": dict(state["ema_unavailable_reasons"].most_common()),
+                    "optional_drop_reasons": dict(
+                        state["ema_optional_drop_reasons"].most_common()
+                    ),
+                    "error_types": dict(state["ema_error_types"].most_common()),
+                    "candidate_symbols": self._symbols_summary(state["ema_candidate_symbols"]),
+                    "unavailable_symbols": self._symbols_summary(
+                        state["ema_unavailable_symbols"]
+                    ),
+                    "latest": state.get("latest_ema_unavailable"),
+                }
+            ema_fallback = {}
+            if int(state.get("ema_fallback_events") or 0):
+                ema_fallback = {
+                    "events": int(state.get("ema_fallback_events") or 0),
+                    "close_recovered_count": int(state.get("close_recovered_count") or 0),
+                    "close_fallback_count": int(state.get("close_fallback_count") or 0),
+                    "forager_cached_fallback_count": int(
+                        state.get("forager_cached_fallback_count") or 0
+                    ),
+                    "symbols": self._symbols_summary(state["fallback_symbols"]),
+                    "latest": state.get("latest_ema_fallback"),
+                }
+            group = {
+                "bot": bot,
+                "total_events": int(state.get("total_events") or 0),
+                "latest_ts": state.get("latest_ts"),
+                "event_types": dict(state["event_types"].most_common()),
+                "statuses": dict(state["statuses"].most_common()),
+                "reason_codes": dict(state["reason_codes"].most_common()),
+                "psides": dict(state["psides"].most_common()),
+                "latest": state.get("latest"),
+                "forager_selection": {
+                    key: value
+                    for key, value in selection.items()
+                    if value not in (None, {}, [])
+                },
+                "forager_feature_unavailable": {
+                    key: value
+                    for key, value in feature_unavailable.items()
+                    if value not in (None, {}, [])
+                },
+                "ema_unavailable": {
+                    key: value
+                    for key, value in ema_unavailable.items()
+                    if value not in (None, {}, [])
+                },
+                "ema_fallback": {
+                    key: value
+                    for key, value in ema_fallback.items()
+                    if value not in (None, {}, [])
+                },
+            }
+            groups.append(
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, {}, [])
+                }
+            )
+        groups = sorted(
+            groups,
+            key=lambda item: (
+                -int(
+                    (
+                        item.get("ema_unavailable", {}) or {}
+                    ).get("candidate_symbol_sample_count", 0)
+                    or 0
+                ),
+                -int(
+                    (
+                        item.get("forager_selection", {}) or {}
+                    ).get("feature_unavailable_count", {})
+                    .get("max", 0)
                     or 0
                 ),
                 -int(item.get("latest_ts", 0) or 0),
@@ -2031,6 +2543,7 @@ def build_live_performance_report(
     startup_readiness = _StartupReadinessAccumulator()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
+    forager_ema_readiness = _ForagerEmaReadinessAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
@@ -2120,6 +2633,7 @@ def build_live_performance_report(
                     startup_readiness.add(row=row, live_event=live_event)
                     hsl_replay_profile.add(row=row, live_event=live_event)
                     cache_warmup.add(row=row, live_event=live_event)
+                    forager_ema_readiness.add(row=row, live_event=live_event)
                     resource_pressure.add(row=row, live_event=live_event)
                     shutdown_latency.add(row=row, live_event=live_event)
                     execution_timing.add(
@@ -2167,6 +2681,7 @@ def build_live_performance_report(
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
         "hsl_replay_profile": hsl_replay_profile.to_dict(group_limit=group_limit),
         "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
+        "forager_ema_readiness": forager_ema_readiness.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
@@ -2282,6 +2797,17 @@ def summarize_live_performance_report(
         if len(cache_groups) > max(0, int(group_limit)):
             cache_warmup["groups_truncated"] = True
         summary["cache_warmup"] = cache_warmup
+    if isinstance(report.get("forager_ema_readiness"), dict):
+        forager_ema_readiness = dict(report["forager_ema_readiness"])
+        readiness_groups = (
+            forager_ema_readiness.get("groups")
+            if isinstance(forager_ema_readiness.get("groups"), list)
+            else []
+        )
+        forager_ema_readiness["groups"] = readiness_groups[: max(0, int(group_limit))]
+        if len(readiness_groups) > max(0, int(group_limit)):
+            forager_ema_readiness["groups_truncated"] = True
+        summary["forager_ema_readiness"] = forager_ema_readiness
     if isinstance(report.get("resource_pressure"), dict):
         resource_pressure = dict(report["resource_pressure"])
         pressure_groups = (
