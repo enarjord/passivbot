@@ -871,7 +871,18 @@ def test_live_performance_report_startup_readiness_summary(tmp_path):
     _write_ndjson(
         events_dir / "current.ndjson",
         [
-            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.started",
+                seq=1,
+                ts=1000,
+                data={
+                    "live_event_debug_profiles": [
+                        "rust",
+                        "ema",
+                        "api_key=should_not_render",
+                    ]
+                },
+            ),
             _monitor_row(
                 event_type="bot.startup_timing",
                 seq=2,
@@ -921,6 +932,9 @@ def test_live_performance_report_startup_readiness_summary(tmp_path):
     assert bot["lifecycle_status"] == "ready"
     assert bot["bot_started_ts"] == 1000
     assert bot["bot_ready_ts"] == 5000
+    assert bot["debug_profiles"] == ["ema", "rust"]
+    assert startup["debug_profile_counts"] == {"ema": 1, "rust": 1}
+    assert "api_key=should_not_render" not in json.dumps(startup, sort_keys=True)
     assert bot["startup_phases_ms"] == {"account": 900, "hsl": 2500}
     assert bot["hsl_replay"]["stage"] == "pair_replay"
     assert bot["hsl_replay"]["pairs"] == 26
@@ -982,7 +996,12 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
                 data={"stage": "full_replay", "pairs": 2, "full_elapsed_s": 1.5},
             ),
             _monitor_row(event_type="bot.ready", seq=4, ts=1300),
-            _monitor_row(event_type="bot.started", seq=5, ts=2000),
+            _monitor_row(
+                event_type="bot.started",
+                seq=5,
+                ts=2000,
+                data={"live_event_debug_profiles": ["state"]},
+            ),
         ],
     )
 
@@ -994,6 +1013,8 @@ def test_live_performance_report_startup_readiness_resets_on_restart(tmp_path):
     bot = startup["bots"][0]
     assert bot["lifecycle_status"] == "started"
     assert bot["bot_started_ts"] == 2000
+    assert bot["debug_profiles"] == ["state"]
+    assert startup["debug_profile_counts"] == {"state": 1}
     assert "bot_ready_ts" not in bot
     assert "startup_phases_ms" not in bot
     assert "hsl_replay" not in bot

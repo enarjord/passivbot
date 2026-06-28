@@ -8,7 +8,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_bus import LIVE_EVENT_DEBUG_PROFILES, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_query import discover_event_files
 from live.smoke_report import _user_safe_display_path
 
@@ -846,9 +846,40 @@ def _startup_elapsed_ms(data: dict[str, Any]) -> int | None:
     return _elapsed_s_to_ms(data.get("elapsed_s"))
 
 
+_LIVE_EVENT_DEBUG_PROFILE_SET = set(LIVE_EVENT_DEBUG_PROFILES)
+
+
+def _known_debug_profiles(value: Any) -> list[str]:
+    if isinstance(value, str):
+        raw_values: list[Any] = [
+            part for part in value.replace(";", ",").replace(" ", ",").split(",") if part
+        ]
+    elif isinstance(value, (list, tuple, set, frozenset)):
+        raw_values = list(value)
+    else:
+        return []
+    profiles = {
+        str(item).strip()
+        for item in raw_values
+        if str(item).strip() in _LIVE_EVENT_DEBUG_PROFILE_SET
+    }
+    return sorted(profiles)
+
+
 class _StartupReadinessAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
+
+    @staticmethod
+    def _update_debug_profiles(state: dict[str, Any], data: dict[str, Any]) -> None:
+        profiles = _known_debug_profiles(data.get("live_event_debug_profiles"))
+        if not profiles:
+            return
+        existing = state.get("debug_profiles")
+        if not isinstance(existing, set):
+            existing = set()
+            state["debug_profiles"] = existing
+        existing.update(profiles)
 
     def _bot_state(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> dict[str, Any]:
         bot = _bot_key(row, live_event)
@@ -885,12 +916,14 @@ class _StartupReadinessAccumulator:
             if ts is not None:
                 state["bot_started_ts"] = int(ts)
             state["lifecycle_status"] = "started"
+            self._update_debug_profiles(state, data)
             return
         if event_type == "bot.ready":
             state = self._bot_state(row=row, live_event=live_event)
             if ts is not None:
                 state["bot_ready_ts"] = int(ts)
             state["lifecycle_status"] = "ready"
+            self._update_debug_profiles(state, data)
             return
         if event_type == "bot.startup_timing":
             state = self._bot_state(row=row, live_event=live_event)
@@ -933,6 +966,7 @@ class _StartupReadinessAccumulator:
         bot_items = []
         ready_count = 0
         hsl_active_count = 0
+        debug_profile_counts: Counter[str] = Counter()
         limit = max(0, int(group_limit))
         for bot, state in sorted(self.bots.items()):
             phases = dict(sorted(state.get("startup_phases_ms", {}).items()))
@@ -958,11 +992,16 @@ class _StartupReadinessAccumulator:
                 item["hsl_replay"] = hsl_state
                 if hsl_state.get("status") not in ("succeeded", "failed"):
                     hsl_active_count += 1
+            debug_profiles = sorted(state.get("debug_profiles") or [])
+            if debug_profiles:
+                item["debug_profiles"] = debug_profiles
+                debug_profile_counts.update(debug_profiles)
             bot_items.append({key: value for key, value in item.items() if value not in (None, {})})
         return {
             "bot_count": len(bot_items),
             "ready_count": int(ready_count),
             "hsl_replay_active_count": int(hsl_active_count),
+            "debug_profile_counts": dict(sorted(debug_profile_counts.items())),
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
