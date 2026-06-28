@@ -253,6 +253,11 @@ if the final replay result is correct.
      existing startup, cycle, state-refresh, remote-call, HSL replay, cache,
      decision-boundary, input-staleness, execution, and shutdown timing groups
      into one bounded report section.
+   - A follow-up slice corrected `snapshot_to_rust` correlation: planning
+     snapshot epochs are not live event cycle IDs, so legacy/current
+     `snapshot.built` events without envelope cycle IDs are matched to the
+     latest preceding snapshot in the same bot/restart scope and surfaced with
+     exact-vs-latest match counters.
    - Missing pieces: candle close age, market price age, config age, and
      complete coverage for every order/write/shutdown stage.
 

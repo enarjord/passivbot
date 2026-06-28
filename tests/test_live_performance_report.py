@@ -661,6 +661,8 @@ def test_live_performance_report_input_staleness(tmp_path):
     assert report["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert report["input_staleness"]["rust_calls_seen"] == 1
     assert report["input_staleness"]["packet_refs_missing"] == 0
+    assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
+    assert report["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert staleness_groups["input_staleness.surface.balance"]["max_ms"] == 900
     assert staleness_groups["input_staleness.surface.completed_candles"]["max_ms"] == 1500
     assert staleness_groups["input_staleness.surface.completed_candles"][
@@ -723,8 +725,95 @@ def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path
     }
 
     assert report["input_staleness"]["rust_calls_missing_snapshot"] == 1
+    assert report["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 0
     assert "input_staleness.snapshot_to_rust" not in staleness_groups
     assert staleness_groups["input_staleness.ema_bundle_to_rust"]["max_ms"] == 500
+
+
+def test_live_performance_report_input_staleness_prefers_envelope_cycle_id(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=2000,
+                ids={"cycle_id": "cy_9"},
+                data={
+                    "cycle_id": 1,
+                    "surface_ages": [],
+                    "market_snapshot_summary": {},
+                    "data_packets": [],
+                },
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=2,
+                ts=2600,
+                ids={"cycle_id": "cy_9"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    staleness_groups = {
+        group["operation"]: group
+        for group in report["input_staleness"]["groups"]
+    }
+
+    assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 1
+    assert report["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 0
+    assert report["input_staleness"]["rust_calls_missing_snapshot"] == 0
+    assert staleness_groups["input_staleness.snapshot_to_rust"]["max_ms"] == 600
+
+
+def test_live_performance_report_input_staleness_uses_latest_legacy_snapshot(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1000,
+                data={
+                    "cycle_id": 1,
+                    "surface_ages": [],
+                    "market_snapshot_summary": {},
+                    "data_packets": [],
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=2,
+                ts=2400,
+                data={
+                    "cycle_id": 2,
+                    "surface_ages": [],
+                    "market_snapshot_summary": {},
+                    "data_packets": [],
+                },
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                seq=3,
+                ts=2700,
+                ids={"cycle_id": "cy_99"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    staleness_groups = {
+        group["operation"]: group
+        for group in report["input_staleness"]["groups"]
+    }
+
+    assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
+    assert report["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
+    assert report["input_staleness"]["rust_calls_missing_snapshot"] == 0
+    assert staleness_groups["input_staleness.snapshot_to_rust"]["max_ms"] == 300
 
 
 def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_path):
@@ -759,6 +848,7 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert summary["input_staleness"]["snapshot_surface_age_rows"] == 1
     assert summary["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert summary["input_staleness"]["rust_calls_seen"] == 1
+    assert summary["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert summary["input_staleness"]["rust_calls_missing_ema"] == 1
     assert summary["input_staleness"]["total_groups"] == 4
     assert len(summary["input_staleness"]["groups"]) == 1
