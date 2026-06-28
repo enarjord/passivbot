@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `404063c6` after PR #815, `Summarize event taxonomy in trace queries`.
+- `c7bc5924` after PR #819, `Summarize HSL replay state in smoke report`.
 
 Current review gate:
 
@@ -30,6 +30,45 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #819 at `c7bc5924`.
+- Bots were not restarted for PR #819 because the change was read-only smoke
+  report tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #819 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice derives `hsl_replay_health` from existing
+  `hsl.replay.*` monitor events and adds no event producers, exchange calls,
+  cache mutation, readiness gates, order/risk logic, monitor writes, console
+  routing, or trading behavior.
+- A settled 10-minute smoke after the PR #819 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=c7bc5924`, `hsl_replay_health.active_bots=0`, and no
+  missing configured processes. Remaining attention came from known non-hard
+  EMA readiness groups.
+- Wider 20- and 45-minute smokes intentionally captured startup/risk history:
+  `hsl_replay_health` showed three completed coin-HSL replays, with Binance
+  about `1.00M` applied rows in `1445s`, GateIO about `954k` rows in `1467s`,
+  and OKX completing similarly slowly. The same wider windows showed HSL RED
+  ZEC supervisor/finalized risk lines for Binance, GateIO, and OKX, not a
+  software crash. This confirms the new smoke section works and reinforces that
+  coin-HSL startup replay latency remains the highest-priority safety/perf gap.
+- Repository pulled through PR #817 at `4dc6ef79`.
+- Bots were not restarted for PR #817 because the change was read-only
+  event-query tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #817 passed local validation and CI; the slice adds `--tag` filtering to
+  `passivbot tool live-event-query` and `build_event_report()` so event,
+  timeline, trace-summary, order-trace, and cycle-trace reports can be scoped by
+  structured live-event tags. It adds no event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, or trading
+  behavior.
+- PR #810 was merged at `ddf1f7fe` and carried snapshot/cycle IDs through
+  `DiagnosticEvent` and `snapshot.built` diagnostic emission. This improves
+  cycle/snapshot trace correlation for existing diagnostic events without
+  changing trading behavior.
+- PR #809 was an interleaved non-logging v8 configuration/defaults update,
+  merged at `54e6b335`. It is noted here only because it advanced `v8` between
+  logging slices.
 - Repository pulled through PR #815 at `404063c6`.
 - Bots were not restarted for PR #815 because the change was read-only
   event-query tooling. All five configured `passivbot live` processes remained
@@ -2662,6 +2701,59 @@ VPS5 deployment status:
   repository state, `remote_calls.failed=0`, and
   `account_critical_remote_calls.failed=0`.
 
+### PR #810: Snapshot IDs in Diagnostic Events
+
+- Branch: `codex/v8-snapshot-built-envelope-ids`.
+- Scope: live diagnostic event correlation IDs and tests.
+- Result: `DiagnosticEvent` can now carry `cycle_id` and `snapshot_id`, and the
+  live planning path passes the current live cycle ID plus planning snapshot ID
+  into `snapshot.built` diagnostics. This narrows the gap between legacy
+  diagnostic producers and the structured live-event envelope without changing
+  trading behavior.
+- Review evidence: CI was green. Local validation covered focused event-bus and
+  planning snapshot tests, the adjacent event-bus, balance-split, and
+  performance-report suites, py_compile, `git diff --check`, and a source-stamp
+  verification of the shared local Rust extension. No order/risk/cache/exchange
+  behavior changed.
+
+### PR #817: Event-Query Tag Filtering
+
+- Branch: `codex/v8-event-query-tag-filter`.
+- Scope: read-only `live-event-query` tag filtering and tests.
+- Result: `passivbot tool live-event-query` and `build_event_report()` now
+  accept tag filters so event, timeline, trace-summary, order-trace, and
+  cycle-trace views can be scoped by structured live-event tags. The tag filter
+  applies to already-persisted event rows only.
+- Review evidence: CI was green. Local validation covered
+  `tests/test_live_event_query.py`, adjacent CLI dispatch tests, py_compile for
+  touched files, `git diff --check`, and a silent-handling scan with no matches.
+  No event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, or trading behavior changed.
+
+### PR #819: HSL Replay Smoke Summary
+
+- Branch: `codex/v8-smoke-hsl-replay-summary`.
+- Scope: read-only smoke-report summary for existing HSL replay monitor events.
+- Result: `passivbot tool live-smoke-report` now includes `hsl_replay_health`
+  derived from existing `hsl.replay.started`, `hsl.replay.progress`, and
+  `hsl.replay.completed` rows. The summary shows per-bot active/completed/failed
+  state, bounded started/loaded/progress/completed samples, dense pair-row work
+  estimates, observed work percentage, and elapsed timing. Active replay counts
+  as attention, not a hard failure.
+- Review evidence: CI was green. Claude approved the initial commit and carried
+  approval over a test-only hardening commit. Hermes approved both the initial
+  commit and the follow-up delta. Local validation covered the smoke-report
+  suite, adjacent CLI dispatch tests, py_compile, `git diff --check`, and a
+  silent-handling scan of touched files.
+- VPS5 evidence: deployed at `c7bc5924` without bot restart because this is
+  read-only smoke tooling. A settled 10-minute smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, and `hsl_replay_health.active_bots=0`. Wider
+  20- and 45-minute smokes confirmed the new section captured completed
+  coin-HSL startup replays and showed their long elapsed times; the hard
+  entries in those wider windows were intended HSL RED ZEC risk events rather
+  than software failures.
+
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
 - Discovery: Binance VPS5 startup on 2026-06-26 showed coin-mode HSL history
@@ -2683,6 +2775,8 @@ VPS5 deployment status:
 1. Prioritize a separate trading-path PR for coin-HSL startup replay latency:
    held-position protective readiness must be bounded, exact where data is
    available, and observable before full historical replay of unrelated coins.
+   PR #819 now makes active/completed replay state visible in standard smoke,
+   but it does not reduce the replay latency.
 2. Continue collecting smoke evidence with the new source breakdown and
    risk-vs-general log-match counters before changing any verdict policy. If
    future HSL RED/cooldown episodes make smoke red, the report can now show
