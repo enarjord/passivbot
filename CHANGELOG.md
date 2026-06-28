@@ -4,6 +4,7 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added root-level `passivbot -V` and `passivbot --version` output.
 - Added `hsl_replay_health` summaries to
   `passivbot tool live-smoke-report`, so smoke reports show active,
   completed, and failed HSL startup replay state from existing
