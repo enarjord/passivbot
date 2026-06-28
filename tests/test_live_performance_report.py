@@ -624,7 +624,7 @@ def test_live_performance_report_input_staleness(tmp_path):
                         "missing_count": 0,
                         "max_age_ms": 700,
                         "mean_age_ms": 450,
-                        "configured_max_age_ms": 10_000,
+                        "configured_max_age_ms": 600,
                         "sources": ["ticker"],
                         "sources_count": 1,
                     },
@@ -659,6 +659,7 @@ def test_live_performance_report_input_staleness(tmp_path):
     assert report["input_staleness"]["snapshots_seen"] == 1
     assert report["input_staleness"]["snapshot_surface_age_rows"] == 2
     assert report["input_staleness"]["snapshot_market_summaries_seen"] == 1
+    assert report["input_staleness"]["snapshot_market_stale_count"] == 1
     assert report["input_staleness"]["rust_calls_seen"] == 1
     assert report["input_staleness"]["packet_refs_missing"] == 0
     assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
@@ -670,6 +671,12 @@ def test_live_performance_report_input_staleness(tmp_path):
     ] == "blocks_indicator_readiness"
     assert staleness_groups["input_staleness.market_snapshot.max"]["max_ms"] == 700
     assert staleness_groups["input_staleness.market_snapshot.mean"]["max_ms"] == 450
+    assert staleness_groups["input_staleness.market_snapshot.configured_excess"][
+        "max_ms"
+    ] == 100
+    assert staleness_groups["input_staleness.market_snapshot.configured_excess"][
+        "timing_kind"
+    ] == "configured_age_excess"
     assert staleness_groups["input_staleness.data_packet.balance"]["max_ms"] == 1000
     assert staleness_groups["input_staleness.data_packet.open_orders"]["max_ms"] == 800
     assert staleness_groups["input_staleness.data_packet.positions"]["max_ms"] == 600
@@ -828,7 +835,11 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
                 data={
                     "cycle_id": 1,
                     "surface_ages": [{"name": "balance", "age_ms": 500}],
-                    "market_snapshot_summary": {"max_age_ms": 250, "mean_age_ms": 125},
+                    "market_snapshot_summary": {
+                        "max_age_ms": 250,
+                        "mean_age_ms": 125,
+                        "configured_max_age_ms": 200,
+                    },
                     "data_packets": [],
                 },
             ),
@@ -847,10 +858,11 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert summary["input_staleness"]["snapshots_seen"] == 1
     assert summary["input_staleness"]["snapshot_surface_age_rows"] == 1
     assert summary["input_staleness"]["snapshot_market_summaries_seen"] == 1
+    assert summary["input_staleness"]["snapshot_market_stale_count"] == 1
     assert summary["input_staleness"]["rust_calls_seen"] == 1
     assert summary["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert summary["input_staleness"]["rust_calls_missing_ema"] == 1
-    assert summary["input_staleness"]["total_groups"] == 4
+    assert summary["input_staleness"]["total_groups"] == 5
     assert len(summary["input_staleness"]["groups"]) == 1
 
 
