@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ac495065` after PR #833, `Report risk event activity`.
+- `17962106` after PR #835, `Emit realized loss gate block events`.
 
 Current review gate:
 
@@ -30,6 +30,20 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #835 at `17962106`.
+- Bots were not restarted for PR #835 because the change is an observability-only
+  structured event and report aggregation slice. All five configured
+  `passivbot live` processes remained running.
+- PR #835 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice emits `risk.realized_loss_gate_blocked` beside the
+  existing throttled realized-loss-gate warning, routes the event away from
+  console/text by default, and includes it in the read-only `risk_activity`
+  performance-report summary using envelope labels only.
+- A 5-minute smoke after the PR #835 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=17962106`, and all hard failure sources at zero. Remaining
+  attention came from known non-hard structured problem events.
 - Repository pulled through PR #833 at `ac495065`.
 - Bots were not restarted for PRs #832/#833. PR #832 was a small CLI
   version-flag improvement; PR #833 was read-only performance-report tooling.
