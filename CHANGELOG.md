@@ -546,6 +546,9 @@ All notable user-facing changes will be documented in this file.
 - Added optimizer `--resume` checkpoint recovery safeguards: resume now requires a
   readable checkpoint plus prior `all_results.bin` metadata, rejects changed optimizer
   search domains before appending results, and exits non-zero on fatal optimizer errors.
+- Changed explicit `backtest.ohlcv_source_dir` backtest/optimizer runs to read that
+  caller-managed OHLCV tree directly instead of first importing it into PB7's v2 raw
+  `caches/ohlcvs` store; the final prepared HLCV cache is still written normally.
 
 ## v7.12.0 - 2026-05-27
 
