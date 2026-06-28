@@ -21,6 +21,8 @@ class DiagnosticEvent:
     ts_ms: int | None = None
     symbol: str | None = None
     pside: str | None = None
+    cycle_id: str | None = None
+    snapshot_id: str | None = None
 
     @classmethod
     def build(
@@ -32,6 +34,8 @@ class DiagnosticEvent:
         ts_ms: int | None = None,
         symbol: str | None = None,
         pside: str | None = None,
+        cycle_id: str | None = None,
+        snapshot_id: str | None = None,
     ) -> "DiagnosticEvent":
         return cls(
             kind=str(kind),
@@ -40,6 +44,8 @@ class DiagnosticEvent:
             ts_ms=None if ts_ms is None else int(ts_ms),
             symbol=None if symbol is None else str(symbol),
             pside=None if pside is None else str(pside),
+            cycle_id=None if cycle_id is None else str(cycle_id),
+            snapshot_id=None if snapshot_id is None else str(snapshot_id),
         )
 
     def emit(self, bot) -> Any:
@@ -86,6 +92,8 @@ class DiagnosticEvent:
             "exchange": None if exchange is None else str(exchange),
             "user": None if user is None else str(user),
             "bot_id": None if bot_id is None else str(bot_id),
+            "cycle_id": self.cycle_id,
+            "snapshot_id": self.snapshot_id,
             "symbol": self.symbol,
             "pside": self.pside,
             "data": dict(self.payload),

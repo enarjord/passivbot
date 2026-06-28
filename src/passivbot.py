@@ -9182,6 +9182,8 @@ class Passivbot:
                     "planning_availability": availability.summary(),
                 },
                 ts_ms=snapshot.ts_ms,
+                cycle_id=self._current_live_event_cycle_id(),
+                snapshot_id=snapshot.snapshot_id,
             ),
         )
         self._emit_planning_symbol_state_event(availability, context=context)

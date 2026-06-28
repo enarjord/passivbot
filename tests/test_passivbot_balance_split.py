@@ -5827,7 +5827,7 @@ def test_build_staged_planning_snapshot_captures_exact_surface_contract():
 
 
 @pytest.mark.asyncio
-async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
+async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle(monkeypatch):
     symbol = "BTC/USDT:USDT"
     positions = [
         {
@@ -5883,6 +5883,24 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
         )
     }
     bot._record_market_snapshot_surface([symbol], snapshots)
+    bot._live_event_current_cycle_id = "cy_snapshot"
+    bot._current_live_event_cycle_id = Passivbot._current_live_event_cycle_id.__get__(
+        bot, Passivbot
+    )
+    diagnostic_build_calls = []
+    original_diagnostic_build = passivbot_module.DiagnosticEvent.build
+
+    def recording_diagnostic_build(kind, tags, payload=None, **kwargs):
+        event = original_diagnostic_build(kind, tags, payload, **kwargs)
+        if kind == "snapshot.built":
+            diagnostic_build_calls.append((payload, kwargs, event))
+        return event
+
+    monkeypatch.setattr(
+        passivbot_module.DiagnosticEvent,
+        "build",
+        staticmethod(recording_diagnostic_build),
+    )
 
     planning_snapshot = bot._build_staged_planning_snapshot([symbol], snapshots)
     frozen_revisions = {
@@ -5899,6 +5917,8 @@ async def test_planning_snapshot_freezes_data_packet_revisions_through_cycle():
     ]
     snapshot_payload = snapshot_events[-1]["payload"]
     assert snapshot_payload["snapshot_id"] == planning_snapshot.snapshot_id
+    assert diagnostic_build_calls[-1][1]["cycle_id"] == "cy_snapshot"
+    assert diagnostic_build_calls[-1][1]["snapshot_id"] == planning_snapshot.snapshot_id
     surface_age_names = {item["name"] for item in snapshot_payload["surface_ages"]}
     assert {"balance", "positions", "open_orders", "completed_candles", "market_snapshot"} <= (
         surface_age_names
