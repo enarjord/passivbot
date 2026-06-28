@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Updated the canonical v8 trailing-martingale default config profile, including
+  the 41-coin universe, per-coin HSL signal mode, refreshed optimizer
+  scoring/limits/bounds, and `bot.long.risk.n_positions = 5`.
 - Improved cold `passivbot backtest` materialization by batching legacy OHLCV
   imports by month, vectorizing chunk writes, staging HLCV cache writes with
   rollback on publish failure, and honoring Ctrl+C between expensive
@@ -489,7 +492,7 @@ All notable user-facing changes will be documented in this file.
   sorting recursive close ladders.
 - Updated the canonical v8 schema defaults and mirrored example config to the new
   `trailing_martingale` long-only `n_positions = 4` profile at
-  `configs/examples/default_trailing_martingale_long_npos4.json`.
+  `configs/examples/default_trailing_martingale_long.json`.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.

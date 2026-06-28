@@ -16,9 +16,9 @@ See also:
    - `bot.long.hsl.*`
    - `bot.short.hsl.*`
 3. `live.hsl_signal_mode` selects whether those `pside` runtimes use:
-   - one shared `unified` signal (default)
+   - one shared `unified` signal
    - side-local `pside` signals
-   - coin-local `coin` signals
+   - coin-local `coin` signals (default)
 4. Live and backtest use the same reconstructed strategy-drawdown concept for each `pside`; `coin` mode instead uses realized PnL cumsum drawdown plus current UPnL divided by the configured slot budget.
 5. RED can halt permanently or restart after cooldown, per `pside`.
 6. Live startup behavior is reconstructed from exchange-derived history rather than depending on a local latch file.

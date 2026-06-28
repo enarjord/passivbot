@@ -93,7 +93,7 @@ def test_trailing_martingale_ema_gate_mode_is_fixed_config_not_optimizer_bound()
     spec = pbr.get_strategy_spec("trailing_martingale")
     assert any(
         param["config_path"] == ["strategy", "long", "entry", "ema_gate_mode"]
-        and param["default"] == "initial"
+        and param["default"] == "all"
         and param["allowed_values"] == ["disabled", "all", "initial", "reentry"]
         for param in spec["fixed_parameters"]
     )
@@ -1594,7 +1594,7 @@ def test_load_prepared_config_without_path_uses_schema_defaults_pipeline():
     assert _strategy_side(prepared, "long")["ema_span_0"] == _strategy_side(
         template, "long", "trailing_martingale"
     )["ema_span_0"]
-    assert prepared["backtest"]["visible_metrics"] is None
+    assert prepared["backtest"]["visible_metrics"] == template["backtest"]["visible_metrics"]
     assert prepared["_raw"] == template
     assert prepared["_raw_effective"] == template
 
@@ -2008,16 +2008,34 @@ def test_prepare_config_legacy_bot_omissions_do_not_backfill_schema_defaults(cap
 
     long_strategy = _strategy_side(prepared, "long")
     long_risk = prepared["bot"]["long"]["risk"]
-    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(1787)
-    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(44.0)
-    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(1.5)
-    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(4.66)
-    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(3.578)
-    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(0.985)
+    template_strategy = _strategy_side(get_template_config(), "long")
+    template_risk = get_template_config()["bot"]["long"]["risk"]
+    assert long_strategy["volatility_ema_span_1h"] == pytest.approx(
+        template_strategy["volatility_ema_span_1h"]
+    )
+    assert long_strategy["volatility_ema_span_1m"] == pytest.approx(
+        template_strategy["volatility_ema_span_1m"]
+    )
+    assert long_strategy["entry"]["threshold_volatility_1h_weight"] == pytest.approx(
+        template_strategy["entry"]["threshold_volatility_1h_weight"]
+    )
+    assert long_strategy["entry"]["threshold_volatility_1m_weight"] == pytest.approx(
+        template_strategy["entry"]["threshold_volatility_1m_weight"]
+    )
+    assert long_strategy["entry"]["threshold_we_weight"] == pytest.approx(
+        template_strategy["entry"]["threshold_we_weight"]
+    )
+    assert long_risk["total_exposure_enforcer_threshold"] == pytest.approx(
+        template_risk["total_exposure_enforcer_threshold"]
+    )
     assert long_risk["total_exposure_entry_gate_enabled"] is True
     assert long_risk["total_exposure_enforcer_policy"] == "reduce_overweight"
-    assert long_risk["we_excess_allowance_pct"] == pytest.approx(0.1)
-    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(0.99)
+    assert long_risk["we_excess_allowance_pct"] == pytest.approx(
+        template_risk["we_excess_allowance_pct"]
+    )
+    assert long_risk["position_exposure_enforcer_threshold"] == pytest.approx(
+        template_risk["position_exposure_enforcer_threshold"]
+    )
 
 
 def test_prepare_config_normalizes_twel_policy_and_runtime_flattening():

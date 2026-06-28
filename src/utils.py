@@ -299,7 +299,7 @@ def dump_json_streamlined(
     *,
     indent: int = 4,
     max_inline: int = 60,
-    separators: tuple[str, str] = (",", ":"),
+    separators: tuple[str, str] = (", ", ": "),
     sort_keys: bool = False,
 ) -> None:
     """
@@ -332,7 +332,7 @@ def json_dumps_streamlined(
     *,
     indent: int = 4,
     max_inline: int = 60,
-    separators: tuple[str, str] = (",", ":"),
+    separators: tuple[str, str] = (", ", ": "),
     sort_keys: bool = False,
 ) -> str:
     """Return the streamlined JSON string (like ``dump_json_streamlined`` but in-memory)."""

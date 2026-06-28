@@ -766,10 +766,14 @@ def validate_forager_config(
             forager_cfg["score_weights"],
             path=f"bot.{pside}.forager.score_weights",
         )
+        raw_weight_total = sum(
+            float(forager_cfg["score_weights"][key])
+            for key in ("volume", "ema_readiness", "volatility")
+        )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],
             path=f"bot.{pside}.forager.score_weights",
-        ):
+        ) and (pside_enabled or raw_weight_total > 0.0):
             raise ValueError(
                 f"bot.{pside}.forager.score_weights must be normalized before validation"
             )

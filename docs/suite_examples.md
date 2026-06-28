@@ -5,7 +5,7 @@ This page shows practical examples of Passivbot's flattened suite configuration 
 Suite mode is **off by default** in both:
 
 - `src/config/schema.py`
-- `configs/examples/default_trailing_martingale_long_npos4.json`
+- `configs/examples/default_trailing_martingale_long.json`
 
 That is intentional. A fresh user should start with a single backtest or optimize run, then enable
 suite mode when they specifically want multi-scenario evaluation.

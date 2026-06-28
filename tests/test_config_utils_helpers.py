@@ -60,7 +60,7 @@ def test_load_input_config_without_path_uses_schema_defaults():
     assert base_config_path == ""
     assert source == get_template_config()
     assert raw_snapshot == get_template_config()
-    assert source["live"]["hsl_signal_mode"] == "unified"
+    assert source["live"]["hsl_signal_mode"] == "coin"
 
 
 def test_hsl_signal_mode_accepts_coin():
@@ -87,7 +87,7 @@ def test_backtest_cli_accepts_hsl_signal_mode_override(flag):
 
 
 def test_default_example_config_loads_with_grouped_shape_and_live_execution_settings():
-    loaded = load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
 
     assert loaded["live"]["strategy_kind"] == "trailing_martingale"
     assert set(loaded["bot"]["long"]) == {
@@ -225,7 +225,9 @@ def test_ensure_bot_defaults_and_bounds_adds_missing_values():
     assert config["bot"]["long"]["forager"]["volume_ema_span_1m"] == pytest.approx(
         get_template_config()["bot"]["long"]["forager"]["volume_ema_span_1m"]
     )
-    assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"] == [360, 2880, 10]
+    assert config["optimize"]["bounds"]["long"]["forager"]["volume_ema_span_1m"] == get_template_config()[
+        "optimize"
+    ]["bounds"]["long"]["forager"]["volume_ema_span_1m"]
 
 
 def test_rename_config_keys_moves_legacy_fields():
@@ -467,7 +469,7 @@ def test_max_realized_loss_pct_default_is_consistent_across_template_and_formatt
     assert formatted["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
     assert formatted["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
 
-    loaded = load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=False)
+    loaded = load_config("configs/examples/default_trailing_martingale_long.json", verbose=False)
     assert loaded["live"]["max_realized_loss_pct"] == pytest.approx(1.0)
     assert loaded["live"]["fee_pct_fallback"] == pytest.approx(0.0002)
     assert loaded["live"]["fee_pct_sanity_abs_max"] == pytest.approx(0.001)
@@ -781,7 +783,7 @@ def test_format_config_emits_coalesced_summary_without_leaf_noise(caplog):
 
 def test_load_example_config_avoids_leaf_add_remove_log_churn(caplog):
     with caplog.at_level(logging.INFO):
-        load_config("configs/examples/default_trailing_martingale_long_npos4.json", verbose=True)
+        load_config("configs/examples/default_trailing_martingale_long.json", verbose=True)
 
     messages = [rec.message for rec in caplog.records]
     assert not any("Removed unused key" in msg for msg in messages)
@@ -896,7 +898,7 @@ def test_update_config_with_args_records_old_new_values():
     assert entry["step"] == "update_config_with_args"
     diff = entry["details"]["diffs"][0]
     assert diff["path"] == "backtest.start_date"
-    assert diff["old"] == "2021-01-01"
+    assert diff["old"] == "2021-04-20"
     assert diff["new"] == "2022-01-01"
 
 
@@ -1004,7 +1006,7 @@ def test_update_config_with_args_ignores_non_config_parser_args():
 
 def test_update_config_with_args_adds_missing_sparse_leaf_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_martingale_long_npos4.json", log_info=False
+        "configs/examples/default_trailing_martingale_long.json", log_info=False
     )
     source_config["bot"]["long"]["strategy"]["trailing_martingale"]["close"].pop(
         "threshold_we_weight", None
@@ -1048,7 +1050,7 @@ def test_update_config_with_args_adds_missing_sparse_leaf_override():
 
 def test_prepare_config_preserves_sparse_leaf_cli_override():
     source_config, base_config_path, raw_snapshot = load_input_config(
-        "configs/examples/default_trailing_martingale_long_npos4.json", log_info=False
+        "configs/examples/default_trailing_martingale_long.json", log_info=False
     )
     args = SimpleNamespace()
     vars(args)["bot.long.strategy.trailing_martingale.entry.threshold_volatility_1h_weight"] = 3.5
