@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `1fc77413` after PR #801, `Add forager EMA readiness performance report`.
+- `07f8e759` after PR #803, `Add resource pressure percentiles`.
 
 Current review gate:
 
@@ -30,6 +30,29 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #803 at `07f8e759`.
+- Bots were not restarted for PR #803 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #803 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `80bc42fd` with no
+  findings and CI was green; the slice is report-only, derives values from
+  existing `health.summary` events, and does not add event producers, exchange
+  calls, cache mutation, readiness gates, console routing, or trading behavior.
+- A 5-minute time-windowed smoke after the PR #803 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state at
+  `repository.head=07f8e759`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness and HSL cooldown
+  groups.
+- A focused 30-minute performance report confirmed the updated
+  `resource_pressure` section populated on VPS5. It reported `total=8` health
+  summary events across four bots, and sample groups for Hyperliquid and GateIO
+  showed whitelisted process/event-pipeline fields with `count`, `latest`,
+  `min`, `mean`, `median`, `p95`, and `max` values, including RSS, load
+  averages, loop duration, event queue depth, sink-error totals, dropped-event
+  totals, and worker state. No raw account or financial payload fields were
+  surfaced.
 - Repository pulled through PR #801 at `1fc77413`.
 - Bots were not restarted for PR #801 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2345,6 +2368,36 @@ VPS5 deployment status:
   `total_events=140`, including `ema.fallback_used=41`, `ema.unavailable=56`,
   and `forager.selection=43`. The section grouped current readiness evidence
   across Binance, GateIO, OKX, and Hyperliquid.
+
+### PR #803: Resource Pressure Percentiles
+
+- Branch: `codex/v8-resource-pressure-percentiles`.
+- Scope: read-only live performance report resource-pressure projection, docs,
+  and tests.
+- Result: `passivbot tool live-performance-report` `resource_pressure` field
+  stats now include `count`, `median`, and `p95` in addition to the prior
+  latest/min/max/mean values. Integer-only health series remain integer-valued,
+  while fractional fields such as load averages and memory percentage keep
+  bounded decimal precision. The section continues to derive only from existing
+  `health.summary` events and continues to use the existing whitelist of
+  process and event-pipeline fields.
+- Review evidence: CI was green. Hermes approved current head `80bc42fd` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered performance-report, event-query, and smoke-report tests, py_compile,
+  `git diff --check`, a local compact CLI performance-report smoke, and a
+  silent-handling scan of touched report/test files. No event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior changed.
+- VPS5 evidence: deployed at `07f8e759` without bot restart because this is
+  read-only report tooling. A 5-minute time-windowed smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state, and
+  `account_critical_remote_calls.failed=0`. A focused 30-minute performance
+  report returned `ok=true` and showed `resource_pressure` populated with
+  `total=8` health summary events across four bots. Sample groups confirmed
+  resource fields now include count/latest/min/mean/median/p95/max values
+  without surfacing raw account or financial payload fields.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
