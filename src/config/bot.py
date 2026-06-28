@@ -529,6 +529,7 @@ def normalize_bot_forager_config(
         forager_cfg["volume_drop_pct"] = drop_pct
 
         weights = forager_cfg["score_weights"]
+        risk_cfg = get_bot_group(result["bot"][pside], "risk")
         normalized = normalize_forager_score_weights(
             weights, path=f"bot.{pside}.forager.score_weights"
         )
@@ -541,6 +542,12 @@ def normalize_bot_forager_config(
                     except (TypeError, ValueError, KeyError):
                         raw_total = math.nan
                         break
+            pside_enabled = (
+                float(risk_cfg["total_wallet_exposure_limit"]) > 0.0
+                and int(round(float(risk_cfg["n_positions"]))) > 0
+            )
+            if raw_total <= 0.0 and not pside_enabled:
+                continue
             if raw_total <= 0.0:
                 log_config_message(
                     verbose,
@@ -766,10 +773,14 @@ def validate_forager_config(
             forager_cfg["score_weights"],
             path=f"bot.{pside}.forager.score_weights",
         )
+        raw_weight_total = sum(
+            float(forager_cfg["score_weights"][key])
+            for key in ("volume", "ema_readiness", "volatility")
+        )
         if not forager_score_weights_are_normalized(
             forager_cfg["score_weights"],
             path=f"bot.{pside}.forager.score_weights",
-        ):
+        ) and (pside_enabled or raw_weight_total > 0.0):
             raise ValueError(
                 f"bot.{pside}.forager.score_weights must be normalized before validation"
             )

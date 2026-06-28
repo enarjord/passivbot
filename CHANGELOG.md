@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Updated the canonical v8 trailing-martingale default config profile, including
+  the 41-coin universe, per-coin HSL signal mode, refreshed optimizer
+  scoring/limits/bounds, `bot.long.risk.n_positions = 5`, and
+  `entry.ema_gate_mode = "all"` for default-reliant configs.
 - Added `--tag` filtering to `passivbot tool live-event-query`, so operator
   event, timeline, trace-summary, order-trace, and cycle-trace reports can be
   scoped by structured live-event tags.
@@ -531,7 +535,7 @@ All notable user-facing changes will be documented in this file.
   sorting recursive close ladders.
 - Updated the canonical v8 schema defaults and mirrored example config to the new
   `trailing_martingale` long-only `n_positions = 4` profile at
-  `configs/examples/default_trailing_martingale_long_npos4.json`.
+  `configs/examples/default_trailing_martingale_long.json`.
 - Fixed Hyperliquid `xyz:*` stock-perp backtest/optimizer startup so explicit
   `backtest.ohlcv_source_dir` data can use the direct source-dir preparation path when
   strict local v2 materialization is unavailable.

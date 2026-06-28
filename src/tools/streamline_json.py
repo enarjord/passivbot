@@ -63,23 +63,18 @@ def process_file(
 
 
 def parse_separators(raw: str) -> tuple[str, str]:
+    if raw == ", :":
+        return ", ", ": "
+
     value = raw.strip()
     if not value:
-        return ",", ":"
+        return ", ", ": "
 
     if value == ",:":
         return ",", ":"
 
-    pieces = value.split()
-    if len(pieces) == 2 and all(len(piece) == 1 for piece in pieces):
-        return pieces[0], pieces[1]
-
-    if len(value) >= 2 and "," not in value:
-        return value[0], value[-1]
-
-    parts = value.split(",")
-    if len(parts) == 2 and parts[0] and parts[1].strip():
-        return parts[0], parts[1].strip()
+    if value == ", :":
+        return ", ", ": "
 
     raise argparse.ArgumentTypeError("Invalid separators format. Examples: ', :', ',:' or ' , : '")
 

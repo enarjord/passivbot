@@ -9,20 +9,20 @@ HSL is configured separately for each `pside`:
 
 Signal construction is selected globally with `live.hsl_signal_mode`:
 
-1. `unified` (default)
+1. `unified`
    - long and short keep separate HSL controllers
    - both controllers are fed from the same combined account-level strategy signal
 2. `pside`
    - long HSL uses long realized/unrealized strategy PnL
    - short HSL uses short realized/unrealized strategy PnL
-3. `coin`
+3. `coin` (default)
    - each `coin+pside` has its own HSL controller
    - RED panic-closes only the affected `coin+pside`
    - drawdown is measured from realized PnL cumsum peak inside `live.pnls_max_lookback_days` plus current UPnL, divided by the configured slot budget
 
 ### Choosing a Signal Mode
 
-`unified` is the default and the safer general-purpose choice:
+`coin` is the default symbol-local stop mode. `unified` remains available when account-level HSL behavior is preferred. In `unified` mode:
 
 1. HSL reacts to whole-account strategy drawdown
 2. long and short still keep separate thresholds, cooldowns, and halts

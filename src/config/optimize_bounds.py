@@ -63,60 +63,61 @@ SHARED_OPTIMIZE_BOUNDS_DEFAULTS = {
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
-            "volatility_ema_span_1m": [10, 720, 1],
+            "volatility_ema_span_1m": [10, 1440, 1],
             "volume_drop_pct": [0.02, 1, 0.01],
-            "volume_ema_span_1m": [360, 2880, 10],
+            "volume_ema_span_1m": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [1, 2880, 10],
-            "ema_span_minutes": [1, 2880, 10],
-            "red_threshold": [0.01, 0.12, 0.001],
+            "cooldown_minutes_after_red": [2160, 4320, 10],
+            "ema_span_minutes": [1, 720, 1],
+            "red_threshold": [0.01, 0.15, 0.001]
         },
         "risk": {
-            "entry_cooldown_minutes": [0.0, 60.0, 0.1],
-            "n_positions": [2, 5, 1],
-            "total_exposure_enforcer_threshold": [0.8, 0.99, 0.001],
-            "we_excess_allowance_pct": [0.1, 5, 0.01],
-            "position_exposure_enforcer_threshold": [0.8, 0.99, 0.001],
-            "total_wallet_exposure_limit": [1.5, 1.5],
+            "entry_cooldown_minutes": [0, 60, 0.1],
+            "n_positions": [4, 12, 1],
+            "position_exposure_enforcer_threshold": [1, 1, 0.001],
+            "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
+            "total_wallet_exposure_limit": [1.5, 1.5, 0.01],
+            "we_excess_allowance_pct": [0, 3, 0.01]
         },
         "unstuck": {
-            "close_pct": [0.05, 0.12, 0.001],
+            "close_pct": [0.01, 0.12, 0.001],
             "ema_dist": [-0.2, 0.01, 0.0001],
-            "loss_allowance_pct": [0.0001, 0.1, 0.0001],
-            "threshold": [0.4, 0.99, 0.001],
-        },
+            "loss_allowance_pct": [0.005, 0.2, 0.0001],
+            "threshold": [0.4, 0.9, 0.001]
+        }
     },
     "short": {
         "forager": {
             "score_weights_ema_readiness": [0, 1, 0.01],
             "score_weights_volatility": [0, 1, 0.01],
             "score_weights_volume": [0, 1, 0.01],
-            "volatility_ema_span_1m": [10, 720, 1],
+            "volatility_ema_span_1m": [10, 1440, 1],
             "volume_drop_pct": [0.02, 1, 0.01],
-            "volume_ema_span_1m": [360, 2880, 10],
+            "volume_ema_span_1m": [180, 2880, 1]
         },
         "hsl": {
-            "cooldown_minutes_after_red": [1, 2880, 10],
-            "ema_span_minutes": [1, 2880, 10],
-            "red_threshold": [0.01, 0.12, 0.001],
+            "cooldown_minutes_after_red": [2160, 4320, 10],
+            "ema_span_minutes": [1, 720, 1],
+            "red_threshold": [0.01, 0.15, 0.001]
         },
         "risk": {
-            "entry_cooldown_minutes": [0.0, 60.0, 0.1],
-            "n_positions": [1, 1, 1],
+            "entry_cooldown_minutes": [0, 60, 0.1],
+            "n_positions": [4, 12, 1],
+            "position_exposure_enforcer_threshold": [1, 1, 0.001],
             "total_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
-            "we_excess_allowance_pct": [0, 0, 0.01],
-            "position_exposure_enforcer_threshold": [0.8, 1.01, 0.001],
-            "total_wallet_exposure_limit": [0.0, 0.0],
+            "total_wallet_exposure_limit": [0, 0],
+            "we_excess_allowance_pct": [0, 3, 0.01]
         },
         "unstuck": {
-            "close_pct": [0.05, 0.12, 0.001],
+            "close_pct": [0.01, 0.12, 0.001],
             "ema_dist": [-0.2, 0.01, 0.0001],
-            "loss_allowance_pct": [0.005, 0.1, 0.0001],
-            "threshold": [0.4, 1.01, 0.001],
-        },
-    },
+            "loss_allowance_pct": [0.005, 0.2, 0.0001],
+            "threshold": [0.4, 0.9, 0.001]
+        }
+    }
 }
+
 
 def get_optimize_bounds_defaults() -> dict:
     result = {}
