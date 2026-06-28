@@ -494,6 +494,51 @@ def test_event_query_filters_by_remaining_event_ids(tmp_path):
     }
 
 
+def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                cycle_id=None,
+                seq=1,
+                ts=1000,
+                data={
+                    "snapshot_id": "snap_legacy",
+                    "cycle_id": 42,
+                    "ready_symbols": 3,
+                },
+            ),
+            _monitor_row(
+                event_type="rust_orchestrator.called",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                ids={"snapshot_id": "snap_2", "plan_id": "plan_2"},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        snapshot_id="snap_legacy",
+        include_data=True,
+        trace_summary=True,
+    )
+
+    assert report["query"]["filters"] == {"snapshot_ids": ["snap_legacy"]}
+    assert report["missing_cycle_id"] == 1
+    assert report["query"]["matched_events"] == 1
+    event = report["query"]["events"][0]
+    assert event["event_type"] == "snapshot.built"
+    assert event["ids"] == {"snapshot_id": "snap_legacy"}
+    assert event["data"]["cycle_id"] == 42
+    assert report["query"]["trace_summary"]["ids"]["snapshot_id"] == [
+        {"id": "snap_legacy", "events": 1}
+    ]
+
+
 def test_event_query_filters_by_inclusive_time_window(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     invalid_ts = _monitor_row(
