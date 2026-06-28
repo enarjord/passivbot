@@ -186,8 +186,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   delays are visible without scanning every timing group. The `resource_pressure` section
   summarizes whitelisted process and event-pipeline health fields from existing
   `health.summary` events, including RSS, memory percent, file descriptors, load average,
-  event queue depth, dropped-event counters, and sink-error counters without exposing raw
-  account or financial payloads. The `shutdown_latency` section summarizes existing
+  event queue depth, dropped-event counters, and sink-error counters with count, latest,
+  min, mean, median, p95, and max values without exposing raw account or financial
+  payloads. The `shutdown_latency` section summarizes existing
   lifecycle shutdown events, including per-stage cumulative elapsed time and final shutdown
   duration, without copying shutdown error text. The `execution_timing` section derives
   aggregate exchange-action latency groups from existing order-wave, order create/cancel,

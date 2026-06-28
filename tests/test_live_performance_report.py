@@ -1799,12 +1799,24 @@ def test_live_performance_report_resource_pressure_from_health_summary(tmp_path)
     assert group["latest_ts"] == 2000
     assert group["fields"]["rss_bytes"] == {
         "latest": 1500,
+        "count": 2,
         "min": 1000,
         "max": 1500,
         "mean": 1250,
+        "median": 1250,
+        "p95": 1475,
     }
-    assert group["fields"]["memory_percent"]["latest"] == 6.5
+    assert group["fields"]["memory_percent"] == {
+        "latest": 6.5,
+        "count": 2,
+        "min": 5.5,
+        "max": 6.5,
+        "mean": 6,
+        "median": 6,
+        "p95": 6.45,
+    }
     assert group["fields"]["event_queue_depth"]["max"] == 5
+    assert group["fields"]["event_queue_depth"]["p95"] == 5
     assert group["fields"]["event_dropped_total"]["latest"] == 4
     assert group["fields"]["event_sink_error_total"]["latest"] == 1
     assert group["fields"]["event_degraded_count"]["latest"] == 3
