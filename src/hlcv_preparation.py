@@ -681,7 +681,9 @@ class HLCVManager:
 
         return df.reset_index(drop=True)
 
-    async def get_ohlcvs(self, coin: str, start_date=None, end_date=None) -> pd.DataFrame:
+    async def get_ohlcvs(
+        self, coin: str, start_date=None, end_date=None, *, source_dir_only: bool = False
+    ) -> pd.DataFrame:
         empty_df = pd.DataFrame(
             columns=["timestamp", "open", "high", "low", "close", "volume", "valid"]
         )
@@ -753,6 +755,13 @@ class HLCVManager:
                     coin,
                 )
                 return df.reset_index(drop=True)
+            if source_dir_only:
+                logging.info(
+                    "[%s] get_ohlcvs: source_dir_only had no data for %s",
+                    self.exchange,
+                    coin,
+                )
+                return empty_df
             logging.debug(
                 "[%s] get_ohlcvs: source dir had no data for %s; falling back to candlestick manager",
                 self.exchange,
@@ -4565,7 +4574,7 @@ async def _load_combined_btc_prices(
             if not btc_om.has_coin("BTC"):
                 continue
             if not use_v2_local:
-                btc_df = await btc_om.get_ohlcvs("BTC")
+                btc_df = await btc_om.get_ohlcvs("BTC", source_dir_only=True)
                 if not btc_df.empty:
                     btc_source_exchange = btc_exchange
                     logging.info("using BTC/USD benchmark direct source dir from %s", btc_exchange)
@@ -4693,7 +4702,9 @@ async def fetch_data_for_coin_and_exchange(
         )
         return (ex, df, coverage_count, gap_count, total_volume)
     om.update_date_range(effective_start_ts, end_ts)
-    df = await om.get_ohlcvs(coin)
+    df = await om.get_ohlcvs(
+        coin, source_dir_only=bool(getattr(om, "ohlcv_source_dir", None) and not use_v2_local)
+    )
     if df.empty:
         logging.info(
             "%s candles load empty coin=%s elapsed_s=%.1f",
