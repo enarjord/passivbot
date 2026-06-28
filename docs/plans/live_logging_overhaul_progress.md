@@ -2452,7 +2452,12 @@ VPS5 deployment status:
   `total_groups=161` across cache, cycle, decision-boundary, input-staleness,
   remote-call, and state-refresh categories. The top observed groups were
   `input_staleness.snapshot_to_rust` delays in the `delays_cycle_decision`
-  scope.
+  scope. A follow-up investigation found those multi-minute
+  `snapshot_to_rust` durations were a report correlation artifact: planning
+  snapshot epochs in `snapshot.built.data.cycle_id` were being treated as live
+  event cycle IDs. The report now uses exact envelope cycle IDs when present
+  and otherwise falls back to the latest preceding snapshot in the same
+  bot/restart scope, with match counters.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 

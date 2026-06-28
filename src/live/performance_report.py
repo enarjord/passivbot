@@ -603,27 +603,20 @@ class _DecisionBoundaryAccumulator:
         }
 
 
-def _cycle_id_from_snapshot_data(data: dict[str, Any]) -> str | None:
-    cycle_id = data.get("cycle_id")
-    if cycle_id is None:
-        return None
-    text = str(cycle_id)
-    if text.startswith("cy_"):
-        return text
-    return f"cy_{text}"
-
-
 class _InputStalenessAccumulator:
     def __init__(self) -> None:
         self.groups: dict[tuple[str, str, str], _MetricGroup] = {}
         self.packet_received_ts: dict[tuple[str, int, str, str], int] = {}
         self.snapshot_ts_by_cycle: dict[tuple[str, int, str], int] = {}
+        self.latest_snapshot_ts_by_scope: dict[tuple[str, int], int] = {}
         self.ema_ts_by_cycle: dict[tuple[str, int, str], int] = {}
         self.snapshots_seen = 0
         self.snapshot_surface_age_rows = 0
         self.snapshot_market_summaries_seen = 0
         self.rust_calls_seen = 0
         self.packet_refs_missing = 0
+        self.snapshot_to_rust_exact_matches = 0
+        self.snapshot_to_rust_latest_snapshot_matches = 0
         self.rust_calls_missing_snapshot = 0
         self.rust_calls_missing_ema = 0
 
@@ -677,7 +670,9 @@ class _InputStalenessAccumulator:
             return
         if event_type == "snapshot.built":
             self.snapshots_seen += 1
-            cycle_id = _cycle_id_from_snapshot_data(data)
+            scope_key = (bot, int(cycle_scope))
+            self.latest_snapshot_ts_by_scope[scope_key] = int(timestamp_ms)
+            cycle_id = _event_cycle_id(live_event)
             if cycle_id:
                 self.snapshot_ts_by_cycle[(bot, int(cycle_scope), cycle_id)] = int(timestamp_ms)
             surface_ages = data.get("surface_ages")
@@ -763,6 +758,13 @@ class _InputStalenessAccumulator:
             if not cycle_id:
                 return
             snapshot_ts = self.snapshot_ts_by_cycle.get((bot, int(cycle_scope), cycle_id))
+            if snapshot_ts is not None:
+                self.snapshot_to_rust_exact_matches += 1
+            else:
+                latest_snapshot_ts = self.latest_snapshot_ts_by_scope.get((bot, int(cycle_scope)))
+                if latest_snapshot_ts is not None and latest_snapshot_ts <= int(timestamp_ms):
+                    snapshot_ts = int(latest_snapshot_ts)
+                    self.snapshot_to_rust_latest_snapshot_matches += 1
             if snapshot_ts is None:
                 self.rust_calls_missing_snapshot += 1
             else:
@@ -807,6 +809,10 @@ class _InputStalenessAccumulator:
             "snapshot_market_summaries_seen": int(self.snapshot_market_summaries_seen),
             "rust_calls_seen": int(self.rust_calls_seen),
             "packet_refs_missing": int(self.packet_refs_missing),
+            "snapshot_to_rust_exact_matches": int(self.snapshot_to_rust_exact_matches),
+            "snapshot_to_rust_latest_snapshot_matches": int(
+                self.snapshot_to_rust_latest_snapshot_matches
+            ),
             "rust_calls_missing_snapshot": int(self.rust_calls_missing_snapshot),
             "rust_calls_missing_ema": int(self.rust_calls_missing_ema),
             "total_groups": len(groups),
@@ -2886,6 +2892,12 @@ def summarize_live_performance_report(
             ),
             "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
             "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),
+            "snapshot_to_rust_exact_matches": int(
+                input_staleness.get("snapshot_to_rust_exact_matches") or 0
+            ),
+            "snapshot_to_rust_latest_snapshot_matches": int(
+                input_staleness.get("snapshot_to_rust_latest_snapshot_matches") or 0
+            ),
             "rust_calls_missing_snapshot": int(
                 input_staleness.get("rust_calls_missing_snapshot") or 0
             ),

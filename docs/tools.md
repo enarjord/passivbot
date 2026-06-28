@@ -177,6 +177,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   confirmations, and completion. It also includes an input-staleness section derived from
   existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
   snapshot build plus snapshot/EMA age at the Rust call boundary when those events are present.
+  For `snapshot_to_rust`, the report uses exact event-envelope `cycle_id` matches when
+  available; for legacy/current `snapshot.built` events that only carry a planning snapshot
+  epoch in `data.cycle_id`, it uses the latest preceding snapshot in the same bot/restart scope
+  and exposes exact-vs-latest match counters.
   Newer `snapshot.built` events also expose bounded surface-age and market-snapshot age
   summaries, allowing the report to break down stale planning inputs without exposing market
   prices.

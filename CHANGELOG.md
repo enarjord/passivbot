@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Corrected `passivbot tool live-performance-report` `snapshot_to_rust`
+  correlation so planning snapshot epochs are no longer mistaken for live
+  cycle IDs; legacy snapshot events now use the latest preceding snapshot in
+  the same bot/restart scope and expose match counters.
 - Added `operation_durations` summaries to
   `passivbot tool live-performance-report`, collating existing startup, cycle,
   state-refresh, remote-call, HSL replay, cache, decision-boundary,
