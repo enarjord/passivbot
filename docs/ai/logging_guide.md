@@ -54,12 +54,24 @@ Use `logging.live_event_debug_profiles` or the
 structured-event enrichment without increasing default console noise. Values may
 be a list or comma/space separated string. `all` enables every known profile.
 
-Initial supported profile behavior:
+Supported profile names are documented in `live_event_registry.md`; keep that
+registry synchronized with `src/live/event_bus.py`.
+
+Current profile behavior:
 
 1. `rust` adds bounded Rust orchestrator input-symbol and output-order samples
    to the existing `rust_orchestrator.called` and
    `rust_orchestrator.returned` events. Full raw Rust payload persistence remains
    disabled; hashes stay present for correlation.
+2. `remote_calls`, `candles`, `ema`, `fills`, `forager`, `execution`, and `hsl`
+   add bounded event-specific debug summaries such as data-key lists,
+   reason/sample counts, correlation ids, and shape metadata. These summaries
+   must not copy raw exchange/account payloads, credentials, or unbounded row
+   data.
+3. `startup` and `state` are reserved profile names for startup/state
+   diagnostics. Startup lifecycle events already surface which profiles are
+   enabled, and live performance reports can summarize them from existing
+   monitor events.
 
 Unknown profile names should fail visibly instead of being ignored silently.
 
