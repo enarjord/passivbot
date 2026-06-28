@@ -1,9 +1,11 @@
 # Backtesting
 
-Passivbot ships with a backtester that replays historical 1 minute candles. The
-backtester prepares data from the canonical v2 OHLCV store under `caches/ohlcvs/`.
+Passivbot ships with a backtester that replays historical 1 minute candles. By default,
+the backtester prepares data from the canonical v2 OHLCV store under `caches/ohlcvs/`.
 When data is missing there, it imports any matching legacy daily shards before making
-targeted remote exchange requests.
+targeted remote exchange requests. If `backtest.ohlcv_source_dir` is set, Passivbot
+reads that caller-managed OHLCV tree directly instead of importing it into the v2 raw
+store first.
 
 Backtesting requires the full install profile:
 
@@ -27,6 +29,10 @@ You can point `backtest.ohlcv_source_dir` to a pre-populated OHLCV tree. The loa
 ```
 
 `<coin_or_symbol>` accepts base coins (e.g., `ETH`) or CCXT-style symbol dirs (e.g., `ETH_USDC:USDC`).
+
+Explicit source directories are treated as caller-managed data. Backtest and optimizer
+preparation read them directly and still write the final prepared HLCV dataset cache for
+the run, but they do not mirror those raw daily files into `caches/ohlcvs/`.
 
 For `.npz` files, the archive must contain a `candles` key with a structured NumPy array having fields `ts` (int64 timestamp), `o` (open), `h` (high), `l` (low), `c` (close), `bv` (base volume). Timestamps should be in milliseconds. For `.npy` files, the array should have columns `[timestamp, open, high, low, close, volume]`.
 
@@ -66,7 +72,8 @@ The workspace includes `config`, `analysis`, `fills`, `balance_and_equity`, `hlc
 
 ## HLCV Data Contract
 
-Backtest and optimize data preparation follows one deterministic order:
+Without `backtest.ohlcv_source_dir`, backtest and optimize data preparation follows one
+deterministic order:
 
 1. read existing v2 chunks in `caches/ohlcvs/`
 2. import matching legacy raw OHLCV shards when they are present
