@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `fb2268af` after PR #829, `Report account state change activity`.
+- `ac495065` after PR #833, `Report risk event activity`.
 
 Current review gate:
 
@@ -30,6 +30,24 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #833 at `ac495065`.
+- Bots were not restarted for PRs #832/#833. PR #832 was a small CLI
+  version-flag improvement; PR #833 was read-only performance-report tooling.
+  All five configured `passivbot live` processes remained running.
+- PR #833 passed the normal review gate after a rebase: Claude approved the
+  current head, Hermes approved the current head, and CI was green. The slice
+  adds value-safe risk/HSL/unstuck activity summaries to the read-only live
+  performance report from existing structured event envelope labels only.
+- A 5-minute smoke after the PR #833 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=ac495065`, and all hard failure sources at zero. Remaining
+  attention came from known non-hard structured problem events.
+- A 180-minute performance report after deploy confirmed the new
+  `risk_activity` section populated on VPS5 with `total_events=606`,
+  `event_types={"hsl.status": 587, "unstuck.status": 19}`,
+  `total_groups=7`, and `bot_count=4`. Reported fields were bounded event
+  labels/counts only; no risk/account numeric payload values were surfaced.
 - Repository pulled through PR #829 at `fb2268af`.
 - Bots were not restarted for PR #829 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
