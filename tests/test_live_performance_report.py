@@ -2009,6 +2009,145 @@ def test_live_performance_report_account_state_changes_summary_is_bounded(tmp_pa
     assert summary["account_state_changes"]["bots_truncated"] is True
 
 
+def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                seq=1,
+                ts=1000,
+                component="risk.hsl.status",
+                status="degraded",
+                reason_code="cooldown_active",
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={
+                    "tier": "red",
+                    "drawdown_score": 0.1234,
+                    "strategy_equity": 98765.43,
+                    "unrealized_pnl": -12.34,
+                    "secret_marker": "hsl-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                seq=2,
+                ts=2000,
+                component="risk.hsl",
+                status="degraded",
+                reason_code="red_threshold_crossed",
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={
+                    "balance": 12345.67,
+                    "peak_strategy_equity": 45678.9,
+                    "raw_payload": {"secret_marker": "red-secret"},
+                },
+            ),
+            _monitor_row(
+                event_type="risk.mode_changed",
+                seq=3,
+                ts=3000,
+                component="risk.hsl.mode",
+                reason_code="hsl_halted",
+                pside="long",
+                data={
+                    "mode": "halted",
+                    "symbols": ["BTC/USDT:USDT"],
+                    "secret_marker": "mode-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="unstuck.selection",
+                seq=4,
+                ts=4000,
+                component="risk.unstuck.selection",
+                reason_code="unstuck_selection",
+                symbol="ETH/USDT:USDT",
+                pside="short",
+                data={
+                    "entry_price": 1111.22,
+                    "current_price": 999.88,
+                    "allowance": -0.123,
+                    "secret_marker": "unstuck-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=5,
+                ts=5000,
+                component="risk.hsl.replay",
+                reason_code="replay_progress",
+                symbol="XRP/USDT:USDT",
+                pside="long",
+                data={"rows": 100, "secret_marker": "replay-secret"},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    risk = report["risk_activity"]
+    groups = {
+        group["event_type"]: group
+        for group in risk["groups"]
+    }
+    rendered = json.dumps(risk, sort_keys=True)
+
+    assert risk["total_events"] == 4
+    assert risk["event_types"] == {
+        "hsl.red_triggered": 1,
+        "hsl.status": 1,
+        "risk.mode_changed": 1,
+        "unstuck.selection": 1,
+    }
+    assert "hsl.replay.progress" not in risk["event_types"]
+    assert groups["hsl.status"]["statuses"] == {"degraded": 1}
+    assert groups["hsl.status"]["reason_codes"] == {"cooldown_active": 1}
+    assert groups["hsl.status"]["symbols_sample"] == ["BTC/USDT:USDT"]
+    assert groups["hsl.status"]["psides"] == {"long": 1}
+    assert groups["unstuck.selection"]["symbols_sample"] == ["ETH/USDT:USDT"]
+    assert "98765.43" not in rendered
+    assert "45678.9" not in rendered
+    assert "1111.22" not in rendered
+    assert "hsl-secret" not in rendered
+    assert "red-secret" not in rendered
+    assert "mode-secret" not in rendered
+    assert "unstuck-secret" not in rendered
+    assert "replay-secret" not in rendered
+
+
+def test_live_performance_report_risk_activity_summary_is_bounded(tmp_path):
+    for index in range(2):
+        events_dir = tmp_path / "monitor" / "binance" / f"user_{index}" / "events"
+        _write_ndjson(
+            events_dir / "current.ndjson",
+            [
+                _monitor_row(
+                    event_type="hsl.status",
+                    seq=index + 1,
+                    ts=1000 + index,
+                    user=f"user_{index}",
+                    component="risk.hsl.status",
+                    status="degraded",
+                    reason_code="cooldown_active",
+                    symbol=f"COIN{index}/USDT:USDT",
+                    pside="long",
+                ),
+            ],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+
+    assert report["risk_activity"]["bot_count"] == 2
+    assert len(summary["risk_activity"]["groups"]) == 1
+    assert len(summary["risk_activity"]["bots"]) == 1
+    assert summary["risk_activity"]["groups_truncated"] is True
+    assert summary["risk_activity"]["bots_truncated"] is True
+
+
 def test_live_performance_report_resource_pressure_from_health_summary(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

@@ -118,6 +118,16 @@ _ACCOUNT_STATE_CHANGE_EVENT_TYPES = {
     "position.changed",
     "balance.changed",
 }
+_RISK_ACTIVITY_EVENT_TYPES = {
+    "risk.mode_changed",
+    "hsl.transition",
+    "hsl.status",
+    "hsl.red_triggered",
+    "hsl.cooldown_started",
+    "hsl.cooldown_ended",
+    "unstuck.status",
+    "unstuck.selection",
+}
 _CACHE_STRING_FIELDS = (
     "context",
     "timeframe",
@@ -2449,6 +2459,123 @@ class _AccountStateChangeAccumulator:
         }
 
 
+class _RiskActivityGroup:
+    def __init__(self, *, bot: str, event_type: str) -> None:
+        self.bot = bot
+        self.event_type = event_type
+        self.count = 0
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.symbols: Counter[str] = Counter()
+        self.psides: Counter[str] = Counter()
+        self.components: Counter[str] = Counter()
+        self.latest_ts: int | None = None
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        self.count += 1
+        status = live_event.get("status")
+        if status is not None:
+            self.statuses[str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            self.reason_codes[str(reason_code)] += 1
+        symbol = live_event.get("symbol") or row.get("symbol")
+        if symbol is not None:
+            self.symbols[str(symbol)] += 1
+        pside = live_event.get("pside") or row.get("pside")
+        if pside is not None:
+            self.psides[str(pside)] += 1
+        component = live_event.get("component")
+        if component is not None:
+            self.components[str(component)] += 1
+        ts = _record_ts(row)
+        if ts is not None and (self.latest_ts is None or ts > self.latest_ts):
+            self.latest_ts = ts
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in {
+                "bot": self.bot,
+                "event_type": self.event_type,
+                "count": int(self.count),
+                "latest_ts": self.latest_ts,
+                "statuses": dict(sorted(self.statuses.items())),
+                "reason_codes": dict(sorted(self.reason_codes.items())),
+                "psides": dict(sorted(self.psides.items())),
+                "components": dict(sorted(self.components.items())),
+                "symbols_sample": [
+                    symbol
+                    for symbol, _count in sorted(
+                        self.symbols.items(), key=lambda item: (-item[1], item[0])
+                    )[:10]
+                ],
+                "symbols_count": len(self.symbols),
+            }.items()
+            if value not in (None, {}, [])
+        }
+
+
+class _RiskActivityAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str], _RiskActivityGroup] = {}
+        self.event_types: Counter[str] = Counter()
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.bot_counts: Counter[str] = Counter()
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _RISK_ACTIVITY_EVENT_TYPES:
+            return
+        bot = _bot_key(row, live_event)
+        self.event_types[event_type] += 1
+        self.bot_counts[bot] += 1
+        status = live_event.get("status")
+        if status is not None:
+            self.statuses[str(status)] += 1
+        reason_code = live_event.get("reason_code")
+        if reason_code is not None:
+            self.reason_codes[str(reason_code)] += 1
+        key = (bot, event_type)
+        group = self.groups.get(key)
+        if group is None:
+            group = _RiskActivityGroup(bot=bot, event_type=event_type)
+            self.groups[key] = group
+        group.add(row=row, live_event=live_event)
+
+    def groups_list(self) -> list[dict[str, Any]]:
+        return sorted(
+            (group.to_dict() for group in self.groups.values()),
+            key=lambda item: (
+                -int(item.get("count", 0) or 0),
+                -int(item.get("latest_ts", 0) or 0),
+                str(item.get("bot") or ""),
+                str(item.get("event_type") or ""),
+            ),
+        )
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = self.groups_list()
+        return {
+            "total_events": sum(self.event_types.values()),
+            "event_types": dict(sorted(self.event_types.items())),
+            "statuses": dict(sorted(self.statuses.items())),
+            "reason_codes": dict(sorted(self.reason_codes.items())),
+            "bot_count": len(self.bot_counts),
+            "bots": [
+                {"bot": bot, "events": int(count)}
+                for bot, count in sorted(
+                    self.bot_counts.items(), key=lambda item: (-item[1], item[0])
+                )[: max(0, int(group_limit))]
+            ],
+            "bots_truncated": len(self.bot_counts) > int(group_limit),
+            "total_groups": len(groups),
+            "groups_truncated": len(groups) > int(group_limit),
+            "groups": groups[: max(0, int(group_limit))],
+        }
+
+
 def _slowest_blockers(
     *,
     performance_groups: list[dict[str, Any]],
@@ -2876,6 +3003,7 @@ def build_live_performance_report(
     shutdown_latency = _ShutdownLatencyAccumulator()
     execution_timing = _ExecutionTimingAccumulator()
     account_state_changes = _AccountStateChangeAccumulator()
+    risk_activity = _RiskActivityAccumulator()
     cycle_scope_tracker = _CycleScopeTracker()
     records_total = 0
     live_events = 0
@@ -2971,6 +3099,7 @@ def build_live_performance_report(
                         cycle_scope=cycle_scope,
                     )
                     account_state_changes.add(row=row, live_event=live_event)
+                    risk_activity.add(row=row, live_event=live_event)
         except OSError as exc:
             issues.append(
                 {
@@ -3017,6 +3146,7 @@ def build_live_performance_report(
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
         "account_state_changes": account_state_changes.to_dict(group_limit=group_limit),
+        "risk_activity": risk_activity.to_dict(group_limit=group_limit),
         "operation_durations": _operation_duration_table(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
@@ -3209,6 +3339,25 @@ def summarize_live_performance_report(
         if len(state_bots) > max(0, int(group_limit)):
             account_state_changes["bots_truncated"] = True
         summary["account_state_changes"] = account_state_changes
+    if isinstance(report.get("risk_activity"), dict):
+        risk_activity = dict(report["risk_activity"])
+        risk_groups = (
+            risk_activity.get("groups")
+            if isinstance(risk_activity.get("groups"), list)
+            else []
+        )
+        risk_bots = (
+            risk_activity.get("bots")
+            if isinstance(risk_activity.get("bots"), list)
+            else []
+        )
+        risk_activity["groups"] = risk_groups[: max(0, int(group_limit))]
+        risk_activity["bots"] = risk_bots[: max(0, int(group_limit))]
+        if len(risk_groups) > max(0, int(group_limit)):
+            risk_activity["groups_truncated"] = True
+        if len(risk_bots) > max(0, int(group_limit)):
+            risk_activity["bots_truncated"] = True
+        summary["risk_activity"] = risk_activity
     if isinstance(report.get("slowest_blockers"), dict):
         slowest_blockers = report["slowest_blockers"]
         blocker_groups = (
