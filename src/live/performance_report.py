@@ -2305,6 +2305,107 @@ def _slowest_blockers(
     }
 
 
+def _operation_category(operation: Any) -> str:
+    text = str(operation or "")
+    for prefix, category in (
+        ("startup.", "startup"),
+        ("state_refresh.", "state_refresh"),
+        ("remote_call.", "remote_call"),
+        ("hsl_replay.", "hsl_replay"),
+        ("cache_", "cache"),
+        ("forager_", "forager"),
+        ("decision_boundary.", "decision_boundary"),
+        ("input_staleness.", "input_staleness"),
+        ("execution.", "execution"),
+        ("order_wave.", "execution"),
+        ("shutdown.", "shutdown"),
+        ("cycle.", "cycle"),
+    ):
+        if text.startswith(prefix):
+            return category
+    return "other"
+
+
+def _operation_duration_table(
+    *,
+    performance_groups: list[dict[str, Any]],
+    decision_boundary_groups: list[dict[str, Any]],
+    input_staleness_groups: list[dict[str, Any]],
+    execution_timing_groups: list[dict[str, Any]],
+    shutdown_latency_groups: list[dict[str, Any]],
+    group_limit: int = GROUP_LIMIT,
+) -> dict[str, Any]:
+    items: list[dict[str, Any]] = []
+    trading_impact_counts: Counter[str] = Counter()
+    blocking_scope_counts: Counter[str] = Counter()
+    operation_category_counts: Counter[str] = Counter()
+    timing_kind_counts: Counter[str] = Counter()
+    for source_section, groups in (
+        ("performance", performance_groups),
+        ("decision_boundary_lag", decision_boundary_groups),
+        ("input_staleness", input_staleness_groups),
+        ("execution_timing", execution_timing_groups),
+        ("shutdown_latency", shutdown_latency_groups),
+    ):
+        for group in groups:
+            operation = group.get("operation")
+            category = _operation_category(operation)
+            impact = str(group.get("trading_impact") or "unknown")
+            blocking_scope = _BLOCKING_SCOPE_BY_IMPACT.get(impact, impact)
+            timing_kind = str(group.get("timing_kind") or "duration")
+            item = {
+                key: group[key]
+                for key in (
+                    "bot",
+                    "operation",
+                    "component",
+                    "event_type",
+                    "trading_impact",
+                    "timing_kind",
+                    "count",
+                    "min_ms",
+                    "max_ms",
+                    "mean_ms",
+                    "median_ms",
+                    "p95_ms",
+                    "latest_ts",
+                    "statuses",
+                    "reason_codes",
+                    "symbols_sample",
+                )
+                if key in group
+            }
+            item["source_section"] = source_section
+            item["operation_category"] = category
+            item["blocking_scope"] = blocking_scope
+            items.append(item)
+            trading_impact_counts[impact] += 1
+            blocking_scope_counts[blocking_scope] += 1
+            operation_category_counts[category] += 1
+            timing_kind_counts[timing_kind] += 1
+    items = sorted(
+        items,
+        key=lambda item: (
+            -int(item.get("p95_ms", 0) or 0),
+            -int(item.get("max_ms", 0) or 0),
+            -int(item.get("count", 0) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("source_section") or ""),
+            str(item.get("operation") or ""),
+        ),
+    )
+    limit = max(0, int(group_limit))
+    return {
+        "total_groups": len(items),
+        "groups_truncated": len(items) > limit,
+        "trading_impact_counts": dict(sorted(trading_impact_counts.items())),
+        "blocking_scope_counts": dict(sorted(blocking_scope_counts.items())),
+        "operation_category_counts": dict(sorted(operation_category_counts.items())),
+        "timing_kind_counts": dict(sorted(timing_kind_counts.items())),
+        "groups": items[:limit],
+    }
+
+
 def _timings_map(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}
@@ -2678,6 +2779,7 @@ def build_live_performance_report(
     decision_boundary_groups = decision_boundary.groups_list()
     input_staleness_groups = input_staleness.groups_list()
     execution_timing_groups = execution_timing.accumulator.groups_list()
+    shutdown_latency_groups = shutdown_latency.accumulator.groups_list()
     report = {
         "ok": error_count == 0,
         "root": _user_safe_display_path(root),
@@ -2705,6 +2807,14 @@ def build_live_performance_report(
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
         "execution_timing": execution_timing.to_dict(group_limit=group_limit),
+        "operation_durations": _operation_duration_table(
+            performance_groups=performance_groups,
+            decision_boundary_groups=decision_boundary_groups,
+            input_staleness_groups=input_staleness_groups,
+            execution_timing_groups=execution_timing_groups,
+            shutdown_latency_groups=shutdown_latency_groups,
+            group_limit=group_limit,
+        ),
         "slowest_blockers": _slowest_blockers(
             performance_groups=performance_groups,
             decision_boundary_groups=decision_boundary_groups,
@@ -2872,6 +2982,25 @@ def summarize_live_performance_report(
             "total_groups": int(slowest_blockers.get("total_groups") or 0),
             "groups_truncated": bool(slowest_blockers.get("groups_truncated")),
             "groups": blocker_groups[: max(0, int(group_limit))],
+        }
+    if isinstance(report.get("operation_durations"), dict):
+        operation_durations = report["operation_durations"]
+        operation_groups = (
+            operation_durations.get("groups")
+            if isinstance(operation_durations.get("groups"), list)
+            else []
+        )
+        summary["operation_durations"] = {
+            "total_groups": int(operation_durations.get("total_groups") or 0),
+            "groups_truncated": bool(operation_durations.get("groups_truncated")),
+            "trading_impact_counts": operation_durations.get("trading_impact_counts") or {},
+            "blocking_scope_counts": operation_durations.get("blocking_scope_counts") or {},
+            "operation_category_counts": operation_durations.get(
+                "operation_category_counts"
+            )
+            or {},
+            "timing_kind_counts": operation_durations.get("timing_kind_counts") or {},
+            "groups": operation_groups[: max(0, int(group_limit))],
         }
     if report.get("event_window") is not None:
         summary["event_window"] = report.get("event_window")

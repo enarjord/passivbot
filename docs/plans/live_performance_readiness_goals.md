@@ -249,6 +249,10 @@ if the final replay result is correct.
      account packet, snapshot, EMA bundle, and Rust-call events.
    - A follow-up slice added HSL coin replay pair classification, applied-row,
      elapsed, and rows-per-second fields to structured replay events.
+   - A follow-up slice added an `operation_durations` table that collates
+     existing startup, cycle, state-refresh, remote-call, HSL replay, cache,
+     decision-boundary, input-staleness, execution, and shutdown timing groups
+     into one bounded report section.
    - Missing pieces: candle close age, market price age, config age, and
      complete coverage for every order/write/shutdown stage.
 
@@ -316,6 +320,12 @@ classification when enough source events exist.
 - [ ] Cycle phases: market state, account state, Rust planning,
   reconciliation/gating, execution, confirmation, monitor flush, event
   pipeline overhead.
+  - Status: partial. The report now includes an `operation_durations` table
+    that normalizes existing duration/staleness groups from performance,
+    decision-boundary, input-staleness, execution, and shutdown sections into
+    one sortable table with operation category, timing kind, trading impact, and
+    blocking scope. Remaining work: source events for event-pipeline overhead
+    and complete stage coverage where the live loop does not yet emit timings.
 - [ ] Exchange writes: create/cancel/close/panic write latency, exchange
   response latency, ambiguous write rate, confirmation latency.
   - Status: partial. The report now derives order-wave total duration,
