@@ -2989,6 +2989,49 @@ def emit_risk_mode_changed_event(
         )
 
 
+def emit_realized_loss_gate_blocked_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    order_type: str,
+    qty: float,
+    price: float,
+    projected_pnl: float,
+    projected_balance: float,
+    balance_floor: float,
+    max_realized_loss_pct: float,
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.REALIZED_LOSS_GATE_BLOCKED,
+            level="warning",
+            component="risk.realized_loss_gate",
+            tags=(EventTags.RISK, EventTags.ORDER, EventTags.GATE),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=str(symbol),
+            pside=str(pside),
+            status="deferred",
+            reason_code=ReasonCodes.REALIZED_LOSS_GATE_BLOCKED,
+            data={
+                "order_type": str(order_type),
+                "qty": _safe_float(qty),
+                "price": _safe_float(price),
+                "projected_pnl": _safe_float(projected_pnl),
+                "projected_balance_after": _safe_float(projected_balance),
+                "balance_floor": _safe_float(balance_floor),
+                "max_realized_loss_pct": _safe_float(max_realized_loss_pct),
+            },
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit realized loss gate event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def _unstuck_status_side_summary(
     info: dict[str, Any],
     *,

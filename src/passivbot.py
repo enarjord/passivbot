@@ -633,6 +633,9 @@ class Passivbot:
     )
     _emit_fill_ingested_event = live_event_emitters.emit_fill_ingested_event
     _emit_risk_mode_changed_event = live_event_emitters.emit_risk_mode_changed_event
+    _emit_realized_loss_gate_blocked_event = (
+        live_event_emitters.emit_realized_loss_gate_blocked_event
+    )
     _emit_unstuck_status_event = live_event_emitters.emit_unstuck_status_event
     _emit_unstuck_selection_event = live_event_emitters.emit_unstuck_selection_event
     _emit_forager_feature_unavailable_event = (
@@ -11134,6 +11137,17 @@ class Passivbot:
                 projected_balance,
                 balance_floor,
                 max_loss_pct,
+            )
+            self._emit_realized_loss_gate_blocked_event(
+                symbol=symbol,
+                pside=pside,
+                order_type=order_type,
+                qty=qty,
+                price=price,
+                projected_pnl=projected_pnl,
+                projected_balance=projected_balance,
+                balance_floor=balance_floor,
+                max_realized_loss_pct=max_loss_pct,
             )
 
     def _log_min_effective_cost_blocks(

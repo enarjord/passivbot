@@ -10,6 +10,7 @@ import pytest
 
 from passivbot import Passivbot
 from backtest import prep_backtest_args
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -420,6 +421,58 @@ class TestLogRealizedLossGateBlocks:
         assert "[risk] order blocked by realized-loss gate" in caplog.text
         assert " BTC long " in caplog.text
         assert "close_auto_reduce_wel_long" in caplog.text
+
+    def test_block_emits_structured_event(self, caplog):
+        bot = _make_bot_for_logging()
+        sink = ListEventSink()
+        bot.bot_id = "bot_loss_gate"
+        bot.exchange = "binance"
+        bot.user = "binance_01"
+        bot._live_event_current_cycle_id = "cy_loss_gate"
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[sink],
+            monitor_sinks=[],
+        )
+        block = {
+            "symbol_idx": 0,
+            "pside": "long",
+            "order_type": "close_auto_reduce_wel_long",
+            "qty": -1.5,
+            "price": 80.0,
+            "projected_pnl": -200.0,
+            "projected_balance_after": 9800.0,
+            "balance_floor": 9900.0,
+            "max_realized_loss_pct": 0.01,
+        }
+        try:
+            with caplog.at_level(logging.WARNING):
+                bot._log_realized_loss_gate_blocks(
+                    {"diagnostics": {"loss_gate_blocks": [block]}},
+                    {0: "BTCUSDT"},
+                )
+            assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        finally:
+            assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+        assert "[risk] order blocked by realized-loss gate" in caplog.text
+        events = [
+            event
+            for event in sink.events
+            if event.event_type == EventTypes.REALIZED_LOSS_GATE_BLOCKED
+        ]
+        assert len(events) == 1
+        event = events[0]
+        assert event.level == "warning"
+        assert event.status == "deferred"
+        assert event.reason_code == "realized_loss_gate_blocked"
+        assert event.cycle_id == "cy_loss_gate"
+        assert event.symbol == "BTCUSDT"
+        assert event.pside == "long"
+        assert event.data["order_type"] == "close_auto_reduce_wel_long"
+        assert event.data["projected_pnl"] == pytest.approx(-200.0)
+        assert event.data["projected_balance_after"] == pytest.approx(9800.0)
+        assert event.data["balance_floor"] == pytest.approx(9900.0)
+        assert event.data["max_realized_loss_pct"] == pytest.approx(0.01)
 
     def test_unknown_symbol_idx_logs_unknown(self, caplog):
         bot = _make_bot_for_logging()

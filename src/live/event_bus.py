@@ -120,6 +120,7 @@ class EventTypes:
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
     UNSTUCK_STATUS = "unstuck.status"
     UNSTUCK_SELECTION = "unstuck.selection"
+    REALIZED_LOSS_GATE_BLOCKED = "risk.realized_loss_gate_blocked"
     SINK_DEGRADED = "sink.degraded"
 
 
@@ -206,6 +207,7 @@ class ReasonCodes:
     STAGED_REFRESH_TIMING = "staged_refresh_timing"
     STATE_CHANGE_DETECTED = "state_change_detected"
     SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
+    REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"
     WARMUP_CACHE_DECISION = "warmup_cache_decision"
@@ -342,6 +344,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_COOLDOWN_ENDED,
     EventTypes.UNSTUCK_STATUS,
     EventTypes.UNSTUCK_SELECTION,
+    EventTypes.REALIZED_LOSS_GATE_BLOCKED,
     EventTypes.SINK_DEGRADED,
 }
 
@@ -635,6 +638,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
     EventTypes.UNSTUCK_STATUS: EventRoute(console=False, text=False),
     EventTypes.UNSTUCK_SELECTION: EventRoute(console=False, text=False),
+    EventTypes.REALIZED_LOSS_GATE_BLOCKED: EventRoute(console=False, text=False),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 
