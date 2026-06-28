@@ -102,7 +102,12 @@ def _live_event_payload(row: dict[str, Any]) -> dict[str, Any] | None:
 
 def _event_ids(live_event: dict[str, Any]) -> dict[str, Any]:
     ids = live_event.get("ids")
-    return dict(ids) if isinstance(ids, dict) else {}
+    out = dict(ids) if isinstance(ids, dict) else {}
+    if out.get("snapshot_id") is None:
+        data = live_event.get("data")
+        if isinstance(data, dict) and data.get("snapshot_id") is not None:
+            out["snapshot_id"] = data["snapshot_id"]
+    return out
 
 
 def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
