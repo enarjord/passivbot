@@ -2596,6 +2596,76 @@ async def test_prepare_hlcvs_mss_stock_perp_source_dir_uses_direct_prepare(
 
 
 @pytest.mark.asyncio
+async def test_prepare_hlcvs_mss_crypto_source_dir_uses_direct_prepare(
+    monkeypatch, tmp_path
+):
+    import rust_utils
+
+    source_dir = tmp_path / "ohlcv_source"
+    config = {
+        "backtest": {
+            "base_dir": str(tmp_path / "results"),
+            "ohlcv_source_dir": str(source_dir),
+            "start_date": "2026-04-01",
+            "end_date": "2026-04-01",
+            "gap_tolerance_ohlcvs_minutes": 120.0,
+        },
+        "live": {
+            "approved_coins": {"long": ["ETH"], "short": []},
+            "warmup_ratio": 0.0,
+            "max_warmup_minutes": 0.0,
+        },
+        "bot": _minimal_bot_config(),
+    }
+    prepared = (
+        {
+            "ETH": {"first_valid_index": 0, "last_valid_index": 0},
+            "__meta__": {"btc_source_exchange": "binance"},
+        },
+        np.array([month_start_ts(2026, 4)], dtype=np.int64),
+        np.array([[[101.0, 99.0, 100.0, 10.0]]], dtype=np.float64),
+        np.array([50_000.0], dtype=np.float64),
+    )
+
+    monkeypatch.setattr(rust_utils, "check_and_maybe_compile", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        rust_utils,
+        "verify_loaded_runtime_extension",
+        lambda *args, **kwargs: {"skipped": "test"},
+    )
+    sys.modules.pop("backtest", None)
+    backtest = importlib.import_module("backtest")
+
+    monkeypatch.setattr(backtest, "load_coins_hlcvs_from_cache", lambda *args, **kwargs: None)
+    direct_prepare_calls = []
+
+    async def fail_try_prepare(*args, **kwargs):
+        raise AssertionError("explicit source-dir path must skip strict v2")
+
+    async def direct_prepare(*args, **kwargs):
+        direct_prepare_calls.append((args, kwargs))
+        return prepared
+
+    monkeypatch.setattr(backtest, "try_prepare_hlcvs_v2_local", fail_try_prepare)
+    monkeypatch.setattr(backtest, "prepare_hlcvs", direct_prepare)
+    monkeypatch.setattr(
+        backtest,
+        "save_coins_hlcvs_to_cache",
+        lambda *args, **kwargs: tmp_path / "cache",
+    )
+
+    coins, _hlcvs, mss, _results_path, cache_dir, _btc_prices, _timestamps = (
+        await backtest.prepare_hlcvs_mss(config, "binance")
+    )
+
+    assert coins == ["ETH"]
+    assert mss["ETH"]["first_valid_index"] == 0
+    assert cache_dir == tmp_path / "cache"
+    assert direct_prepare_calls
+    assert direct_prepare_calls[0][1]["skip_v2_local"] is True
+
+
+@pytest.mark.asyncio
 async def test_prepare_hlcvs_mss_stock_perp_without_source_dir_keeps_strict_boundary(
     monkeypatch, tmp_path
 ):

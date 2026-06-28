@@ -1989,15 +1989,10 @@ async def prepare_hlcvs_mss(config, exchange, *, force_refetch_gaps: bool = Fals
     if exchange != "combined":
         backtest_cfg = config.get("backtest", {}) if isinstance(config, dict) else {}
         has_explicit_source_dir = bool(backtest_cfg.get("ohlcv_source_dir"))
-        stock_perp_coins = [
-            coin
-            for coin in effective_backtest_data_coins(config)
-            if str(coin).startswith("xyz:")
-        ]
         try:
-            if stock_perp_coins and has_explicit_source_dir:
-                # Source-dir stock-perp imports need the direct preparer; keep that
-                # exception explicit so default stock-perp runs still fail strict.
+            if has_explicit_source_dir:
+                # Explicit source dirs are caller-managed OHLCV stores. Read them directly
+                # instead of importing them into PB7's v2 raw OHLCV store.
                 local_v2 = await prepare_hlcvs(
                     config,
                     exchange,
