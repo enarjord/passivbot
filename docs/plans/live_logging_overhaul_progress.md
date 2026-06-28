@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `2bb89cfa` after PR #807, `Fix snapshot-to-Rust performance correlation`.
+- `52f85e08` after PR #811, `Query legacy snapshot IDs from event data`.
 
 Current review gate:
 
@@ -30,6 +30,21 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #811 at `52f85e08`.
+- Bots were not restarted for PR #811 because the change was read-only
+  event-query tooling. All five configured `passivbot live` processes remained
+  running.
+- PR #811 was merged under the documented degraded low-risk tooling gate after
+  repeated Claude absence. Hermes approved current head `6ca8a602` with no
+  findings and CI was green; the slice is query-only, adds no event producers,
+  exchange calls, cache mutation, readiness gates, console routing, or trading
+  behavior.
+- A 5-minute time-windowed smoke after the PR #811 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=52f85e08`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Remaining attention came from
+  known non-hard EMA readiness problem events.
 - Repository pulled through PR #807 at `2bb89cfa`.
 - Bots were not restarted for PR #807 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
@@ -2478,6 +2493,31 @@ VPS5 deployment status:
   event cycle IDs. The report now uses exact envelope cycle IDs when present
   and otherwise falls back to the latest preceding snapshot in the same
   bot/restart scope, with match counters.
+
+### PR #811: Legacy Snapshot ID Query Fallback
+
+- Branch: `codex/v8-event-query-snapshot-data-fallback`.
+- Scope: read-only `live-event-query` compatibility for legacy
+  `snapshot.built` rows written before snapshot IDs were promoted into the
+  structured event envelope.
+- Result: `_event_ids()` now derives `snapshot_id` from
+  `_live_event.data.snapshot_id` when `ids.snapshot_id` is absent, so existing
+  ID filters, compact output, timelines, trace summaries, order traces, and
+  cycle traces can match older snapshot events. The fallback intentionally does
+  not promote `data.cycle_id`, because legacy `snapshot.built.data.cycle_id`
+  is a planning snapshot epoch rather than a live cycle ID.
+- Review evidence: CI was green. Hermes approved current head `6ca8a602` with
+  no findings. Claude did not return after repeated polling, so the PR was
+  merged under the documented degraded low-risk tooling gate. Local validation
+  covered event-query tests, the adjacent CLI dispatch test, py_compile, and
+  `git diff --check`. No event producers, exchange calls, cache mutation,
+  readiness gates, console routing, or trading behavior changed.
+- VPS5 evidence: deployed at `52f85e08` without bot restart because this is
+  read-only query tooling. A 5-minute time-windowed smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness problem events.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
