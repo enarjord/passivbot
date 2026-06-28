@@ -19,7 +19,7 @@ Last updated: 2026-06-28.
 
 Current `origin/v8` logging-overhaul head:
 
-- `3d6e3fa7` after PR #805, `Add operation duration performance summary`.
+- `2bb89cfa` after PR #807, `Fix snapshot-to-Rust performance correlation`.
 
 Current review gate:
 
@@ -30,6 +30,26 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #807 at `2bb89cfa`.
+- Bots were not restarted for PR #807 because the change was read-only
+  performance-report tooling. All five configured `passivbot live` processes
+  remained running.
+- PR #807 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice corrected `snapshot_to_rust` report correlation only;
+  no event producers, exchange calls, cache mutation, readiness gates, console
+  routing, or trading behavior changed.
+- A 10-minute time-windowed smoke after the PR #807 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected=[]`, clean tracked repository state at
+  `repository.head=2bb89cfa`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention came from known non-hard EMA readiness and HSL cooldown
+  groups.
+- A focused 30-minute performance report confirmed the corrected
+  `snapshot_to_rust` values on VPS5: Binance p95 `1449ms`, GateIO p95
+  `1477ms`, OKX p95 `1712ms`, and Hyperliquid p95 `564ms`. The same report
+  showed `snapshot_to_rust_latest_snapshot_matches=154`,
+  `snapshot_to_rust_exact_matches=0`, and one missing snapshot match at the
+  time-window boundary.
 - Repository pulled through PR #805 at `3d6e3fa7`.
 - Bots were not restarted for PR #805 because the change was read-only
   performance-report tooling. All five configured `passivbot live` processes
