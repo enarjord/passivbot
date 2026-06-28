@@ -70,6 +70,7 @@ across time.
 - `remote_call.succeeded`
 - `remote_call.throttled`
 - `risk.mode_changed`
+- `risk.realized_loss_gate_blocked`
 - `rust_orchestrator.called`
 - `rust_orchestrator.returned`
 - `sink.degraded`
@@ -153,6 +154,7 @@ across time.
 - `ranking_features_unavailable`
 - `recent_execution`
 - `remote_fetch`
+- `realized_loss_gate_blocked`
 - `required_candle_disk_coverage`
 - `required_ema_unavailable`
 - `rust_output_actions`

@@ -2075,8 +2075,25 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                 },
             ),
             _monitor_row(
-                event_type="hsl.replay.progress",
+                event_type="risk.realized_loss_gate_blocked",
                 seq=5,
+                ts=4500,
+                component="risk.realized_loss_gate",
+                status="deferred",
+                reason_code="realized_loss_gate_blocked",
+                symbol="SOL/USDT:USDT",
+                pside="long",
+                data={
+                    "order_type": "close_auto_reduce_wel_long",
+                    "projected_pnl": -200.0,
+                    "projected_balance_after": 9800.0,
+                    "balance_floor": 9900.0,
+                    "secret_marker": "loss-gate-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=6,
                 ts=5000,
                 component="risk.hsl.replay",
                 reason_code="replay_progress",
@@ -2095,11 +2112,12 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     }
     rendered = json.dumps(risk, sort_keys=True)
 
-    assert risk["total_events"] == 4
+    assert risk["total_events"] == 5
     assert risk["event_types"] == {
         "hsl.red_triggered": 1,
         "hsl.status": 1,
         "risk.mode_changed": 1,
+        "risk.realized_loss_gate_blocked": 1,
         "unstuck.selection": 1,
     }
     assert "hsl.replay.progress" not in risk["event_types"]
@@ -2108,6 +2126,8 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert groups["hsl.status"]["symbols_sample"] == ["BTC/USDT:USDT"]
     assert groups["hsl.status"]["psides"] == {"long": 1}
     assert groups["unstuck.selection"]["symbols_sample"] == ["ETH/USDT:USDT"]
+    assert groups["risk.realized_loss_gate_blocked"]["symbols_sample"] == ["SOL/USDT:USDT"]
+    assert groups["risk.realized_loss_gate_blocked"]["statuses"] == {"deferred": 1}
     assert "98765.43" not in rendered
     assert "45678.9" not in rendered
     assert "1111.22" not in rendered
@@ -2115,6 +2135,8 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert "red-secret" not in rendered
     assert "mode-secret" not in rendered
     assert "unstuck-secret" not in rendered
+    assert "loss-gate-secret" not in rendered
+    assert "9800" not in rendered
     assert "replay-secret" not in rendered
 
 
