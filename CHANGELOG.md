@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `operation_durations` summaries to
+  `passivbot tool live-performance-report`, collating existing startup, cycle,
+  state-refresh, remote-call, HSL replay, cache, decision-boundary,
+  input-staleness, execution, and shutdown timing groups into one bounded
+  trading-impact-ranked table without adding new live events or exchange calls.
 - Added `forager_ema_readiness` summaries to
   `passivbot tool live-performance-report`, deriving bounded forager selection,
   forager feature-unavailable, EMA unavailable, and EMA fallback evidence from

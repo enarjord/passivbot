@@ -72,6 +72,13 @@ def _groups_by_operation(report):
     }
 
 
+def _operation_duration_groups_by_operation(report):
+    return {
+        group["operation"]: group
+        for group in report["operation_durations"]["groups"]
+    }
+
+
 def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -173,6 +180,20 @@ def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(t
     )
     assert groups["hsl_replay.pair_replay.elapsed"]["max_ms"] == 12500
     assert groups["hsl_replay.pair_replay.elapsed"]["timing_kind"] == "cumulative"
+
+    operation_durations = report["operation_durations"]
+    duration_groups = _operation_duration_groups_by_operation(report)
+    assert operation_durations["total_groups"] >= len(groups)
+    assert operation_durations["operation_category_counts"]["cycle"] >= 2
+    assert operation_durations["operation_category_counts"]["hsl_replay"] == 1
+    assert operation_durations["blocking_scope_counts"]["delays_protective_readiness"] == 1
+    assert duration_groups["hsl_replay.pair_replay.elapsed"]["source_section"] == "performance"
+    assert duration_groups["hsl_replay.pair_replay.elapsed"]["operation_category"] == (
+        "hsl_replay"
+    )
+    assert duration_groups["remote_call.authoritative.open_orders"]["blocking_scope"] == (
+        "delays_exchange_actions"
+    )
 
 
 def test_live_performance_report_time_window_and_group_limit(tmp_path):
@@ -297,6 +318,8 @@ def test_live_performance_report_summary_projection_is_bounded(tmp_path):
     assert summary["filters"]["users"] == ["binance_01"]
     assert summary["performance"]["total_groups"] == 3
     assert len(summary["performance"]["groups"]) == 1
+    assert summary["operation_durations"]["total_groups"] == 3
+    assert len(summary["operation_durations"]["groups"]) == 1
     assert "files" not in summary
     assert "event_types" not in summary
 
@@ -1734,6 +1757,9 @@ def test_live_performance_report_execution_timing_summary_is_bounded(tmp_path):
     assert summary["execution_timing"]["total_groups"] == 2
     assert summary["execution_timing"]["groups_truncated"] is True
     assert len(summary["execution_timing"]["groups"]) == 1
+    assert summary["operation_durations"]["total_groups"] == 2
+    assert summary["operation_durations"]["operation_category_counts"] == {"execution": 2}
+    assert summary["operation_durations"]["blocking_scope_counts"] == {"exchange_io": 2}
     assert summary["slowest_blockers"]["total_groups"] >= 2
 
 
@@ -2002,6 +2028,10 @@ def test_live_performance_report_shutdown_latency_summary_is_bounded(tmp_path):
     assert len(summary["shutdown_latency"]["groups"]) == 1
     assert summary["shutdown_latency"]["groups_truncated"] is True
     assert summary["shutdown_latency"]["groups"][0]["operation"] == "shutdown.total"
+    assert summary["operation_durations"]["total_groups"] == 2
+    assert summary["operation_durations"]["operation_category_counts"] == {"shutdown": 2}
+    assert summary["operation_durations"]["blocking_scope_counts"] == {"observability": 2}
+    assert summary["operation_durations"]["groups"][0]["operation"] == "shutdown.total"
 
 
 def test_live_performance_report_cli_outputs_json(tmp_path, capsys):
