@@ -1,7 +1,12 @@
 from pathlib import Path
 import re
 
-from live.event_bus import EventTags, EventTypes, ReasonCodes
+from live.event_bus import (
+    EventTags,
+    EventTypes,
+    LIVE_EVENT_DEBUG_PROFILES,
+    ReasonCodes,
+)
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -34,3 +39,7 @@ def test_live_event_tag_docs_match_registry():
 
 def test_live_event_reason_code_docs_match_registry():
     assert _documented_values("Reason Codes") == _registry_values(ReasonCodes)
+
+
+def test_live_event_debug_profile_docs_match_registry():
+    assert _documented_values("Debug Profiles") == sorted(LIVE_EVENT_DEBUG_PROFILES)

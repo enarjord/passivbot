@@ -171,3 +171,21 @@ Dynamic helpers are part of the same contract:
 
 - `authoritative_reason_code(surface)` emits `authoritative_<surface>`.
 - `sink_failed_reason_code(name)` emits `<name>_sink_failed`.
+
+## Debug Profiles
+
+Set `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES` to one or more comma-separated values
+to add bounded, opt-in diagnostic details for selected live event families.
+`all` enables every profile. Empty, false-like, or `none` values disable debug
+profile enrichment.
+
+- `candles`
+- `ema`
+- `execution`
+- `fills`
+- `forager`
+- `hsl`
+- `remote_calls`
+- `rust`
+- `startup`
+- `state`
