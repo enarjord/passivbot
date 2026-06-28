@@ -42,74 +42,133 @@ Use this as a living performance scorecard:
 - [ ] If an item is delegated, the delegate works from one checked subsection,
   opens a PR, and does not touch unrelated live behavior.
 
-## Current Priority Checklist
+## Actionable Goal Checklist
 
-This is the short actionable goal list. The rest of the document explains the
-evidence, contract, and candidate implementation slices.
+This is the implementation checklist for the performance/readiness goal. The
+rest of this document gives evidence, target contracts, and candidate PR
+slices.
 
-1. [ ] Measure the slow paths with enough detail to know what is blocking
-   trading.
-   - [ ] Add/report min, mean, p50, p95, max, count, latest timestamp, bot, and
-     trading-impact label for startup, state refresh, candle/EMA readiness, HSL
-     replay, Rust planning, Python reconciliation, exchange writes,
-     confirmation, monitor flush, event-pipeline overhead, and shutdown.
-   - [ ] Split each startup delay into account-critical readiness, held-position
-     protective readiness, fresh-entry readiness, and background/full replay.
-   - [ ] Make every long operation answer whether it delayed protective action,
-     fresh entries, normal cycles, or diagnostics only.
+### Goal 1: Make The Slow Path Measurable
 
-2. [ ] Fix the P0 HSL startup safety gap.
-   - [ ] A held `coin+pside` must not wait behind unrelated flat coins before
-     its exact HSL state is known.
-   - [ ] Current drawdown state takes precedence: a historical red crossing
-     must not trigger a new panic if the exact current state is no longer red.
-   - [ ] Full historical/cooldown reconstruction may continue after held
-     positions are protectively ready, but fresh entries remain blocked for
-     symbols whose cooldown/trading eligibility is not yet known.
+- [ ] Add one reportable duration table for startup, state refresh,
+  candle/EMA readiness, HSL replay, Rust planning, Python reconciliation,
+  exchange writes, confirmation, monitor flush, event-pipeline overhead, and
+  shutdown.
+- [ ] For every duration group, report `count`, `min`, `mean`, `p50`, `p95`,
+  `max`, latest timestamp, bot identity, and trading-impact label.
+- [ ] Split startup into account-critical readiness, held-position protective
+  readiness, fresh-entry readiness, first cycle, first possible exchange write,
+  and full background replay.
+- [ ] Every long operation must answer whether it delayed protective action,
+  fresh entries, normal cycle cadence, or diagnostics only.
+- [ ] Acceptance: one `passivbot tool live-performance-report` run can explain
+  the dominant live-vs-backtest delay without SSH log archaeology.
 
-3. [ ] Prove the HSL replay bottleneck before optimizing broadly.
-   - [ ] Measure cache discovery, cache decode, fill indexing, candle/timeline
-     materialization, pair iteration, EMA/drawdown update, event emission, and
-     exchange/backfill time separately.
-   - [ ] Determine whether coin-mode replay is CPU-bound Python, disk/cache IO,
-     exchange backfill, repeated data conversion, or unnecessary serial
-     dependency between independent pairs.
-   - [ ] Add an offline deterministic fixture so rows/s and equivalence can be
-     checked without live exchange access.
+### Goal 2: Remove HSL Broad Replay From The Protective Critical Path
 
-4. [ ] Optimize exact HSL replay.
-   - [ ] Replay held positions first, cooldown-affected symbols second, and
-     remaining flat symbols last or in background.
-   - [ ] Replace avoidable `timeline_rows * pairs` work, repeated fill scans,
-     and repeated data conversions with indexed/sparse or single-pass logic
-     where exact equivalence is proven.
-   - [ ] Keep panic/order-triggering decisions equivalent to the current HSL
-     contract unless an explicit contract change is reviewed.
+- [ ] A held `coin+pside` must not wait behind unrelated flat coins before its
+  exact HSL state is known.
+- [ ] HSL startup must expose separate states for account-critical ready,
+  held-position protective ready, fresh-entry/cooldown eligibility unknown,
+  and full replay ready.
+- [ ] Current drawdown state takes precedence: a historical red crossing must
+  not trigger a new panic if the exact current state is no longer red.
+- [ ] Full historical/cooldown reconstruction may continue after held positions
+  are protectively ready, but fresh entries remain blocked for symbols whose
+  cooldown/trading eligibility is still unknown.
+- [ ] Acceptance: with 25-30 configured pairs and one held position,
+  held-position protective readiness is reached in seconds, not tens of
+  minutes, when required local/exchange proof is present.
 
-5. [ ] Add resumable HSL checkpoints after exact replay is understood.
-   - [ ] Treat checkpoints as performance caches only, never as authority.
-   - [ ] Validate exchange, user, signal mode, risk config, schema/code version,
-     fill coverage/hash, candle coverage/hash where required, market metadata,
-     and last processed timestamp before resume.
-   - [ ] On any ambiguity, bypass the checkpoint and perform exact replay with
-     a structured reason event.
+### Goal 3: Identify The HSL Replay Bottleneck
 
-6. [ ] Make warm restarts and shutdown operationally fast.
-   - [ ] Warm restart should use proven local cache/checkpoint state before
-     scheduling broad repair.
-   - [ ] Short downtime should not cause broad HSL/candle/fill reconstruction
-     when coverage proof is still valid.
-   - [ ] Ctrl+C should interrupt non-critical long work promptly and report the
-     blocking task if shutdown is slow.
+- [ ] Measure cache discovery, cache decode, fill indexing, candle/timeline
+  materialization, pair iteration, EMA/drawdown update, event emission, and
+  exchange/backfill time separately.
+- [ ] Determine whether coin-mode replay is CPU-bound Python, disk/cache IO,
+  exchange backfill, repeated data conversion, or unnecessary serial dependency
+  between independent pairs.
+- [ ] Confirm whether all needed data was already cached in the slow Binance
+  XLM incident path; if yes, explain exactly why local replay still took about
+  27 minutes.
+- [ ] Add an offline deterministic fixture so rows/s, stage timings, and
+  equivalence can be checked without live exchange access.
+- [ ] Acceptance: before optimizing, the report identifies the dominant cost
+  category and provides a repeatable local benchmark.
 
-7. [ ] Keep observability and trading behavior separated.
-   - [ ] Reports, probes, and cache doctors may prove state and expose gaps, but
-     must not enforce trading decisions unless a separate behavior PR changes
-     the contract.
-   - [ ] Any readiness fallback used by live trading must be bounded,
-     observable, and covered by tests.
-   - [ ] No neutral defaults for missing HSL, fill, candle, account, EMA, or
-     market proof.
+### Goal 4: Optimize Exact HSL Replay
+
+- [ ] Replay currently held pairs first, cooldown-affected symbols second, and
+  remaining flat symbols last or in background.
+- [ ] Replace avoidable `timeline_rows * pairs` work, repeated fill scans, and
+  repeated data conversions with indexed, sparse, vectorized, or single-pass
+  logic where exact equivalence is proven.
+- [ ] Keep panic/order-triggering decisions equivalent to the current HSL
+  contract unless an explicit contract change is reviewed.
+- [ ] Add equivalence tests against the current full replay for
+  `ema_span_minutes=1` and `ema_span_minutes>1`.
+- [ ] Acceptance: full HSL replay for 25-30 pairs over the configured lookback
+  is no longer a 20-40 minute operation on VPS5-class hardware.
+
+### Goal 5: Add Conservative HSL Checkpoints
+
+- [ ] Treat checkpoints as performance caches only, never as trading authority.
+- [ ] Validate exchange, user, signal mode, risk config, schema/code version,
+  fill coverage/hash, candle coverage/hash where required, market metadata, and
+  last processed timestamp before resume.
+- [ ] Resume only from a validated checkpoint boundary; replay exact
+  exchange/cache data after that boundary.
+- [ ] On any ambiguity, bypass the checkpoint and perform exact replay with a
+  structured reason event.
+- [ ] Acceptance: warm restart with valid proof reaches held-position
+  protective readiness quickly; invalid proof falls back loudly and safely.
+
+### Goal 6: Make Warm Restart Fast But Proven
+
+- [ ] Short downtime should not cause broad HSL, candle, or fill
+  reconstruction when coverage proof is still valid.
+- [ ] Warm restart should use proven local cache/checkpoint state before
+  scheduling broad repair.
+- [ ] A stale or missing proof for one symbol should trigger targeted repair,
+  not a broad stall for every unrelated held position or forager candidate.
+- [ ] Acceptance: a quick restart after a clean shutdown reuses valid local
+  state and reaches protective readiness much faster than cold start.
+
+### Goal 7: Make Shutdown Fast And Diagnosable
+
+- [ ] Ctrl+C should set the exit flag and cancel or interrupt non-critical long
+  work promptly.
+- [ ] Big candle fetches, background HSL replay, broad forager refresh, and
+  monitor scans must not block exit unless they are inside a clearly documented
+  critical cleanup section.
+- [ ] Slow shutdown should report the blocking task, stage, and elapsed time.
+- [ ] Acceptance: repeated Ctrl+C should not be required in the normal path;
+  when it is required, the reason is visible in structured events/logs.
+
+### Goal 8: Keep Forager Readiness Fast Without Random Fresh-Subset Bias
+
+- [ ] Refresh the stalest eligible forager symbols regularly in the background.
+- [ ] Allow bounded staleness for candidate ranking without disqualifying a
+  coin merely because it was not among the freshest arbitrary subset.
+- [ ] For stale-but-within-cap candidates, close EMA readiness may use bounded
+  flat-close projection, while quote-volume and log-range ranking should carry
+  forward latest known EMA values with age/source metadata.
+- [ ] Candidates with no prior feature basis, non-finite carried values, or age
+  beyond the cap are explicitly unavailable until refreshed.
+- [ ] Acceptance: forager selection is both rate-limit friendly and
+  non-random; stale candidate state is observable and does not weaken actual
+  entry readiness.
+
+### Goal 9: Keep Speed And Correctness Boundaries Explicit
+
+- [ ] Reports, probes, and cache doctors may expose gaps, but must not enforce
+  trading decisions unless a separate behavior PR changes the contract.
+- [ ] Any readiness fallback used by live trading must be bounded, observable,
+  and covered by tests.
+- [ ] No neutral defaults for missing HSL, fill, candle, account, EMA, market,
+  or cooldown proof.
+- [ ] Acceptance: every speedup PR states whether it affects protective action,
+  fresh entries, diagnostics only, or no trading behavior.
 
 ## Definition Of Done
 
