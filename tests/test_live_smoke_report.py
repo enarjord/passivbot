@@ -2114,6 +2114,9 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
                     "elapsed_s": 201.2,
                     "is_held_pair": True,
                     "is_cooldown_pair": False,
+                    "balance": 1234.56,
+                    "equity": 1200.0,
+                    "drawdown_score": 0.42,
                     "error": "api_key=AKIA123",
                 },
             ),
@@ -2148,6 +2151,12 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     )
     assert "AKIA123" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
     assert "must-not-render" not in json.dumps(
+        report["hsl_replay_health"],
+        sort_keys=True,
+    )
+    assert "balance" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
+    assert "equity" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
+    assert "drawdown_score" not in json.dumps(
         report["hsl_replay_health"],
         sort_keys=True,
     )
