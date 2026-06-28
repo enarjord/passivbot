@@ -1905,6 +1905,63 @@ async def test_load_combined_coin_candidates_reports_failed_non_forced_exchange(
 
 
 @pytest.mark.asyncio
+async def test_load_combined_coin_candidates_can_bypass_v2_for_source_dir(monkeypatch, tmp_path):
+    start_ts = month_start_ts(2026, 4)
+    end_ts = start_ts + 60_000
+    plan = hp.CombinedCoinPlan(
+        coin="BTC",
+        effective_start_ts=start_ts,
+        forced_exchange=None,
+        candidate_exchanges=("binanceusdm",),
+    )
+
+    class FakeManager:
+        def has_coin(self, coin):
+            return True
+
+        def get_symbol(self, coin):
+            return f"{coin}/USDT:USDT"
+
+    calls = []
+
+    async def fake_fetch(coin, ex, *_args, **kwargs):
+        calls.append(kwargs)
+        df = pd.DataFrame(
+            {
+                "timestamp": np.array([start_ts, end_ts], dtype=np.int64),
+                "high": [1.0, 2.0],
+                "low": [1.0, 2.0],
+                "close": [1.0, 2.0],
+                "volume": [10.0, 11.0],
+            }
+        )
+        return ex, df, 2, 0, 21.0
+
+    monkeypatch.setattr(hp, "fetch_data_for_coin_and_exchange", fake_fetch)
+    catalog = OhlcvCatalog(tmp_path / "catalog.sqlite")
+    store = OhlcvStore(tmp_path / "ohlcvs", catalog)
+    candidate_report = []
+
+    candidates = await hp._load_combined_coin_candidates(
+        plan=plan,
+        om_dict={"binanceusdm": FakeManager()},
+        end_ts=end_ts,
+        force_refetch_gaps=False,
+        catalog=catalog,
+        store=store,
+        legacy_root=None,
+        exchanges_to_consider=("binanceusdm",),
+        use_v2_local=False,
+        candidate_report=candidate_report,
+    )
+
+    assert [candidate.exchange for candidate in candidates] == ["binanceusdm"]
+    assert calls
+    assert calls[0]["use_v2_local"] is False
+    assert candidate_report[0]["source_layers_used"] == ["source_dir"]
+
+
+@pytest.mark.asyncio
 async def test_combined_force_refetch_uses_v2_resolver_for_large_internal_gap(
     monkeypatch, tmp_path
 ):
