@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `8c908e72` after PR #858, `Instrument HSL history build progress`.
+- `cf7e5d25` after PR #863, `Show active HSL replay event age in reports`.
 
 Current review gate:
 
@@ -30,6 +30,43 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #863 at `cf7e5d25`.
+- PR #863 added report-only active-age projections for non-terminal HSL replay
+  groups. `live-smoke-report` and `live-performance-report` now include the age
+  since the latest active replay event as `active_latest_event_age_ms` plus
+  `latest.derived.latest_event_age_ms`, making stuck active replay stages
+  visible without raw NDJSON inspection. The slice changed only report
+  projections and tests; it did not change event producers, exchange calls,
+  HSL replay behavior, readiness gates, console routing, or trading behavior.
+- PR #863 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Hermes noted two unrelated full-suite smoke-report test
+  failures reproduced on clean `origin/v8` in that environment; Claude's clean
+  worktree run of the touched performance/smoke tests passed.
+- After deploying PR #863 to VPS5, the bots were not restarted because this was
+  read-only report tooling. All five configured `passivbot live` processes were
+  still running. A 5-minute settled smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=cf7e5d25`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Known non-hard attention remained
+  from EMA readiness groups and ZEC HSL cooldown groups.
+- A focused 30-minute performance-report extraction validated the new active HSL
+  replay age field on VPS5. Kucoin had an active HSL replay group at
+  `hsl_price_history_symbol_fetch_started` for `ASTER/USDT:USDT`, and the
+  report projected both `active_latest_event_age_ms=1352835` and
+  `latest.derived.latest_event_age_ms=1352835`. The same report showed
+  `startup_readiness.hsl_replay_active_count=1`, confirming the field is
+  populated for active, non-terminal replay stages.
+- Ledger catch-up since PR #858:
+  - PR #859 updated this progress ledger after the HSL history-build progress
+    smoke.
+  - PR #860 added HSL price-history fetch progress events, including bounded
+    per-symbol start/completed progress for the expensive price-history stage.
+  - PR #861 fixed live-event-query bot path filtering so monitor paths such as
+    `gateio/gateio_01` are matched consistently.
+  - PR #862 made HSL replay query/report output more usable by exposing
+    latest-stage elapsed information for active HSL history/replay work.
+  - PR #863 added the current active-event age projection described above.
 - Repository pulled through PR #858 at `8c908e72`.
 - PR #858 added opt-in structured HSL history-build progress events inside
   `get_balance_equity_history` for HSL replay callers. The new
