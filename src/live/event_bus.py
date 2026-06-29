@@ -116,6 +116,7 @@ class EventTypes:
     RISK_MODE_CHANGED = "risk.mode_changed"
     HSL_TRANSITION = "hsl.transition"
     HSL_STATUS = "hsl.status"
+    HSL_RAW_RED_PENDING = "hsl.raw_red_pending"
     HSL_REPLAY_STARTED = "hsl.replay.started"
     HSL_REPLAY_PROGRESS = "hsl.replay.progress"
     HSL_REPLAY_COMPLETED = "hsl.replay.completed"
@@ -221,6 +222,7 @@ class ReasonCodes:
     HSL_BALANCE_OVERRIDE_ACCOUNT_LEVEL_REPLAY_UNSAFE = (
         "hsl_balance_override_account_level_replay_unsafe"
     )
+    HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
     SINK_PIPELINE_CLOSING = "pipeline_closing"
     SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
@@ -667,6 +669,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
     EventTypes.HSL_STATUS: EventRoute(console=False, text=False),
+    EventTypes.HSL_RAW_RED_PENDING: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_PROGRESS: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_COMPLETED: EventRoute(console=False, text=False),

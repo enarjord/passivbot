@@ -57,6 +57,7 @@ across time.
 - `market.snapshot_diagnostic_skipped`
 - `hsl.cooldown_ended`
 - `hsl.cooldown_started`
+- `hsl.raw_red_pending`
 - `hsl.red_triggered`
 - `hsl.replay.completed`
 - `hsl.replay.failed`
@@ -155,6 +156,7 @@ across time.
 - `fill_cache_ready`
 - `fill_cache_rebuild_started`
 - `hsl_balance_override_account_level_replay_unsafe`
+- `hsl_raw_red_pending_ema_confirmation`
 - `initial_entry_distance_gate`
 - `length_mismatch`
 - `limit_order_create_market_distance`

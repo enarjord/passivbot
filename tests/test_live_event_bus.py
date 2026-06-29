@@ -227,6 +227,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.RISK_MODE_CHANGED,
         EventTypes.HSL_TRANSITION,
         EventTypes.HSL_STATUS,
+        EventTypes.HSL_RAW_RED_PENDING,
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_COOLDOWN_STARTED,
         EventTypes.HSL_COOLDOWN_ENDED,

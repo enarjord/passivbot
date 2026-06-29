@@ -328,6 +328,7 @@ def _equity_hard_stop_make_state(self) -> dict[str, Any]:
         "pending_stop_event": None,
         "last_stop_event": None,
         "red_trigger_event_emitted": False,
+        "last_raw_red_pending_event_ms": 0,
         "last_status_log_ms": 0,
         "last_cooldown_log_ms": 0,
         "cooldown_intervention_active": False,
@@ -745,6 +746,7 @@ def _equity_hard_stop_reset_state(self) -> None:
         state["pending_stop_event"] = None
         state["last_stop_event"] = None
         state["red_trigger_event_emitted"] = False
+        state["last_raw_red_pending_event_ms"] = 0
         state["last_status_log_ms"] = 0
         state["last_cooldown_log_ms"] = 0
         state["cooldown_intervention_active"] = False
@@ -1461,6 +1463,71 @@ def _equity_hard_stop_log_transition(self, pside: str, metrics: dict, prev_tier:
     )
 
 
+def _equity_hard_stop_maybe_emit_raw_red_pending(
+    self,
+    pside: str,
+    metrics: dict,
+    *,
+    symbol: Optional[str] = None,
+) -> None:
+    """Emit a bounded diagnostic when raw HSL drawdown is red before EMA confirms."""
+    try:
+        red_threshold = float(metrics["red_threshold"])
+        drawdown_raw = float(metrics["drawdown_raw"])
+        drawdown_ema = float(metrics["drawdown_ema"])
+        drawdown_score = float(metrics["drawdown_score"])
+        if drawdown_raw < red_threshold or drawdown_score >= red_threshold:
+            return
+        state = self._hsl_coin_state(pside, symbol) if symbol else self._hsl_state(pside)
+        now_ms = int(metrics["timestamp_ms"])
+        last_event_ms = int(state.get("last_raw_red_pending_event_ms", 0) or 0)
+        interval_ms = int(
+            getattr(
+                self,
+                "_equity_hard_stop_status_log_interval_ms",
+                15 * 60 * 1000,
+            )
+            or 0
+        )
+        if last_event_ms and interval_ms > 0 and now_ms - last_event_ms < interval_ms:
+            return
+        state["last_raw_red_pending_event_ms"] = now_ms
+        _emit_hsl_event(
+            self,
+            EventTypes.HSL_RAW_RED_PENDING,
+            ("hsl", "risk", "red", "pending"),
+            {
+                "signal_mode": str(metrics.get("signal_mode") or ""),
+                "tier": str(metrics.get("tier") or ""),
+                "timestamp_ms": now_ms,
+                "red_threshold": red_threshold,
+                "drawdown_raw": drawdown_raw,
+                "drawdown_ema": drawdown_ema,
+                "drawdown_score": drawdown_score,
+                "dist_to_red": max(0.0, red_threshold - drawdown_score),
+                "raw_excess": max(0.0, drawdown_raw - red_threshold),
+                "ema_gap_to_red": max(0.0, red_threshold - drawdown_ema),
+                "elapsed_minutes": int(metrics.get("elapsed_minutes", 0) or 0),
+                "balance_override_active": bool(
+                    getattr(self, "balance_override", None) is not None
+                ),
+            },
+            pside=pside,
+            symbol=symbol,
+            ts=now_ms,
+            level="warning",
+            status="degraded",
+            reason_code=ReasonCodes.HSL_RAW_RED_PENDING_EMA_CONFIRMATION,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit HSL raw-red pending event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def _equity_hard_stop_build_latch_payload(
     self,
     pside: str,
@@ -1979,6 +2046,7 @@ def _equity_hard_stop_reset_after_restart(self, pside: str) -> None:
     state["cooldown_until_ms"] = None
     state["pending_stop_event"] = None
     state["red_trigger_event_emitted"] = False
+    state["last_raw_red_pending_event_ms"] = 0
     state["last_status_log_ms"] = 0
     state["last_cooldown_log_ms"] = 0
     state["cooldown_intervention_active"] = False
@@ -3179,6 +3247,7 @@ async def _equity_hard_stop_check(self) -> Optional[dict]:
         )
         if metrics["changed"]:
             self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
+        self._equity_hard_stop_maybe_emit_raw_red_pending(pside, metrics)
         if metrics["tier"] == "red" and not prev_latched:
             state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
             state["pending_stop_event"] = None
@@ -3416,6 +3485,9 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
             )
             if metrics["changed"]:
                 self._equity_hard_stop_log_transition(pside, metrics, prev_tier)
+            self._equity_hard_stop_maybe_emit_raw_red_pending(
+                pside, metrics, symbol=symbol
+            )
             if metrics["tier"] == "red" and not prev_latched:
                 state["pending_red_since_ms"] = int(metrics["timestamp_ms"])
                 state["pending_stop_event"] = None
