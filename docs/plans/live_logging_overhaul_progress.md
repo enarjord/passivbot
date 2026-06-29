@@ -19,8 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7c199df1` after PR #857, `Validate historical HSL panic markers before
-  preserving replay cooldown`.
+- `8c908e72` after PR #858, `Instrument HSL history build progress`.
 
 Current review gate:
 
@@ -31,6 +30,36 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #858 at `8c908e72`.
+- PR #858 added opt-in structured HSL history-build progress events inside
+  `get_balance_equity_history` for HSL replay callers. The new
+  `hsl.replay.progress` reason codes are `hsl_history_inputs_loaded`,
+  `hsl_history_empty`, `hsl_price_history_fetch_started`,
+  `hsl_price_history_fetch_completed`, `hsl_timeline_replay_started`, and
+  `hsl_timeline_replay_completed`. Payloads are limited to counts, timestamps,
+  and elapsed timings; no balances, prices, equity, realized PnL, sizes, raw
+  fills, or candle rows are emitted.
+- PR #858 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation covered the HSL history pacing regression
+  test, unsupported historical-symbol skip test, event-registry docs test,
+  coin-mode HSL tests, compileall for touched files, and `git diff --check`.
+- After deploying PR #858 to VPS5, all five configured bots were restarted from
+  `/root/bots_vps5.yaml` and left running on `v8@8c908e72`. The follow-up
+  read-only smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
+- The first VPS5 event query after the restart found
+  `hsl_history_inputs_loaded` and `hsl_price_history_fetch_started` for the
+  Binance, GateIO, Kucoin, and OKX forager bots. It had not yet found
+  `hsl_price_history_fetch_completed` or either timeline replay stage in that
+  early window, so the remaining startup bottleneck is now localized to HSL
+  price/candle history fetching before dense timeline replay.
+- Shutdown observation from the same deploy: Hyperliquid stopped promptly on
+  the first `killbots` signal, while the four HSL forager bots remained alive
+  after roughly 20 seconds during HSL replay and required a second signal. This
+  reinforces the existing shutdown-responsiveness backlog item; it was not a
+  PR #858 trading-behavior regression.
 - Repository pulled through PR #857 at `7c199df1`.
 - PR #856 added structured `hsl.raw_red_pending` diagnostics for coin-mode HSL
   cases where raw drawdown is beyond red but EMA-confirmed drawdown has not
