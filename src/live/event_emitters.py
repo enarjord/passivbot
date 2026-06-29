@@ -1191,6 +1191,43 @@ def emit_health_summary_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug("[event] failed to emit health summary event: %s", exc)
 
 
+def _emit_market_snapshot_diagnostic_skipped_event_unchecked(
+    bot: Any,
+    *,
+    context: str,
+    error: BaseException,
+) -> None:
+    _safe_emit(
+        bot,
+        EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
+        level="warning",
+        component="market.snapshot",
+        tags=(EventTags.MARKET, EventTags.SNAPSHOT, EventTags.DEGRADED),
+        cycle_id=current_live_event_cycle_id(bot),
+        status="skipped",
+        reason_code=ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED,
+        data={
+            "context": str(context),
+            "error_type": type(error).__name__,
+            "error": _sanitize_remote_text(error, max_len=500),
+        },
+    )
+
+
+def emit_market_snapshot_diagnostic_skipped_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> None:
+    try:
+        _emit_market_snapshot_diagnostic_skipped_event_unchecked(
+            bot, *args, **kwargs
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit market snapshot diagnostic skipped event: %s",
+            exc,
+        )
+
+
 def _safe_int_map(value: Any) -> dict[str, int]:
     if not isinstance(value, dict):
         return {}

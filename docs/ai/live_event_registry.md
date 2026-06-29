@@ -54,6 +54,7 @@ across time.
 - `forager.feature_unavailable`
 - `forager.selection`
 - `health.summary`
+- `market.snapshot_diagnostic_skipped`
 - `hsl.cooldown_ended`
 - `hsl.cooldown_started`
 - `hsl.red_triggered`
@@ -112,6 +113,7 @@ across time.
 - `health`
 - `load`
 - `logging`
+- `market`
 - `mode`
 - `order`
 - `planning`
@@ -157,6 +159,7 @@ across time.
 - `length_mismatch`
 - `limit_order_create_market_distance`
 - `low_balance`
+- `market_snapshot_diagnostic_skipped`
 - `min_effective_cost_blocked`
 - `new_fill`
 - `open_tail_projection`

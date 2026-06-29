@@ -122,6 +122,41 @@ def test_market_snapshot_ticker_strategy_respects_explicit_override():
     assert bot._market_snapshot_ticker_strategy() == "bulk"
 
 
+def test_noncritical_market_snapshot_error_emits_skipped_event():
+    sink = ListEventSink()
+    bot = Passivbot.__new__(Passivbot)
+    bot._live_event_current_cycle_id = "cy_market_diag"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    exc = RuntimeError(
+        "missing live market snapshots for upnl api_key=secret-token"
+    )
+
+    assert bot._log_noncritical_market_snapshot_error("upnl diagnostics", exc) is True
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.level == "warning"
+    assert event.component == "market.snapshot"
+    assert event.tags == ("market", "snapshot", "degraded")
+    assert event.cycle_id == "cy_market_diag"
+    assert event.status == "skipped"
+    assert event.reason_code == ReasonCodes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED
+    assert event.data["context"] == "upnl diagnostics"
+    assert event.data["error_type"] == "RuntimeError"
+    assert "secret-token" not in event.data["error"]
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].console is False
+    assert DEFAULT_ROUTES[EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED].text is False
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 @pytest.mark.asyncio
 async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monkeypatch):
     managers = []
