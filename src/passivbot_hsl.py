@@ -539,6 +539,21 @@ def _equity_hard_stop_format_remaining_time(seconds: float) -> str:
     return "".join(parts)
 
 
+def _equity_hard_stop_replay_marker_confirms_red(metrics: dict) -> bool:
+    try:
+        drawdown_raw = float(metrics["drawdown_raw"])
+        drawdown_score = float(metrics["drawdown_score"])
+        red_threshold = float(metrics["red_threshold"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("HSL replay panic marker confirmation metrics are incomplete") from exc
+    threshold = red_threshold - 1e-12
+    return (
+        str(metrics.get("tier")) == "red"
+        or drawdown_score >= threshold
+        or drawdown_raw >= threshold
+    )
+
+
 def _equity_hard_stop_infer_replay_contract(
     self, pside: str, fill_events: list[dict], now_ms: int
 ) -> dict[str, Any]:
@@ -2255,6 +2270,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 if current_metrics["tier"] == "red":
                     state["pending_red_since_ms"] = int(current_metrics["timestamp_ms"])
                 continue
+            ignored_panic_marker_timestamps: set[int] = set()
             for row in timeline:
                 if not isinstance(row, dict):
                     continue
@@ -2294,6 +2310,21 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                 n_rows[pside] += 1
                 panic_flatten_marker = panic_flatten_events_by_key.get((pside, ts))
                 if panic_flatten_marker is not None:
+                    marker_ts = int(panic_flatten_marker["timestamp"])
+                    if not _equity_hard_stop_replay_marker_confirms_red(current_metrics):
+                        ignored_panic_marker_timestamps.add(marker_ts)
+                        logging.warning(
+                            "[risk] HSL[%s] ignored historical panic marker without reconstructed RED | "
+                            "stop_ts=%s drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f "
+                            "red_threshold=%.6f source=panic_fill_flatten",
+                            pside,
+                            marker_ts,
+                            float(current_metrics["drawdown_raw"]),
+                            float(current_metrics["drawdown_ema"]),
+                            float(current_metrics["drawdown_score"]),
+                            float(current_metrics["red_threshold"]),
+                        )
+                        continue
                     state["pending_red_since_ms"] = int(ts)
                     stop_drawdown_raw = float(current_metrics["drawdown_raw"])
                     (
@@ -2311,10 +2342,10 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                     )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
-                        cooldown_until_ms = int(panic_flatten_marker["timestamp"]) + cooldown_ms
+                        cooldown_until_ms = marker_ts + cooldown_ms
                     payload = self._equity_hard_stop_build_latch_payload(
                         pside,
-                        stop_event_timestamp_ms=int(panic_flatten_marker["timestamp"]),
+                        stop_event_timestamp_ms=marker_ts,
                         balance=float(row["balance"]),
                         realized_pnl_total=float(row["realized_pnl"]),
                         realized_pnl=float(row[f"realized_pnl_{pside}"]),
@@ -2344,7 +2375,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                         "no_restart_latched=%s cooldown_until_ms=%s diagnostic=%s "
                         "source=panic_fill_flatten",
                         pside,
-                        int(panic_flatten_marker["timestamp"]),
+                        marker_ts,
                         stop_drawdown_raw,
                         no_restart_drawdown_raw,
                         state["no_restart_latched"],
@@ -2357,6 +2388,7 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             if (
                 not state["halted"]
                 and contract["latest_panic_ts"] is not None
+                and int(contract["latest_panic_ts"]) not in ignored_panic_marker_timestamps
                 and contract["active_cooldown_now"]
                 and not state["no_restart_latched"]
             ):
@@ -2746,6 +2778,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                 replay_event_idx = 0
                 replay_size = 0.0
+                ignored_panic_marker_timestamps: set[int] = set()
 
                 def replay_size_at(row_ts_ms: int) -> float:
                     nonlocal replay_event_idx, replay_size
@@ -2867,7 +2900,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         peak_realized,
                         window_last_realized,
                         current_upnl,
-                        latch_red=marker is not None,
+                        latch_red=False,
                     )
                     applied_rows += 1
                     rows += 1
@@ -2875,6 +2908,21 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if marker is None:
                         continue
                     stop_ts = int(marker["timestamp"])
+                    if not _equity_hard_stop_replay_marker_confirms_red(metrics):
+                        ignored_panic_marker_timestamps.add(stop_ts)
+                        logging.warning(
+                            "[risk] HSL[%s:%s] ignored historical coin panic marker without reconstructed RED | "
+                            "stop_ts=%s drawdown_raw=%.6f drawdown_ema=%.6f drawdown_score=%.6f "
+                            "red_threshold=%.6f source=panic_fill_flatten",
+                            pside,
+                            symbol,
+                            stop_ts,
+                            float(metrics["drawdown_raw"]),
+                            float(metrics["drawdown_ema"]),
+                            float(metrics["drawdown_score"]),
+                            float(metrics["red_threshold"]),
+                        )
+                        continue
                     stop_drawdown_raw = float(metrics["drawdown_raw"])
                     no_restart_latched = bool(stop_drawdown_raw >= no_restart_drawdown_threshold)
                     cooldown_until_ms = None
@@ -2948,6 +2996,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                 if (
                     not state["halted"]
                     and contract["latest_panic_ts"] is not None
+                    and int(contract["latest_panic_ts"]) not in ignored_panic_marker_timestamps
                     and contract["active_cooldown_now"]
                     and not state["no_restart_latched"]
                     and not (
