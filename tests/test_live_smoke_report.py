@@ -1984,6 +1984,18 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "risk.mode_changed": 1,
             "unstuck.selection": 1,
         },
+        "hsl_flat_finalization_anchors": {
+            "total": 1,
+            "source_counts": {"current_time_fallback": 1},
+            "fallback_used": 1,
+            "fallback_used_pct": 100.0,
+            "bots": 1,
+            "symbols": {
+                "count": 1,
+                "sample": ["ZEC/USDT:USDT"],
+                "truncated": 0,
+            },
+        },
         "groups": [
             {
                 "bot": "binance/binance_01",
@@ -2073,6 +2085,32 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "12345.67" not in rendered
     assert "0.42" not in rendered
     assert "flat-secret" not in rendered
+    summary = summarize_live_smoke_report(report)
+    assert summary["risk_events"]["hsl_flat_finalization_anchors"] == {
+        "total": 1,
+        "source_counts": {"current_time_fallback": 1},
+        "fallback_used": 1,
+        "fallback_used_pct": 100.0,
+        "bots": 1,
+        "symbols": {
+            "count": 1,
+            "sample": ["ZEC/USDT:USDT"],
+            "truncated": 0,
+        },
+    }
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["risk_events"]["hsl_flat_finalization_anchors"] == {
+        "total": 1,
+        "source_counts": {"current_time_fallback": 1},
+        "fallback_used": 1,
+        "fallback_used_pct": 100.0,
+        "bots": 1,
+        "symbols": {
+            "count": 1,
+            "sample": ["ZEC/USDT:USDT"],
+            "truncated": 0,
+        },
+    }
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
