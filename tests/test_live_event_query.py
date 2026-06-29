@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
 
 import pytest
 
@@ -893,6 +894,7 @@ def test_event_query_filters_by_inclusive_time_window(tmp_path):
         "events_skipped_before": 1,
         "events_skipped_after": 1,
         "invalid_window_ts": 1,
+        "files_skipped_before_window": 0,
     }
     assert report["event_types"] == {
         "cycle.completed": 1,
@@ -911,6 +913,75 @@ def test_event_query_filters_by_inclusive_time_window(tmp_path):
             "reason_code=request_timeout ids=cycle_id=cy_2"
         ),
         "2000 seq=4 cycle.completed status=succeeded reason_code=test ids=cycle_id=cy_3",
+    ]
+
+
+def test_event_query_prunes_rotated_files_before_time_window_by_mtime(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    old_segment = events_dir / "2026-06-29T18-00-00.ndjson.gz"
+    recent_segment = events_dir / "2026-06-29T22-00-00.ndjson.gz"
+    current_segment = events_dir / "current.ndjson"
+    _write_gz_ndjson(
+        old_segment,
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_old",
+                seq=1,
+                ts=1_000,
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+    _write_gz_ndjson(
+        recent_segment,
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_recent",
+                seq=2,
+                ts=5_000,
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+    _write_ndjson(
+        current_segment,
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_current",
+                seq=3,
+                ts=6_000,
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+    os.utime(old_segment, (1.0, 1.0))
+    os.utime(recent_segment, (5.0, 5.0))
+    os.utime(current_segment, (6.0, 6.0))
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        exchange="gateio",
+        user="gateio_01",
+        event_type="hsl.status",
+        since_ms=4_000,
+        include_rotated=True,
+        timeline=True,
+    )
+
+    assert report["ok"] is True
+    assert report["files_scanned"] == 2
+    assert report["event_window"]["files_skipped_before_window"] == 1
+    assert report["event_window"]["events_considered"] == 2
+    assert report["query"]["matched_events"] == 2
+    assert [event["ids"]["cycle_id"] for event in report["query"]["events"]] == [
+        "cy_recent",
+        "cy_current",
     ]
 
 
