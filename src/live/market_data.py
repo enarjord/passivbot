@@ -28,6 +28,62 @@ def _passivbot_module():
     return module
 
 
+def _bounded_pre_create_skip_details(details: list[dict] | None) -> list[dict]:
+    bounded: list[dict] = []
+    for item in list(details or [])[:8]:
+        if not isinstance(item, dict):
+            continue
+        compact = {}
+        for key in (
+            "surface",
+            "reason",
+            "symbol",
+            "age_ms",
+            "max_age_ms",
+            "epoch",
+            "min_epoch",
+        ):
+            value = item.get(key)
+            if value is not None:
+                compact[key] = value
+        if compact:
+            bounded.append(compact)
+    return bounded
+
+
+def _emit_pre_create_skip_event(
+    bot,
+    *,
+    reason_code: str,
+    orders: list[dict],
+    symbols: list[str],
+    stage: str,
+    message: str,
+    details: list[dict] | None = None,
+    error_type: str | None = None,
+) -> None:
+    emit_filter_event = getattr(bot, "_emit_execution_create_filter_event", None)
+    if not callable(emit_filter_event):
+        return
+    details_count = len(details or [])
+    emit_filter_event(
+        event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        reason_code=reason_code,
+        order_count=len(orders),
+        symbols=symbols,
+        level="warning",
+        message=message,
+        data={
+            "stage": stage,
+            "details": _bounded_pre_create_skip_details(details),
+            "details_count": details_count,
+            "details_truncated": details_count > 8,
+            "error_type": error_type,
+        },
+    )
+
+
 def market_snapshot_ticker_strategy(bot) -> str:
     """Choose the cheapest safe ticker endpoint shape for market snapshots."""
     explicit = get_optional_live_value(
@@ -80,6 +136,15 @@ async def filter_fresh_market_snapshot_creations(
                 bot._log_symbols(symbols, limit=12),
                 bot._log_compact_symbol_payload(planning_snapshot_invalid[:8]),
             )
+            _emit_pre_create_skip_event(
+                bot,
+                reason_code=ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID,
+                orders=orders,
+                symbols=symbols,
+                stage="planning_snapshot",
+                message="create orders skipped because planning snapshot is invalid before create",
+                details=planning_snapshot_invalid,
+            )
             return []
         logging.info(
             "[market] refreshing stale planning market snapshot before create | symbols=%s stale=%s",
@@ -102,12 +167,30 @@ async def filter_fresh_market_snapshot_creations(
             type(exc).__name__,
             exc,
         )
+        _emit_pre_create_skip_event(
+            bot,
+            reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+            orders=orders,
+            symbols=symbols,
+            stage="market_snapshot_refresh",
+            message="create orders skipped because pre-create market snapshot refresh failed",
+            error_type=type(exc).__name__,
+        )
         return []
     if invalid:
         logging.warning(
             "[market] skipping order creation; stale pre-create market snapshots | symbols=%s details=%s",
             bot._log_symbols(symbols, limit=12),
             bot._log_compact_symbol_payload(invalid[:8]),
+        )
+        _emit_pre_create_skip_event(
+            bot,
+            reason_code=ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE,
+            orders=orders,
+            symbols=symbols,
+            stage="market_snapshot_validation",
+            message="create orders skipped because pre-create market snapshots are stale",
+            details=invalid,
         )
         return []
     orders = _filter_limit_order_creations_by_market_distance(bot, orders, snapshots)

@@ -160,6 +160,8 @@ across time.
 - `optional_ema_dropped`
 - `pending_exchange_config`
 - `periodic_health_summary`
+- `pre_create_market_snapshot_unavailable`
+- `pre_create_planning_snapshot_invalid`
 - `queue_full`
 - `ranking_features_unavailable`
 - `recent_execution`

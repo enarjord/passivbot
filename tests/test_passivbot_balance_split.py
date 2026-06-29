@@ -6405,6 +6405,11 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
     bot.exchange = "bybit"
     bot.freshness_ledger = FreshnessLedger(now_ms=0)
     bot._authoritative_refresh_epoch = 1
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_stale_pre_create_market_snapshot"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     symbol = "BTC/USDT:USDT"
 
     async def fake_get_snapshots(symbols, max_age_ms=None):
@@ -6454,6 +6459,98 @@ async def test_pre_create_snapshot_filter_blocks_stale_market_snapshots():
     ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.reason_code == ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE
+    assert event.status == "skipped"
+    assert event.level == "warning"
+    assert event.cycle_id == "cy_stale_pre_create_market_snapshot"
+    assert event.data["order_count"] == 1
+    assert event.data["symbols"] == [symbol]
+    assert event.data["stage"] == "market_snapshot_validation"
+    assert event.data["details_count"] == 1
+    assert event.data["details"][0]["symbol"] == symbol
+    assert event.data["details"][0]["reason"] == "stale"
+    assert event.data["details"][0]["age_ms"] >= 20_000
+    assert event.data["details"][0]["max_age_ms"] == 10_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_pre_create_snapshot_filter_emits_failed_refresh_skip_event():
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {}}
+    bot.exchange = "bybit"
+    bot.freshness_ledger = FreshnessLedger(now_ms=0)
+    bot._authoritative_refresh_epoch = 1
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_failed_pre_create_market_snapshot"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
+    symbol = "BTC/USDT:USDT"
+    now_ms = passivbot_module.utc_ms()
+    bot._current_planning_snapshot = PlanningSnapshot(
+        ts_ms=now_ms,
+        exchange="bybit",
+        user="tester",
+        epoch=1,
+        symbols=(symbol,),
+        required_surfaces=tuple(),
+        surfaces=tuple(),
+        market_snapshots=(
+            PlanningMarketSnapshot(
+                symbol=symbol,
+                bid=100.0,
+                ask=100.0,
+                last=100.0,
+                fetched_ms=now_ms,
+                source="test",
+            ),
+        ),
+        market_snapshot_max_age_ms=10_000,
+        completed_candle_signature=tuple(),
+    )
+
+    async def fail_get_snapshots(symbols, max_age_ms=None):
+        raise RuntimeError("exchange unavailable with raw detail")
+
+    bot.market_snapshot_provider = SimpleNamespace(get_snapshots=fail_get_snapshots)
+    orders = [
+        {
+            "symbol": symbol,
+            "side": "buy",
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 99.0,
+        }
+    ]
+
+    assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.reason_code == ReasonCodes.PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE
+    assert event.status == "skipped"
+    assert event.level == "warning"
+    assert event.cycle_id == "cy_failed_pre_create_market_snapshot"
+    assert event.data["order_count"] == 1
+    assert event.data["symbols"] == [symbol]
+    assert event.data["stage"] == "market_snapshot_refresh"
+    assert event.data["error_type"] == "RuntimeError"
+    assert "exchange unavailable" not in json.dumps(event.data)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
@@ -6733,6 +6830,11 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}
     bot.exchange = "bybit"
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_invalid_pre_create_planning_snapshot"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     symbol = "BTC/USDT:USDT"
     now_ms = passivbot_module.utc_ms()
     bot._current_planning_snapshot = PlanningSnapshot(
@@ -6782,6 +6884,25 @@ async def test_pre_create_snapshot_filter_blocks_non_market_planning_invalidatio
     ]
 
     assert await bot._filter_fresh_market_snapshot_creations(orders) == []
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.reason_code == ReasonCodes.PRE_CREATE_PLANNING_SNAPSHOT_INVALID
+    assert event.status == "skipped"
+    assert event.level == "warning"
+    assert event.cycle_id == "cy_invalid_pre_create_planning_snapshot"
+    assert event.data["order_count"] == 1
+    assert event.data["symbols"] == [symbol]
+    assert event.data["stage"] == "planning_snapshot"
+    assert event.data["details_count"] == 1
+    assert event.data["details"][0]["surface"] == "positions"
+    assert event.data["details"][0]["reason"] == "surface_epoch_too_old"
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 def _make_open_order_guardrail_bot(*, epoch: int = 3):
