@@ -118,6 +118,7 @@ class EventTypes:
     HSL_REPLAY_STARTED = "hsl.replay.started"
     HSL_REPLAY_PROGRESS = "hsl.replay.progress"
     HSL_REPLAY_COMPLETED = "hsl.replay.completed"
+    HSL_REPLAY_FAILED = "hsl.replay.failed"
     HSL_RED_TRIGGERED = "hsl.red_triggered"
     HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
@@ -206,6 +207,9 @@ class ReasonCodes:
     RISK_ENTRY_COOLDOWN_POSITION_DELTA = "entry_cooldown_position_delta"
     REQUIRED_CANDLE_DISK_COVERAGE = "required_candle_disk_coverage"
     REQUIRED_EMA_UNAVAILABLE = "required_ema_unavailable"
+    HSL_BALANCE_OVERRIDE_ACCOUNT_LEVEL_REPLAY_UNSAFE = (
+        "hsl_balance_override_account_level_replay_unsafe"
+    )
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
     SINK_PIPELINE_CLOSING = "pipeline_closing"
     SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"
@@ -349,6 +353,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_REPLAY_STARTED,
     EventTypes.HSL_REPLAY_PROGRESS,
     EventTypes.HSL_REPLAY_COMPLETED,
+    EventTypes.HSL_REPLAY_FAILED,
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
@@ -651,6 +656,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_PROGRESS: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_COMPLETED: EventRoute(console=False, text=False),
+    EventTypes.HSL_REPLAY_FAILED: EventRoute(console=False, text=False),
     EventTypes.HSL_RED_TRIGGERED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),

@@ -58,6 +58,7 @@ across time.
 - `hsl.cooldown_started`
 - `hsl.red_triggered`
 - `hsl.replay.completed`
+- `hsl.replay.failed`
 - `hsl.replay.progress`
 - `hsl.replay.started`
 - `hsl.status`
@@ -148,6 +149,7 @@ across time.
 - `execution_loop_error_burst`
 - `entry_cooldown_position_delta`
 - `fill_cache_ready`
+- `hsl_balance_override_account_level_replay_unsafe`
 - `initial_entry_distance_gate`
 - `length_mismatch`
 - `low_balance`

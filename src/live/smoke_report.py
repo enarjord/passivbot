@@ -92,6 +92,7 @@ HSL_REPLAY_EVENT_TYPES = {
     EventTypes.HSL_REPLAY_STARTED,
     EventTypes.HSL_REPLAY_PROGRESS,
     EventTypes.HSL_REPLAY_COMPLETED,
+    EventTypes.HSL_REPLAY_FAILED,
 }
 REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -1934,6 +1935,10 @@ def _merge_hsl_replay_group(
         record, group.get("completed")
     ):
         group["completed"] = record
+    elif event_type == EventTypes.HSL_REPLAY_FAILED and is_newer(
+        record, group.get("failed")
+    ):
+        group["failed"] = record
 
 
 def _public_hsl_replay_record(record: Any) -> dict[str, Any]:
@@ -1950,7 +1955,10 @@ def _hsl_replay_group_active(group: dict[str, Any]) -> bool:
     latest = group.get("latest")
     if not isinstance(latest, dict):
         return False
-    return latest.get("event_type") != EventTypes.HSL_REPLAY_COMPLETED
+    return latest.get("event_type") not in {
+        EventTypes.HSL_REPLAY_COMPLETED,
+        EventTypes.HSL_REPLAY_FAILED,
+    }
 
 
 def _summarize_hsl_replay_health(
@@ -1979,6 +1987,7 @@ def _summarize_hsl_replay_health(
         active = _hsl_replay_group_active(group)
         latest = _public_hsl_replay_record(group.get("latest"))
         completed = _public_hsl_replay_record(group.get("completed"))
+        failed = _public_hsl_replay_record(group.get("failed"))
         if active:
             active_bots += 1
         if completed:
@@ -1986,6 +1995,8 @@ def _summarize_hsl_replay_health(
                 completed_bots += 1
             elif completed.get("status") == "failed":
                 failed_bots += 1
+        elif failed:
+            failed_bots += 1
         public_group = {
             "bot": group.get("bot"),
             "active": active,
@@ -1998,6 +2009,7 @@ def _summarize_hsl_replay_health(
             "loaded": _public_hsl_replay_record(group.get("loaded")),
             "progress": _public_hsl_replay_record(group.get("progress")),
             "completed": completed,
+            "failed": failed,
         }
         compact_groups.append(
             {

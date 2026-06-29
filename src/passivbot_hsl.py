@@ -22,7 +22,7 @@ from config.coerce import (
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
 from fill_events_manager import signed_fee_paid_from_payload
-from live.event_bus import live_event_debug_profile_enabled
+from live.event_bus import EventTypes, ReasonCodes, live_event_debug_profile_enabled
 from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
 
@@ -281,17 +281,20 @@ def _emit_hsl_replay_event(
     status: str | None = None,
     reason_code: str | None = None,
 ) -> None:
-    _emit_hsl_event(
-        self,
-        event_type,
-        ("hsl", "risk", "replay"),
-        data,
-        pside=pside,
-        symbol=symbol,
-        level=level,
-        status=status,
-        reason_code=reason_code,
-    )
+    try:
+        _emit_hsl_event(
+            self,
+            event_type,
+            ("hsl", "risk", "replay"),
+            data,
+            pside=pside,
+            symbol=symbol,
+            level=level,
+            status=status,
+            reason_code=reason_code,
+        )
+    except Exception as exc:
+        logging.debug("[event] failed to emit HSL replay event type=%s: %s", event_type, exc)
 
 
 def _calc_hsl_pnl(position_side, entry_price, close_price, qty, c_mult):
@@ -485,6 +488,18 @@ def _equity_hard_stop_validate_balance_source_for_history_replay(self) -> None:
     ]
     if not enabled_psides:
         return
+    _emit_hsl_replay_event(
+        self,
+        EventTypes.HSL_REPLAY_FAILED,
+        {
+            "signal_mode": signal_mode,
+            "balance_override_active": True,
+            "enabled_psides": enabled_psides,
+        },
+        level="critical",
+        status="failed",
+        reason_code=ReasonCodes.HSL_BALANCE_OVERRIDE_ACCOUNT_LEVEL_REPLAY_UNSAFE,
+    )
     raise RuntimeError(
         "HSL equity history replay is unsafe with balance_override for "
         f"signal_mode={signal_mode!r} enabled_psides={','.join(enabled_psides)}. "
@@ -3003,7 +3018,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
     except asyncio.CancelledError:
         _emit_hsl_replay_event(
             self,
-            "hsl.replay.completed",
+            EventTypes.HSL_REPLAY_FAILED,
             {
                 "signal_mode": "coin",
                 "elapsed_s": round(time.monotonic() - replay_started_s, 3)
@@ -3017,7 +3032,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
     except Exception as exc:
         _emit_hsl_replay_event(
             self,
-            "hsl.replay.completed",
+            EventTypes.HSL_REPLAY_FAILED,
             {
                 "signal_mode": "coin",
                 "error_type": type(exc).__name__,

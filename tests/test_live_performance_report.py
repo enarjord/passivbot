@@ -1201,6 +1201,20 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
                     "elapsed_s": 7.5,
                 },
             ),
+            _monitor_row(
+                event_type="hsl.replay.failed",
+                seq=5,
+                ts=5000,
+                component="risk.hsl",
+                status="failed",
+                reason_code="coin_history_replay_failed",
+                data={
+                    "signal_mode": "coin",
+                    "elapsed_s": 8.0,
+                    "error_type": "RuntimeError",
+                    "secret": "must-not-render",
+                },
+            ),
         ],
     )
 
@@ -1208,12 +1222,13 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     profile = report["hsl_replay_profile"]
     group = profile["groups"][0]
 
-    assert profile["total_events"] == 4
+    assert profile["total_events"] == 5
     assert profile["bot_count"] == 1
     assert profile["event_types"] == {
         "hsl.replay.started": 1,
         "hsl.replay.progress": 2,
         "hsl.replay.completed": 1,
+        "hsl.replay.failed": 1,
     }
     assert group["bot"] == "binance/binance_01"
     assert group["event_types"]["hsl.replay.progress"] == 2
@@ -1226,6 +1241,10 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     assert group["progress"]["derived"]["latest_elapsed_ms"] == 2500
     assert group["completed"]["derived"]["startup_blocking_elapsed_ms"] == 7500
     assert group["completed"]["derived"]["startup_blocking"] is True
+    assert group["failed"]["event_type"] == "hsl.replay.failed"
+    assert group["failed"]["status"] == "failed"
+    assert group["failed"]["derived"]["latest_elapsed_ms"] == 8000
+    assert "must-not-render" not in json.dumps(group, sort_keys=True)
     assert group["completed"]["derived"]["observed_work_pct"] == 75
 
 

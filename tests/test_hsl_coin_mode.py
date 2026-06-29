@@ -222,7 +222,7 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
     events = [event for event in sink.events if event.event_type.startswith("hsl.replay.")]
     assert [event.event_type for event in events] == [
         EventTypes.HSL_REPLAY_STARTED,
-        EventTypes.HSL_REPLAY_COMPLETED,
+        EventTypes.HSL_REPLAY_FAILED,
     ]
     assert events[0].status == "started"
     assert events[0].reason_code == "coin_history_replay"
