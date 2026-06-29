@@ -2270,6 +2270,57 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     }
 
 
+def test_live_smoke_report_hsl_replay_latest_failure_overrides_stale_completion(tmp_path):
+    _write_ndjson(
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.started",
+                seq=1,
+                ts=1000,
+                reason_code="coin_history_replay",
+                level="debug",
+                status="started",
+                data={"signal_mode": "coin"},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=2,
+                ts=2000,
+                reason_code="coin_history_replay_completed",
+                level="debug",
+                status="succeeded",
+                data={"signal_mode": "coin", "stage": "full_replay"},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.failed",
+                seq=3,
+                ts=4000,
+                reason_code="coin_history_replay_failed",
+                level="warning",
+                status="failed",
+                data={"signal_mode": "coin", "error_type": "RuntimeError"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    health = report["hsl_replay_health"]
+
+    assert health["active_bots"] == 0
+    assert health["completed_bots"] == 0
+    assert health["failed_bots"] == 1
+    assert health["failed_attention_bots"] == 1
+    assert report["attention_sources"]["hsl_replay_failed_bots"] == 1
+    assert health["groups"][0]["latest"]["event_type"] == "hsl.replay.failed"
+    assert health["groups"][0]["completed"]["event_type"] == "hsl.replay.completed"
+
+
 def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
     tmp_path,
 ):

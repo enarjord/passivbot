@@ -1991,7 +1991,11 @@ def _summarize_hsl_replay_health(
         failed = _public_hsl_replay_record(group.get("failed"))
         if active:
             active_bots += 1
-        if completed:
+        elif latest.get("event_type") == EventTypes.HSL_REPLAY_FAILED:
+            failed_bots += 1
+            if latest.get("reason_code") != "shutdown_cancelled":
+                failed_attention_bots += 1
+        elif latest.get("event_type") == EventTypes.HSL_REPLAY_COMPLETED:
             if completed.get("status") == "succeeded":
                 completed_bots += 1
             elif completed.get("status") == "failed":
