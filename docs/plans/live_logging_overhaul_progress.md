@@ -33,7 +33,7 @@ VPS5 deployment status:
 - Repository pulled through PR #866 at `d44c5132`.
 - PR #866 added the active HSL replay age projection to
   `live-performance-report` startup readiness summaries. It derives the field
-  from existing HSL replay profile data and reports `active_latest_age_ms` for
+  from existing HSL replay profile data and reports `latest_event_age_ms` for
   active replay stages without adding event producers, exchange calls, cache
   mutation, readiness gates, console routing, or trading behavior.
 - PR #866 passed the normal review gate: Claude approved the current head,
