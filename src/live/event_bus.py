@@ -97,6 +97,7 @@ class EventTypes:
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
+    ENTRY_MIN_EFFECTIVE_COST_BLOCKED = "entry.min_effective_cost_blocked"
     EXECUTION_CANCEL_SENT = "execution.cancel_sent"
     EXECUTION_CANCEL_SUCCEEDED = "execution.cancel_succeeded"
     EXECUTION_CANCEL_FAILED = "execution.cancel_failed"
@@ -188,6 +189,7 @@ class ReasonCodes:
     FILL_CACHE_READY = "fill_cache_ready"
     LENGTH_MISMATCH = "length_mismatch"
     LOW_BALANCE = "low_balance"
+    MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
     NEW_FILL = "new_fill"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
     OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
@@ -321,6 +323,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_REJECTED,
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
     EventTypes.EXECUTION_CANCEL_SENT,
     EventTypes.EXECUTION_CANCEL_SUCCEEDED,
     EventTypes.EXECUTION_CANCEL_FAILED,
@@ -615,6 +618,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=False, text=False),
+    EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_FAILED: EventRoute(console=True, text=True),

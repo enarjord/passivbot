@@ -3032,6 +3032,46 @@ def emit_realized_loss_gate_blocked_event(
         )
 
 
+def emit_entry_min_effective_cost_blocked_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    projected_initial_cost: float,
+    effective_min_cost: float,
+    balance: float,
+    effective_limit: float,
+    entry_initial_qty_pct: float,
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
+            level="info",
+            component="entry.min_effective_cost",
+            tags=(EventTags.ORDER, EventTags.GATE),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=str(symbol),
+            pside=str(pside),
+            status="skipped",
+            reason_code=ReasonCodes.MIN_EFFECTIVE_COST_BLOCKED,
+            data={
+                "projected_initial_cost": _safe_float(projected_initial_cost),
+                "effective_min_cost": _safe_float(effective_min_cost),
+                "balance": _safe_float(balance),
+                "effective_limit": _safe_float(effective_limit),
+                "entry_initial_qty_pct": _safe_float(entry_initial_qty_pct),
+                "action": "skip_create",
+            },
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit min effective cost event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def _unstuck_status_side_summary(
     info: dict[str, Any],
     *,

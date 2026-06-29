@@ -46,6 +46,7 @@ across time.
 - `execution.create_sent`
 - `execution.create_skipped`
 - `execution.create_succeeded`
+- `entry.min_effective_cost_blocked`
 - `fill.ingested`
 - `fills.refresh_summary`
 - `forager.feature_unavailable`
@@ -145,6 +146,7 @@ across time.
 - `fill_cache_ready`
 - `length_mismatch`
 - `low_balance`
+- `min_effective_cost_blocked`
 - `new_fill`
 - `open_tail_projection`
 - `optional_ema_dropped`
