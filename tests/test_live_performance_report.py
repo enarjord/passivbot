@@ -870,7 +870,8 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert len(summary["input_staleness"]["groups"]) == 1
 
 
-def test_live_performance_report_startup_readiness_summary(tmp_path):
+def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch):
+    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 64000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -944,6 +945,7 @@ def test_live_performance_report_startup_readiness_summary(tmp_path):
     assert bot["hsl_replay"]["pairs"] == 26
     assert bot["hsl_replay"]["held_pairs"] == 1
     assert bot["hsl_replay"]["rows_per_second"] == 289.4
+    assert bot["hsl_replay"]["latest_event_age_ms"] == 60000
 
 
 def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_path):
@@ -977,6 +979,7 @@ def test_live_performance_report_startup_readiness_completed_hsl_not_active(tmp_
     assert startup["ready_count"] == 0
     assert startup["hsl_replay_active_count"] == 0
     assert startup["bots"][0]["hsl_replay"]["status"] == "succeeded"
+    assert "latest_event_age_ms" not in startup["bots"][0]["hsl_replay"]
     assert startup["bots"][0]["hsl_replay"]["skipped_pairs"] == 1
 
 
@@ -1063,7 +1066,8 @@ def test_live_performance_report_startup_readiness_is_bounded(tmp_path):
     assert list(startup["bots"][0]["startup_phases_ms"]) == ["account"]
 
 
-def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path):
+def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path, monkeypatch):
+    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 122000)
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -1097,6 +1101,7 @@ def test_live_performance_report_startup_readiness_hsl_whitelist(tmp_path):
         "reason_code": "test",
         "stage": "pair_replay",
         "pairs": 1,
+        "latest_event_age_ms": 120000,
     }
 
 
