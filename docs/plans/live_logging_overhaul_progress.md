@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7ce1aec9` after PR #852, `Emit market snapshot diagnostic skip events`.
+- `2fb9ffc5` after PR #854, `Flag unsafe HSL balance override in smoke report`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Current ledger catch-up through PR #852:
+- Current ledger catch-up through PR #854:
   - PR #836 updated this progress ledger after the realized-loss gate event
     slice.
   - PR #837 added structured `entry.min_effective_cost_blocked` events for
@@ -80,25 +80,30 @@ VPS5 deployment status:
     warning log and boolean helper behavior unchanged, routes the event away
     from console/text by default, and emits only bounded sanitized context,
     error type, and error text.
-- Repository pulled through PR #852 at `7ce1aec9` and the configured VPS5 bots
-  were restarted from `/root/bots_vps5.yaml`.
-- PR #852 passed the normal review gate: Hermes approved with no findings,
-  Claude approved with only a non-blocking categorization nit, and CI was green.
-  Local validation before PR creation covered focused pytest, compileall for
-  touched Python files, and `git diff --check`.
-- Immediate VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
-  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected_count=0`,
-  clean tracked repository state at `repository.head=7ce1aec9`,
-  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
-  Remaining attention came from known non-hard EMA readiness groups, HSL status,
-  and active HSL replay.
-- Follow-up VPS5 observation after roughly 20 minutes kept process/repository
-  smoke green with all five expected live processes running and no hard log or
-  monitor failures, but the four crypto bots had not reached `READY`. Their
-  newest text logs still showed only `HSL coin history reconstruction starting`
-  and no completion line. This is tracked as the separate critical HSL startup
-  replay latency/readiness gap in `live_ops_improvement_backlog.md` and
-  `live_performance_readiness_goals.md`, not as a regression from PR #852.
+  - PR #853 updated this progress ledger after the market-snapshot diagnostic
+    skip event slice.
+  - PR #854 added a read-only smoke-report config/process check for the known
+    unsafe `balance_override` plus account-level HSL replay contract. The
+    check parses running `passivbot live` commands, resolves local configs,
+    hard-fails smoke only for `unified`/`pside` HSL with an active balance
+    override, and redacts override values from public process/report command
+    surfaces.
+- Repository pulled through PR #854 at `2fb9ffc5`.
+- Bots were not restarted for PRs #853/#854. PR #853 was docs-only and PR #854
+  was read-only smoke-report tooling; all five configured `passivbot live`
+  processes remained running.
+- PR #854 passed the normal review gate after two value-safety amendments:
+  Claude approved the current head, Hermes approved the current head, and CI
+  was green. Local validation before PR creation covered focused
+  `tests/test_live_smoke_report.py`, the incident-bundle process-status
+  integration test, compileall for touched Python files, and `git diff --check`.
+- Immediate read-only VPS5 smoke after the PR #854 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=2fb9ffc5`, `remote_calls.failed=1`,
+  `account_critical_remote_calls.failed=0`, and
+  `processes.config_checks.ok=true` with `issues_count=0`. Remaining attention
+  came from known non-hard EMA readiness and structured problem-event groups.
 - Repository pulled through PR #850 at `13b0044d`.
 - Bots were not restarted for PR #850 because the change is an
   observability-only event producer beside existing fill-cache doctor startup
