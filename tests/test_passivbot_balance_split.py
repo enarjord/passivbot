@@ -163,6 +163,12 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
     bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
     bot._pnls_initialized = False
     bot.get_exchange_time = lambda: 1_700_086_400_000
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_init_fills_legacy"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
 
     monkeypatch.delenv("PASSIVBOT_FILL_EVENTS_DOCTOR", raising=False)
     monkeypatch.setattr(passivbot_module, "_extract_symbol_pool", lambda *_args: [])
@@ -176,6 +182,40 @@ async def test_init_pnls_quarantines_and_rebuilds_unsupported_legacy_cache(monke
     assert manager.quarantine_reason == "legacy_pnl_contract"
     assert manager.refresh_calls == [(1_700_000_000_000, None)]
     assert manager.history_scope == "window"
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.FILLS_REFRESH_SUMMARY
+    ]
+    events_by_reason = {event.reason_code: event for event in events}
+    assert ReasonCodes.FILL_CACHE_DOCTOR_REPORT in events_by_reason
+    assert ReasonCodes.FILL_CACHE_QUARANTINED in events_by_reason
+    assert ReasonCodes.FILL_CACHE_REBUILD_STARTED in events_by_reason
+    assert ReasonCodes.FILL_CACHE_READY in events_by_reason
+    doctor_event = events_by_reason[ReasonCodes.FILL_CACHE_DOCTOR_REPORT]
+    assert doctor_event.cycle_id == "cy_init_fills_legacy"
+    assert doctor_event.status == "succeeded"
+    assert doctor_event.data["source"] == "startup"
+    assert doctor_event.data["refresh_mode"] == "doctor"
+    assert doctor_event.data["doctor_mode"] == "auto"
+    assert doctor_event.data["doctor_action"] == "rebuild_cache"
+    assert doctor_event.data["auto_repair"] is True
+    assert doctor_event.data["anomaly_events"] == 1
+    assert doctor_event.data["repaired"] is False
+    quarantine_event = events_by_reason[ReasonCodes.FILL_CACHE_QUARANTINED]
+    assert quarantine_event.level == "warning"
+    assert quarantine_event.status == "succeeded"
+    assert quarantine_event.data["refresh_mode"] == "cache_quarantine"
+    assert quarantine_event.data["quarantine_created"] is True
+    assert quarantine_event.data["quarantine_reason"] == "legacy_pnl_contract"
+    assert "/tmp/fills.backup" not in json.dumps(quarantine_event.data)
+    rebuild_event = events_by_reason[ReasonCodes.FILL_CACHE_REBUILD_STARTED]
+    assert rebuild_event.status == "succeeded"
+    assert rebuild_event.data["refresh_mode"] == "cache_rebuild"
+    assert rebuild_event.data["history_scope"] == "window"
+    assert rebuild_event.data["start_ms"] == 1_700_000_000_000
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio

@@ -3452,6 +3452,17 @@ def _emit_fills_refresh_summary_event_unchecked(
     overlap_minutes: float | None = None,
     retry_count: int | None = None,
     next_retry_in_ms: int | None = None,
+    start_ms: int | None = None,
+    end_ms: int | None = None,
+    doctor_mode: str | None = None,
+    doctor_action: str | None = None,
+    auto_repair: bool | None = None,
+    anomaly_events: int | None = None,
+    repaired: bool | None = None,
+    degraded_events_after: int | None = None,
+    legacy_files_quarantined: int | None = None,
+    quarantine_created: bool | None = None,
+    quarantine_reason: str | None = None,
     error: BaseException | None = None,
     level: str = "debug",
 ) -> None:
@@ -3490,6 +3501,33 @@ def _emit_fills_refresh_summary_event_unchecked(
     next_retry_value = _safe_int(next_retry_in_ms)
     if next_retry_value is not None:
         data["next_retry_in_ms"] = max(0, next_retry_value)
+    start_value = _safe_int(start_ms)
+    if start_value is not None:
+        data["start_ms"] = start_value
+    end_value = _safe_int(end_ms)
+    if end_value is not None:
+        data["end_ms"] = end_value
+    if doctor_mode is not None:
+        data["doctor_mode"] = str(doctor_mode)
+    if doctor_action is not None:
+        data["doctor_action"] = str(doctor_action)
+    if auto_repair is not None:
+        data["auto_repair"] = bool(auto_repair)
+    anomaly_value = _safe_int(anomaly_events)
+    if anomaly_value is not None:
+        data["anomaly_events"] = anomaly_value
+    if repaired is not None:
+        data["repaired"] = bool(repaired)
+    degraded_value = _safe_int(degraded_events_after)
+    if degraded_value is not None:
+        data["degraded_events_after"] = degraded_value
+    quarantined_value = _safe_int(legacy_files_quarantined)
+    if quarantined_value is not None:
+        data["legacy_files_quarantined"] = quarantined_value
+    if quarantine_created is not None:
+        data["quarantine_created"] = bool(quarantine_created)
+    if quarantine_reason is not None:
+        data["quarantine_reason"] = str(quarantine_reason)
     if error is not None:
         data["error_type"] = type(error).__name__
         data["error"] = _sanitize_remote_text(error, max_len=500)
