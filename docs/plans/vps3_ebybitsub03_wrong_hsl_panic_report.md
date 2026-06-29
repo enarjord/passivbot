@@ -25,6 +25,13 @@ earlier: HSL reconstructed account-level drawdown from current balance override
 plus historical realized PnL, then combined inconsistent lookback anchors for
 the replay peak and the current sample.
 
+Follow-up VPS3 inspection on `2026-06-29` confirmed the operator assessment:
+the panic was wrong. The account was not near a real account-level drawdown
+that should have triggered RED. The bot was still running the vulnerable
+`b972f022` build, remained flat after the close, and kept logging RED cooldown
+from the synthetic peak. Current `v8` contains a guard which blocks this exact
+startup contract before HSL replay can trade.
+
 ## Key Evidence
 
 The current HSL latch/cache after the incident recorded:
@@ -120,6 +127,19 @@ This aligns replay with the live runtime sample path:
 `live.pnls_max_lookback_days` window via `_pnls_lookback_start_ms()`, so replayed
 peaks and current samples must use the same realized-PnL scope.
 
+The merged short-term mitigation is intentionally fail-loud: if HSL is enabled
+and `balance_override` is active, `signal_mode=unified` and `signal_mode=pside`
+must not proceed into history replay. Operators must remove the balance
+override, switch to `hsl_signal_mode=coin`, disable HSL, or wait for an explicit
+baseline/checkpoint mechanism.
+
+This fix prevents the same false-panic calculation on new starts, but it does
+not decide how to treat historical fills that were already created by the bad
+model. In this incident the exchange history now contains a
+`close_panic_long` fill for XMR. Stateless replay can legitimately see that as
+cooldown evidence unless a future, explicit recovery contract marks the event as
+operator-invalid.
+
 ## Follow-Up Work
 
 - Add explicit HSL baseline/checkpoint support for overridden strategy
@@ -128,4 +148,10 @@ peaks and current samples must use the same realized-PnL scope.
 - Add startup diagnostics when raw drawdown is above red but EMA has not caught
   up yet.
 - Decide how to treat existing latch files or panic fills created by the unsafe
-  overridden account-level replay model.
+  overridden account-level replay model. Any ignore/recovery mechanism must be
+  explicit, auditable, config- or exchange-derived, and covered by tests because
+  silently ignoring exchange-derived panic fills would weaken the stateless HSL
+  cooldown contract.
+- Add preflight/reporting that flags `balance_override` plus account-level HSL
+  before an operator starts live, so this class of configuration cannot be
+  missed in a manual restart.

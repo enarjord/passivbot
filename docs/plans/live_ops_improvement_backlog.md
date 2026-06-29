@@ -30,6 +30,31 @@ Related detailed plans:
 
 ## High-Value Follow-Ups
 
+0a. [ ] Critical: HSL false-panic recovery and preflight.
+   Status: open. VPS3 `ebybitsub03` evidence from 2026-06-28/29 showed a wrong
+   `close_panic_long` on XMR under `hsl_signal_mode=unified` with
+   `balance_override=1000`. HSL reconstructed a synthetic account-level peak
+   near `1213` from overridden balance plus historical realized PnL, while the
+   account was not near a legitimate drawdown that should have triggered RED.
+   PR #839 added the immediate fail-loud runtime guard for
+   `balance_override` plus account-level HSL replay, but an operational gap
+   remains for recovery and prevention.
+
+   Target contract: operators need a preflight-visible warning/error before
+   starting a config that combines `balance_override` with `unified` or `pside`
+   HSL, and a carefully designed recovery path for historical panic fills that
+   are known to have been created by a bad HSL model. Recovery must not silently
+   ignore exchange-derived panic fills. Any invalid-panic override must be
+   explicit, auditable, bounded to exact fill/time/side/symbol evidence, and
+   compatible with stateless restart semantics.
+
+   Investigation directions: extend `live-config-preflight` and/or
+   `hsl-startup-preview` to flag the unsafe contract offline; add richer HSL
+   baseline-source diagnostics; design an operator-owned invalid-panic marker
+   if needed; and add tests proving that the default remains fail-loud and
+   exchange-derived cooldown evidence is ignored only when the explicit recovery
+   contract is satisfied.
+
 0. [ ] Critical: HSL startup replay latency before protective panic.
    Status: open. Binance VPS5 incident evidence from 2026-06-26 shows
    `hsl_signal_mode=coin` startup history reconstruction loaded
