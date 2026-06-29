@@ -3025,7 +3025,7 @@ async def test_hard_stop_initialize_from_history_terminal_stop_sets_latch(monkey
     _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.1
     bot.balance = 80.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -3107,7 +3107,7 @@ async def test_hard_stop_initialize_from_history_does_not_latch_recovered_red_wi
     _hsl_cfg(bot)["ema_span_minutes"] = 1.0
     bot.balance = 100.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -3180,7 +3180,7 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
     bot.balance = 104.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -3275,7 +3275,7 @@ async def test_hard_stop_initialize_from_history_ignores_panic_marker_without_re
     bot.config["live"]["hsl_signal_mode"] = "pside"
     bot.balance = 100.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -3360,7 +3360,7 @@ async def test_hard_stop_initialize_from_history_replay_cooldown_resets_cycle(
     bot.balance = 104.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -3476,7 +3476,7 @@ async def test_hard_stop_initialize_from_history_preserves_no_restart_peak_acros
     bot.balance = 86.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -4058,7 +4058,7 @@ async def test_hard_stop_initialize_from_history_resets_after_panic_marker_same_
     bot.balance = 80.0
     bot._live_values["execution_delay_seconds"] = 60.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -4169,7 +4169,7 @@ async def test_hard_stop_initialize_from_history_normal_policy_replays_from_entr
     bot.positions[symbol]["long"]["price"] = 90.0
     bot.balance = 90.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -4290,7 +4290,7 @@ async def test_hard_stop_initialize_from_history_unresolved_panic_residue_stays_
     bot.positions[symbol]["long"]["price"] = 90.0
     bot.balance = 80.0
 
-    async def fake_history(*, current_balance=None):
+    async def fake_history(*, current_balance=None, **kwargs):
         return {
             "timeline": [
                 {

@@ -2166,7 +2166,10 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             lookback.display_value,
             signal_mode,
         )
-        history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
+        history = await self.get_balance_equity_history(
+            current_balance=self.get_raw_balance(),
+            hsl_replay_signal_mode=signal_mode,
+        )
         if "timeline" not in history:
             raise ValueError("get_balance_equity_history() missing required key: timeline")
         timeline = history["timeline"]
@@ -2499,7 +2502,10 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             status="started",
             reason_code="coin_history_replay",
         )
-        history = await self.get_balance_equity_history(current_balance=self.get_raw_balance())
+        history = await self.get_balance_equity_history(
+            current_balance=self.get_raw_balance(),
+            hsl_replay_signal_mode="coin",
+        )
         check_shutdown("hsl_coin_history_replay_history_loaded")
         panic_flatten_events = history["panic_flatten_events"] if "panic_flatten_events" in history else []
         if panic_flatten_events is None:

@@ -192,7 +192,7 @@ async def test_coin_hsl_replay_cancels_when_shutdown_requested_after_history_loa
     )
     bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         bot.stop_signal_received = True
         return {
             "timeline": [
@@ -252,7 +252,7 @@ async def test_coin_hsl_history_replay_emits_lifecycle_events():
     )
     bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -589,7 +589,7 @@ async def test_coin_hsl_history_replay_skips_enabled_side_with_zero_budget():
 
     bot.bot_value = bot_value
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -646,7 +646,7 @@ async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_pani
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -816,7 +816,7 @@ async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points()
     ]
     bot._pnls_manager = make_fake_pnls_manager(fill_events)
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -861,7 +861,7 @@ async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
     symbol = "A"
     bot.hsl["long"]["no_restart_drawdown_threshold"] = 0.7
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -918,7 +918,7 @@ async def test_coin_hsl_history_replay_ignores_panic_marker_without_reconstructe
         or "/tmp/hsl_coin_ignored.json"
     )
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -974,7 +974,7 @@ async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1006,7 +1006,7 @@ async def test_coin_hsl_open_position_missing_history_uses_current_sample():
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1034,7 +1034,7 @@ async def test_coin_hsl_open_position_empty_coin_history_uses_current_sample():
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1064,7 +1064,7 @@ async def test_coin_hsl_history_replay_allows_leading_rows_before_first_fill():
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1108,7 +1108,7 @@ async def test_coin_hsl_history_replay_requires_relevant_symbol_fields():
     symbol = "A"
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1141,7 +1141,7 @@ async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
     bot = make_coin_bot()
     symbol = "A"
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1199,7 +1199,7 @@ async def test_coin_hsl_history_replay_requires_upnl_for_carry_in_decrease():
         symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}
     }
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1235,7 +1235,7 @@ async def test_coin_hsl_history_replay_requires_upnl_for_flat_ambiguous_decrease
     bot = make_coin_bot()
     symbol = "A"
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1273,7 +1273,7 @@ async def test_coin_hsl_reconstructs_unresolved_panic_residue_on_restart():
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
     bot.get_exchange_time = lambda: 200_000
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1328,7 +1328,7 @@ async def test_coin_hsl_reconstructs_manual_cooldown_intervention_on_restart():
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
     bot.get_exchange_time = lambda: 180_000
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {
@@ -1384,7 +1384,7 @@ async def test_coin_hsl_reconstructs_normal_cooldown_intervention_as_override():
     bot.positions = {symbol: {"long": {"size": 1.0, "price": 100.0}, "short": {"size": 0.0}}}
     bot.get_exchange_time = lambda: 180_000
 
-    async def fake_history(current_balance=None):
+    async def fake_history(current_balance=None, **kwargs):
         return {
             "timeline": [
                 {

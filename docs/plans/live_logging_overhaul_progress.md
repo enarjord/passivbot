@@ -19,7 +19,8 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `2fb9ffc5` after PR #854, `Flag unsafe HSL balance override in smoke report`.
+- `7c199df1` after PR #857, `Validate historical HSL panic markers before
+  preserving replay cooldown`.
 
 Current review gate:
 
@@ -30,6 +31,28 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #857 at `7c199df1`.
+- PR #856 added structured `hsl.raw_red_pending` diagnostics for coin-mode HSL
+  cases where raw drawdown is beyond red but EMA-confirmed drawdown has not
+  crossed red. The event is routed away from console/text by default and keeps
+  payloads to bounded HSL metrics/status fields.
+- PR #857 was a trading-safety interruption, not a logging slice: historical
+  HSL replay now preserves a panic-marker cooldown only when reconstructed RED
+  metrics confirm the historical panic marker. Incomplete marker metrics fail
+  loudly, and ignored markers are logged/observable instead of silently keeping
+  a stale bad cooldown alive.
+- After deploying PRs #856/#857 to VPS5, all five configured bots were
+  restarted and left running on `v8@7c199df1`. A read-only smoke reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`, and
+  `processes.config_checks.ok=true`.
+- The same smoke showed the remaining live startup-readiness gap more
+  precisely: Binance, Kucoin, GateIO, and OKX had emitted
+  `hsl.replay.started` but not `hsl.replay.progress`/`completed` after the
+  restart window, meaning they were still blocked inside HSL balance/equity
+  history assembly before the per-pair replay loop. That gap is now the driver
+  for the next observability slice.
 - Current ledger catch-up through PR #854:
   - PR #836 updated this progress ledger after the realized-loss gate event
     slice.
