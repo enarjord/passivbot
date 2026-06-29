@@ -2991,7 +2991,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         )
         _emit_hsl_replay_event(
             self,
-            "hsl.replay.completed",
+            EventTypes.HSL_REPLAY_COMPLETED,
             {
                 "signal_mode": "coin",
                 "stage": "full_replay",

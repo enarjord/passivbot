@@ -2159,6 +2159,41 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
             ),
         ],
     )
+    _write_ndjson(
+        tmp_path
+        / "monitor"
+        / "kucoin"
+        / "kucoin_01"
+        / "events"
+        / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.started",
+                seq=8,
+                ts=8000,
+                exchange="kucoin",
+                user="kucoin_01",
+                reason_code="coin_history_replay",
+                level="debug",
+                status="started",
+                data={"signal_mode": "coin", "lookback_days": 30.0},
+            ),
+            _monitor_row(
+                event_type="hsl.replay.failed",
+                seq=9,
+                ts=9000,
+                exchange="kucoin",
+                user="kucoin_01",
+                reason_code="shutdown_cancelled",
+                level="debug",
+                status="failed",
+                data={
+                    "signal_mode": "coin",
+                    "elapsed_s": 1.0,
+                },
+            ),
+        ],
+    )
 
     report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
     summary = summarize_live_smoke_report(report)
@@ -2167,15 +2202,19 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     assert report["ok"] is True
     assert report["attention"] is True
     assert report["hard_failures"] == 0
+    assert report["attention_sources"]["problem_events"] == 1
     assert report["attention_sources"]["hsl_replay_active_bots"] == 1
+    assert report["attention_sources"]["hsl_replay_failed_bots"] == 1
+    assert report["attention_sources"]["total"] == 3
     assert report["hsl_replay_health"]["active_bots"] == 1
     assert report["hsl_replay_health"]["completed_bots"] == 1
-    assert report["hsl_replay_health"]["failed_bots"] == 1
+    assert report["hsl_replay_health"]["failed_bots"] == 2
+    assert report["hsl_replay_health"]["failed_attention_bots"] == 1
     assert report["hsl_replay_health"]["event_types"] == {
         "hsl.replay.progress": 2,
-        "hsl.replay.started": 3,
+        "hsl.replay.started": 4,
         "hsl.replay.completed": 1,
-        "hsl.replay.failed": 1,
+        "hsl.replay.failed": 2,
     }
     active_group = report["hsl_replay_health"]["groups"][0]
     assert active_group["bot"] == "gateio/gateio_01"
@@ -2208,17 +2247,25 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     assert failed_group["active"] is False
     assert failed_group["failed"]["event_type"] == "hsl.replay.failed"
     assert failed_group["failed"]["status"] == "failed"
+    shutdown_group = next(
+        group
+        for group in report["hsl_replay_health"]["groups"]
+        if group["bot"] == "kucoin/kucoin_01"
+    )
+    assert shutdown_group["active"] is False
+    assert shutdown_group["failed"]["reason_code"] == "shutdown_cancelled"
     assert brief["hsl_replay"] == {
-        "total": 7,
-        "bots": 3,
+        "total": 9,
+        "bots": 4,
         "active_bots": 1,
         "completed_bots": 1,
-        "failed_bots": 1,
+        "failed_bots": 2,
+        "failed_attention_bots": 1,
         "event_types": {
             "hsl.replay.progress": 2,
-            "hsl.replay.started": 3,
+            "hsl.replay.started": 4,
             "hsl.replay.completed": 1,
-            "hsl.replay.failed": 1,
+            "hsl.replay.failed": 2,
         },
     }
 
