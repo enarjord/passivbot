@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f09c79887` after PR #874, `Record HSL anchor and query progress`.
+- `fda17fad1` after PR #875, `Scope live event queries by exchange and user`.
 
 Current review gate:
 
@@ -30,6 +30,34 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #875 at `fda17fad1`.
+- PR #875 added read-only `passivbot tool live-event-query --exchange` and
+  `--user` filters plus conservative monitor-root path pruning, so incident
+  queries can focus one VPS account without scanning unrelated bot directories
+  when the root has the standard `<monitor>/<exchange>/<user>/events` layout.
+  Direct file and direct `events/` directory workflows remain readable and use
+  row-level filtering. The slice did not add event producers, exchange calls,
+  cache mutation, readiness gates, console routing, order/risk logic, or trading
+  behavior.
+- PR #875 passed the normal review gate: Claude approved head `6d70eacd`,
+  Hermes approved head `6d70eacd`, and CI was green. Local validation covered
+  the full `tests/test_live_event_query.py` suite, compileall for touched files,
+  `git diff --check`, and the silent-handling scan on touched files.
+- After deploying PR #875 to VPS5, the bots were not restarted because the
+  change was read-only query tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@fda17fad` reported
+  `ok=true`, `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected_count=0`,
+  clean tracked repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Known non-hard attention remained
+  from EMA readiness and HSL status groups.
+- Follow-up gap: a focused Gate.io/ZEC query using exchange/user scoping,
+  `hsl.status`, `data_eq symbol=ZEC/USDT:USDT`, `--recent-minutes 180`, and
+  `--include-rotated` still ran for roughly two minutes before manual
+  interruption. No probe process was left running afterward. This shows
+  exchange/user path pruning is useful but not sufficient for rotated incident
+  queries; the next operator tooling slice should add safer time-bounded
+  rotated scanning or an event index.
 - Repository pulled through PR #874 at `f09c79887`.
 - PR #874 was progress-ledger-only and recorded the HSL anchor/query evidence
   after PR #873. No live bot restart was needed. All five configured
