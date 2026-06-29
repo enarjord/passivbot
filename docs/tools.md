@@ -147,6 +147,12 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   local HSL status/cooldown observations when present, while explicitly marking current
   drawdown and startup panic-order prediction unavailable unless a future slice adds safe
   local replay inputs.
+- `passivbot tool live-event-query` validates and queries local structured monitor event
+  segments. It is read-only and does not contact exchanges. Use `--event-type`,
+  `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`, `--data-eq`, and time-window
+  filters to reconstruct incident slices. Use `--exchange EXCHANGE` and `--user USER` to
+  focus one monitor account and prune unrelated monitor paths before scanning; `--bot-id`
+  remains available for event-envelope bot IDs.
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
