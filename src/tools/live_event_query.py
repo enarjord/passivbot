@@ -128,6 +128,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--data-eq",
+        action="append",
+        help=(
+            "Return compact records whose top-level event data field exactly "
+            "matches key=value. May be repeated; filters are ANDed."
+        ),
+    )
+    parser.add_argument(
         "--since-ms",
         type=int,
         help="Only include live events with monitor ts at or after this epoch-ms value.",
@@ -212,32 +220,36 @@ def main(argv: list[str] | None = None) -> int:
         since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
     if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
-    report = build_event_report(
-        args.path,
-        cycle_id=args.cycle_id,
-        event_type=args.event_types,
-        bot_id=args.bot_id,
-        snapshot_id=args.snapshot_id,
-        plan_id=args.plan_id,
-        action_id=args.action_id,
-        order_wave_id=args.order_wave_id,
-        remote_call_id=args.remote_call_id,
-        remote_call_group_id=args.remote_call_group_id,
-        symbol=args.symbol,
-        pside=args.pside,
-        reason_code=args.reason_code,
-        status=args.status,
-        tag=args.tag,
-        since_ms=since_ms,
-        until_ms=args.until_ms,
-        limit=args.limit,
-        include_data=bool(args.include_data),
-        include_rotated=bool(args.include_rotated),
-        timeline=bool(args.timeline),
-        trace_summary=bool(args.trace_summary),
-        order_trace=bool(args.order_trace),
-        cycle_trace=bool(args.cycle_trace),
-    )
+    try:
+        report = build_event_report(
+            args.path,
+            cycle_id=args.cycle_id,
+            event_type=args.event_types,
+            bot_id=args.bot_id,
+            snapshot_id=args.snapshot_id,
+            plan_id=args.plan_id,
+            action_id=args.action_id,
+            order_wave_id=args.order_wave_id,
+            remote_call_id=args.remote_call_id,
+            remote_call_group_id=args.remote_call_group_id,
+            symbol=args.symbol,
+            pside=args.pside,
+            reason_code=args.reason_code,
+            status=args.status,
+            tag=args.tag,
+            data_eq=args.data_eq,
+            since_ms=since_ms,
+            until_ms=args.until_ms,
+            limit=args.limit,
+            include_data=bool(args.include_data),
+            include_rotated=bool(args.include_rotated),
+            timeline=bool(args.timeline),
+            trace_summary=bool(args.trace_summary),
+            order_trace=bool(args.order_trace),
+            cycle_trace=bool(args.cycle_trace),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 

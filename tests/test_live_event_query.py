@@ -426,6 +426,73 @@ def test_event_query_filters_by_tags(tmp_path):
     assert risk_report["cycle"]["events"][0]["event_type"] == "risk.hsl_status"
 
 
+def test_event_query_filters_by_top_level_data_fields(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_finalized_without_order",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                tags=["risk", "hsl"],
+                data={
+                    "stop_event_anchor_source": "current_time_fallback",
+                    "stop_event_anchor_fallback_used": True,
+                    "flat_confirmations": 2,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.red_finalized_without_order",
+                cycle_id="cy_2",
+                seq=2,
+                ts=1100,
+                symbol="XLM/USDT:USDT",
+                pside="long",
+                tags=["risk", "hsl"],
+                data={
+                    "stop_event_anchor_source": "panic_fill",
+                    "stop_event_anchor_fallback_used": False,
+                    "flat_confirmations": 2,
+                },
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        event_type="hsl.red_finalized_without_order",
+        tag="hsl",
+        data_eq=[
+            "stop_event_anchor_source=current_time_fallback",
+            "stop_event_anchor_fallback_used=true",
+        ],
+        include_data=True,
+    )
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {
+        "data_eq": {
+            "stop_event_anchor_fallback_used": ["true"],
+            "stop_event_anchor_source": ["current_time_fallback"],
+        },
+        "event_types": ["hsl.red_finalized_without_order"],
+        "tags": ["hsl"],
+    }
+    assert report["query"]["matched_events"] == 1
+    event = report["query"]["events"][0]
+    assert event["symbol"] == "ZEC/USDT:USDT"
+    assert event["data"]["stop_event_anchor_source"] == "current_time_fallback"
+
+
+def test_event_query_rejects_malformed_data_eq_filter(tmp_path):
+    with pytest.raises(ValueError, match="key=value"):
+        build_event_report(tmp_path, data_eq="missing_equals")
+
+
 def test_event_query_filters_by_remaining_event_ids(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -973,6 +1040,61 @@ def test_live_event_query_cli_accepts_time_window(tmp_path, capsys):
     assert report["query"]["filters"] == {"since_ms": 1100, "until_ms": 1300}
     assert report["query"]["matched_events"] == 1
     assert report["query"]["events"][0]["seq"] == 2
+
+
+def test_live_event_query_cli_accepts_data_eq_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_finalized_without_order",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                data={"stop_event_anchor_source": "current_time_fallback"},
+            ),
+            _monitor_row(
+                event_type="hsl.red_finalized_without_order",
+                cycle_id="cy_2",
+                seq=2,
+                ts=1100,
+                data={"stop_event_anchor_source": "panic_fill"},
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--event-type",
+                "hsl.red_finalized_without_order",
+                "--data-eq",
+                "stop_event_anchor_source=current_time_fallback",
+                "--include-data",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {
+        "data_eq": {"stop_event_anchor_source": ["current_time_fallback"]},
+        "event_types": ["hsl.red_finalized_without_order"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["data"]["stop_event_anchor_source"] == (
+        "current_time_fallback"
+    )
+
+
+def test_live_event_query_cli_rejects_malformed_data_eq_filter(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_event_query.main([str(tmp_path), "--data-eq", "missing_equals"])
+
+    assert exc_info.value.code == 2
+    assert "key=value" in capsys.readouterr().err
 
 
 def test_live_event_query_cli_accepts_recent_minutes(tmp_path, capsys, monkeypatch):
