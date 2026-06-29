@@ -381,6 +381,47 @@ class TestGetRealizedPnlCumsumStats:
         result = bot._equity_hard_stop_realized_pnl_now()
         assert result == pytest.approx(45.0)
 
+    def test_equity_hard_stop_blocks_unified_replay_with_balance_override(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "unified"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": False},
+        }
+
+        with pytest.raises(RuntimeError, match="unsafe with balance_override"):
+            bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+    def test_equity_hard_stop_allows_coin_replay_with_balance_override(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "coin"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": True},
+        }
+
+        bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+    @pytest.mark.asyncio
+    async def test_equity_hard_stop_startup_guard_runs_before_history_replay(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "pside"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": False},
+        }
+
+        async def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("history replay should not start")
+
+        bot.get_balance_equity_history = fail_if_called
+
+        with pytest.raises(RuntimeError, match="false RED panic"):
+            await bot._equity_hard_stop_initialize_from_history()
+
 
 # ---------------------------------------------------------------------------
 # _log_realized_loss_gate_blocks

@@ -2638,6 +2638,12 @@ class Passivbot:
     _parse_hsl_config = pb_hsl._parse_hsl_config
     _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
     _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
+    _equity_hard_stop_balance_override_active = (
+        pb_hsl._equity_hard_stop_balance_override_active
+    )
+    _equity_hard_stop_validate_balance_source_for_history_replay = (
+        pb_hsl._equity_hard_stop_validate_balance_source_for_history_replay
+    )
     _equity_hard_stop_cooldown_position_policy = (
         pb_hsl._equity_hard_stop_cooldown_position_policy
     )
