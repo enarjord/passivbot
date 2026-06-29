@@ -1385,7 +1385,26 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     ) == sorted(bot.c_mults)
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_PROGRESS]
-    assert [event.reason_code for event in events] == [
+    batch_events = [
+        event
+        for event in events
+        if event.reason_code
+        not in {
+            ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED,
+            ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
+        }
+    ]
+    symbol_started_events = [
+        event
+        for event in events
+        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED
+    ]
+    symbol_completed_events = [
+        event
+        for event in events
+        if event.reason_code == ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED
+    ]
+    assert [event.reason_code for event in batch_events] == [
         ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
         ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
         ReasonCodes.HSL_PRICE_HISTORY_FETCH_COMPLETED,
@@ -1394,12 +1413,26 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     ]
     assert {event.cycle_id for event in events} == {"cy_hsl_history_build"}
     assert {event.data["signal_mode"] for event in events} == {"coin"}
-    assert events[0].data["fill_events"] == 3
-    assert events[1].data["price_replay_symbols"] == 3
-    assert events[2].data["priced_symbols"] == 3
-    assert events[3].data["history_minutes"] >= 3
-    assert events[4].data["timeline_rows"] == events[3].data["history_minutes"]
-    assert events[4].data["timeline_replay_elapsed_s"] is not None
+    assert batch_events[0].data["fill_events"] == 3
+    assert batch_events[1].data["price_replay_symbols"] == 3
+    assert batch_events[2].data["priced_symbols"] == 3
+    assert batch_events[3].data["history_minutes"] >= 3
+    assert (
+        batch_events[4].data["timeline_rows"]
+        == batch_events[3].data["history_minutes"]
+    )
+    assert batch_events[4].data["timeline_replay_elapsed_s"] is not None
+    assert {event.symbol for event in symbol_started_events} == set(bot.c_mults)
+    assert {event.symbol for event in symbol_completed_events} == set(bot.c_mults)
+    assert {event.status for event in symbol_started_events} == {"started"}
+    assert {event.status for event in symbol_completed_events} == {"succeeded"}
+    assert {event.data["timeframe"] for event in symbol_completed_events} == {"1m"}
+    assert {event.data["rows"] for event in symbol_completed_events} == {3}
+    assert all(
+        event.data["stage"] == "price_history_symbol_fetch_completed"
+        for event in symbol_completed_events
+    )
+    assert all("elapsed_s" in event.data for event in symbol_completed_events)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
