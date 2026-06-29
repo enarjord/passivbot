@@ -60,6 +60,7 @@ class EventTypes:
     BOT_SHUTDOWN_STAGE = "bot.shutdown.stage"
     BOT_STOPPED = "bot.stopped"
     HEALTH_SUMMARY = "health.summary"
+    MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED = "market.snapshot_diagnostic_skipped"
     CYCLE_STARTED = "cycle.started"
     CYCLE_COMPLETED = "cycle.completed"
     CYCLE_DEGRADED = "cycle.degraded"
@@ -155,6 +156,7 @@ class EventTags:
     HEALTH = "health"
     LOAD = "load"
     LOGGING = "logging"
+    MARKET = "market"
     MODE = "mode"
     ORDER = "order"
     PLANNING = "planning"
@@ -198,6 +200,7 @@ class ReasonCodes:
     LENGTH_MISMATCH = "length_mismatch"
     LIMIT_ORDER_CREATE_MARKET_DISTANCE = "limit_order_create_market_distance"
     LOW_BALANCE = "low_balance"
+    MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED = "market_snapshot_diagnostic_skipped"
     MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
     NEW_FILL = "new_fill"
     OPEN_TAIL_PROJECTION = "open_tail_projection"
@@ -596,6 +599,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
     EventTypes.HEALTH_SUMMARY: EventRoute(console=False, text=False),
+    EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.CYCLE_STARTED: EventRoute(
         console=True, text=True, throttle_interval_ms=60_000
     ),

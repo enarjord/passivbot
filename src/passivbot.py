@@ -680,6 +680,9 @@ class Passivbot:
     )
     _emit_position_changed_event = live_event_emitters.emit_position_changed_event
     _emit_health_summary_event = live_event_emitters.emit_health_summary_event
+    _emit_market_snapshot_diagnostic_skipped_event = (
+        live_event_emitters.emit_market_snapshot_diagnostic_skipped_event
+    )
     _emit_execution_loop_error_burst_event = (
         live_event_emitters.emit_execution_loop_error_burst_event
     )
@@ -10177,6 +10180,11 @@ class Passivbot:
     ) -> bool:
         if not self._is_market_snapshot_error(exc):
             return False
+        emit_market_snapshot_event = getattr(
+            self, "_emit_market_snapshot_diagnostic_skipped_event", None
+        )
+        if callable(emit_market_snapshot_event):
+            emit_market_snapshot_event(context=context, error=exc)
         logging.warning("[market] skipped %s | error=%s", context, exc)
         return True
 
