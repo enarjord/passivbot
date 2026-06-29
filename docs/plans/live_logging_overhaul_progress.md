@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b6cd3b9e` after PR #870, `Record HSL flat finalization anchor source`.
+- `20351283` after PR #873, `Filter live event queries by data fields`.
 
 Current review gate:
 
@@ -30,6 +30,53 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #873 at `20351283`.
+- PR #873 added `passivbot tool live-event-query --data-eq key=value`, a
+  repeated top-level live-event `data` equality filter. It lets operators query
+  exact event subsets such as `stop_event_anchor_source=current_time_fallback`
+  or `tier=red` without changing event producers or forcing payload data into
+  compact output unless `--include-data` is requested. The slice is
+  query/tooling-only and does not add exchange calls, cache mutation, readiness
+  gates, console routing, order/risk logic, or trading behavior.
+- PR #873 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation covered the full `tests/test_live_event_query.py`
+  suite, focused data-filter API/CLI tests, compileall for touched files,
+  `git diff --check`, and the silent-handling scan on touched files.
+- After deploying PR #873 to VPS5, the bots were not restarted because the
+  change was read-only query tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@20351283` reported
+  `ok=true`, `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected_count=0`,
+  clean tracked repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. A live event-query probe against
+  VPS5 monitor artifacts with `--event-type hsl.status --data-eq tier=red`
+  returned matching ZEC red cooldown events and reported `ok=true`, proving the
+  new filter works on current monitor output. Remaining attention came from
+  known non-hard EMA readiness groups and existing HSL status/cooldown groups.
+- Repository pulled through PR #872 at `c45537c1`.
+- PR #872 added the bounded `risk_events.hsl_flat_finalization_anchors`
+  aggregate to `live-smoke-report` full, summary, and brief outputs. It rolls
+  up existing `hsl.red_finalized_without_order` anchor-source labels and
+  current-time-fallback counts, making fallback-heavy flat HSL finalizations
+  visible at window level without opening individual event payloads. The slice
+  is report-only and does not add event producers, exchange calls, cache
+  mutation, readiness gates, console routing, order/risk logic, or trading
+  behavior.
+- PR #872 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation covered the full `tests/test_live_smoke_report.py`
+  suite, focused smoke-report summary/brief CLI tests, compileall for touched
+  files, and `git diff --check`.
+- After deploying PR #872 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@c45537c1` reported
+  `ok=true`, `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected_count=0`,
+  clean tracked repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. A focused 180-minute brief smoke
+  confirmed the new `hsl_flat_finalization_anchors` section was present; no
+  flat-finalization anchor events were present in that sampled window
+  (`total=0`). Remaining attention came from known non-hard EMA readiness
+  groups and existing HSL status/cooldown groups.
 - Repository pulled through PR #870 at `b6cd3b9e`.
 - PR #870 added bounded anchor provenance to existing
   `hsl.red_finalized_without_order` events and `live-smoke-report` risk-event
