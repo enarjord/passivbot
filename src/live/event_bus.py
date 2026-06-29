@@ -193,6 +193,7 @@ class ReasonCodes:
     FILL_CACHE_READY = "fill_cache_ready"
     INITIAL_ENTRY_DISTANCE_GATE = "initial_entry_distance_gate"
     LENGTH_MISMATCH = "length_mismatch"
+    LIMIT_ORDER_CREATE_MARKET_DISTANCE = "limit_order_create_market_distance"
     LOW_BALANCE = "low_balance"
     MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
     NEW_FILL = "new_fill"
