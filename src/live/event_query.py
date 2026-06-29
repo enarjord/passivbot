@@ -77,16 +77,7 @@ def discover_event_files(
     exchange_filter = _normalize_filter_values(exchange)
     user_filter = _normalize_filter_values(user)
     if path.is_file():
-        return (
-            [path]
-            if _is_event_segment(path)
-            and _monitor_path_scope_matches(
-                path,
-                exchange_filter=exchange_filter,
-                user_filter=user_filter,
-            )
-            else []
-        )
+        return [path] if _is_event_segment(path) else []
     if not path.exists():
         raise FileNotFoundError(str(path))
     if not path.is_dir():
@@ -99,7 +90,8 @@ def discover_event_files(
             and candidate.parent.name == "events"
             and _is_event_segment(candidate)
             and (include_rotated or candidate.name == "current.ndjson")
-            and _monitor_path_scope_matches(
+            and _monitor_path_scope_matches_under_root(
+                path,
                 candidate,
                 exchange_filter=exchange_filter,
                 user_filter=user_filter,
@@ -156,16 +148,23 @@ def _monitor_path_bot_id(path: Path) -> str | None:
     return f"{exchange}/{user}"
 
 
-def _monitor_path_scope_matches(
+def _monitor_path_scope_matches_under_root(
+    root: Path,
     path: Path,
     *,
     exchange_filter: set[str],
     user_filter: set[str],
 ) -> bool:
-    scope = _monitor_path_exchange_user(path)
-    if scope is None:
+    """Conservatively prune only obvious <monitor>/<exchange>/<user>/events files."""
+    if not exchange_filter and not user_filter:
         return True
-    exchange, user = scope
+    try:
+        relative_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    if len(relative_parts) != 4 or relative_parts[2] != "events":
+        return True
+    exchange, user = relative_parts[0], relative_parts[1]
     return _filter_matches(exchange, exchange_filter) and _filter_matches(
         user,
         user_filter,

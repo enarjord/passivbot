@@ -49,7 +49,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--exchange",
         action="append",
         help=(
-            "Return compact records for one exchange and prune matching monitor "
+            "Return compact records for one exchange and prune unrelated monitor "
             "paths before scanning. May be repeated or comma-separated."
         ),
     )
@@ -57,7 +57,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--user",
         action="append",
         help=(
-            "Return compact records for one user/account and prune matching "
+            "Return compact records for one user/account and prune unrelated "
             "monitor paths before scanning. May be repeated or comma-separated."
         ),
     )

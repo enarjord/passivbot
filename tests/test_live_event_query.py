@@ -752,6 +752,37 @@ def test_event_query_filters_exchange_user_and_prunes_monitor_paths(tmp_path):
     assert report["query"]["events"][0]["ids"]["cycle_id"] == "cy_gateio"
 
 
+def test_event_query_exchange_user_filter_keeps_direct_events_dir(tmp_path):
+    events_dir = tmp_path / "ad_hoc" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_gateio",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+
+    report = build_event_report(
+        events_dir,
+        exchange="gateio",
+        user="gateio_01",
+        event_type="hsl.red_triggered",
+    )
+
+    assert report["ok"] is True
+    assert report["files_scanned"] == 1
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["exchange"] == "gateio"
+    assert report["query"]["events"][0]["user"] == "gateio_01"
+
+
 def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
