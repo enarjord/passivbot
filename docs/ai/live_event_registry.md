@@ -46,6 +46,8 @@ across time.
 - `execution.create_sent`
 - `execution.create_skipped`
 - `execution.create_succeeded`
+- `entry.initial_distance_gate_blocked`
+- `entry.initial_distance_gate_cleared`
 - `entry.min_effective_cost_blocked`
 - `fill.ingested`
 - `fills.refresh_summary`
@@ -144,6 +146,7 @@ across time.
 - `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`
 - `fill_cache_ready`
+- `initial_entry_distance_gate`
 - `length_mismatch`
 - `low_balance`
 - `min_effective_cost_blocked`

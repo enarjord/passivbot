@@ -97,6 +97,8 @@ class EventTypes:
     EXECUTION_CREATE_REJECTED = "execution.create_rejected"
     EXECUTION_CREATE_DEFERRED = "execution.create_deferred"
     EXECUTION_CREATE_SKIPPED = "execution.create_skipped"
+    ENTRY_INITIAL_DISTANCE_GATE_BLOCKED = "entry.initial_distance_gate_blocked"
+    ENTRY_INITIAL_DISTANCE_GATE_CLEARED = "entry.initial_distance_gate_cleared"
     ENTRY_MIN_EFFECTIVE_COST_BLOCKED = "entry.min_effective_cost_blocked"
     EXECUTION_CANCEL_SENT = "execution.cancel_sent"
     EXECUTION_CANCEL_SUCCEEDED = "execution.cancel_succeeded"
@@ -187,6 +189,7 @@ class ReasonCodes:
     EXCHANGE_TIME_SYNC_UNAVAILABLE = "exchange_time_sync_unavailable"
     EXECUTION_LOOP_ERROR_BURST = "execution_loop_error_burst"
     FILL_CACHE_READY = "fill_cache_ready"
+    INITIAL_ENTRY_DISTANCE_GATE = "initial_entry_distance_gate"
     LENGTH_MISMATCH = "length_mismatch"
     LOW_BALANCE = "low_balance"
     MIN_EFFECTIVE_COST_BLOCKED = "min_effective_cost_blocked"
@@ -323,6 +326,8 @@ PHASE1_EVENT_TYPES = {
     EventTypes.EXECUTION_CREATE_REJECTED,
     EventTypes.EXECUTION_CREATE_DEFERRED,
     EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
     EventTypes.EXECUTION_CANCEL_SENT,
     EventTypes.EXECUTION_CANCEL_SUCCEEDED,
@@ -618,6 +623,12 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=False, text=False),
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: EventRoute(
+        console=False, text=False
+    ),
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
