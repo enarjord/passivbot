@@ -15,11 +15,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-28.
+Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `17962106` after PR #835, `Emit realized loss gate block events`.
+- `b207bb42` after PR #842, `Document entry cooldown event registry`.
 
 Current review gate:
 
@@ -30,6 +30,28 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Current ledger catch-up through PR #842:
+  - PR #836 updated this progress ledger after the realized-loss gate event
+    slice.
+  - PR #837 added structured `entry.min_effective_cost_blocked` events for
+    min-effective-cost entry skips, routed away from console/text by default and
+    covered by event-registry and live-event tests.
+  - PR #838 added structured initial-entry distance gate blocked/cleared events
+    with throttled producer behavior and focused regression tests.
+  - PR #839 was a trading-safety interruption, not a logging slice: it guards
+    account-level `unified`/`pside` HSL replay when balance override is active
+    and anchors replay realized PnL to the lookback window.
+  - PR #840 documented the HSL false-panic recovery follow-up in the live ops
+    backlog and incident report.
+  - PR #841 added preflight detection for unsafe account-level HSL replay with
+    balance override, aligned with the runtime guard from PR #839.
+  - PR #842 added structured
+    `risk.entry_cooldown_delta_anchored` events and registry/report support for
+    entry-cooldown anchor updates.
+- This progress ledger has not yet recorded fresh VPS5 deployment/smoke
+  evidence for PRs #837 through #842. The next VPS5 smoke should verify the
+  remote repository head and distinguish normal logging-slice validation from
+  the separate HSL safety guard behavior.
 - Repository pulled through PR #835 at `17962106`.
 - Bots were not restarted for PR #835 because the change is an observability-only
   structured event and report aggregation slice. All five configured
