@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes
+from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
 from live.event_query import build_event_report, discover_event_files
 
 
@@ -2001,10 +2001,47 @@ def _hsl_replay_group_active(group: dict[str, Any]) -> bool:
     }
 
 
+def _hsl_replay_latest_event_age_ms(
+    record: dict[str, Any],
+    *,
+    report_ts_ms: int,
+) -> int | None:
+    ts = _non_negative_int(record.get("ts"))
+    if ts is None:
+        return None
+    return int(max(0, int(report_ts_ms) - int(ts)))
+
+
+def _with_hsl_replay_active_age(
+    group: dict[str, Any],
+    *,
+    report_ts_ms: int,
+) -> dict[str, Any]:
+    latest = group.get("latest")
+    if not _hsl_replay_group_active(group) or not isinstance(latest, dict):
+        return group
+    age_ms = _hsl_replay_latest_event_age_ms(latest, report_ts_ms=report_ts_ms)
+    if age_ms is None:
+        return group
+    out = dict(group)
+    latest_out = dict(latest)
+    derived = latest_out.get("derived")
+    derived_out = dict(derived) if isinstance(derived, dict) else {}
+    derived_out["latest_event_age_ms"] = int(age_ms)
+    latest_out["derived"] = derived_out
+    out["latest"] = latest_out
+    out["active_latest_event_age_ms"] = int(age_ms)
+    return out
+
+
 def _summarize_hsl_replay_health(
     groups: dict[str, dict[str, Any]],
     event_type_counts: Counter[str],
+    *,
+    report_ts_ms: int | None = None,
 ) -> dict[str, Any]:
+    if report_ts_ms is None:
+        report_ts_ms = utc_ms()
     ordered = sorted(
         groups.values(),
         key=lambda item: (
@@ -2058,6 +2095,10 @@ def _summarize_hsl_replay_health(
             "completed": completed,
             "failed": failed,
         }
+        public_group = _with_hsl_replay_active_age(
+            public_group,
+            report_ts_ms=int(report_ts_ms),
+        )
         compact_groups.append(
             {
                 key: value
@@ -3018,6 +3059,7 @@ def _scan_events(
     until_ms: int | None = None,
 ) -> dict[str, Any]:
     files = discover_event_files(root, include_rotated=include_rotated)
+    report_ts_ms = utc_ms()
     bots: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "events": 0,
@@ -3291,6 +3333,7 @@ def _scan_events(
         "hsl_replay_health": _summarize_hsl_replay_health(
             hsl_replay_health_groups,
             hsl_replay_health_event_type_counts,
+            report_ts_ms=report_ts_ms,
         ),
         "risk_events": _summarize_risk_events(
             risk_event_groups,

@@ -2015,7 +2015,8 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     }
 
 
-def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
+def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
+    monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 65000)
     _write_ndjson(
         tmp_path
         / "monitor"
@@ -2231,6 +2232,7 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     active_group = report["hsl_replay_health"]["groups"][0]
     assert active_group["bot"] == "gateio/gateio_01"
     assert active_group["active"] is True
+    assert active_group["active_latest_event_age_ms"] == 60000
     assert active_group["latest"]["symbol"] == "ZEC/USDT:USDT"
     assert active_group["latest"]["data"]["timeframe"] == "1m"
     assert active_group["latest"]["data"]["history_minutes"] == 43201
@@ -2242,6 +2244,7 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     assert active_group["latest"]["data"]["end_ts"] == 1782492600000
     assert active_group["latest"]["data"]["record_start_ts"] == 1782492000000
     assert active_group["latest"]["derived"]["history_build_elapsed_ms"] == 255750
+    assert active_group["latest"]["derived"]["latest_event_age_ms"] == 60000
     assert active_group["latest"]["derived"]["price_history_fetch_elapsed_ms"] == 210500
     assert active_group["latest"]["derived"]["timeline_replay_elapsed_ms"] == 12250
     assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
