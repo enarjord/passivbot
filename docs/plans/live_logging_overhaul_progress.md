@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `a5af777c` after PR #868, `Surface HSL flat finalizations in live reports`.
+- `b6cd3b9e` after PR #870, `Record HSL flat finalization anchor source`.
 
 Current review gate:
 
@@ -30,6 +30,26 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #870 at `b6cd3b9e`.
+- PR #870 added bounded anchor provenance to existing
+  `hsl.red_finalized_without_order` events and `live-smoke-report` risk-event
+  projections. Flat HSL finalizations now distinguish `panic_fill`,
+  `provided_stop_event`, and `current_time_fallback` anchors without changing
+  stop timestamp selection, cooldown math, latch writes, exchange calls,
+  readiness gates, order creation, or console routing.
+- PR #870 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation in a detached worktree covered
+  `tests/test_live_smoke_report.py`, focused coin-HSL flat-finalization anchor
+  tests, the existing panic-fill timestamp safeguard test, compileall for
+  touched files, and `git diff --check`.
+- After deploying PR #870 to VPS5, the bots were not restarted because the
+  change was observability-only. All five configured `passivbot live` processes
+  remained running. A 5-minute brief smoke on `v8@b6cd3b9e` reported
+  `ok=true`, `hard_failures=0`, `hard_failure_sources.total=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected_count=0`,
+  clean tracked repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Remaining attention came from
+  known non-hard EMA readiness groups and existing HSL cooldown/status groups.
 - Repository pulled through PR #868 at `a5af777c`.
 - PR #868 made the already-emitted `hsl.red_finalized_without_order` event
   visible in the operator-facing report surfaces. `live-smoke-report` now
