@@ -4,6 +4,12 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added a live HSL safety guard: `hsl_signal_mode=unified` or `pside` now
+  fails before account-level equity replay when `balance_override` is active,
+  preventing synthetic historical peaks from triggering false RED panic orders
+  until an explicit HSL baseline/checkpoint exists. HSL history replay also
+  zero-anchors realized-PnL timeline fields at the configured lookback boundary
+  so replayed peaks match the live runtime lookback contract.
 - Added root-level `passivbot -V` and `passivbot --version` output.
 - Added `hsl_replay_health` summaries to
   `passivbot tool live-smoke-report`, so smoke reports show active,

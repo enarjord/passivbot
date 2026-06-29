@@ -3,7 +3,7 @@
 import logging
 import types
 from copy import deepcopy
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
 import pytest
@@ -115,6 +115,31 @@ def _make_bot_with_events(events, balance=10000.0, cache=_DEFAULT_RISK_CACHE):
 def _set_pnl_lookback(bot, *, lookback_days: float | str, now_ms: int) -> None:
     bot.config = {"live": {"pnls_max_lookback_days": lookback_days}}
     bot.get_exchange_time = lambda: now_ms
+
+
+def _make_replay_fill(
+    *,
+    timestamp: int,
+    pnl: float,
+    symbol: str = "BTC/USDT:USDT",
+    position_side: str = "long",
+    side: str = "sell",
+    qty: float = 1.0,
+    price: float = 100.0,
+    fee_paid: float = 0.0,
+    pb_order_type: str = "close_grid_long",
+) -> dict:
+    return {
+        "timestamp": int(timestamp),
+        "symbol": symbol,
+        "position_side": position_side,
+        "side": side,
+        "qty": qty,
+        "price": price,
+        "pnl": pnl,
+        "fee_paid": fee_paid,
+        "pb_order_type": pb_order_type,
+    }
 
 
 def _rust_effective_pnl_cumsum_reference(events, *, start_ms=None):
@@ -380,6 +405,121 @@ class TestGetRealizedPnlCumsumStats:
         bot = _make_bot_with_events([_make_fill_event(50.0, fee_paid=-5.0)])
         result = bot._equity_hard_stop_realized_pnl_now()
         assert result == pytest.approx(45.0)
+
+    def test_equity_hard_stop_blocks_unified_replay_with_balance_override(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "unified"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": False},
+        }
+
+        with pytest.raises(RuntimeError, match="unsafe with balance_override"):
+            bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+    def test_equity_hard_stop_allows_coin_replay_with_balance_override(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "coin"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": True},
+        }
+
+        bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+    @pytest.mark.asyncio
+    async def test_equity_hard_stop_startup_guard_runs_before_history_replay(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "pside"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": False},
+        }
+
+        async def fail_if_called(*_args, **_kwargs):
+            raise AssertionError("history replay should not start")
+
+        bot.get_balance_equity_history = fail_if_called
+
+        with pytest.raises(RuntimeError, match="false RED panic"):
+            await bot._equity_hard_stop_initialize_from_history()
+
+    @pytest.mark.asyncio
+    async def test_balance_equity_history_realized_pnl_is_lookback_anchored(self):
+        day_ms = 86_400_000
+        now_ms = 1_782_700_043_210
+        lookback_start_ms = now_ms - day_ms
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+        bot.init_pnls = AsyncMock()
+        bot.get_exchange_time = lambda: now_ms
+        bot.get_raw_balance = lambda: 1000.0
+        bot.live_value = lambda key: bot.config["live"][key]
+        bot.c_mults = {"BTC/USDT:USDT": 1.0}
+        bot.positions = {}
+        bot.cm = None
+        bot.inverse = False
+        bot.exchange = "binance"
+        bot.user = "test_user"
+        bot.get_symbol_id_inv = lambda symbol: symbol
+        bot._pnls_manager = None
+
+        history = await bot.get_balance_equity_history(
+            fill_events=[
+                _make_replay_fill(timestamp=lookback_start_ms - 60_000, pnl=200.0),
+                _make_replay_fill(timestamp=lookback_start_ms + 60_000, pnl=10.0),
+            ],
+            current_balance=1000.0,
+        )
+
+        assert history["timeline"]
+        last = history["timeline"][-1]
+        assert last["balance"] == pytest.approx(1000.0)
+        assert last["realized_pnl"] == pytest.approx(10.0)
+        assert last["realized_pnl_long"] == pytest.approx(10.0)
+        assert last["realized_pnl_short"] == pytest.approx(0.0)
+        assert last["realized_pnl_by_coin_pside"]["BTC/USDT:USDT"]["long"] == pytest.approx(
+            10.0
+        )
+
+    @pytest.mark.asyncio
+    async def test_balance_equity_history_excludes_same_minute_pre_lookback_pnl(self):
+        day_ms = 86_400_000
+        now_ms = 1_782_700_043_210
+        lookback_start_ms = now_ms - day_ms
+        pre_window_ts = lookback_start_ms - 10_000
+        in_window_ts = lookback_start_ms + 10_000
+        assert pre_window_ts // 60_000 == in_window_ts // 60_000
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+        bot.init_pnls = AsyncMock()
+        bot.get_exchange_time = lambda: now_ms
+        bot.get_raw_balance = lambda: 1000.0
+        bot.live_value = lambda key: bot.config["live"][key]
+        bot.c_mults = {"BTC/USDT:USDT": 1.0}
+        bot.positions = {}
+        bot.cm = None
+        bot.inverse = False
+        bot.exchange = "binance"
+        bot.user = "test_user"
+        bot.get_symbol_id_inv = lambda symbol: symbol
+        bot._pnls_manager = None
+
+        history = await bot.get_balance_equity_history(
+            fill_events=[
+                _make_replay_fill(timestamp=pre_window_ts, pnl=200.0),
+                _make_replay_fill(timestamp=in_window_ts, pnl=10.0),
+            ],
+            current_balance=1000.0,
+        )
+
+        last = history["timeline"][-1]
+        assert last["balance"] == pytest.approx(1000.0)
+        assert last["realized_pnl"] == pytest.approx(10.0)
+        assert last["realized_pnl_long"] == pytest.approx(10.0)
 
 
 # ---------------------------------------------------------------------------

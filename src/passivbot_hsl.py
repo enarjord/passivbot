@@ -470,6 +470,32 @@ def _equity_hard_stop_signal_mode(self) -> str:
     return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "unified"))
 
 
+def _equity_hard_stop_balance_override_active(self) -> bool:
+    return getattr(self, "balance_override", None) is not None
+
+
+def _equity_hard_stop_validate_balance_source_for_history_replay(self) -> None:
+    signal_mode = self._equity_hard_stop_signal_mode()
+    if signal_mode == "coin":
+        return
+    if not self._equity_hard_stop_balance_override_active():
+        return
+    enabled_psides = [
+        pside for pside in self._hsl_psides() if self._equity_hard_stop_enabled(pside)
+    ]
+    if not enabled_psides:
+        return
+    raise RuntimeError(
+        "HSL equity history replay is unsafe with balance_override for "
+        f"signal_mode={signal_mode!r} enabled_psides={','.join(enabled_psides)}. "
+        "Unified/pside HSL reconstructs historical drawdown from current balance "
+        "minus realized PnL; with a balance override this can create a synthetic "
+        "peak and false RED panic. Remove the balance override, use "
+        "hsl_signal_mode='coin', disable HSL, or initialize an explicit HSL "
+        "baseline/checkpoint before live trading."
+    )
+
+
 def _equity_hard_stop_cooldown_position_policy(self) -> str:
     config = getattr(self, "config", {})
     return normalize_hsl_cooldown_position_policy(
@@ -2023,6 +2049,7 @@ def _equity_hard_stop_refresh_halted_runtime_forced_modes(self) -> None:
 async def _equity_hard_stop_initialize_from_history(self) -> None:
     if not self._equity_hard_stop_enabled():
         return
+    self._equity_hard_stop_validate_balance_source_for_history_replay()
     prev_phase = getattr(self, "_log_silence_watchdog_phase", "runtime")
     prev_stage = getattr(self, "_log_silence_watchdog_stage", "idle")
     if hasattr(self, "_set_log_silence_watchdog_context"):

@@ -2638,6 +2638,12 @@ class Passivbot:
     _parse_hsl_config = pb_hsl._parse_hsl_config
     _equity_hard_stop_enabled = pb_hsl._equity_hard_stop_enabled
     _equity_hard_stop_signal_mode = pb_hsl._equity_hard_stop_signal_mode
+    _equity_hard_stop_balance_override_active = (
+        pb_hsl._equity_hard_stop_balance_override_active
+    )
+    _equity_hard_stop_validate_balance_source_for_history_replay = (
+        pb_hsl._equity_hard_stop_validate_balance_source_for_history_replay
+    )
     _equity_hard_stop_cooldown_position_policy = (
         pb_hsl._equity_hard_stop_cooldown_position_policy
     )
@@ -11783,9 +11789,11 @@ class Passivbot:
 
         if lookback_start is None:
             start_ts = ensure_millis(events[0]["timestamp"])
+            record_start_ts = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
             record_start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
         else:
             start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+            record_start_ts = int(lookback_start)
             record_start_minute = int(
                 math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS
             )
@@ -11916,6 +11924,9 @@ class Passivbot:
         missing_price_symbols: set[str] = set()
         realized_pnl_pside_running = {"long": 0.0, "short": 0.0}
         realized_pnl_coin_pside_running: Dict[str, Dict[str, float]] = {}
+        record_start_balance: Optional[float] = None
+        record_start_realized_pnl_pside = {"long": 0.0, "short": 0.0}
+        record_start_realized_pnl_coin_pside: Dict[str, Dict[str, float]] = {}
         actual_symbol_pside_flat = {
             (sym, ps): size <= 1e-12
             for (sym, ps), (size, _price) in current_position_state.items()
@@ -11982,6 +11993,19 @@ class Passivbot:
             panic_fill_count = 0
             while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
                 evt = events[event_idx]
+                if record_start_balance is None and int(evt["timestamp"]) >= record_start_ts:
+                    record_start_balance = float(balance)
+                    record_start_realized_pnl_pside = {
+                        "long": float(realized_pnl_pside_running["long"]),
+                        "short": float(realized_pnl_pside_running["short"]),
+                    }
+                    record_start_realized_pnl_coin_pside = {
+                        sym: {
+                            "long": float(values["long"]),
+                            "short": float(values["short"]),
+                        }
+                        for sym, values in realized_pnl_coin_pside_running.items()
+                    }
                 _apply_event(evt)
                 realized_delta = evt["pnl"] + evt.get("fee", 0.0)
                 balance += realized_delta
@@ -12062,6 +12086,45 @@ class Passivbot:
                     )
                     symbol_upnl[pside] += pside_upnl
             if minute >= record_start_minute:
+                if record_start_balance is None:
+                    record_start_balance = float(balance)
+                    record_start_realized_pnl_pside = {
+                        "long": float(realized_pnl_pside_running["long"]),
+                        "short": float(realized_pnl_pside_running["short"]),
+                    }
+                    record_start_realized_pnl_coin_pside = {
+                        sym: {
+                            "long": float(values["long"]),
+                            "short": float(values["short"]),
+                        }
+                        for sym, values in realized_pnl_coin_pside_running.items()
+                    }
+                realized_pnl_window = float(balance - record_start_balance)
+                realized_pnl_pside_window = {
+                    "long": float(
+                        realized_pnl_pside_running["long"]
+                        - record_start_realized_pnl_pside.get("long", 0.0)
+                    ),
+                    "short": float(
+                        realized_pnl_pside_running["short"]
+                        - record_start_realized_pnl_pside.get("short", 0.0)
+                    ),
+                }
+                realized_pnl_coin_pside_window: Dict[str, Dict[str, float]] = {}
+                for sym in sorted(
+                    set(realized_pnl_coin_pside_running)
+                    | set(record_start_realized_pnl_coin_pside)
+                ):
+                    values = realized_pnl_coin_pside_running.get(
+                        sym, {"long": 0.0, "short": 0.0}
+                    )
+                    anchor = record_start_realized_pnl_coin_pside.get(
+                        sym, {"long": 0.0, "short": 0.0}
+                    )
+                    realized_pnl_coin_pside_window[sym] = {
+                        "long": float(values["long"] - anchor.get("long", 0.0)),
+                        "short": float(values["short"] - anchor.get("short", 0.0)),
+                    }
                 timeline_upnl_by_coin_pside = {
                     sym: {
                         "long": float(values["long"]),
@@ -12080,19 +12143,13 @@ class Passivbot:
                         "balance": balance,
                         "equity": balance + upnl,
                         "unrealized_pnl": upnl,
-                        "realized_pnl": balance - baseline_balance,
+                        "realized_pnl": realized_pnl_window,
                         "unrealized_pnl_long": upnl_by_pside["long"],
                         "unrealized_pnl_short": upnl_by_pside["short"],
-                        "realized_pnl_long": realized_pnl_pside_running["long"],
-                        "realized_pnl_short": realized_pnl_pside_running["short"],
+                        "realized_pnl_long": realized_pnl_pside_window["long"],
+                        "realized_pnl_short": realized_pnl_pside_window["short"],
                         "unrealized_pnl_by_coin_pside": timeline_upnl_by_coin_pside,
-                        "realized_pnl_by_coin_pside": {
-                            sym: {
-                                "long": float(values["long"]),
-                                "short": float(values["short"]),
-                            }
-                            for sym, values in sorted(realized_pnl_coin_pside_running.items())
-                        },
+                        "realized_pnl_by_coin_pside": realized_pnl_coin_pside_window,
                         "is_flat": len(active_symbols) == 0,
                         "is_flat_long": not any(
                             positions.get(sym, {}).get("long", {}).get("size", 0.0)
