@@ -46,6 +46,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--exchange",
+        action="append",
+        help=(
+            "Return compact records for one exchange and prune unrelated monitor "
+            "paths before scanning. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--user",
+        action="append",
+        help=(
+            "Return compact records for one user/account and prune unrelated "
+            "monitor paths before scanning. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--snapshot-id",
         action="append",
         help=(
@@ -225,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
             args.path,
             cycle_id=args.cycle_id,
             event_type=args.event_types,
+            exchange=args.exchange,
+            user=args.user,
             bot_id=args.bot_id,
             snapshot_id=args.snapshot_id,
             plan_id=args.plan_id,

@@ -27,6 +27,8 @@ def _monitor_row(
     tags: list[str] | None = None,
     order_id: str | None = None,
     client_order_id: str | None = None,
+    exchange: str = "binance",
+    user: str = "binance_01",
 ) -> dict:
     event_ids = dict(ids or {})
     if cycle_id is not None:
@@ -38,8 +40,8 @@ def _monitor_row(
         "level": "debug",
         "source": source,
         "component": component,
-        "exchange": "binance",
-        "user": "binance_01",
+        "exchange": exchange,
+        "user": user,
         "symbol": symbol,
         "pside": pside,
         "side": side,
@@ -53,8 +55,8 @@ def _monitor_row(
     payload = {"_live_event": live_event}
     payload.update(live_event["data"])
     row = {
-        "exchange": "binance",
-        "user": "binance_01",
+        "exchange": exchange,
+        "user": user,
         "kind": event_type,
         "tags": list(tags or ["test"]),
         "payload": payload,
@@ -662,6 +664,125 @@ def test_event_query_bot_filter_falls_back_to_monitor_path(tmp_path):
     assert wrong_bot_report["query"]["matched_events"] == 0
 
 
+def test_discover_event_files_filters_monitor_paths_by_exchange_and_user(tmp_path):
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    kucoin_events = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(gateio_events / "current.ndjson", [])
+    _write_gz_ndjson(gateio_events / "20260629.ndjson.gz", [])
+    _write_ndjson(binance_events / "current.ndjson", [])
+    _write_ndjson(kucoin_events / "current.ndjson", [])
+
+    gateio_files = discover_event_files(
+        tmp_path / "monitor",
+        include_rotated=True,
+        exchange="gateio",
+        user="gateio_01",
+    )
+
+    assert [path.name for path in gateio_files] == [
+        "20260629.ndjson.gz",
+        "current.ndjson",
+    ]
+    assert {path.parent.parent.parent.name for path in gateio_files} == {"gateio"}
+    assert {path.parent.parent.name for path in gateio_files} == {"gateio_01"}
+
+    missing_files = discover_event_files(
+        tmp_path / "monitor",
+        exchange="gateio",
+        user="binance_01",
+    )
+
+    assert missing_files == []
+
+
+def test_event_query_filters_exchange_user_and_prunes_monitor_paths(tmp_path):
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_gateio",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                exchange="gateio",
+                user="gateio_01",
+            ),
+        ],
+    )
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_binance",
+                seq=2,
+                ts=1100,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                exchange="binance",
+                user="binance_01",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        exchange="gateio",
+        user="gateio_01",
+        event_type="hsl.red_triggered",
+        symbol="ZEC/USDT:USDT",
+    )
+
+    assert report["ok"] is True
+    assert report["files_scanned"] == 1
+    assert report["query"]["filters"] == {
+        "event_types": ["hsl.red_triggered"],
+        "exchanges": ["gateio"],
+        "symbols": ["ZEC/USDT:USDT"],
+        "users": ["gateio_01"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["exchange"] == "gateio"
+    assert report["query"]["events"][0]["user"] == "gateio_01"
+    assert report["query"]["events"][0]["ids"]["cycle_id"] == "cy_gateio"
+
+
+def test_event_query_exchange_user_filter_keeps_direct_events_dir(tmp_path):
+    events_dir = tmp_path / "ad_hoc" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_gateio",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+
+    report = build_event_report(
+        events_dir,
+        exchange="gateio",
+        user="gateio_01",
+        event_type="hsl.red_triggered",
+    )
+
+    assert report["ok"] is True
+    assert report["files_scanned"] == 1
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["exchange"] == "gateio"
+    assert report["query"]["events"][0]["user"] == "gateio_01"
+
+
 def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -996,6 +1117,65 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
             "ids=cycle_id=cy_9,order_wave_id=ow_9"
         )
     ]
+
+
+def test_live_event_query_cli_accepts_exchange_and_user_filters(tmp_path, capsys):
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        gateio_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.cooldown_started",
+                cycle_id="cy_gateio",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                exchange="gateio",
+                user="gateio_01",
+            )
+        ],
+    )
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.cooldown_started",
+                cycle_id="cy_okx",
+                seq=2,
+                ts=1100,
+                symbol="ZEC/USDT:USDT",
+                exchange="okx",
+                user="okx_faisal",
+            )
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--exchange",
+                "gateio",
+                "--user",
+                "gateio_01",
+                "--event-type",
+                "hsl.cooldown_started",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["files_scanned"] == 1
+    assert report["query"]["filters"] == {
+        "event_types": ["hsl.cooldown_started"],
+        "exchanges": ["gateio"],
+        "users": ["gateio_01"],
+    }
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["exchange"] == "gateio"
+    assert report["query"]["events"][0]["ids"]["cycle_id"] == "cy_gateio"
 
 
 def test_live_event_query_cli_accepts_time_window(tmp_path, capsys):

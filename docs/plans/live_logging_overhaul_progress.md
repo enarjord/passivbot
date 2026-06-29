@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `20351283` after PR #873, `Filter live event queries by data fields`.
+- `f09c79887` after PR #874, `Record HSL anchor and query progress`.
 
 Current review gate:
 
@@ -30,6 +30,16 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #874 at `f09c79887`.
+- PR #874 was progress-ledger-only and recorded the HSL anchor/query evidence
+  after PR #873. No live bot restart was needed. All five configured
+  `passivbot live` processes remained running after the deploy. A 5-minute
+  brief smoke on `v8@f09c79887` reported `ok=true`, `hard_failures=0`,
+  `hard_failure_sources.total=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state,
+  `account_critical_remote_calls.failed=0`, and one non-account-critical
+  remote-call failure. Known non-hard attention remained from EMA readiness and
+  HSL status/cooldown groups.
 - Repository pulled through PR #873 at `20351283`.
 - PR #873 added `passivbot tool live-event-query --data-eq key=value`, a
   repeated top-level live-event `data` equality filter. It lets operators query

@@ -65,9 +65,17 @@ def _event_path_sort_key(path: Path) -> tuple[str, int, str]:
     return (str(path.parent), 1 if path.name == "current.ndjson" else 0, path.name)
 
 
-def discover_event_files(root: str | Path, *, include_rotated: bool = False) -> list[Path]:
+def discover_event_files(
+    root: str | Path,
+    *,
+    include_rotated: bool = False,
+    exchange: str | Iterable[str] | None = None,
+    user: str | Iterable[str] | None = None,
+) -> list[Path]:
     """Find monitor event NDJSON segments below a monitor root, bot root, or events dir."""
     path = Path(root).expanduser()
+    exchange_filter = _normalize_filter_values(exchange)
+    user_filter = _normalize_filter_values(user)
     if path.is_file():
         return [path] if _is_event_segment(path) else []
     if not path.exists():
@@ -82,6 +90,12 @@ def discover_event_files(root: str | Path, *, include_rotated: bool = False) -> 
             and candidate.parent.name == "events"
             and _is_event_segment(candidate)
             and (include_rotated or candidate.name == "current.ndjson")
+            and _monitor_path_scope_matches_under_root(
+                path,
+                candidate,
+                exchange_filter=exchange_filter,
+                user_filter=user_filter,
+            )
         ),
         key=_event_path_sort_key,
     )
@@ -111,8 +125,8 @@ def _event_ids(live_event: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def _monitor_path_bot_id(path: Path) -> str | None:
-    """Return monitor path-derived bot id for .../<exchange>/<user>/events/*.ndjson."""
+def _monitor_path_exchange_user(path: Path) -> tuple[str, str] | None:
+    """Return monitor path-derived exchange/user for .../<exchange>/<user>/events/*.ndjson."""
     if path.parent.name != "events":
         return None
     try:
@@ -122,7 +136,39 @@ def _monitor_path_bot_id(path: Path) -> str | None:
         return None
     if not exchange or not user:
         return None
+    return exchange, user
+
+
+def _monitor_path_bot_id(path: Path) -> str | None:
+    """Return monitor path-derived bot id for .../<exchange>/<user>/events/*.ndjson."""
+    scope = _monitor_path_exchange_user(path)
+    if scope is None:
+        return None
+    exchange, user = scope
     return f"{exchange}/{user}"
+
+
+def _monitor_path_scope_matches_under_root(
+    root: Path,
+    path: Path,
+    *,
+    exchange_filter: set[str],
+    user_filter: set[str],
+) -> bool:
+    """Conservatively prune only obvious <monitor>/<exchange>/<user>/events files."""
+    if not exchange_filter and not user_filter:
+        return True
+    try:
+        relative_parts = path.relative_to(root).parts
+    except ValueError:
+        return True
+    if len(relative_parts) != 4 or relative_parts[2] != "events":
+        return True
+    exchange, user = relative_parts[0], relative_parts[1]
+    return _filter_matches(exchange, exchange_filter) and _filter_matches(
+        user,
+        user_filter,
+    )
 
 
 def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
@@ -197,6 +243,8 @@ def _filter_report(
     *,
     cycle_id: str | None,
     event_types: set[str],
+    exchanges: set[str],
+    users: set[str],
     bot_ids: set[str],
     snapshot_ids: set[str],
     plan_ids: set[str],
@@ -222,6 +270,10 @@ def _filter_report(
         filters["until_ms"] = int(until_ms)
     if event_types:
         filters["event_types"] = sorted(event_types)
+    if exchanges:
+        filters["exchanges"] = sorted(exchanges)
+    if users:
+        filters["users"] = sorted(users)
     if bot_ids:
         filters["bot_ids"] = sorted(bot_ids)
     if snapshot_ids:
@@ -897,6 +949,8 @@ def build_event_report(
     *,
     cycle_id: str | None = None,
     event_type: str | Iterable[str] | None = None,
+    exchange: str | Iterable[str] | None = None,
+    user: str | Iterable[str] | None = None,
     bot_id: str | Iterable[str] | None = None,
     snapshot_id: str | Iterable[str] | None = None,
     plan_id: str | Iterable[str] | None = None,
@@ -935,7 +989,12 @@ def build_event_report(
     window_invalid_ts = 0
     issues: list[EventIssue] = []
     try:
-        files = discover_event_files(root, include_rotated=include_rotated)
+        files = discover_event_files(
+            root,
+            include_rotated=include_rotated,
+            exchange=exchange,
+            user=user,
+        )
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -976,6 +1035,8 @@ def build_event_report(
         include_data=include_data,
     )
     event_type_filter = _normalize_filter_values(event_type)
+    exchange_filter = _normalize_filter_values(exchange)
+    user_filter = _normalize_filter_values(user)
     bot_filter = _normalize_filter_values(bot_id)
     snapshot_filter = _normalize_filter_values(snapshot_id)
     plan_filter = _normalize_filter_values(plan_id)
@@ -992,6 +1053,8 @@ def build_event_report(
     has_non_cycle_filter = any(
         (
             event_type_filter,
+            exchange_filter,
+            user_filter,
             bot_filter,
             snapshot_filter,
             plan_filter,
@@ -1113,10 +1176,23 @@ def build_event_report(
                     record_status = live_event.get("status")
                     record_reason_code = live_event.get("reason_code")
                     record_tags = _event_tags(row, live_event)
+                    path_scope = _monitor_path_exchange_user(path)
+                    record_exchange = live_event.get("exchange") or row.get("exchange")
+                    record_user = live_event.get("user") or row.get("user")
+                    if path_scope is not None:
+                        if record_exchange is None:
+                            record_exchange = path_scope[0]
+                        if record_user is None:
+                            record_user = path_scope[1]
                     event_type_matches = _filter_matches(
                         record_event_type, event_type_filter
                     )
                     cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
+                    exchange_matches = _filter_matches(
+                        record_exchange,
+                        exchange_filter,
+                    )
+                    user_matches = _filter_matches(record_user, user_filter)
                     bot_matches = _filter_matches(
                         ids.get("bot_id") or _monitor_path_bot_id(path), bot_filter
                     )
@@ -1149,6 +1225,8 @@ def build_event_report(
                     query_matches = (
                         event_type_matches
                         and cycle_matches
+                        and exchange_matches
+                        and user_matches
                         and bot_matches
                         and snapshot_matches
                         and plan_matches
@@ -1266,6 +1344,8 @@ def build_event_report(
         query_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            exchanges=exchange_filter,
+            users=user_filter,
             bot_ids=bot_filter,
             snapshot_ids=snapshot_filter,
             plan_ids=plan_filter,
@@ -1302,6 +1382,8 @@ def build_event_report(
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            exchanges=exchange_filter,
+            users=user_filter,
             bot_ids=bot_filter,
             snapshot_ids=snapshot_filter,
             plan_ids=plan_filter,
