@@ -121,7 +121,15 @@ Related detailed plans:
    now embed the existing trace-summary/order-trace reports and cycle traces
    when scoped to `--cycle-id`.
 
-   Remaining refinements: cross-bot incident workflow.
+   Remaining refinements: cross-bot incident workflow; faster bounded rotated
+   scans for incident queries. A 2026-06-29 VPS5 probe after PR #875 showed
+   that `live-event-query --exchange gateio --user gateio_01 --include-rotated`
+   still ran for roughly two minutes on a focused Gate.io/ZEC HSL query before
+   manual interruption. Exchange/user path pruning reduces unrelated bot scans,
+   but rotated incident queries still need either time-aware segment selection,
+   a lightweight local event index, reverse chronological scanning with early
+   stop for bounded `--recent-minutes` queries, or another safe bounded strategy
+   that preserves direct file/events-dir workflows.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
