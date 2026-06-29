@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b207bb42` after PR #842, `Document entry cooldown event registry`.
+- `b207bb42` after PR #842, `Emit entry cooldown delta anchor events`.
 
 Current review gate:
 
