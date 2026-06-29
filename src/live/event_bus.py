@@ -201,6 +201,10 @@ class ReasonCodes:
     OPTIONAL_EMA_DROPPED = "optional_ema_dropped"
     PENDING_EXCHANGE_CONFIG = "pending_exchange_config"
     PERIODIC_HEALTH_SUMMARY = "periodic_health_summary"
+    PRE_CREATE_MARKET_SNAPSHOT_UNAVAILABLE = (
+        "pre_create_market_snapshot_unavailable"
+    )
+    PRE_CREATE_PLANNING_SNAPSHOT_INVALID = "pre_create_planning_snapshot_invalid"
     QUEUE_FULL = "queue_full"
     RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
     RECENT_EXECUTION = "recent_execution"
