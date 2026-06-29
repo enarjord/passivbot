@@ -3083,6 +3083,48 @@ def emit_realized_loss_gate_blocked_event(
         )
 
 
+def emit_entry_cooldown_delta_anchored_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    previous_abs_size: float,
+    current_abs_size: float,
+    qty_step: float,
+    epsilon: float,
+    anchor_ts_ms: int,
+    text_log_emitted: bool,
+) -> None:
+    try:
+        bot._emit_live_event(
+            EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED,
+            level="warning",
+            component="risk.entry_cooldown",
+            tags=(EventTags.RISK, EventTags.GATE, EventTags.FALLBACK),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=str(symbol),
+            pside=str(pside),
+            status="deferred",
+            reason_code=ReasonCodes.RISK_ENTRY_COOLDOWN_POSITION_DELTA,
+            data={
+                "previous_abs_size": _safe_float(previous_abs_size),
+                "current_abs_size": _safe_float(current_abs_size),
+                "qty_step": _safe_float(qty_step),
+                "epsilon": _safe_float(epsilon),
+                "anchor_ts_ms": int(anchor_ts_ms),
+                "fallback_source": "exchange_position_delta",
+                "text_log_emitted": bool(text_log_emitted),
+            },
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit entry cooldown delta event pside=%s symbol=%s: %s",
+            pside,
+            symbol,
+            exc,
+        )
+
+
 def emit_entry_min_effective_cost_blocked_event(
     bot: Any,
     *,

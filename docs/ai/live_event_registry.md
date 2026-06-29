@@ -73,6 +73,7 @@ across time.
 - `remote_call.succeeded`
 - `remote_call.throttled`
 - `risk.mode_changed`
+- `risk.entry_cooldown_delta_anchored`
 - `risk.realized_loss_gate_blocked`
 - `rust_orchestrator.called`
 - `rust_orchestrator.returned`
@@ -145,6 +146,7 @@ across time.
 - `exchange_time_sync`
 - `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`
+- `entry_cooldown_position_delta`
 - `fill_cache_ready`
 - `initial_entry_distance_gate`
 - `length_mismatch`

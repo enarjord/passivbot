@@ -639,6 +639,9 @@ class Passivbot:
     _emit_realized_loss_gate_blocked_event = (
         live_event_emitters.emit_realized_loss_gate_blocked_event
     )
+    _emit_entry_cooldown_delta_anchored_event = (
+        live_event_emitters.emit_entry_cooldown_delta_anchored_event
+    )
     _emit_entry_min_effective_cost_blocked_event = (
         live_event_emitters.emit_entry_min_effective_cost_blocked_event
     )
@@ -11015,11 +11018,22 @@ class Passivbot:
         key = (symbol, pside)
         raw_last_log_ms = self._entry_cooldown_delta_guard_last_log_ms.get(key)
         last_log_ms = 0 if raw_last_log_ms is None else int(raw_last_log_ms)
-        if (
+        text_log_emitted = not (
             last_log_ms > 0
             and now_ms - last_log_ms
             < int(self._entry_cooldown_delta_guard_log_interval_ms)
-        ):
+        )
+        self._emit_entry_cooldown_delta_anchored_event(
+            symbol=symbol,
+            pside=pside,
+            previous_abs_size=previous_abs_size,
+            current_abs_size=current_abs_size,
+            qty_step=qty_step,
+            epsilon=epsilon,
+            anchor_ts_ms=int(now_ms),
+            text_log_emitted=text_log_emitted,
+        )
+        if not text_log_emitted:
             return
         self._entry_cooldown_delta_guard_last_log_ms[key] = int(now_ms)
         logging.warning(
