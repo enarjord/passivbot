@@ -28,6 +28,20 @@ Current review gate:
   gate may still be used after repeated Claude absence, but that exception must
   be called out in the progress evidence.
 
+Scope calibration:
+
+- The active loop remains the live logging/observability overhaul. Backlog work
+  belongs in this loop when it directly improves structured diagnosis, operator
+  smoke evidence, incident reconstruction, or the ability to finish the logging
+  overhaul.
+- Trading-behavior bugs discovered by the new observability, including HSL
+  panic/cooldown contract issues and HSL startup replay latency, should be
+  tracked in the backlog and handled as separate focused trading-path PRs unless
+  they block observability validation.
+- Prefer single-agent implementation for tightly scoped observability slices.
+  Use sub-agents only for isolated offline investigations or independent PRs
+  with explicit no-SSH/no-merge boundaries.
+
 VPS5 deployment status:
 
 - Repository pulled through PR #877 at `1c9d05036`.

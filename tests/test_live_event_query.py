@@ -784,6 +784,46 @@ def test_event_query_exchange_user_filter_keeps_direct_events_dir(tmp_path):
     assert report["query"]["events"][0]["user"] == "gateio_01"
 
 
+def test_event_query_path_scope_labels_legacy_rows_in_output(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    row = _monitor_row(
+        event_type="hsl.status",
+        cycle_id="cy_gateio",
+        seq=1,
+        ts=1000,
+        symbol="ZEC/USDT:USDT",
+        exchange="gateio",
+        user="gateio_01",
+    )
+    live_event = row["payload"]["_live_event"]
+    live_event.pop("exchange")
+    live_event.pop("user")
+    row.pop("exchange")
+    row.pop("user")
+    _write_ndjson(events_dir / "current.ndjson", [row])
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        exchange="gateio",
+        user="gateio_01",
+        event_type="hsl.status",
+        trace_summary=True,
+        cycle_trace=True,
+    )
+
+    assert report["ok"] is True
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["exchange"] == "gateio"
+    assert report["query"]["events"][0]["user"] == "gateio_01"
+    assert report["query"]["trace_summary"]["exchanges"] == {"gateio": 1}
+    assert report["query"]["trace_summary"]["users"] == {"gateio_01": 1}
+    cycle = report["query"]["cycle_trace"]["cycles"][0]
+    assert cycle["timeline"][0]["exchange"] == "gateio"
+    assert cycle["timeline"][0]["user"] == "gateio_01"
+    assert cycle["trace_summary"]["exchanges"] == {"gateio": 1}
+    assert cycle["trace_summary"]["users"] == {"gateio_01": 1}
+
+
 def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
