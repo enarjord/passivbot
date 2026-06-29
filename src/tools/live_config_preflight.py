@@ -419,7 +419,7 @@ def _balance_override_report(
         }
     if isinstance(raw_value, bool):
         return {
-            "active": False,
+            "active": True,
             "source": source,
             "present": True,
             "value_type": type(raw_value).__name__,
@@ -429,7 +429,7 @@ def _balance_override_report(
         number = float(raw_value)
     except (TypeError, ValueError):
         return {
-            "active": False,
+            "active": True,
             "source": source,
             "present": True,
             "value_type": type(raw_value).__name__,
@@ -437,9 +437,10 @@ def _balance_override_report(
         }
     if not math.isfinite(number) or number <= 0.0:
         return {
-            "active": False,
+            "active": True,
             "source": source,
             "present": True,
+            "value": number if math.isfinite(number) else None,
             "value_type": type(raw_value).__name__,
             "status": "invalid",
         }
@@ -985,7 +986,7 @@ def build_live_config_preflight_report(
     if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
         issues.append(
             _issue(
-                "warning",
+                "error",
                 f"balance_override_{balance_override_report['status']}",
                 "balance override is present but is not a positive finite number",
                 path=(

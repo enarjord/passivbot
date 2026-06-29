@@ -209,6 +209,26 @@ def test_live_config_preflight_flags_account_hsl_with_launch_balance_override(tm
     assert report["issues"][0]["path"] == "argument.balance_override"
 
 
+@pytest.mark.parametrize("override_value", [0, -1, False, "0"])
+def test_live_config_preflight_blocks_invalid_runtime_override_with_account_hsl(
+    tmp_path,
+    override_value,
+):
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, _sample_config())
+
+    report = live_config_preflight.build_live_config_preflight_report(
+        config_path,
+        balance_override=override_value,
+    )
+    issue_codes = [issue["code"] for issue in report["issues"]]
+
+    assert report["ok"] is False
+    assert report["hsl"]["balance_override"]["active"] is True
+    assert "hsl_balance_override_account_level_replay_unsafe" in issue_codes
+    assert any(code.startswith("balance_override_invalid") for code in issue_codes)
+
+
 def test_live_config_preflight_allows_coin_hsl_with_balance_override(tmp_path):
     config = _sample_config()
     config["live"]["hsl_signal_mode"] = "coin"
@@ -521,3 +541,22 @@ def test_live_config_preflight_cli_balance_override_returns_nonzero(tmp_path, ca
         "hsl_balance_override_account_level_replay_unsafe"
     )
     assert report["hsl"]["balance_override"]["source"] == "argument"
+
+
+def test_live_config_preflight_cli_zero_balance_override_returns_nonzero(tmp_path, capsys):
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, _sample_config())
+
+    assert (
+        live_config_preflight.main(
+            [str(config_path), "--balance-override", "0", "--compact"]
+        )
+        == 1
+    )
+    report = json.loads(capsys.readouterr().out)
+    issue_codes = [issue["code"] for issue in report["issues"]]
+
+    assert report["ok"] is False
+    assert report["hsl"]["balance_override"]["active"] is True
+    assert "balance_override_invalid" in issue_codes
+    assert "hsl_balance_override_account_level_replay_unsafe" in issue_codes
