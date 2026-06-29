@@ -5,6 +5,7 @@ Incident account: `ebybitsub03` on `vps3`
 Exchange: Bybit
 Observed command: `passivbot live -u ebybitsub03 configs/xmr_migrated.json -bo 1000`
 Observed VPS3 head: `v8` at `b972f0221fb5121330a7ee3a41b99c761317544c`
+Current fixed `origin/v8` head inspected: `b207bb42a2bd4b8b0754775278bc50587be869ac`
 
 ## Summary
 
@@ -31,6 +32,15 @@ that should have triggered RED. The bot was still running the vulnerable
 `b972f022` build, remained flat after the close, and kept logging RED cooldown
 from the synthetic peak. Current `v8` contains a guard which blocks this exact
 startup contract before HSL replay can trade.
+
+Additional inspection on `2026-06-29T06:17Z` found VPS3 still on the stale
+`b972f022` build while GitHub `origin/v8` was already at `b207bb42`. The
+current `v8` runtime guard raises before account-level HSL replay starts when
+`balance_override` is active with `hsl_signal_mode=unified` or `pside`; targeted
+tests for the guard pass. Therefore the immediate operational fix is to update
+VPS3 to current `v8` before running this account again, or run only `coin` HSL,
+disabled HSL, or no balance override until an explicit baseline/checkpoint
+contract exists.
 
 ## Key Evidence
 
