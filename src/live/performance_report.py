@@ -1304,6 +1304,8 @@ class _HslReplayProfileAccumulator:
             state["loaded"] = record
         elif event_type == "hsl.replay.completed":
             state["completed"] = record
+        elif event_type == "hsl.replay.failed":
+            state["failed"] = record
         elif event_type == "hsl.replay.progress":
             state["progress"] = record
         elif event_type == "hsl.replay.started":
@@ -1328,6 +1330,7 @@ class _HslReplayProfileAccumulator:
                 "loaded": state.get("loaded"),
                 "progress": state.get("progress"),
                 "completed": state.get("completed"),
+                "failed": state.get("failed"),
             }
             groups.append({key: value for key, value in group.items() if value not in (None, {}, [])})
         groups = sorted(

@@ -3,6 +3,7 @@
 import logging
 import types
 from copy import deepcopy
+from types import MethodType
 from unittest.mock import AsyncMock, MagicMock
 
 import numpy as np
@@ -417,6 +418,42 @@ class TestGetRealizedPnlCumsumStats:
 
         with pytest.raises(RuntimeError, match="unsafe with balance_override"):
             bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+    def test_equity_hard_stop_balance_override_guard_emits_replay_failed_event(self):
+        bot = object.__new__(Passivbot)
+        bot.config = {"live": {"hsl_signal_mode": "unified"}}
+        bot.balance_override = 1000.0
+        bot.hsl = {
+            "long": {"enabled": True},
+            "short": {"enabled": False},
+        }
+        sink = ListEventSink()
+        bot._live_event_current_cycle_id = "cy_hsl_guard"
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[sink],
+            monitor_sinks=[],
+        )
+        bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+
+        with pytest.raises(RuntimeError, match="unsafe with balance_override"):
+            bot._equity_hard_stop_validate_balance_source_for_history_replay()
+
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        events = [event for event in sink.events if event.event_type.startswith("hsl.replay.")]
+        assert [event.event_type for event in events] == [EventTypes.HSL_REPLAY_FAILED]
+        assert events[0].level == "critical"
+        assert events[0].status == "failed"
+        assert (
+            events[0].reason_code
+            == "hsl_balance_override_account_level_replay_unsafe"
+        )
+        assert events[0].cycle_id == "cy_hsl_guard"
+        assert events[0].data == {
+            "signal_mode": "unified",
+            "balance_override_active": True,
+            "enabled_psides": ["long"],
+        }
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
 
     def test_equity_hard_stop_allows_coin_replay_with_balance_override(self):
         bot = object.__new__(Passivbot)

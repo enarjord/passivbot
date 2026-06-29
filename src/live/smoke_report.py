@@ -92,6 +92,7 @@ HSL_REPLAY_EVENT_TYPES = {
     EventTypes.HSL_REPLAY_STARTED,
     EventTypes.HSL_REPLAY_PROGRESS,
     EventTypes.HSL_REPLAY_COMPLETED,
+    EventTypes.HSL_REPLAY_FAILED,
 }
 REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -1934,6 +1935,10 @@ def _merge_hsl_replay_group(
         record, group.get("completed")
     ):
         group["completed"] = record
+    elif event_type == EventTypes.HSL_REPLAY_FAILED and is_newer(
+        record, group.get("failed")
+    ):
+        group["failed"] = record
 
 
 def _public_hsl_replay_record(record: Any) -> dict[str, Any]:
@@ -1950,7 +1955,10 @@ def _hsl_replay_group_active(group: dict[str, Any]) -> bool:
     latest = group.get("latest")
     if not isinstance(latest, dict):
         return False
-    return latest.get("event_type") != EventTypes.HSL_REPLAY_COMPLETED
+    return latest.get("event_type") not in {
+        EventTypes.HSL_REPLAY_COMPLETED,
+        EventTypes.HSL_REPLAY_FAILED,
+    }
 
 
 def _summarize_hsl_replay_health(
@@ -1975,17 +1983,27 @@ def _summarize_hsl_replay_health(
     active_bots = 0
     completed_bots = 0
     failed_bots = 0
+    failed_attention_bots = 0
     for group in ordered:
         active = _hsl_replay_group_active(group)
         latest = _public_hsl_replay_record(group.get("latest"))
         completed = _public_hsl_replay_record(group.get("completed"))
+        failed = _public_hsl_replay_record(group.get("failed"))
         if active:
             active_bots += 1
-        if completed:
+        elif latest.get("event_type") == EventTypes.HSL_REPLAY_FAILED:
+            failed_bots += 1
+            if latest.get("reason_code") != "shutdown_cancelled":
+                failed_attention_bots += 1
+        elif latest.get("event_type") == EventTypes.HSL_REPLAY_COMPLETED:
             if completed.get("status") == "succeeded":
                 completed_bots += 1
             elif completed.get("status") == "failed":
                 failed_bots += 1
+        elif failed:
+            failed_bots += 1
+            if failed.get("reason_code") != "shutdown_cancelled":
+                failed_attention_bots += 1
         public_group = {
             "bot": group.get("bot"),
             "active": active,
@@ -1998,6 +2016,7 @@ def _summarize_hsl_replay_health(
             "loaded": _public_hsl_replay_record(group.get("loaded")),
             "progress": _public_hsl_replay_record(group.get("progress")),
             "completed": completed,
+            "failed": failed,
         }
         compact_groups.append(
             {
@@ -2014,6 +2033,7 @@ def _summarize_hsl_replay_health(
         "active_bots": int(active_bots),
         "completed_bots": int(completed_bots),
         "failed_bots": int(failed_bots),
+        "failed_attention_bots": int(failed_attention_bots),
         "groups": compact_groups[:HSL_REPLAY_HEALTH_GROUP_LIMIT],
     }
 
@@ -2672,6 +2692,9 @@ def _is_problem_event(live_event: dict[str, Any]) -> bool:
     level = str(live_event.get("level") or "").lower()
     status = str(live_event.get("status") or "").lower()
     event_type = str(live_event.get("event_type") or "")
+    reason_code = str(live_event.get("reason_code") or "")
+    if event_type == EventTypes.HSL_REPLAY_FAILED and reason_code == "shutdown_cancelled":
+        return False
     return (
         level in {"error", "critical"}
         or status in {"failed", "degraded"}
@@ -3359,6 +3382,7 @@ def build_live_smoke_report(
                 "active_bots": 0,
                 "completed_bots": 0,
                 "failed_bots": 0,
+                "failed_attention_bots": 0,
                 "groups": [],
             },
             "risk_events": {
@@ -3404,11 +3428,18 @@ def build_live_smoke_report(
         + int(log_scan["hard_matches"])
         + int(process_report["hard_failures"])
     )
+    hsl_replay_active_bots = int(
+        event_scan["hsl_replay_health"].get("active_bots") or 0
+    )
+    hsl_replay_failed_attention_bots = int(
+        event_scan["hsl_replay_health"].get("failed_attention_bots") or 0
+    )
     attention_count = (
         int(event_scan["problem_event_count"])
         + int(log_scan["attention_matches"])
         + int(log_scan.get("dropped_unparsed_attention_matches", 0))
-        + int(event_scan["hsl_replay_health"].get("active_bots") or 0)
+        + hsl_replay_active_bots
+        + hsl_replay_failed_attention_bots
     )
     hard_failure_sources = {
         "monitor_errors": int(event_report["error_count"]),
@@ -3418,9 +3449,6 @@ def build_live_smoke_report(
         "process_hard_failures": int(process_report["hard_failures"]),
         "total": int(hard_failures),
     }
-    hsl_replay_active_bots = int(
-        event_scan["hsl_replay_health"].get("active_bots") or 0
-    )
     attention_sources = {
         "problem_events": int(event_scan["problem_event_count"]),
         "log_attention_matches": int(log_scan["attention_matches"]),
@@ -3431,6 +3459,8 @@ def build_live_smoke_report(
     }
     if hsl_replay_active_bots:
         attention_sources["hsl_replay_active_bots"] = hsl_replay_active_bots
+    if hsl_replay_failed_attention_bots:
+        attention_sources["hsl_replay_failed_bots"] = hsl_replay_failed_attention_bots
     return {
         "ok": hard_failures == 0,
         "attention": attention_count > 0,
@@ -3499,6 +3529,7 @@ def _summary_limited_groups(
             "active_bots": summary.get("active_bots"),
             "completed_bots": summary.get("completed_bots"),
             "failed_bots": summary.get("failed_bots"),
+            "failed_attention_bots": summary.get("failed_attention_bots"),
             "latest_candidate_unavailable_total": summary.get(
                 "latest_candidate_unavailable_total"
             ),
@@ -3925,6 +3956,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "active_bots": _count_value(hsl_replay_health.get("active_bots")),
             "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
             "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
+            "failed_attention_bots": _count_value(
+                hsl_replay_health.get("failed_attention_bots")
+            ),
             "event_types": hsl_replay_health.get("event_types") or {},
         },
         "risk_events": {
