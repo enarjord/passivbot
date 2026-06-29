@@ -8,6 +8,7 @@ from collections import Counter
 from typing import Iterable
 
 from config.access import get_optional_live_value
+from live.event_bus import EventTypes, ReasonCodes
 from live.market_snapshot import MarketSnapshot
 from utils import utc_ms
 
@@ -226,6 +227,49 @@ def _log_limit_order_distance_skips(
         for (symbol, pside, side, pb_type), count in grouped.items()
     )
     log_fn = logging.info if should_info else logging.debug
+    emit_filter_event = getattr(bot, "_emit_execution_create_filter_event", None)
+    if callable(emit_filter_event):
+        grouped_sample = [
+            {
+                "symbol": symbol,
+                "pside": pside or None,
+                "side": side or None,
+                "pb_order_type": pb_type or "unknown",
+                "count": int(count),
+            }
+            for (symbol, pside, side, pb_type), count in grouped.most_common(12)
+        ]
+        order_sample = []
+        for item in skipped[:8]:
+            order = item["order"]
+            order_sample.append(
+                {
+                    "symbol": str(order.get("symbol") or ""),
+                    "pside": str(order.get("position_side") or "") or None,
+                    "side": str(order.get("side") or "") or None,
+                    "pb_order_type": str(order.get("pb_order_type") or "unknown"),
+                    "price": float(order.get("price")),
+                    "market_price": float(item["market_price"]),
+                    "distance": float(item["dist"]),
+                }
+            )
+        emit_filter_event(
+            event_type=EventTypes.EXECUTION_CREATE_SKIPPED,
+            status="skipped",
+            reason_code=ReasonCodes.LIMIT_ORDER_CREATE_MARKET_DISTANCE,
+            order_count=len(skipped),
+            symbols=skipped_symbols,
+            level="info" if should_info else "debug",
+            message="limit order creates skipped because prices are too far from live market",
+            data={
+                "threshold": float(threshold),
+                "min_multiplier": float(min_mult),
+                "max_multiplier": float(max_mult),
+                "groups": grouped_sample,
+                "sample": order_sample,
+                "suppressed_text_log": not should_info,
+            },
+        )
     log_fn(
         "[order] skipped far-from-market limit order creates | "
         "skipped=%d symbols=%s threshold=%.4f min_multiplier=%.4f "

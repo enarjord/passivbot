@@ -152,6 +152,7 @@ across time.
 - `hsl_balance_override_account_level_replay_unsafe`
 - `initial_entry_distance_gate`
 - `length_mismatch`
+- `limit_order_create_market_distance`
 - `low_balance`
 - `min_effective_cost_blocked`
 - `new_fill`

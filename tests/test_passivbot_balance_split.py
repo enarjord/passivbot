@@ -6581,6 +6581,11 @@ async def test_pre_create_snapshot_filter_skips_far_limit_order_creations(
 
     symbol = "POPCAT/USDT:USDT"
     bot = _make_pre_create_distance_guard_bot(symbol)
+    sink = ListEventSink()
+    bot._live_event_current_cycle_id = "cy_distance_guard"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink], monitor_sinks=[]
+    )
     kept_buy = {
         "symbol": symbol,
         "side": "buy",
@@ -6650,6 +6655,51 @@ async def test_pre_create_snapshot_filter_skips_far_limit_order_creations(
         and "skipped=3" in rec.message
         for rec in caplog.records
     )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.reason_code == ReasonCodes.LIMIT_ORDER_CREATE_MARKET_DISTANCE
+    assert event.status == "skipped"
+    assert event.level == "info"
+    assert event.cycle_id == "cy_distance_guard"
+    assert event.data["order_count"] == 3
+    assert event.data["symbols"] == [symbol]
+    assert event.data["symbols_count"] == 1
+    assert event.data["threshold"] == pytest.approx(0.8)
+    assert event.data["min_multiplier"] == pytest.approx(0.2)
+    assert event.data["max_multiplier"] == pytest.approx(1.8)
+    assert event.data["suppressed_text_log"] is False
+    assert event.data["groups"] == [
+        {
+            "symbol": symbol,
+            "pside": "long",
+            "side": "buy",
+            "pb_order_type": "entry_grid_cropped_long",
+            "count": 1,
+        },
+        {
+            "symbol": symbol,
+            "pside": "short",
+            "side": "sell",
+            "pb_order_type": "entry_grid_cropped_short",
+            "count": 1,
+        },
+        {
+            "symbol": symbol,
+            "pside": "long",
+            "side": "sell",
+            "pb_order_type": "close_grid_long",
+            "count": 1,
+        },
+    ]
+    assert len(event.data["sample"]) == 3
+    assert all(item["symbol"] == symbol for item in event.data["sample"])
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
