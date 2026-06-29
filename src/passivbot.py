@@ -620,6 +620,9 @@ class Passivbot:
     _emit_execution_create_filter_event = (
         live_event_emitters.emit_execution_create_filter_event
     )
+    _emit_initial_entry_distance_gate_event = (
+        live_event_emitters.emit_initial_entry_distance_gate_event
+    )
     _emit_action_planned_event = live_event_emitters.emit_action_planned_event
     _emit_rust_orchestrator_called_event = (
         live_event_emitters.emit_rust_orchestrator_called_event
@@ -16011,6 +16014,18 @@ class Passivbot:
             tolerance * 100.0,
             self._resolve_pb_order_type(order),
         )
+        event_order = dict(order)
+        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
+        self._emit_initial_entry_distance_gate_event(
+            event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+            status="skipped",
+            action="skip_create",
+            order=event_order,
+            market_price=market_price,
+            signed_dist=signed_dist,
+            threshold=threshold,
+            tolerance=tolerance,
+        )
 
     def _log_initial_entry_distance_gate_cleared(
         self,
@@ -16037,6 +16052,17 @@ class Passivbot:
             signed_dist * 100.0,
             threshold * 100.0,
             self._resolve_pb_order_type(order),
+        )
+        event_order = dict(order)
+        event_order["pb_order_type"] = self._resolve_pb_order_type(order)
+        self._emit_initial_entry_distance_gate_event(
+            event_type=EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+            status="recovered",
+            action="allow_create",
+            order=event_order,
+            market_price=market_price,
+            signed_dist=signed_dist,
+            threshold=threshold,
         )
 
     def _apply_mode_filters(

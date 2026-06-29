@@ -2595,6 +2595,57 @@ def emit_action_planned_event(
         )
 
 
+def emit_initial_entry_distance_gate_event(
+    bot: Any,
+    *,
+    event_type: str,
+    status: str,
+    action: str,
+    order: dict,
+    market_price: float,
+    signed_dist: float,
+    threshold: float,
+    tolerance: float | None = None,
+) -> None:
+    try:
+        symbol = str(order.get("symbol") or "")
+        pside = str(order.get("position_side") or "")
+        side = str(order.get("side") or "")
+        data = {
+            "qty": _safe_float(order.get("qty")),
+            "price": _safe_float(order.get("price")),
+            "market_price": _safe_float(market_price),
+            "distance_pct": _safe_float(float(signed_dist) * 100.0),
+            "threshold_pct": _safe_float(float(threshold) * 100.0),
+            "action": str(action),
+            "order_type": str(
+                order.get("pb_order_type") or order.get("type") or "unknown"
+            ),
+        }
+        if tolerance is not None:
+            data["tolerance_pct"] = _safe_float(float(tolerance) * 100.0)
+        bot._emit_live_event(
+            event_type,
+            level="info",
+            component="entry.initial_distance_gate",
+            tags=(EventTags.ORDER, EventTags.GATE, EventTags.ACTION),
+            cycle_id=current_live_event_cycle_id(bot),
+            symbol=symbol,
+            pside=pside,
+            side=side,
+            status=status,
+            reason_code=ReasonCodes.INITIAL_ENTRY_DISTANCE_GATE,
+            data={key: value for key, value in data.items() if value is not None},
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit initial entry distance gate event type=%s symbol=%s: %s",
+            event_type,
+            order.get("symbol") if isinstance(order, dict) else None,
+            exc,
+        )
+
+
 def _order_event_data(order: dict | None, *, index: int | None = None) -> dict[str, Any]:
     if not isinstance(order, dict):
         return {"order_type": type(order).__name__}
