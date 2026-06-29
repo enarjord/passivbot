@@ -209,6 +209,13 @@ if the final replay result is correct.
      Binance progress reached `275323` applied rows at `474.669s` with
      `pairs=25`, GateIO reached `254638` rows at `459.291s` with `pairs=29`,
      and OKX reached `317411` rows at `455.068s` with `pairs=26`.
+   - VPS5 restart after PR #852 on 2026-06-29 showed the gap still active on
+     current `v8` head `7ce1aec9`: after roughly 20 minutes, Binance, Kucoin,
+     GateIO, and OKX were still live but not `READY`; each text log still had
+     only `HSL coin history reconstruction starting | lookback_days=30.0` and
+     no completion line. The smoke report remained process-hard-green
+     (`matched_expected=5`, `hard_failures=0`), so the failure mode is startup
+     readiness latency rather than process crash.
    - Approximate replay speed from those samples is only `550-700` applied
      rows/s. Full replay at `25-29 * 43201` rows therefore remains a tens of
      minutes operation on the small VPS.
