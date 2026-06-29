@@ -107,6 +107,13 @@ def _open_text(path: Path):
     return open(path, "r", encoding="utf-8")
 
 
+def _file_mtime_ms(path: Path) -> int | None:
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except OSError:
+        return None
+
+
 def _live_event_payload(row: dict[str, Any]) -> dict[str, Any] | None:
     payload = row.get("payload")
     if not isinstance(payload, dict):
@@ -987,6 +994,7 @@ def build_event_report(
     window_skipped_before = 0
     window_skipped_after = 0
     window_invalid_ts = 0
+    files_skipped_before_window = 0
     issues: list[EventIssue] = []
     try:
         files = discover_event_files(
@@ -1010,6 +1018,15 @@ def build_event_report(
                 "no event NDJSON files found",
             )
         )
+    if since_filter is not None and files:
+        window_files: list[Path] = []
+        for event_file in files:
+            file_mtime_ms = _file_mtime_ms(event_file)
+            if file_mtime_ms is not None and file_mtime_ms < since_filter:
+                files_skipped_before_window += 1
+                continue
+            window_files.append(event_file)
+        files = window_files
 
     event_type_counts: Counter[str] = Counter()
     cycle_counts: Counter[str] = Counter()
@@ -1429,5 +1446,6 @@ def build_event_report(
             "events_skipped_before": window_skipped_before,
             "events_skipped_after": window_skipped_after,
             "invalid_window_ts": window_invalid_ts,
+            "files_skipped_before_window": files_skipped_before_window,
         }
     return report
