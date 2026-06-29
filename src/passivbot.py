@@ -2678,6 +2678,9 @@ class Passivbot:
     _equity_hard_stop_latest_panic_fill_timestamp_ms = (
         pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_ms
     )
+    _equity_hard_stop_latest_panic_fill_timestamp_optional_ms = (
+        pb_hsl._equity_hard_stop_latest_panic_fill_timestamp_optional_ms
+    )
     _get_exchange_fee_rates = pb_hsl._get_exchange_fee_rates
     _orchestrator_exchange_params = pb_hsl._orchestrator_exchange_params
     _equity_hard_stop_realized_pnl_now = pb_hsl._equity_hard_stop_realized_pnl_now

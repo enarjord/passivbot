@@ -277,6 +277,8 @@ def _emit_hsl_red_finalized_without_order(
     pside: str,
     symbol: str | None,
     stop_ts_ms: int,
+    stop_event_anchor_source: str,
+    stop_event_anchor_fallback_used: bool,
     cooldown_until_ms: int | None,
     flat_confirmations: int | None,
     position_count: int | None = None,
@@ -289,6 +291,9 @@ def _emit_hsl_red_finalized_without_order(
         "exchange_close_order_submitted": False,
         "panic_order_submitted_count": 0,
         "stop_event_timestamp_ms": int(stop_ts_ms),
+        "stop_event_anchor_source": str(stop_event_anchor_source),
+        "stop_event_anchor_timestamp_ms": int(stop_ts_ms),
+        "stop_event_anchor_fallback_used": bool(stop_event_anchor_fallback_used),
         "cooldown_until_ms": None
         if cooldown_until_ms is None
         else int(cooldown_until_ms),
@@ -879,6 +884,26 @@ def _equity_hard_stop_latest_panic_fill_timestamp_ms(
     since_ms: Optional[int] = None,
     fallback_ms: Optional[int] = None,
 ) -> int:
+    latest_ts = _equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
+        self,
+        pside,
+        symbol=symbol,
+        since_ms=since_ms,
+    )
+    if latest_ts is not None:
+        return int(latest_ts)
+    if fallback_ms is not None:
+        return int(fallback_ms)
+    return int(self.get_exchange_time())
+
+
+def _equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
+    self,
+    pside: str,
+    *,
+    symbol: Optional[str] = None,
+    since_ms: Optional[int] = None,
+) -> Optional[int]:
     latest_ts: Optional[int] = None
     if self._pnls_manager is not None:
         for event in self._pnls_manager.get_events():
@@ -893,11 +918,7 @@ def _equity_hard_stop_latest_panic_fill_timestamp_ms(
             if since_ms is not None and event_ts < int(since_ms):
                 continue
             latest_ts = event_ts if latest_ts is None else max(latest_ts, event_ts)
-    if latest_ts is not None:
-        return int(latest_ts)
-    if fallback_ms is not None:
-        return int(fallback_ms)
-    return int(self.get_exchange_time())
+    return latest_ts
 
 
 async def _calc_upnl_sum_strict(self, pside: Optional[str] = None, symbol: Optional[str] = None) -> float:
@@ -3835,12 +3856,21 @@ async def _equity_hard_stop_finalize_red_stop(
     state = self._hsl_state(pside)
     cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
+    stop_event_anchor_source = "provided_stop_event"
+    stop_event_anchor_fallback_used = False
     if stop_event is None:
-        stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+        fallback_stop_ts_ms = stop_ts_ms
+        latest_panic_ts = self._equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
             pside,
             since_ms=state.get("pending_red_since_ms"),
-            fallback_ms=stop_ts_ms,
         )
+        if latest_panic_ts is None:
+            stop_ts_ms = fallback_stop_ts_ms
+            stop_event_anchor_source = "current_time_fallback"
+            stop_event_anchor_fallback_used = True
+        else:
+            stop_ts_ms = int(latest_panic_ts)
+            stop_event_anchor_source = "panic_fill"
         stop_event = await self._equity_hard_stop_compute_stop_event(pside, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
@@ -3888,6 +3918,8 @@ async def _equity_hard_stop_finalize_red_stop(
             pside=pside,
             symbol=None,
             stop_ts_ms=stop_ts_ms,
+            stop_event_anchor_source=stop_event_anchor_source,
+            stop_event_anchor_fallback_used=stop_event_anchor_fallback_used,
             cooldown_until_ms=cooldown_until_ms,
             flat_confirmations=flat_confirmations,
             position_count=position_count,
@@ -3969,13 +4001,22 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     state = self._hsl_coin_state(pside, symbol)
     cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
+    stop_event_anchor_source = "provided_stop_event"
+    stop_event_anchor_fallback_used = False
     if stop_event is None:
-        stop_ts_ms = self._equity_hard_stop_latest_panic_fill_timestamp_ms(
+        fallback_stop_ts_ms = stop_ts_ms
+        latest_panic_ts = self._equity_hard_stop_latest_panic_fill_timestamp_optional_ms(
             pside,
             symbol=symbol,
             since_ms=state.get("pending_red_since_ms"),
-            fallback_ms=stop_ts_ms,
         )
+        if latest_panic_ts is None:
+            stop_ts_ms = fallback_stop_ts_ms
+            stop_event_anchor_source = "current_time_fallback"
+            stop_event_anchor_fallback_used = True
+        else:
+            stop_ts_ms = int(latest_panic_ts)
+            stop_event_anchor_source = "panic_fill"
         stop_event = await self._equity_hard_stop_compute_coin_stop_event(pside, symbol, stop_ts_ms)
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
@@ -4019,6 +4060,8 @@ async def _equity_hard_stop_finalize_coin_red_stop(
             pside=pside,
             symbol=symbol,
             stop_ts_ms=stop_ts_ms,
+            stop_event_anchor_source=stop_event_anchor_source,
+            stop_event_anchor_fallback_used=stop_event_anchor_fallback_used,
             cooldown_until_ms=cooldown_until_ms,
             flat_confirmations=flat_confirmations,
             position_count=0,
