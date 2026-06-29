@@ -8,7 +8,11 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-from live.event_bus import LIVE_EVENT_DEBUG_PROFILES, LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_bus import (
+    LIVE_EVENT_DEBUG_PROFILES,
+    LIVE_EVENT_MONITOR_PAYLOAD_KEY,
+    utc_ms,
+)
 from live.event_query import discover_event_files
 from live.smoke_report import _user_safe_display_path
 
@@ -1277,6 +1281,48 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _hsl_replay_latest_event_age_ms(
+    record: dict[str, Any],
+    *,
+    report_ts_ms: int,
+) -> int | None:
+    ts = _non_negative_number(record.get("ts"))
+    if ts is None:
+        return None
+    return int(max(0, int(report_ts_ms) - int(ts)))
+
+
+def _hsl_replay_active(latest: dict[str, Any] | None) -> bool:
+    if not isinstance(latest, dict):
+        return False
+    return latest.get("event_type") not in {
+        "hsl.replay.completed",
+        "hsl.replay.failed",
+    }
+
+
+def _with_hsl_replay_active_age(
+    group: dict[str, Any],
+    *,
+    report_ts_ms: int,
+) -> dict[str, Any]:
+    latest = group.get("latest")
+    if not _hsl_replay_active(latest):
+        return group
+    age_ms = _hsl_replay_latest_event_age_ms(latest, report_ts_ms=report_ts_ms)
+    if age_ms is None:
+        return group
+    out = dict(group)
+    latest_out = dict(latest)
+    derived = latest_out.get("derived")
+    derived_out = dict(derived) if isinstance(derived, dict) else {}
+    derived_out["latest_event_age_ms"] = int(age_ms)
+    latest_out["derived"] = derived_out
+    out["latest"] = latest_out
+    out["active_latest_event_age_ms"] = int(age_ms)
+    return out
+
+
 class _HslReplayProfileAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
@@ -1338,7 +1384,14 @@ class _HslReplayProfileAccumulator:
                 state["latest_ts"] = int(ts)
             state["latest"] = record
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        group_limit: int = GROUP_LIMIT,
+        report_ts_ms: int | None = None,
+    ) -> dict[str, Any]:
+        if report_ts_ms is None:
+            report_ts_ms = utc_ms()
         groups = []
         for bot, state in self.bots.items():
             group = {
@@ -1355,7 +1408,12 @@ class _HslReplayProfileAccumulator:
                 "completed": state.get("completed"),
                 "failed": state.get("failed"),
             }
-            groups.append({key: value for key, value in group.items() if value not in (None, {}, [])})
+            group = {
+                key: value for key, value in group.items() if value not in (None, {}, [])
+            }
+            groups.append(
+                _with_hsl_replay_active_age(group, report_ts_ms=int(report_ts_ms))
+            )
         groups = sorted(
             groups,
             key=lambda item: (
@@ -3024,6 +3082,7 @@ def build_live_performance_report(
     decision_boundary = _DecisionBoundaryAccumulator()
     input_staleness = _InputStalenessAccumulator()
     startup_readiness = _StartupReadinessAccumulator()
+    report_ts_ms = utc_ms()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
     forager_ema_readiness = _ForagerEmaReadinessAccumulator()
@@ -3167,7 +3226,10 @@ def build_live_performance_report(
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
         "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
-        "hsl_replay_profile": hsl_replay_profile.to_dict(group_limit=group_limit),
+        "hsl_replay_profile": hsl_replay_profile.to_dict(
+            group_limit=group_limit,
+            report_ts_ms=report_ts_ms,
+        ),
         "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
         "forager_ema_readiness": forager_ema_readiness.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),

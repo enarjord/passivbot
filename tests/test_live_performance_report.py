@@ -1326,7 +1326,9 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
 
 def test_live_performance_report_hsl_history_elapsed_is_latest_when_replay_not_started(
     tmp_path,
+    monkeypatch,
 ):
+    monkeypatch.setattr(performance_report_module, "utc_ms", lambda: 121000)
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
         events_dir / "current.ndjson",
@@ -1358,8 +1360,10 @@ def test_live_performance_report_hsl_history_elapsed_is_latest_when_replay_not_s
     assert group["latest"]["data"]["stage"] == "price_history_fetch_started"
     assert group["latest"]["derived"] == {
         "history_build_elapsed_ms": 91250,
+        "latest_event_age_ms": 120000,
         "latest_elapsed_ms": 91250,
     }
+    assert group["active_latest_event_age_ms"] == 120000
 
 
 def test_live_performance_report_hsl_replay_profile_summary_is_bounded(tmp_path):
