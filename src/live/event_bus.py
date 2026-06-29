@@ -222,7 +222,13 @@ class ReasonCodes:
     HSL_BALANCE_OVERRIDE_ACCOUNT_LEVEL_REPLAY_UNSAFE = (
         "hsl_balance_override_account_level_replay_unsafe"
     )
+    HSL_HISTORY_EMPTY = "hsl_history_empty"
+    HSL_HISTORY_INPUTS_LOADED = "hsl_history_inputs_loaded"
+    HSL_PRICE_HISTORY_FETCH_COMPLETED = "hsl_price_history_fetch_completed"
+    HSL_PRICE_HISTORY_FETCH_STARTED = "hsl_price_history_fetch_started"
     HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
+    HSL_TIMELINE_REPLAY_COMPLETED = "hsl_timeline_replay_completed"
+    HSL_TIMELINE_REPLAY_STARTED = "hsl_timeline_replay_started"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
     SINK_PIPELINE_CLOSING = "pipeline_closing"
     SNAPSHOT_SYMBOL_STATE = "snapshot_symbol_state"

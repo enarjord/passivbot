@@ -11682,9 +11682,44 @@ class Passivbot:
         self,
         fill_events: Optional[List[dict]] = None,
         current_balance: Optional[float] = None,
+        hsl_replay_signal_mode: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Replay canonical fill events to produce historical balance/equity curves."""
+        history_started_s = time.monotonic()
         await self.init_pnls()
+
+        def _emit_hsl_history_progress(
+            stage: str,
+            data: Optional[Dict[str, Any]] = None,
+            *,
+            status: str = "started",
+            reason_code: Optional[str] = None,
+        ) -> None:
+            if not hsl_replay_signal_mode:
+                return
+            try:
+                payload = {
+                    "signal_mode": str(hsl_replay_signal_mode),
+                    "stage": str(stage),
+                    "history_build_elapsed_s": round(
+                        max(0.0, time.monotonic() - history_started_s), 3
+                    ),
+                }
+                if data:
+                    payload.update(data)
+                pb_hsl._emit_hsl_replay_event(
+                    self,
+                    EventTypes.HSL_REPLAY_PROGRESS,
+                    payload,
+                    status=status,
+                    reason_code=reason_code or str(stage),
+                )
+            except Exception as exc:
+                logging.debug(
+                    "[event] failed to emit HSL history progress stage=%s: %s",
+                    stage,
+                    exc,
+                )
 
         def _safe_float(val: Any, default: float = 0.0) -> float:
             try:
@@ -11826,6 +11861,19 @@ class Passivbot:
 
         events = _extract_events(fill_events)
         current_position_state = _current_position_state()
+        _emit_hsl_history_progress(
+            "history_inputs_loaded",
+            {
+                "fill_events": len(fill_events),
+                "events": len(events),
+                "current_position_pairs": sum(
+                    1
+                    for size, _price in current_position_state.values()
+                    if size > 1e-12
+                ),
+            },
+            reason_code=ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
+        )
         if events:
             try:
                 compute_psize_pprice(
@@ -11858,6 +11906,17 @@ class Passivbot:
                 "is_flat_short": True,
                 "panic_fill_count": 0,
             }
+            _emit_hsl_history_progress(
+                "history_empty",
+                {
+                    "timeline_rows": 1,
+                    "fill_events": 0,
+                    "events": 0,
+                    "price_replay_symbols": 0,
+                },
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_HISTORY_EMPTY,
+            )
             return {
                 "timeline": [point],
                 "panic_flatten_events": [],
@@ -11951,6 +12010,23 @@ class Passivbot:
             )
             replay_sem = asyncio.Semaphore(max(1, int(replay_concurrency)))
             replay_fetch_delay_s = self._get_fetch_delay_seconds()
+            candle_fetch_started_s = time.monotonic()
+            history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+            _emit_hsl_history_progress(
+                "price_history_fetch_started",
+                {
+                    "events": len(events),
+                    "symbols": len(symbols),
+                    "price_replay_symbols": len(price_replay_symbols),
+                    "skipped_price_symbols": len(symbols - price_replay_symbols),
+                    "history_minutes": history_minutes,
+                    "replay_concurrency": int(replay_concurrency),
+                    "lookback_days": lookback.display_value,
+                    "start_ts": int(start_minute),
+                    "end_ts": int(end_minute),
+                },
+                reason_code=ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
+            )
 
             async def fetch_replay_candles(sym: str, *, timeframe: str = "1m"):
                 async with replay_sem:
@@ -12029,6 +12105,27 @@ class Passivbot:
                             approximate_price_sources.setdefault(sym, {})[
                                 timeframe
                             ] = added
+            candle_fetch_elapsed_s = max(0.0, time.monotonic() - candle_fetch_started_s)
+            _emit_hsl_history_progress(
+                "price_history_fetch_completed",
+                {
+                    "events": len(events),
+                    "symbols": len(symbols),
+                    "price_replay_symbols": len(price_replay_symbols),
+                    "priced_symbols": sum(
+                        1 for prices in price_lookup.values() if prices
+                    ),
+                    "empty_price_symbols": sum(
+                        1 for prices in price_lookup.values() if not prices
+                    ),
+                    "approximate_price_symbols": len(approximate_price_sources),
+                    "history_minutes": history_minutes,
+                    "replay_concurrency": int(replay_concurrency),
+                    "price_history_fetch_elapsed_s": round(candle_fetch_elapsed_s, 3),
+                },
+                status="succeeded",
+                reason_code=ReasonCodes.HSL_PRICE_HISTORY_FETCH_COMPLETED,
+            )
         else:
             price_lookup = {sym: {} for sym in price_replay_symbols}
 
@@ -12102,6 +12199,21 @@ class Passivbot:
         event_idx = 0
         last_price: Dict[str, float] = {}
 
+        history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
+        _emit_hsl_history_progress(
+            "timeline_replay_started",
+            {
+                "events": len(events),
+                "symbols": len(symbols),
+                "price_replay_symbols": len(price_replay_symbols),
+                "history_minutes": history_minutes,
+                "record_start_ts": int(record_start_ts),
+                "start_ts": int(start_minute),
+                "end_ts": int(end_minute),
+            },
+            reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_STARTED,
+        )
+        timeline_replay_started_s = time.monotonic()
         minute = start_minute
         while minute <= end_minute:
             boundary = minute + ONE_MIN_MS
@@ -12318,6 +12430,23 @@ class Passivbot:
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
         }
+        _emit_hsl_history_progress(
+            "timeline_replay_completed",
+            {
+                "events": len(events),
+                "symbols": len(symbols),
+                "price_replay_symbols": len(price_replay_symbols),
+                "timeline_rows": len(timeline),
+                "panic_events": len(panic_flatten_events),
+                "missing_price_symbols": len(missing_price_symbols),
+                "history_minutes": history_minutes,
+                "timeline_replay_elapsed_s": round(
+                    max(0.0, time.monotonic() - timeline_replay_started_s), 3
+                ),
+            },
+            status="succeeded",
+            reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
+        )
         return {
             "timeline": timeline,
             "panic_flatten_events": panic_flatten_events,

@@ -156,7 +156,13 @@ across time.
 - `fill_cache_ready`
 - `fill_cache_rebuild_started`
 - `hsl_balance_override_account_level_replay_unsafe`
+- `hsl_history_empty`
+- `hsl_history_inputs_loaded`
+- `hsl_price_history_fetch_completed`
+- `hsl_price_history_fetch_started`
 - `hsl_raw_red_pending_ema_confirmation`
+- `hsl_timeline_replay_completed`
+- `hsl_timeline_replay_started`
 - `initial_entry_distance_gate`
 - `length_mismatch`
 - `limit_order_create_market_distance`

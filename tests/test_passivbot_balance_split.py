@@ -1319,6 +1319,13 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
     bot.inverse = False
     bot._candle_fetch_concurrency = lambda *, context="runtime": 2
     bot._get_fetch_delay_seconds = lambda: 0.0
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._live_event_current_cycle_id = "cy_hsl_history_build"
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
     bot.c_mults = {
         "BTC/USDT:USDT": 1.0,
         "ETH/USDT:USDT": 1.0,
@@ -1366,12 +1373,34 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
         for symbol in bot.c_mults
     ]
 
-    await bot.get_balance_equity_history(fill_events=fill_events, current_balance=100.0)
+    await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=100.0,
+        hsl_replay_signal_mode="coin",
+    )
 
     assert cm.max_active == 2
     assert sorted(
         symbol for symbol, timeframe in cm.calls if timeframe == "1m"
     ) == sorted(bot.c_mults)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [event for event in sink.events if event.event_type == EventTypes.HSL_REPLAY_PROGRESS]
+    assert [event.reason_code for event in events] == [
+        ReasonCodes.HSL_HISTORY_INPUTS_LOADED,
+        ReasonCodes.HSL_PRICE_HISTORY_FETCH_STARTED,
+        ReasonCodes.HSL_PRICE_HISTORY_FETCH_COMPLETED,
+        ReasonCodes.HSL_TIMELINE_REPLAY_STARTED,
+        ReasonCodes.HSL_TIMELINE_REPLAY_COMPLETED,
+    ]
+    assert {event.cycle_id for event in events} == {"cy_hsl_history_build"}
+    assert {event.data["signal_mode"] for event in events} == {"coin"}
+    assert events[0].data["fill_events"] == 3
+    assert events[1].data["price_replay_symbols"] == 3
+    assert events[2].data["priced_symbols"] == 3
+    assert events[3].data["history_minutes"] >= 3
+    assert events[4].data["timeline_rows"] == events[3].data["history_minutes"]
+    assert events[4].data["timeline_replay_elapsed_s"] is not None
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
