@@ -226,6 +226,10 @@ class ReasonCodes:
     HSL_HISTORY_INPUTS_LOADED = "hsl_history_inputs_loaded"
     HSL_PRICE_HISTORY_FETCH_COMPLETED = "hsl_price_history_fetch_completed"
     HSL_PRICE_HISTORY_FETCH_STARTED = "hsl_price_history_fetch_started"
+    HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED = (
+        "hsl_price_history_symbol_fetch_completed"
+    )
+    HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED = "hsl_price_history_symbol_fetch_started"
     HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
     HSL_TIMELINE_REPLAY_COMPLETED = "hsl_timeline_replay_completed"
     HSL_TIMELINE_REPLAY_STARTED = "hsl_timeline_replay_started"

@@ -1259,9 +1259,14 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
                 ts=1000,
                 component="risk.hsl",
                 data={
-                    "stage": "pair_replay",
-                    "pairs": 1,
-                    "timeline_rows": 10,
+                    "stage": "price_history_symbol_fetch_completed",
+                    "timeframe": "1m",
+                    "error_type": "TimeoutError",
+                    "events": 2,
+                    "price_replay_symbols": 3,
+                    "history_minutes": 10,
+                    "rows": 9,
+                    "elapsed_s": 4.5,
                     "balance": 1000.0,
                     "equity": 999.0,
                     "raw_payload": {"leak_marker": "raw"},
@@ -1276,9 +1281,14 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
     rendered = json.dumps(report["hsl_replay_profile"], sort_keys=True)
 
     assert report["hsl_replay_profile"]["groups"][0]["progress"]["data"] == {
-        "pairs": 1,
-        "stage": "pair_replay",
-        "timeline_rows": 10,
+        "elapsed_s": 4.5,
+        "error_type": "TimeoutError",
+        "events": 2,
+        "history_minutes": 10,
+        "price_replay_symbols": 3,
+        "rows": 9,
+        "stage": "price_history_symbol_fetch_completed",
+        "timeframe": "1m",
     }
     assert "balance" not in rendered
     assert "equity" not in rendered

@@ -11692,6 +11692,8 @@ class Passivbot:
             stage: str,
             data: Optional[Dict[str, Any]] = None,
             *,
+            symbol: Optional[str] = None,
+            pside: Optional[str] = None,
             status: str = "started",
             reason_code: Optional[str] = None,
         ) -> None:
@@ -11711,6 +11713,8 @@ class Passivbot:
                     self,
                     EventTypes.HSL_REPLAY_PROGRESS,
                     payload,
+                    symbol=symbol,
+                    pside=pside,
                     status=status,
                     reason_code=reason_code or str(stage),
                 )
@@ -12030,6 +12034,22 @@ class Passivbot:
 
             async def fetch_replay_candles(sym: str, *, timeframe: str = "1m"):
                 async with replay_sem:
+                    symbol_fetch_started_s = time.monotonic()
+                    symbol_payload = {
+                        "events": len(events),
+                        "symbols": len(symbols),
+                        "price_replay_symbols": len(price_replay_symbols),
+                        "history_minutes": history_minutes,
+                        "timeframe": str(timeframe),
+                        "start_ts": int(start_minute),
+                        "end_ts": int(end_minute),
+                    }
+                    _emit_hsl_history_progress(
+                        "price_history_symbol_fetch_started",
+                        symbol_payload,
+                        symbol=sym,
+                        reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED,
+                    )
                     try:
                         arr = await self.cm.get_candles(
                             sym,
@@ -12038,8 +12058,44 @@ class Passivbot:
                             strict=False,
                             timeframe=timeframe,
                         )
+                        rows = int(getattr(arr, "size", 0) or 0)
+                        _emit_hsl_history_progress(
+                            "price_history_symbol_fetch_completed",
+                            {
+                                **symbol_payload,
+                                "rows": rows,
+                                "elapsed_s": round(
+                                    max(
+                                        0.0,
+                                        time.monotonic() - symbol_fetch_started_s,
+                                    ),
+                                    3,
+                                ),
+                            },
+                            symbol=sym,
+                            status="succeeded",
+                            reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
+                        )
                         return sym, arr, None
                     except Exception as exc:
+                        _emit_hsl_history_progress(
+                            "price_history_symbol_fetch_completed",
+                            {
+                                **symbol_payload,
+                                "rows": 0,
+                                "elapsed_s": round(
+                                    max(
+                                        0.0,
+                                        time.monotonic() - symbol_fetch_started_s,
+                                    ),
+                                    3,
+                                ),
+                                "error_type": type(exc).__name__,
+                            },
+                            symbol=sym,
+                            status="failed",
+                            reason_code=ReasonCodes.HSL_PRICE_HISTORY_SYMBOL_FETCH_COMPLETED,
+                        )
                         return sym, None, exc
                     finally:
                         if replay_fetch_delay_s > 0.0:

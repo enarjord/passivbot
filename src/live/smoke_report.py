@@ -1780,7 +1780,7 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(data, dict):
         return {}
     out: dict[str, Any] = {}
-    for key in ("signal_mode", "stage"):
+    for key in ("error_type", "signal_mode", "stage", "timeframe"):
         value = data.get(key)
         if isinstance(value, str) and value:
             out[key] = _redact_log_text(value, max_len=80)
@@ -1799,6 +1799,13 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "fill_events",
         "panic_events",
         "skipped_unsupported_symbols",
+        "events",
+        "price_replay_symbols",
+        "priced_symbols",
+        "empty_price_symbols",
+        "approximate_price_symbols",
+        "history_minutes",
+        "replay_concurrency",
         "pair_idx",
         "applied_rows",
         "total_applied_rows",
@@ -1806,6 +1813,7 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "skipped_pairs",
         "rows_per_second",
         "elapsed_s",
+        "price_history_fetch_elapsed_s",
         "full_elapsed_s",
         "startup_blocking_elapsed_s",
     ):

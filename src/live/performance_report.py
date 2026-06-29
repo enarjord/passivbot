@@ -74,8 +74,10 @@ _EXECUTION_CONFIRMATION_TERMINALS = {
     "execution.confirmation_timeout",
 }
 _HSL_REPLAY_STRING_FIELDS = (
+    "error_type",
     "signal_mode",
     "stage",
+    "timeframe",
 )
 _HSL_REPLAY_BOOL_FIELDS = (
     "is_held_pair",
@@ -92,6 +94,13 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "fill_events",
     "panic_events",
     "skipped_unsupported_symbols",
+    "events",
+    "price_replay_symbols",
+    "priced_symbols",
+    "empty_price_symbols",
+    "approximate_price_symbols",
+    "history_minutes",
+    "replay_concurrency",
     "pair_idx",
     "applied_rows",
     "total_applied_rows",
@@ -99,6 +108,7 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "skipped_pairs",
     "rows_per_second",
     "elapsed_s",
+    "price_history_fetch_elapsed_s",
     "full_elapsed_s",
     "startup_blocking_elapsed_s",
 )

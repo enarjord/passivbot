@@ -2112,6 +2112,9 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
                     "total_applied_rows": 64000,
                     "rows_per_second": 318.415,
                     "elapsed_s": 201.2,
+                    "timeframe": "1m",
+                    "history_minutes": 43201,
+                    "price_replay_symbols": 29,
                     "is_held_pair": True,
                     "is_cooldown_pair": False,
                     "balance": 1234.56,
@@ -2220,6 +2223,9 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     assert active_group["bot"] == "gateio/gateio_01"
     assert active_group["active"] is True
     assert active_group["latest"]["symbol"] == "ZEC/USDT:USDT"
+    assert active_group["latest"]["data"]["timeframe"] == "1m"
+    assert active_group["latest"]["data"]["history_minutes"] == 43201
+    assert active_group["latest"]["data"]["price_replay_symbols"] == 29
     assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
         43201 * 29
     )

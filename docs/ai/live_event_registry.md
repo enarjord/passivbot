@@ -160,6 +160,8 @@ across time.
 - `hsl_history_inputs_loaded`
 - `hsl_price_history_fetch_completed`
 - `hsl_price_history_fetch_started`
+- `hsl_price_history_symbol_fetch_completed`
+- `hsl_price_history_symbol_fetch_started`
 - `hsl_raw_red_pending_ema_confirmation`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
