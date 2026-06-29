@@ -10341,6 +10341,17 @@ class Passivbot:
                 )
                 if report.get("repaired", False):
                     if doctor_action == "quarantine_legacy_files":
+                        emit_fill_cache_doctor_event(
+                            reason_code=ReasonCodes.FILL_CACHE_QUARANTINED,
+                            refresh_mode="cache_quarantine",
+                            report=report,
+                            status="succeeded",
+                            level="warning",
+                            quarantine_created=bool(
+                                report.get("legacy_files_quarantined", 0) or 0
+                            ),
+                            quarantine_reason="legacy_pnl_contract",
+                        )
                         await rebuild_fill_cache_from_lookback()
                 elif self.exchange == "kucoin" and "degraded_events_after" in report:
                     logging.warning(
