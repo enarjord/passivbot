@@ -1,6 +1,7 @@
 import pytest
 
 from passivbot import Passivbot
+from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
 
 
 class CoinFilterHarness(Passivbot):
@@ -364,6 +365,71 @@ def test_log_min_effective_cost_blocks_debug_includes_full_context(monkeypatch):
     assert "balance=51.154957" in seen[0]
     assert "live.filter_by_min_effective_cost=false" in seen[0]
     assert "override_may_create_exchange-min-sized_entries" in seen[0]
+
+
+def test_log_min_effective_cost_blocks_emits_structured_event(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._min_effective_cost_last_log_ms = {}
+    bot._min_effective_cost_log_interval_ms = 900_000
+    bot.is_pside_enabled = lambda pside: pside == "long"
+    bot.bot_id = "bot_min_cost"
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot._live_event_current_cycle_id = "cy_min_cost"
+    sink = ListEventSink()
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    monkeypatch.setattr(
+        "passivbot.logging.info",
+        lambda msg, *args: None,
+    )
+    monkeypatch.setattr(
+        "passivbot.logging.debug",
+        lambda msg, *args: None,
+    )
+
+    out = {
+        "diagnostics": {
+            "min_effective_cost_blocks": [
+                {
+                    "symbol_idx": 0,
+                    "pside": "long",
+                    "balance": 51.154957,
+                    "effective_limit": 1.5,
+                    "entry_initial_qty_pct": 0.0192,
+                    "projected_initial_cost": 1.4732627616,
+                    "effective_min_cost": 10.1,
+                }
+            ]
+        }
+    }
+    try:
+        bot._log_min_effective_cost_blocks(out, {0: "BTC/USDC:USDC"})
+        assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    finally:
+        assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.level == "info"
+    assert event.status == "skipped"
+    assert event.reason_code == "min_effective_cost_blocked"
+    assert event.cycle_id == "cy_min_cost"
+    assert event.symbol == "BTC/USDC:USDC"
+    assert event.pside == "long"
+    assert event.data["projected_initial_cost"] == pytest.approx(1.4732627616)
+    assert event.data["effective_min_cost"] == pytest.approx(10.1)
+    assert event.data["balance"] == pytest.approx(51.154957)
+    assert event.data["effective_limit"] == pytest.approx(1.5)
+    assert event.data["entry_initial_qty_pct"] == pytest.approx(0.0192)
+    assert event.data["action"] == "skip_create"
 
 
 def test_log_min_effective_cost_blocks_is_throttled(monkeypatch):

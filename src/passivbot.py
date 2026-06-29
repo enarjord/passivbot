@@ -636,6 +636,9 @@ class Passivbot:
     _emit_realized_loss_gate_blocked_event = (
         live_event_emitters.emit_realized_loss_gate_blocked_event
     )
+    _emit_entry_min_effective_cost_blocked_event = (
+        live_event_emitters.emit_entry_min_effective_cost_blocked_event
+    )
     _emit_unstuck_status_event = live_event_emitters.emit_unstuck_status_event
     _emit_unstuck_selection_event = live_event_emitters.emit_unstuck_selection_event
     _emit_forager_feature_unavailable_event = (
@@ -11257,6 +11260,15 @@ class Passivbot:
                 effective_limit,
                 entry_initial_qty_pct,
                 pside,
+            )
+            self._emit_entry_min_effective_cost_blocked_event(
+                symbol=symbol,
+                pside=pside,
+                projected_initial_cost=projected_initial_cost,
+                effective_min_cost=effective_min_cost,
+                balance=balance,
+                effective_limit=effective_limit,
+                entry_initial_qty_pct=entry_initial_qty_pct,
             )
         if len(eligible_blocks) > detail_limit:
             examples = ",".join(
