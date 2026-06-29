@@ -145,6 +145,54 @@ def _filter_matches(value: Any, filter_values: set[str]) -> bool:
     return not filter_values or (value is not None and str(value) in filter_values)
 
 
+def _normalize_data_eq_filters(
+    values: str | Iterable[str] | None,
+) -> dict[str, set[str]]:
+    if values is None:
+        return {}
+    if isinstance(values, str):
+        raw_values = [values]
+    else:
+        raw_values = list(values)
+    out: dict[str, set[str]] = defaultdict(set)
+    for raw_value in raw_values:
+        text = str(raw_value)
+        if "=" not in text:
+            raise ValueError("data_eq filters must use key=value")
+        key, expected = text.split("=", 1)
+        key = key.strip()
+        if not key:
+            raise ValueError("data_eq filters must include a non-empty key")
+        out[key].add(expected.strip())
+    return {key: set(values) for key, values in sorted(out.items())}
+
+
+def _data_value_matches(value: Any, expected_values: set[str]) -> bool:
+    candidates = {str(value)}
+    if isinstance(value, bool):
+        candidates.add(str(value).lower())
+    elif value is None:
+        candidates.add("null")
+    return bool(candidates.intersection(expected_values))
+
+
+def _data_filters_match(
+    live_event: dict[str, Any],
+    data_eq_filters: dict[str, set[str]],
+) -> bool:
+    if not data_eq_filters:
+        return True
+    data = live_event.get("data")
+    if not isinstance(data, dict):
+        return False
+    for key, expected_values in data_eq_filters.items():
+        if key not in data:
+            return False
+        if not _data_value_matches(data.get(key), expected_values):
+            return False
+    return True
+
+
 def _filter_report(
     *,
     cycle_id: str | None,
@@ -161,6 +209,7 @@ def _filter_report(
     reason_codes: set[str],
     statuses: set[str],
     tags: set[str],
+    data_eq_filters: dict[str, set[str]],
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> dict[str, Any]:
@@ -197,6 +246,10 @@ def _filter_report(
         filters["statuses"] = sorted(statuses)
     if tags:
         filters["tags"] = sorted(tags)
+    if data_eq_filters:
+        filters["data_eq"] = {
+            key: sorted(values) for key, values in sorted(data_eq_filters.items())
+        }
     return filters
 
 
@@ -856,6 +909,7 @@ def build_event_report(
     reason_code: str | Iterable[str] | None = None,
     status: str | Iterable[str] | None = None,
     tag: str | Iterable[str] | None = None,
+    data_eq: str | Iterable[str] | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
     limit: int = 200,
@@ -934,6 +988,7 @@ def build_event_report(
     reason_code_filter = _normalize_filter_values(reason_code)
     status_filter = _normalize_filter_values(status)
     tag_filter = _normalize_filter_values(tag)
+    data_eq_filters = _normalize_data_eq_filters(data_eq)
     has_non_cycle_filter = any(
         (
             event_type_filter,
@@ -949,6 +1004,7 @@ def build_event_report(
             reason_code_filter,
             status_filter,
             tag_filter,
+            data_eq_filters,
         )
     )
     trace_without_cycle = (
@@ -1089,6 +1145,7 @@ def build_event_report(
                     tag_matches = not tag_filter or bool(
                         set(record_tags).intersection(tag_filter)
                     )
+                    data_matches = _data_filters_match(live_event, data_eq_filters)
                     query_matches = (
                         event_type_matches
                         and cycle_matches
@@ -1104,6 +1161,7 @@ def build_event_report(
                         and reason_code_matches
                         and status_matches
                         and tag_matches
+                        and data_matches
                     )
 
                     if has_query_filter and query_matches:
@@ -1220,6 +1278,7 @@ def build_event_report(
             reason_codes=reason_code_filter,
             statuses=status_filter,
             tags=tag_filter,
+            data_eq_filters=data_eq_filters,
             since_ms=since_filter,
             until_ms=until_filter,
         )
@@ -1255,6 +1314,7 @@ def build_event_report(
             reason_codes=reason_code_filter,
             statuses=status_filter,
             tags=tag_filter,
+            data_eq_filters=data_eq_filters,
             since_ms=since_filter,
             until_ms=until_filter,
         )
