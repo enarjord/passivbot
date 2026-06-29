@@ -89,6 +89,14 @@ Related detailed plans:
    eligibility. Any implementation must include targeted tests and structured
    startup timing evidence.
 
+   Work log:
+   - 2026-06-29: After PR #858 deployed to VPS5 at `8c908e72`, new structured
+     `hsl.replay.progress` events showed all four forager bots reached
+     `hsl_history_inputs_loaded` and `hsl_price_history_fetch_started`, but no
+     bot had emitted `hsl_price_history_fetch_completed` or timeline replay
+     stages in the early smoke window. This localizes the current bottleneck to
+     HSL price/candle history fetching before dense timeline replay begins.
+
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
    `passivbot tool live-incident-bundle` collects local monitor event reports,
@@ -163,6 +171,13 @@ Related detailed plans:
      `passivbot live` process pattern. The planner now records that future
      execution must use exact tmux panes or exact canonical process rows, and
      rejects broad process-pattern kill/signal commands.
+   - 2026-06-29: VPS5 deploy of PR #858 at `8c908e72` re-confirmed that
+     shutdown responsiveness is uneven during HSL replay. Hyperliquid stopped
+     promptly on the first signal, but Binance, GateIO, Kucoin, and OKX were
+     still alive after roughly 20 seconds and required a second signal. Future
+     restart orchestration should record per-bot shutdown timings, identify the
+     current blocking phase, and apply an explicit escalation ladder while
+     leaving bots running after smoke.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
