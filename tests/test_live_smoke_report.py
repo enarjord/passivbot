@@ -2107,11 +2107,20 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
                     "stage": "pair_replay",
                     "pair_idx": 3,
                     "pairs": 29,
+                    "current_position_pairs": 1,
                     "timeline_rows": 43201,
+                    "start_ts": 1782492000000,
+                    "end_ts": 1782492600000,
+                    "record_start_ts": 1782492000000,
                     "applied_rows": 12000,
                     "total_applied_rows": 64000,
+                    "skipped_price_symbols": 1,
+                    "missing_price_symbols": 2,
                     "rows_per_second": 318.415,
                     "elapsed_s": 201.2,
+                    "history_build_elapsed_s": 255.75,
+                    "price_history_fetch_elapsed_s": 210.5,
+                    "timeline_replay_elapsed_s": 12.25,
                     "timeframe": "1m",
                     "history_minutes": 43201,
                     "price_replay_symbols": 29,
@@ -2226,6 +2235,15 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path):
     assert active_group["latest"]["data"]["timeframe"] == "1m"
     assert active_group["latest"]["data"]["history_minutes"] == 43201
     assert active_group["latest"]["data"]["price_replay_symbols"] == 29
+    assert active_group["latest"]["data"]["current_position_pairs"] == 1
+    assert active_group["latest"]["data"]["skipped_price_symbols"] == 1
+    assert active_group["latest"]["data"]["missing_price_symbols"] == 2
+    assert active_group["latest"]["data"]["start_ts"] == 1782492000000
+    assert active_group["latest"]["data"]["end_ts"] == 1782492600000
+    assert active_group["latest"]["data"]["record_start_ts"] == 1782492000000
+    assert active_group["latest"]["derived"]["history_build_elapsed_ms"] == 255750
+    assert active_group["latest"]["derived"]["price_history_fetch_elapsed_ms"] == 210500
+    assert active_group["latest"]["derived"]["timeline_replay_elapsed_ms"] == 12250
     assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
         43201 * 29
     )
