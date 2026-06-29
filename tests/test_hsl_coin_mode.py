@@ -82,6 +82,7 @@ def bind_hsl_methods(bot):
         "_equity_hard_stop_compute_coin_stop_event",
         "_equity_hard_stop_finalize_coin_red_stop",
         "_equity_hard_stop_latest_panic_fill_timestamp_ms",
+        "_equity_hard_stop_latest_panic_fill_timestamp_optional_ms",
         "_equity_hard_stop_log_coin_cooldown_status",
         "_equity_hard_stop_emit_coin_status",
         "_equity_hard_stop_make_state",
@@ -826,8 +827,67 @@ async def test_coin_hsl_finalize_emits_flat_without_order_event():
     assert event.data["nonpanic_close_orders"] == 0
     assert event.data["flat_confirmations"] == 2
     assert event.data["stop_event_timestamp_ms"] == 180_000
+    assert event.data["stop_event_anchor_source"] == "current_time_fallback"
+    assert event.data["stop_event_anchor_timestamp_ms"] == 180_000
+    assert event.data["stop_event_anchor_fallback_used"] is True
     assert event.data["cooldown_until_ms"] == 480_000
     assert event.data["drawdown_raw"] == 0.0
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_finalize_flat_without_order_event_records_panic_fill_anchor():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.get_exchange_time = lambda: 180_000
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_flat_fill_anchor"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+    bot._pnls_manager = make_fake_pnls_manager(
+        [
+            {
+                "timestamp": 170_000,
+                "symbol": symbol,
+                "pside": "long",
+                "pb_order_type": "close_panic_long",
+                "pnl": -12.0,
+                "fee_paid": -0.1,
+            }
+        ]
+    )
+
+    await bot._equity_hard_stop_finalize_coin_red_stop(
+        "long",
+        symbol,
+        finalized_without_order=True,
+        flat_confirmations=2,
+        entry_orders=0,
+        nonpanic_close_orders=0,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.cycle_id == "cy_coin_flat_fill_anchor"
+    assert event.data["stop_event_timestamp_ms"] == 170_000
+    assert event.data["stop_event_anchor_source"] == "panic_fill"
+    assert event.data["stop_event_anchor_timestamp_ms"] == 170_000
+    assert event.data["stop_event_anchor_fallback_used"] is False
+    assert event.data["cooldown_until_ms"] == 470_000
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
