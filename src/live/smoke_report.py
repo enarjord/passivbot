@@ -1530,6 +1530,8 @@ def _risk_event_group(
         if payload.get(key) is not None
     }
     event_type = live_event.get("event_type") or row.get("kind")
+    hsl_anchor_sources: Counter[str] = Counter()
+    hsl_anchor_fallback_used = 0
     if event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER:
         for key in (
             "drawdown_score",
@@ -1539,6 +1541,11 @@ def _risk_event_group(
             "red_threshold",
         ):
             latest_data.pop(key, None)
+        anchor_source = latest_data.get("stop_event_anchor_source")
+        if anchor_source not in (None, ""):
+            hsl_anchor_sources[str(anchor_source)] += 1
+        if latest_data.get("stop_event_anchor_fallback_used") is True:
+            hsl_anchor_fallback_used = 1
     return {
         "bot": bot_key,
         "event_type": event_type,
@@ -1554,6 +1561,8 @@ def _risk_event_group(
         "latest_path": str(path),
         "latest_line": int(line_no),
         "latest_data": latest_data,
+        "_hsl_anchor_sources": hsl_anchor_sources,
+        "_hsl_anchor_fallback_used": hsl_anchor_fallback_used,
         "latest_ids": {
             key: ids.get(key)
             for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
@@ -1578,6 +1587,12 @@ def _merge_risk_event_group(
         groups[key] = group
         return
     existing["count"] = int(existing.get("count", 0)) + 1
+    existing_sources = existing.setdefault("_hsl_anchor_sources", Counter())
+    if isinstance(existing_sources, Counter):
+        existing_sources.update(group.get("_hsl_anchor_sources") or Counter())
+    existing["_hsl_anchor_fallback_used"] = int(
+        existing.get("_hsl_anchor_fallback_used") or 0
+    ) + int(group.get("_hsl_anchor_fallback_used") or 0)
     current_key = _sort_event_position_key(
         ts=group.get("latest_ts"),
         seq=group.get("latest_seq"),
@@ -1605,6 +1620,56 @@ def _merge_risk_event_group(
             existing[field] = group.get(field)
 
 
+def _summarize_hsl_flat_finalization_anchors(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+) -> dict[str, Any]:
+    source_counts: Counter[str] = Counter()
+    total = 0
+    fallback_used = 0
+    bots: set[str] = set()
+    symbols: Counter[str] = Counter()
+    for group in groups.values():
+        if group.get("event_type") != EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER:
+            continue
+        count = int(group.get("count") or 0)
+        total += count
+        bot = group.get("bot")
+        if bot not in (None, ""):
+            bots.add(str(bot))
+        symbol = group.get("symbol")
+        if symbol not in (None, ""):
+            symbols[str(symbol)] += count
+        sources = group.get("_hsl_anchor_sources")
+        if isinstance(sources, Counter):
+            source_counts.update(sources)
+        latest_data = group.get("latest_data")
+        if (
+            count > 0
+            and isinstance(latest_data, dict)
+            and not sources
+            and latest_data.get("stop_event_anchor_source") not in (None, "")
+        ):
+            source_counts[str(latest_data.get("stop_event_anchor_source"))] += count
+        fallback_used += int(group.get("_hsl_anchor_fallback_used") or 0)
+    if total <= 0:
+        return {
+            "total": 0,
+            "source_counts": {},
+            "fallback_used": 0,
+            "fallback_used_pct": 0,
+            "bots": 0,
+            "symbols": {"count": 0, "sample": [], "truncated": 0},
+        }
+    return {
+        "total": total,
+        "source_counts": dict(source_counts.most_common()),
+        "fallback_used": fallback_used,
+        "fallback_used_pct": round((fallback_used / total) * 100.0, 3),
+        "bots": len(bots),
+        "symbols": _symbol_sample(symbols, limit=8),
+    }
+
+
 def _summarize_risk_events(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
@@ -1623,7 +1688,14 @@ def _summarize_risk_events(
         {
             key: value
             for key, value in group.items()
-            if key not in {"latest_path", "latest_line", "latest_seq"}
+            if key
+            not in {
+                "latest_path",
+                "latest_line",
+                "latest_seq",
+                "_hsl_anchor_sources",
+                "_hsl_anchor_fallback_used",
+            }
             and value not in (None, {}, [])
         }
         for group in ordered[:RISK_EVENT_GROUP_LIMIT]
@@ -1632,6 +1704,9 @@ def _summarize_risk_events(
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > RISK_EVENT_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
+        "hsl_flat_finalization_anchors": _summarize_hsl_flat_finalization_anchors(
+            groups
+        ),
         "groups": compact_groups,
     }
 
@@ -3897,6 +3972,9 @@ def _summary_limited_groups(
                 "latest_worker_not_alive_count"
             ),
             "latest_stopping_count": summary.get("latest_stopping_count"),
+            "hsl_flat_finalization_anchors": summary.get(
+                "hsl_flat_finalization_anchors"
+            ),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
             "groups": groups[:limit],
@@ -4353,6 +4431,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "risk_events": {
             "total": _count_value(risk_events.get("total")),
             "event_types": risk_events.get("event_types") or {},
+            "hsl_flat_finalization_anchors": risk_events.get(
+                "hsl_flat_finalization_anchors"
+            )
+            or {},
         },
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
