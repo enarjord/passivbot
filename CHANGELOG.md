@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --processes` now performs a read-only
+  local config check for running/expected live commands and reports a hard
+  smoke failure when account-level HSL (`unified`/`pside`) is combined with an
+  active balance override.
 - `passivbot tool live-config-preflight` now flags active
   `balance_override` plus account-level HSL signal modes (`unified`/`pside`)
   before live startup, including an optional `--balance-override` argument for
