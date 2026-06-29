@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `fda17fad1` after PR #875, `Scope live event queries by exchange and user`.
+- `1c9d05036` after PR #877, `Prune old event segments for windowed queries`.
 
 Current review gate:
 
@@ -30,6 +30,30 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #877 at `1c9d05036`.
+- PR #877 added read-only `live-event-query` file-level window pruning: when
+  `--since-ms` or `--recent-minutes` is set, files whose filesystem mtime is
+  strictly before the query window are skipped before opening, and
+  `event_window.files_skipped_before_window` reports the count. Row-level time
+  filtering remains authoritative for all scanned files. The slice did not add
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, order/risk logic, or trading behavior.
+- PR #877 passed the normal review gate: Claude approved head `47a1ec71`,
+  Hermes approved head `47a1ec71`, and CI was green. Local validation covered
+  the full `tests/test_live_event_query.py` suite, compileall for touched files,
+  `git diff --check`, and the silent-handling scan on touched files.
+- After deploying PR #877 to VPS5, the bots were not restarted because the
+  change was read-only query tooling. All five configured `passivbot live`
+  processes remained running. The previously slow Gate.io/ZEC rotated query
+  completed under a 20-second timeout wrapper, scanning 4 Gate.io files and
+  reporting `files_skipped_before_window=160`; it found no matching ZEC
+  `hsl.status` rows in the 180-minute window. No probe process was left running.
+- A 5-minute brief smoke on `v8@1c9d0503` reported `ok=true`,
+  `hard_failures=0`, `hard_failure_sources.total=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state, `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Known non-hard attention remained from EMA readiness and HSL/unstuck status
+  groups.
 - Repository pulled through PR #875 at `fda17fad1`.
 - PR #875 added read-only `passivbot tool live-event-query --exchange` and
   `--user` filters plus conservative monitor-root path pruning, so incident
