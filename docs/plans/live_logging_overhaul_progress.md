@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d2eedb4e` after PR #846, `Emit create skip events for market-distance guard`.
+- `446049aa` after PR #848, `Emit create skip events for pre-create snapshots`.
 
 Current review gate:
 
@@ -30,7 +30,7 @@ Current review gate:
 
 VPS5 deployment status:
 
-- Current ledger catch-up through PR #846:
+- Current ledger catch-up through PR #848:
   - PR #836 updated this progress ledger after the realized-loss gate event
     slice.
   - PR #837 added structured `entry.min_effective_cost_blocked` events for
@@ -57,6 +57,36 @@ VPS5 deployment status:
   - PR #846 added structured `execution.create_skipped` events for the
     pre-create market-distance guard, using reason code
     `limit_order_create_market_distance` and bounded group/sample payloads.
+  - PR #847 updated this progress ledger after the market-distance guard event
+    slice.
+  - PR #848 added structured `execution.create_skipped` events for the
+    remaining pre-create market snapshot skip paths: non-refreshable invalid
+    planning snapshots, failed market snapshot refresh, and stale market
+    snapshots after refresh. The slice uses reason codes
+    `pre_create_planning_snapshot_invalid` and
+    `pre_create_market_snapshot_unavailable`, bounded allowlisted details, and
+    no raw exception text.
+- Repository pulled through PR #848 at `446049aa`.
+- Bots were not restarted for PR #848 because the change is an
+  observability-only event producer beside already-existing pre-create
+  `return []` decisions. All five configured `passivbot live` processes
+  remained running.
+- PR #848 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. The slice reuses the existing off-console
+  `execution.create_skipped` route and existing best-effort create-filter
+  emitter, so event sink/pipeline failures do not affect order filtering.
+- Immediate read-only VPS5 smoke after the PR #848 pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at
+  `repository.head=446049aa`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Remaining attention came from known
+  non-hard EMA readiness and HSL/unstuck status groups.
+- A follow-up read-only VPS5 smoke after a short observation window again
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=446049aa`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. All five configured bots were left
+  running.
 - VPS5 was already deployed at `b207bb42` with all five configured bots running.
   A 10-minute read-only smoke reported `ok=true`, `hard_failures=0`,
   `logs.hard_matches=0`, `matched_expected=5`, `missing_expected=[]`, clean
@@ -819,7 +849,7 @@ VPS5 deployment status:
 | Phase 2: data gatherer events | Mostly done | Account remote-call cohorts, candle tail/coverage, fill refresh summaries, cache load/flush, warmup/startup timing | Not every exchange/network call is instrumented; richer remote-call payload summaries remain incremental |
 | Phase 3: Rust planning and payload refs | Partially done | Rust orchestrator called/returned events, redacted error hardening, action/planning summaries | Full raw-ref retention/debug policy still limited |
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events, HSL replay failure events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
-| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
+| Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events; PR #848 mirrors pre-create planning/market snapshot skips into off-console `execution.create_skipped` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
