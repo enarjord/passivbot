@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `cf7e5d25` after PR #863, `Show active HSL replay event age in reports`.
+- `f63823a0` after PR #865, `Emit HSL flat finalization event`.
 
 Current review gate:
 
@@ -27,9 +27,38 @@ Current review gate:
   now Claude + Hermes + CI. For low-risk docs/tooling-only slices, a degraded
   gate may still be used after repeated Claude absence, but that exception must
   be called out in the progress evidence.
+- PR #866, `Show active HSL age in startup readiness`, is open and CI-green at
+  `a9f591e3`. It has a stale pre-rebase Claude approval and is waiting for
+  current-head reviewer confirmation before merge.
 
 VPS5 deployment status:
 
+- Repository pulled through PR #865 at `f63823a0`.
+- PR #865 added the structured `hsl.red_finalized_without_order` event for HSL
+  RED supervisor paths that finalize cooldown after authoritative state proves
+  the pside/symbol is already flat and no exchange close order is needed. The
+  event is routed away from console/text by default and carries bounded
+  correlation fields: stop/cooldown timestamps, flat confirmation count,
+  blocking-order counts, no-exchange-close booleans, and HSL drawdown summary
+  ratios. It does not change finalization conditions, panic supervision, order
+  creation, cooldown math, forced modes, or exchange writes.
+- PR #865 passed the normal review gate on the current rebased head: Claude
+  approved the rebase at `8032495d`, Hermes approved the same head, and CI was
+  green. Local validation for the slice covered the focused coin-HSL
+  finalization tests, event-bus route/reason-code tests, registry-doc tests,
+  compileall for touched files, and `git diff --check`.
+- After deploying PR #865 to VPS5, the bots were not restarted. All five
+  configured `passivbot live` processes were still running. A 5-minute settled
+  smoke reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=f63823a0`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. Known non-hard attention remained
+  from EMA readiness groups and ZEC HSL cooldown groups. The new event was not
+  expected to appear without a new flat RED finalization transition.
+- Repository pulled through PR #864 at `66ac3a1f`.
+- PR #864 updated this progress ledger after PR #863 and caught the ledger up
+  through PRs #859-#863. It was docs-only, passed CI, and was approved by both
+  Claude and Hermes.
 - Repository pulled through PR #863 at `cf7e5d25`.
 - PR #863 added report-only active-age projections for non-terminal HSL replay
   groups. `live-smoke-report` and `live-performance-report` now include the age
