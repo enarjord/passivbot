@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 import json
+import math
 from pathlib import Path
 from typing import Any
 
@@ -400,6 +401,62 @@ def _any_hsl_enabled(hsl_sides: dict[str, dict[str, Any]]) -> bool:
     return any(side_report.get("enabled") is True for side_report in hsl_sides.values())
 
 
+def _balance_override_report(
+    live: dict[str, Any],
+    *,
+    override_value: Any = _MISSING,
+) -> dict[str, Any]:
+    source = "argument" if override_value is not _MISSING else "live.balance_override"
+    raw_value = override_value if override_value is not _MISSING else live.get("balance_override", _MISSING)
+    if raw_value is _MISSING:
+        return {"active": False, "source": "none", "present": False}
+    if raw_value in (None, ""):
+        return {
+            "active": False,
+            "source": source,
+            "present": True,
+            "value": raw_value,
+        }
+    if isinstance(raw_value, bool):
+        return {
+            "active": False,
+            "source": source,
+            "present": True,
+            "value_type": type(raw_value).__name__,
+            "status": "invalid_bool",
+        }
+    try:
+        number = float(raw_value)
+    except (TypeError, ValueError):
+        return {
+            "active": False,
+            "source": source,
+            "present": True,
+            "value_type": type(raw_value).__name__,
+            "status": "invalid",
+        }
+    if not math.isfinite(number) or number <= 0.0:
+        return {
+            "active": False,
+            "source": source,
+            "present": True,
+            "value_type": type(raw_value).__name__,
+            "status": "invalid",
+        }
+    return {
+        "active": True,
+        "source": source,
+        "present": True,
+        "value": number,
+        "status": "valid",
+    }
+
+
+def _effective_hsl_signal_mode(live: dict[str, Any]) -> str:
+    raw = live.get("hsl_signal_mode", "unified")
+    return str(raw)
+
+
 def _bot_side_config(config: dict[str, Any], side: str) -> dict[str, Any]:
     bot = config.get("bot")
     if not isinstance(bot, dict):
@@ -432,6 +489,7 @@ def _cache_readiness_report(
     *,
     identity: dict[str, Any],
     hsl_sides: dict[str, dict[str, Any]],
+    balance_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     checks = {
         key: _setting_display(live, key)
@@ -586,6 +644,21 @@ def _cache_readiness_report(
         hsl["evidence"].append(
             {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
         )
+        signal_mode = _effective_hsl_signal_mode(live)
+        if (
+            isinstance(balance_override, dict)
+            and balance_override.get("active") is True
+            and signal_mode in {"unified", "pside"}
+        ):
+            _append_attention(
+                hsl,
+                "hsl_balance_override_account_level_replay_unsafe",
+                (
+                    "HSL account-level history replay is unsafe with an active "
+                    "balance override; runtime will fail before replay for "
+                    f"live.hsl_signal_mode={signal_mode!r}"
+                ),
+            )
         if lookback_status in {"missing", "invalid", "invalid_bool", "negative", "zero"}:
             _append_attention(
                 hsl,
@@ -753,11 +826,13 @@ def build_live_config_diff_report(
         baseline_live,
         identity=baseline_identity,
         hsl_sides=baseline_hsl_sides,
+        balance_override=_balance_override_report(baseline_live),
     )
     target_readiness = _cache_readiness_report(
         target_live,
         identity=target_identity,
         hsl_sides=target_hsl_sides,
+        balance_override=_balance_override_report(target_live),
     )
     if baseline_readiness["status"] != target_readiness["status"]:
         changes.append(
@@ -823,6 +898,7 @@ def build_live_config_preflight_report(
     *,
     sample_size: int = DEFAULT_SAMPLE_SIZE,
     compare_config_path: str | Path | None = None,
+    balance_override: Any = _MISSING,
 ) -> dict[str, Any]:
     path = Path(config_path).expanduser()
     display_path = _user_safe_display_path(path)
@@ -904,6 +980,45 @@ def build_live_config_preflight_report(
         side: _hsl_side_report(side_config)
         for side, side_config in side_configs.items()
     }
+    balance_override_report = _balance_override_report(live, override_value=balance_override)
+    hsl_signal_mode = _effective_hsl_signal_mode(live)
+    if balance_override_report.get("status") in {"invalid", "invalid_bool"}:
+        issues.append(
+            _issue(
+                "warning",
+                f"balance_override_{balance_override_report['status']}",
+                "balance override is present but is not a positive finite number",
+                path=(
+                    "argument.balance_override"
+                    if balance_override_report.get("source") == "argument"
+                    else "live.balance_override"
+                ),
+            )
+        )
+    if (
+        _any_hsl_enabled(hsl_sides)
+        and balance_override_report.get("active") is True
+        and hsl_signal_mode in {"unified", "pside"}
+    ):
+        issues.append(
+            _issue(
+                "error",
+                "hsl_balance_override_account_level_replay_unsafe",
+                (
+                    "HSL signal modes 'unified' and 'pside' reconstruct "
+                    "account-level equity history and are unsafe with an active "
+                    "balance override; use hsl_signal_mode='coin', remove the "
+                    "balance override, disable HSL, or initialize an explicit "
+                    "HSL baseline/checkpoint before live trading"
+                ),
+                path=(
+                    "argument.balance_override"
+                    if balance_override_report.get("source") == "argument"
+                    else "live.balance_override"
+                ),
+            )
+        )
+    severity_counts = Counter(issue["severity"] for issue in issues)
     report = {
         "ok": "error" not in severity_counts,
         "config_path": display_path,
@@ -911,7 +1026,9 @@ def build_live_config_preflight_report(
         "identity": identity_report,
         "hsl": {
             "signal_mode": live.get("hsl_signal_mode"),
+            "effective_signal_mode": hsl_signal_mode,
             "cooldown_position_policy": live.get("hsl_position_during_cooldown_policy"),
+            "balance_override": balance_override_report,
             "sides": hsl_sides,
         },
         "universe": {
@@ -929,6 +1046,7 @@ def build_live_config_preflight_report(
                 live,
                 identity=identity_report,
                 hsl_sides=hsl_sides,
+                balance_override=balance_override_report,
             ),
         },
         "issues": issues,
@@ -977,6 +1095,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional baseline live config JSON file for read-only diff reporting.",
     )
     parser.add_argument(
+        "--balance-override",
+        dest="balance_override",
+        default=_MISSING,
+        help=(
+            "Optional balance override from the intended live launch command. "
+            "Use this when preflighting a run that will pass -bo/--balance-override."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -991,6 +1118,7 @@ def main(argv: list[str] | None = None) -> int:
         args.config_path,
         sample_size=int(args.sample_size),
         compare_config_path=args.compare_config_path,
+        balance_override=args.balance_override,
     )
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1

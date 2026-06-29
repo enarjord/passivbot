@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-config-preflight` now flags active
+  `balance_override` plus account-level HSL signal modes (`unified`/`pside`)
+  before live startup, including an optional `--balance-override` argument for
+  preflighting runs that will pass `-bo`.
 - Added a live HSL safety guard: `hsl_signal_mode=unified` or `pside` now
   fails before account-level equity replay when `balance_override` is active,
   preventing synthetic historical peaks from triggering false RED panic orders
