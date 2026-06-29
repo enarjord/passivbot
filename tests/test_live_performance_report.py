@@ -2148,8 +2148,24 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                 },
             ),
             _monitor_row(
-                event_type="risk.mode_changed",
+                event_type="hsl.red_finalized_without_order",
                 seq=3,
+                ts=2500,
+                component="risk.hsl",
+                status="succeeded",
+                reason_code="hsl_red_finalized_without_exchange_order",
+                symbol="BTC/USDT:USDT",
+                pside="long",
+                data={
+                    "cooldown_until_ms": 999999,
+                    "stop_event_timestamp_ms": 2400,
+                    "balance": 12345.67,
+                    "secret_marker": "flat-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="risk.mode_changed",
+                seq=4,
                 ts=3000,
                 component="risk.hsl.mode",
                 reason_code="hsl_halted",
@@ -2162,7 +2178,7 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
             ),
             _monitor_row(
                 event_type="unstuck.selection",
-                seq=4,
+                seq=5,
                 ts=4000,
                 component="risk.unstuck.selection",
                 reason_code="unstuck_selection",
@@ -2177,7 +2193,7 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
             ),
             _monitor_row(
                 event_type="risk.realized_loss_gate_blocked",
-                seq=5,
+                seq=6,
                 ts=4500,
                 component="risk.realized_loss_gate",
                 status="deferred",
@@ -2194,7 +2210,7 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
             ),
             _monitor_row(
                 event_type="hsl.replay.progress",
-                seq=6,
+                seq=7,
                 ts=5000,
                 component="risk.hsl.replay",
                 reason_code="replay_progress",
@@ -2213,8 +2229,9 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     }
     rendered = json.dumps(risk, sort_keys=True)
 
-    assert risk["total_events"] == 5
+    assert risk["total_events"] == 6
     assert risk["event_types"] == {
+        "hsl.red_finalized_without_order": 1,
         "hsl.red_triggered": 1,
         "hsl.status": 1,
         "risk.mode_changed": 1,
@@ -2226,6 +2243,15 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert groups["hsl.status"]["reason_codes"] == {"cooldown_active": 1}
     assert groups["hsl.status"]["symbols_sample"] == ["BTC/USDT:USDT"]
     assert groups["hsl.status"]["psides"] == {"long": 1}
+    assert groups["hsl.red_finalized_without_order"]["statuses"] == {
+        "succeeded": 1
+    }
+    assert groups["hsl.red_finalized_without_order"]["reason_codes"] == {
+        "hsl_red_finalized_without_exchange_order": 1
+    }
+    assert groups["hsl.red_finalized_without_order"]["symbols_sample"] == [
+        "BTC/USDT:USDT"
+    ]
     assert groups["unstuck.selection"]["symbols_sample"] == ["ETH/USDT:USDT"]
     assert groups["risk.realized_loss_gate_blocked"]["symbols_sample"] == ["SOL/USDT:USDT"]
     assert groups["risk.realized_loss_gate_blocked"]["statuses"] == {"deferred": 1}
@@ -2234,6 +2260,7 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert "1111.22" not in rendered
     assert "hsl-secret" not in rendered
     assert "red-secret" not in rendered
+    assert "flat-secret" not in rendered
     assert "mode-secret" not in rendered
     assert "unstuck-secret" not in rendered
     assert "loss-gate-secret" not in rendered

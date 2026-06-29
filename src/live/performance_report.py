@@ -147,6 +147,7 @@ _RISK_ACTIVITY_EVENT_TYPES = {
     "hsl.transition",
     "hsl.status",
     "hsl.red_triggered",
+    "hsl.red_finalized_without_order",
     "hsl.cooldown_started",
     "hsl.cooldown_ended",
     "unstuck.status",

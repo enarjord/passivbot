@@ -78,6 +78,7 @@ RISK_EVENT_TYPES = {
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
     EventTypes.HSL_RED_TRIGGERED,
+    EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
     EventTypes.UNSTUCK_STATUS,
@@ -1509,6 +1510,15 @@ def _risk_event_group(
             "cooldown_remaining_seconds",
             "last_red_ts",
             "pending_red_since_ms",
+            "stop_event_timestamp_ms",
+            "no_exchange_close_needed",
+            "exchange_close_order_submitted",
+            "panic_order_submitted_count",
+            "symbol_position_open",
+            "position_count",
+            "entry_orders",
+            "nonpanic_close_orders",
+            "flat_confirmations",
             "changed",
             "price_diff_pct",
             "status_counts",
@@ -1516,9 +1526,19 @@ def _risk_event_group(
         )
         if payload.get(key) is not None
     }
+    event_type = live_event.get("event_type") or row.get("kind")
+    if event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER:
+        for key in (
+            "drawdown_score",
+            "drawdown_raw",
+            "drawdown_ema",
+            "dist_to_red",
+            "red_threshold",
+        ):
+            latest_data.pop(key, None)
     return {
         "bot": bot_key,
-        "event_type": live_event.get("event_type") or row.get("kind"),
+        "event_type": event_type,
         "reason_code": live_event.get("reason_code"),
         "status": live_event.get("status"),
         "level": live_event.get("level"),
