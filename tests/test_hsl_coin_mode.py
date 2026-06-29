@@ -909,6 +909,66 @@ async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_history_replay_ignores_panic_marker_without_reconstructed_red():
+    bot = make_coin_bot()
+    symbol = "A"
+    writes = []
+    bot._equity_hard_stop_write_latch = (
+        lambda pside, payload, symbol=None: writes.append((pside, symbol, payload))
+        or "/tmp/hsl_coin_ignored.json"
+    )
+
+    async def fake_history(current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                },
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 120_500,
+                    "minute_timestamp": 120_000,
+                    "pside": "long",
+                    "symbol": symbol,
+                }
+            ],
+            "fill_events": [
+                {
+                    "timestamp": 120_500,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "pb_order_type": "close_panic_long",
+                }
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+    bot.get_exchange_time = lambda: 180_000
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    state = bot._hsl_coin_state("long", symbol)
+    assert state["halted"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["last_stop_event"] is None
+    assert state["runtime"].red_latched() is False
+    assert writes == []
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_requires_coin_timeline_fields():
     bot = make_coin_bot()
     symbol = "A"

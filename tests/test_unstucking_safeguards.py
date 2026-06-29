@@ -1160,6 +1160,15 @@ def _make_unstuck_order(symbol="TEST/USDT", type_id=0x1234, price=100.0):
     }
 
 
+def test_hsl_replay_marker_confirmation_fails_loudly_on_incomplete_metrics():
+    import passivbot_hsl
+
+    with pytest.raises(ValueError, match="confirmation metrics are incomplete"):
+        passivbot_hsl._equity_hard_stop_replay_marker_confirms_red(
+            {"drawdown_raw": 0.0, "red_threshold": 0.1}
+        )
+
+
 def _make_order(
     symbol="TEST/USDT",
     *,
@@ -3248,6 +3257,93 @@ async def test_hard_stop_initialize_from_history_reconstructs_active_cooldown_wi
     assert _hsl_state(bot)["halted"] is True
     assert _hsl_state(bot)["no_restart_latched"] is False
     assert _hsl_state(bot)["cooldown_until_ms"] == 241_500
+
+
+@pytest.mark.asyncio
+async def test_hard_stop_initialize_from_history_ignores_panic_marker_without_reconstructed_red(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot, "XMR/USDT:USDT")
+    bot.positions[symbol]["long"]["size"] = 0.0
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["red_threshold"] = 0.05
+    _hsl_cfg(bot)["ema_span_minutes"] = 1.0
+    _hsl_cfg(bot)["cooldown_minutes_after_red"] = 5.0
+    _hsl_cfg(bot)["no_restart_drawdown_threshold"] = 0.2
+    bot.config["live"]["hsl_signal_mode"] = "pside"
+    bot.balance = 100.0
+
+    async def fake_history(*, current_balance=None):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 1_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                },
+                {
+                    "timestamp": 121_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_long": 0.0,
+                    "realized_pnl_short": 0.0,
+                    "unrealized_pnl_long": 0.0,
+                    "unrealized_pnl_short": 0.0,
+                    "is_flat": True,
+                    "is_flat_long": True,
+                    "is_flat_short": True,
+                },
+            ],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 121_500,
+                    "minute_timestamp": 121_000,
+                    "pside": "long",
+                    "symbol": symbol,
+                }
+            ],
+            "fill_events": [
+                _make_hsl_fill_event(
+                    121_500,
+                    symbol=symbol,
+                    pside="long",
+                    action="decrease",
+                    pb_order_type="close_panic_long",
+                )
+            ],
+        }
+
+    writes = []
+
+    def fake_write(pside, payload):
+        writes.append((pside, payload))
+        return "/tmp/ignored_hsl_marker.json"
+
+    async def fake_upnl(*_args, **_kwargs):
+        return 0.0
+
+    monkeypatch.setattr(bot, "get_balance_equity_history", fake_history)
+    monkeypatch.setattr(bot, "_equity_hard_stop_write_latch", fake_write)
+    monkeypatch.setattr(bot, "_calc_upnl_sum_strict", fake_upnl)
+    monkeypatch.setattr(bot, "get_exchange_time", lambda: 150_000)
+
+    await bot._equity_hard_stop_initialize_from_history()
+
+    state = _hsl_state(bot)
+    assert state["halted"] is False
+    assert state["cooldown_until_ms"] is None
+    assert state["last_stop_event"] is None
+    assert state["runtime"].red_latched() is False
+    assert writes == []
 
 
 @pytest.mark.asyncio

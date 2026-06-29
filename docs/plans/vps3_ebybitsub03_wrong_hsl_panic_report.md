@@ -143,12 +143,16 @@ must not proceed into history replay. Operators must remove the balance
 override, switch to `hsl_signal_mode=coin`, disable HSL, or wait for an explicit
 baseline/checkpoint mechanism.
 
-This fix prevents the same false-panic calculation on new starts, but it does
-not decide how to treat historical fills that were already created by the bad
-model. In this incident the exchange history now contains a
-`close_panic_long` fill for XMR. Stateless replay can legitimately see that as
-cooldown evidence unless a future, explicit recovery contract marks the event as
-operator-invalid.
+This fix prevents the same false-panic calculation on new starts. Follow-up
+inspection showed a second unsafe replay behavior: after restart without
+`-bo`, the latest historical `close_panic_long` marker reconstructed to only
+`drawdown_raw=0.001123`, but replay still treated the marker as an active RED
+cooldown. The recovery contract is now explicit: a historical `close_panic_*`
+marker may preserve cooldown only when reconstructed HSL metrics at that marker
+confirm RED by tier, score, or raw drawdown. If reconstructed metrics are
+nowhere near the RED threshold, replay must ignore the marker, must not write a
+latch, and must not rebuild cooldown from the same marker through the generic
+latest-panic-fill fallback.
 
 ## Follow-Up Work
 
@@ -157,11 +161,9 @@ operator-invalid.
 - Include baseline source in HSL metrics/latch payloads.
 - Add startup diagnostics when raw drawdown is above red but EMA has not caught
   up yet.
-- Decide how to treat existing latch files or panic fills created by the unsafe
-  overridden account-level replay model. Any ignore/recovery mechanism must be
-  explicit, auditable, config- or exchange-derived, and covered by tests because
-  silently ignoring exchange-derived panic fills would weaken the stateless HSL
-  cooldown contract.
+- Add richer operator-facing diagnostics for ignored historical panic markers,
+  including marker timestamp, reconstructed drawdown, threshold, and whether the
+  marker came from an older unsafe balance-override run.
 - Add preflight/reporting that flags `balance_override` plus account-level HSL
   before an operator starts live, so this class of configuration cannot be
   missed in a manual restart.

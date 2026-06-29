@@ -7,6 +7,10 @@ All notable user-facing changes will be documented in this file.
 - Added structured `hsl.raw_red_pending` diagnostics when HSL raw drawdown is
   already beyond red but EMA-confirmed drawdown has not crossed yet, helping
   operators spot pending RED risk without changing trading behavior.
+- HSL history replay now ignores historical `close_panic_*` markers that cannot
+  be confirmed as RED by reconstructed HSL metrics at the marker timestamp, so
+  an old or erroneous panic fill does not recreate RED cooldown or supervisor
+  state on restart.
 - `passivbot tool live-smoke-report --processes` now performs a read-only
   local config check for running/expected live commands and reports a hard
   smoke failure when account-level HSL (`unified`/`pside`) is combined with an
