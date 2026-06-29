@@ -48,10 +48,18 @@ VPS5 deployment status:
   - PR #842 added structured
     `risk.entry_cooldown_delta_anchored` events and registry/report support for
     entry-cooldown anchor updates.
-- This progress ledger has not yet recorded fresh VPS5 deployment/smoke
-  evidence for PRs #837 through #842. The next VPS5 smoke should verify the
-  remote repository head and distinguish normal logging-slice validation from
-  the separate HSL safety guard behavior.
+- VPS5 was already deployed at `b207bb42` with all five configured bots running.
+  A 10-minute read-only smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, `missing_expected=[]`, clean
+  tracked repository state, and `account_critical_remote_calls.failed=0`.
+  Non-hard attention came from one recovered Hyperliquid candle timeout, six
+  Hyperliquid EMA unavailable symbols, and active HSL replay on Binance, GateIO,
+  and OKX.
+- The same smoke re-confirmed the separate HSL coin replay performance/safety
+  gap: after several minutes of startup, Binance, GateIO, and OKX were still in
+  `hsl.replay.progress` pair replay at roughly 10-13% of estimated dense
+  pair-row work. That gap remains tracked outside the logging-overhaul stream as
+  live startup readiness/performance work.
 - Repository pulled through PR #835 at `17962106`.
 - Bots were not restarted for PR #835 because the change is an observability-only
   structured event and report aggregation slice. All five configured
