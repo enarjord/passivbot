@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d44c5132` after PR #866, `Show active HSL age in startup readiness`.
+- `a5af777c` after PR #868, `Surface HSL flat finalizations in live reports`.
 
 Current review gate:
 
@@ -30,6 +30,27 @@ Current review gate:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #868 at `a5af777c`.
+- PR #868 made the already-emitted `hsl.red_finalized_without_order` event
+  visible in the operator-facing report surfaces. `live-smoke-report` now
+  includes it in `risk_events` with bounded provenance fields only, and
+  `live-performance-report` now includes it in `risk_activity` as envelope
+  grouping metadata. The smoke projection explicitly filters drawdown ratio
+  fields for this event, so the shareable report carries stop/cooldown
+  timestamps, booleans, and counts without account/risk magnitude values. The
+  slice did not add event producers, exchange calls, cache mutation, readiness
+  gates, console routing, or trading behavior.
+- PR #868 passed the normal review gate: Claude approved the amended
+  value-safety head at `ebeb9caf`, Hermes approved the same head, and CI was
+  green. Local validation covered the full smoke/performance report test files
+  (`94 passed`), compileall for touched files, and `git diff --check`.
+- After deploying PR #868 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@a5af777c` reported
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Known non-hard attention remained from EMA readiness groups, existing HSL
+  cooldown/status groups, and one non-hard staged-readiness group.
 - Repository pulled through PR #866 at `d44c5132`.
 - PR #866 added the active HSL replay age projection to
   `live-performance-report` startup readiness summaries. It derives the field
