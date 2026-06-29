@@ -58,6 +58,7 @@ across time.
 - `hsl.cooldown_ended`
 - `hsl.cooldown_started`
 - `hsl.raw_red_pending`
+- `hsl.red_finalized_without_order`
 - `hsl.red_triggered`
 - `hsl.replay.completed`
 - `hsl.replay.failed`
@@ -163,6 +164,7 @@ across time.
 - `hsl_price_history_symbol_fetch_completed`
 - `hsl_price_history_symbol_fetch_started`
 - `hsl_raw_red_pending_ema_confirmation`
+- `hsl_red_finalized_without_exchange_order`
 - `hsl_timeline_replay_completed`
 - `hsl_timeline_replay_started`
 - `initial_entry_distance_gate`

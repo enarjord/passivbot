@@ -769,6 +769,65 @@ async def test_coin_hsl_finalize_uses_latest_panic_fill_for_reset_boundary():
     assert events[0].reason_code == "coin_red_stop_finalized"
     assert events[0].data["stop_event_timestamp_ms"] == 170_000
     assert events[0].data["cooldown_until_ms"] == 470_000
+    assert [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER
+    ] == []
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_finalize_emits_flat_without_order_event():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.get_exchange_time = lambda: 180_000
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_flat_finalize"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    state = bot._hsl_coin_state("long", symbol)
+    state["pending_red_since_ms"] = 120_000
+
+    await bot._equity_hard_stop_finalize_coin_red_stop(
+        "long",
+        symbol,
+        finalized_without_order=True,
+        flat_confirmations=2,
+        entry_orders=0,
+        nonpanic_close_orders=0,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event
+        for event in sink.events
+        if event.event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.cycle_id == "cy_coin_flat_finalize"
+    assert event.pside == "long"
+    assert event.symbol == symbol
+    assert event.status == "succeeded"
+    assert event.reason_code == ReasonCodes.HSL_RED_FINALIZED_WITHOUT_EXCHANGE_ORDER
+    assert event.data["no_exchange_close_needed"] is True
+    assert event.data["exchange_close_order_submitted"] is False
+    assert event.data["panic_order_submitted_count"] == 0
+    assert event.data["symbol_position_open"] is False
+    assert event.data["position_count"] == 0
+    assert event.data["entry_orders"] == 0
+    assert event.data["nonpanic_close_orders"] == 0
+    assert event.data["flat_confirmations"] == 2
+    assert event.data["stop_event_timestamp_ms"] == 180_000
+    assert event.data["cooldown_until_ms"] == 480_000
+    assert event.data["drawdown_raw"] == 0.0
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

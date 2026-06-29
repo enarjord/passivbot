@@ -122,6 +122,7 @@ class EventTypes:
     HSL_REPLAY_COMPLETED = "hsl.replay.completed"
     HSL_REPLAY_FAILED = "hsl.replay.failed"
     HSL_RED_TRIGGERED = "hsl.red_triggered"
+    HSL_RED_FINALIZED_WITHOUT_ORDER = "hsl.red_finalized_without_order"
     HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
     UNSTUCK_STATUS = "unstuck.status"
@@ -231,6 +232,9 @@ class ReasonCodes:
     )
     HSL_PRICE_HISTORY_SYMBOL_FETCH_STARTED = "hsl_price_history_symbol_fetch_started"
     HSL_RAW_RED_PENDING_EMA_CONFIRMATION = "hsl_raw_red_pending_ema_confirmation"
+    HSL_RED_FINALIZED_WITHOUT_EXCHANGE_ORDER = (
+        "hsl_red_finalized_without_exchange_order"
+    )
     HSL_TIMELINE_REPLAY_COMPLETED = "hsl_timeline_replay_completed"
     HSL_TIMELINE_REPLAY_STARTED = "hsl_timeline_replay_started"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
@@ -378,6 +382,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_REPLAY_COMPLETED,
     EventTypes.HSL_REPLAY_FAILED,
     EventTypes.HSL_RED_TRIGGERED,
+    EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
     EventTypes.UNSTUCK_STATUS,
@@ -685,6 +690,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_REPLAY_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_FAILED: EventRoute(console=False, text=False),
     EventTypes.HSL_RED_TRIGGERED: EventRoute(console=False, text=False),
+    EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
     EventTypes.UNSTUCK_STATUS: EventRoute(console=False, text=False),

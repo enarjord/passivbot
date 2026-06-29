@@ -270,6 +270,63 @@ def _emit_hsl_red_triggered_once(
     state["red_trigger_event_emitted"] = True
 
 
+def _emit_hsl_red_finalized_without_order(
+    self,
+    stop_event: dict,
+    *,
+    pside: str,
+    symbol: str | None,
+    stop_ts_ms: int,
+    cooldown_until_ms: int | None,
+    flat_confirmations: int | None,
+    position_count: int | None = None,
+    entry_orders: int | None = None,
+    nonpanic_close_orders: int | None = None,
+) -> None:
+    data: dict[str, Any] = {
+        "reason": "red_finalized_without_exchange_order",
+        "no_exchange_close_needed": True,
+        "exchange_close_order_submitted": False,
+        "panic_order_submitted_count": 0,
+        "stop_event_timestamp_ms": int(stop_ts_ms),
+        "cooldown_until_ms": None
+        if cooldown_until_ms is None
+        else int(cooldown_until_ms),
+    }
+    if symbol is not None:
+        data["symbol_position_open"] = False
+    if position_count is not None:
+        data["position_count"] = int(position_count)
+    if entry_orders is not None:
+        data["entry_orders"] = int(entry_orders)
+    if nonpanic_close_orders is not None:
+        data["nonpanic_close_orders"] = int(nonpanic_close_orders)
+    if flat_confirmations is not None:
+        data["flat_confirmations"] = int(flat_confirmations)
+    for key in (
+        "signal_mode",
+        "tier",
+        "drawdown_raw",
+        "drawdown_ema",
+        "drawdown_score",
+        "red_threshold",
+    ):
+        if key in stop_event:
+            data[key] = stop_event[key]
+    _emit_hsl_event(
+        self,
+        EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
+        ("hsl", "risk", "red"),
+        data,
+        pside=pside,
+        symbol=symbol,
+        ts=stop_ts_ms,
+        level="info",
+        status="succeeded",
+        reason_code=ReasonCodes.HSL_RED_FINALIZED_WITHOUT_EXCHANGE_ORDER,
+    )
+
+
 def _emit_hsl_replay_event(
     self,
     event_type: str,
@@ -3764,7 +3821,17 @@ def _equity_hard_stop_log_red_progress(
     )
 
 
-async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Optional[dict] = None) -> None:
+async def _equity_hard_stop_finalize_red_stop(
+    self,
+    pside: str,
+    stop_event: Optional[dict] = None,
+    *,
+    finalized_without_order: bool = False,
+    flat_confirmations: int | None = None,
+    position_count: int | None = None,
+    entry_orders: int | None = None,
+    nonpanic_close_orders: int | None = None,
+) -> None:
     state = self._hsl_state(pside)
     cfg = self.hsl[pside]
     stop_ts_ms = int(self.get_exchange_time())
@@ -3814,6 +3881,19 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
     state["red_flat_confirmations"] = 0
     state["pending_red_since_ms"] = None
     latch_path = self._equity_hard_stop_write_latch(pside, payload)
+    if finalized_without_order:
+        _emit_hsl_red_finalized_without_order(
+            self,
+            stop_event,
+            pside=pside,
+            symbol=None,
+            stop_ts_ms=stop_ts_ms,
+            cooldown_until_ms=cooldown_until_ms,
+            flat_confirmations=flat_confirmations,
+            position_count=position_count,
+            entry_orders=entry_orders,
+            nonpanic_close_orders=nonpanic_close_orders,
+        )
     _emit_hsl_red_triggered_once(
         self,
         state,
@@ -3876,7 +3956,15 @@ async def _equity_hard_stop_finalize_red_stop(self, pside: str, stop_event: Opti
 
 
 async def _equity_hard_stop_finalize_coin_red_stop(
-    self, pside: str, symbol: str, stop_event: Optional[dict] = None
+    self,
+    pside: str,
+    symbol: str,
+    stop_event: Optional[dict] = None,
+    *,
+    finalized_without_order: bool = False,
+    flat_confirmations: int | None = None,
+    entry_orders: int | None = None,
+    nonpanic_close_orders: int | None = None,
 ) -> None:
     state = self._hsl_coin_state(pside, symbol)
     cfg = self.hsl[pside]
@@ -3924,6 +4012,19 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     state["pending_red_since_ms"] = None
     state["pnl_reset_timestamp_ms"] = int(stop_ts_ms) + 1
     latch_path = self._equity_hard_stop_write_latch(pside, payload, symbol=symbol)
+    if finalized_without_order:
+        _emit_hsl_red_finalized_without_order(
+            self,
+            stop_event,
+            pside=pside,
+            symbol=symbol,
+            stop_ts_ms=stop_ts_ms,
+            cooldown_until_ms=cooldown_until_ms,
+            flat_confirmations=flat_confirmations,
+            position_count=0,
+            entry_orders=entry_orders,
+            nonpanic_close_orders=nonpanic_close_orders,
+        )
     _emit_hsl_red_triggered_once(
         self,
         state,
@@ -4020,7 +4121,15 @@ async def _equity_hard_stop_run_red_supervisor(self) -> None:
                     state["red_flat_confirmations"],
                 )
                 if state["red_flat_confirmations"] >= 2:
-                    await self._equity_hard_stop_finalize_red_stop(pside, state["pending_stop_event"])
+                    await self._equity_hard_stop_finalize_red_stop(
+                        pside,
+                        state["pending_stop_event"],
+                        finalized_without_order=True,
+                        flat_confirmations=state["red_flat_confirmations"],
+                        position_count=n_positions,
+                        entry_orders=entry_orders,
+                        nonpanic_close_orders=nonpanic_close_orders,
+                    )
             active_red_psides = [
                 pside
                 for pside in self._hsl_psides()
@@ -4098,7 +4207,13 @@ async def _equity_hard_stop_run_coin_red_supervisor(self) -> None:
                         )
                     else:
                         await self._equity_hard_stop_finalize_coin_red_stop(
-                            pside, symbol, state["pending_stop_event"]
+                            pside,
+                            symbol,
+                            state["pending_stop_event"],
+                            finalized_without_order=True,
+                            flat_confirmations=state["red_flat_confirmations"],
+                            entry_orders=entry_orders,
+                            nonpanic_close_orders=nonpanic_close_orders,
                         )
                 else:
                     self._equity_hard_stop_set_coin_runtime_forced_mode(pside, symbol, "panic")
