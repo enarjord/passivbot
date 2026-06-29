@@ -3556,6 +3556,149 @@ def test_live_smoke_report_process_scan_without_config_is_observational(
     )
 
 
+def test_live_smoke_report_flags_account_hsl_with_launch_balance_override(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    config_path = tmp_path / "configs" / "xmr_migrated.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "live": {"hsl_signal_mode": "unified"},
+                "bot": {
+                    "long": {"hsl": {"enabled": True}},
+                    "short": {"hsl": {"enabled": False}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    supervisor_config = tmp_path / "bots.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: ebybitsub03",
+                "    panes:",
+                "      - passivbot live -u ebybitsub03 -bo 1000 configs/xmr_migrated.json",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 2.5 6.0 120000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "-u ebybitsub03 -bo 1000 configs/xmr_migrated.json"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        supervisor_config=supervisor_config,
+    )
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert report["processes"]["hard_failures"] == 1
+    running = report["processes"]["running"][0]
+    assert running["config_path"] == "configs/xmr_migrated.json"
+    assert "balance_override" not in running
+    assert running["command_key"] == (
+        "passivbot live -u ebybitsub03 -bo [redacted] configs/xmr_migrated.json"
+    )
+    assert "1000" not in running["command"]
+    assert "1000" not in running["command_key"]
+    checks = report["processes"]["config_checks"]
+    assert checks["ok"] is False
+    assert checks["hard_failures"] == 1
+    assert checks["checked"] == 1
+    issue = checks["issues"][0]
+    assert issue["code"] == "hsl_balance_override_account_level_replay_unsafe"
+    assert issue["severity"] == "error"
+    assert issue["account"] == "ebybitsub03"
+    assert issue["hsl_signal_mode"] == "unified"
+    assert issue["enabled_psides"] == ["long"]
+    assert issue["balance_override_active"] is True
+    assert issue["balance_override_source"] == "argument"
+    assert "balance_override" not in issue
+    assert "1000" not in issue["command_key"]
+    assert summary["processes"]["config_checks"]["hard_failures"] == 1
+    assert len(summary["processes"]["config_checks"]["issues"]) == 1
+    assert brief["processes"]["config_checks"]["hard_failures"] == 1
+    assert brief["processes"]["config_checks"]["issues_count"] == 1
+
+
+def test_live_smoke_report_allows_coin_hsl_with_balance_override(
+    tmp_path,
+    monkeypatch,
+):
+    _write_minimal_monitor_event(tmp_path / "monitor")
+    config_path = tmp_path / "configs" / "coin_hsl.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps(
+            {
+                "live": {
+                    "hsl_signal_mode": "coin",
+                    "balance_override": 1000,
+                },
+                "bot": {
+                    "long": {"hsl": {"enabled": True}},
+                    "short": {"hsl": {"enabled": True}},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 42 S 2.5 6.0 120000 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/coin_hsl.json -u bybit_01"
+                )
+            ],
+            None,
+        ),
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_processes=True,
+    )
+
+    assert report["ok"] is True
+    assert report["processes"]["config_checks"] == {
+        "enabled": True,
+        "ok": True,
+        "checked": 1,
+        "skipped": 0,
+        "hard_failures": 0,
+        "issues": [],
+    }
+
+
 def test_live_smoke_report_includes_repository_metadata(tmp_path, monkeypatch):
     _write_minimal_monitor_event(tmp_path / "monitor")
     calls = []

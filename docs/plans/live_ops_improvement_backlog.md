@@ -37,8 +37,11 @@ Related detailed plans:
    near `1213` from overridden balance plus historical realized PnL, while the
    account was not near a legitimate drawdown that should have triggered RED.
    PR #839 added the immediate fail-loud runtime guard for
-   `balance_override` plus account-level HSL replay, but an operational gap
-   remains for recovery and prevention.
+   `balance_override` plus account-level HSL replay. `live-config-preflight`
+   flags the same unsafe startup contract before launch, and
+   `live-smoke-report --processes` now adds a read-only local config check for
+   running/expected live commands. An operational gap remains for recovery and
+   prevention.
 
    Target contract: operators need a preflight-visible warning/error before
    starting a config that combines `balance_override` with `unified` or `pside`

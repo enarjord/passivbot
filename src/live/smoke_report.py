@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import math
 import re
 import stat
 import subprocess
@@ -143,6 +144,24 @@ EXPECTED_PROCESS_FIELDS = {
     "command",
     "command_key",
 }
+LIVE_COMMAND_VALUE_FLAGS = {
+    "-u": "account",
+    "--user": "account",
+    "-bo": "balance_override",
+    "--balance-override": "balance_override",
+    "--balance_override": "balance_override",
+    "--live.balance_override": "balance_override",
+    "--live.balance-override": "balance_override",
+}
+LIVE_COMMAND_EQ_PREFIXES = {
+    "--user=": "account",
+    "--balance-override=": "balance_override",
+    "--balance_override=": "balance_override",
+    "--live.balance_override=": "balance_override",
+    "--live.balance-override=": "balance_override",
+}
+ACCOUNT_LEVEL_HSL_SIGNAL_MODES = {"unified", "pside", "per_side"}
+HSL_BALANCE_OVERRIDE_UNSAFE_CODE = "hsl_balance_override_account_level_replay_unsafe"
 
 
 def _resolve_path(path: str | Path) -> Path:
@@ -2047,6 +2066,42 @@ def _shell_tokens(value: str) -> list[str]:
         return str(value).split()
 
 
+def _redact_live_command_for_report(value: str, *, max_len: int = 500) -> str:
+    tokens = _shell_tokens(value)
+    redacted: list[str] = []
+    index = 0
+    balance_flags = {
+        flag
+        for flag, target in LIVE_COMMAND_VALUE_FLAGS.items()
+        if target == "balance_override"
+    }
+    balance_eq_prefixes = {
+        prefix
+        for prefix, target in LIVE_COMMAND_EQ_PREFIXES.items()
+        if target == "balance_override"
+    }
+    while index < len(tokens):
+        token = tokens[index]
+        if token in balance_flags:
+            redacted.append(token)
+            if index + 1 < len(tokens):
+                redacted.append("[redacted]")
+                index += 2
+            else:
+                index += 1
+            continue
+        matched_eq = False
+        for prefix in balance_eq_prefixes:
+            if token.startswith(prefix):
+                redacted.append(f"{prefix}[redacted]")
+                matched_eq = True
+                break
+        if not matched_eq:
+            redacted.append(token)
+        index += 1
+    return _redact_log_text(" ".join(redacted), max_len=max_len)
+
+
 def _canonical_live_command(value: str) -> str:
     tokens = _shell_tokens(value)
     for index, token in enumerate(tokens[:-1]):
@@ -2061,17 +2116,32 @@ def _live_command_context(command_key: str) -> dict[str, str]:
         return {}
     account: str | None = None
     config_path: str | None = None
+    balance_override: str | None = None
     args = tokens[2:]
     index = 0
     while index < len(args):
         token = args[index]
-        if token in {"-u", "--user"}:
+        if token in LIVE_COMMAND_VALUE_FLAGS:
             if index + 1 < len(args):
-                account = args[index + 1]
+                value = args[index + 1]
+                target = LIVE_COMMAND_VALUE_FLAGS[token]
+                if target == "account":
+                    account = value
+                elif target == "balance_override":
+                    balance_override = value
             index += 2
             continue
-        if token.startswith("--user="):
-            account = token.split("=", 1)[1]
+        matched_eq = False
+        for prefix, target in LIVE_COMMAND_EQ_PREFIXES.items():
+            if token.startswith(prefix):
+                value = token.split("=", 1)[1]
+                if target == "account":
+                    account = value
+                elif target == "balance_override":
+                    balance_override = value
+                matched_eq = True
+                break
+        if matched_eq:
             index += 1
             continue
         if token.startswith("-"):
@@ -2084,6 +2154,8 @@ def _live_command_context(command_key: str) -> dict[str, str]:
     out: dict[str, str] = {}
     if account:
         out["account"] = _redact_log_text(account, max_len=160)
+    if balance_override is not None and str(balance_override).strip() != "":
+        out["balance_override"] = _redact_log_text(balance_override, max_len=80)
     if config_path:
         out["config_path"] = _redact_log_text(config_path, max_len=260)
     if account and config_path:
@@ -2142,8 +2214,8 @@ def _parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]
         expected.append(
             {
                 "name": current_window,
-                "command": _redact_log_text(command, max_len=400),
-                "command_key": _redact_log_text(command_key, max_len=400),
+                "command": _redact_live_command_for_report(command, max_len=400),
+                "command_key": _redact_live_command_for_report(command_key, max_len=400),
                 "_match_key": command_key,
                 **context,
             }
@@ -2332,8 +2404,8 @@ def _process_record_from_ps_line(line: str) -> dict[str, Any] | None:
         "cpu_pct": _float_or_none(pcpu),
         "mem_pct": _float_or_none(pmem),
         "rss_kb": _int_or_none(rss) if rss is not None else None,
-        "command": _redact_log_text(command, max_len=500),
-        "command_key": _redact_log_text(command_key, max_len=500),
+        "command": _redact_live_command_for_report(command, max_len=500),
+        "command_key": _redact_live_command_for_report(command_key, max_len=500),
         "_match_key": command_key,
     }
     record.update(_live_command_context(command_key))
@@ -2381,6 +2453,178 @@ def _public_expected_record(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _load_smoke_config_file(
+    path: str | Path,
+    *,
+    base_dir: Path | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    config_path = Path(path).expanduser()
+    if not config_path.is_absolute():
+        config_path = (base_dir or Path.cwd()) / config_path
+    try:
+        raw = config_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        return None, f"config_read_failed:{exc.__class__.__name__}"
+    try:
+        import hjson
+
+        parsed = hjson.loads(raw)
+    except Exception as exc:
+        return None, f"config_parse_failed:{exc.__class__.__name__}"
+    if not isinstance(parsed, dict):
+        return None, "config_root_not_object"
+    return parsed, None
+
+
+def _truthy_config_flag(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return bool(value) and math.isfinite(float(value))
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "on", "enabled"}
+    return False
+
+
+def _smoke_hsl_enabled_psides(config: dict[str, Any]) -> list[str]:
+    enabled: list[str] = []
+    bot = config.get("bot")
+    if not isinstance(bot, dict):
+        return enabled
+    for pside in ("long", "short"):
+        side_config = bot.get(pside)
+        if not isinstance(side_config, dict):
+            continue
+        hsl_config = side_config.get("hsl")
+        nested_enabled = (
+            hsl_config.get("enabled") if isinstance(hsl_config, dict) else None
+        )
+        flat_enabled = side_config.get("hsl_enabled")
+        if _truthy_config_flag(nested_enabled) or _truthy_config_flag(flat_enabled):
+            enabled.append(pside)
+    return enabled
+
+
+def _normalize_smoke_hsl_signal_mode(value: Any) -> str:
+    text = str(value if value not in (None, "") else "unified").strip().lower()
+    aliases = {
+        "per_side": "pside",
+        "side": "pside",
+        "symbol": "coin",
+        "coins": "coin",
+    }
+    return aliases.get(text, text)
+
+
+def _balance_override_active(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
+
+
+def _smoke_config_check_records(
+    records: list[dict[str, Any]],
+    *,
+    config_base_dir: Path | None = None,
+) -> dict[str, Any]:
+    issues: list[dict[str, Any]] = []
+    checked_keys: set[str] = set()
+    skipped = 0
+    for record in records:
+        config_path = record.get("config_path")
+        command_key = record.get("command_key")
+        if not config_path:
+            skipped += 1
+            continue
+        dedupe_key = str(command_key or config_path)
+        if dedupe_key in checked_keys:
+            continue
+        checked_keys.add(dedupe_key)
+        config, error = _load_smoke_config_file(
+            str(config_path),
+            base_dir=config_base_dir,
+        )
+        if error is not None or config is None:
+            issues.append(
+                {
+                    "severity": "warning",
+                    "code": str(error or "config_unavailable"),
+                    "account": record.get("account"),
+                    "config_path": config_path,
+                    "command_key": _redact_live_command_for_report(str(command_key))
+                    if command_key is not None
+                    else None,
+                }
+            )
+            continue
+        live = config.get("live") if isinstance(config.get("live"), dict) else {}
+        signal_mode = _normalize_smoke_hsl_signal_mode(live.get("hsl_signal_mode"))
+        config_balance_override = live.get("balance_override")
+        launch_balance_override = record.get("balance_override")
+        balance_override_source = None
+        if _balance_override_active(launch_balance_override):
+            balance_override_source = "argument"
+        elif _balance_override_active(config_balance_override):
+            balance_override_source = "live.balance_override"
+        enabled_psides = _smoke_hsl_enabled_psides(config)
+        if (
+            enabled_psides
+            and balance_override_source is not None
+            and signal_mode in ACCOUNT_LEVEL_HSL_SIGNAL_MODES
+        ):
+            issues.append(
+                {
+                    "severity": "error",
+                    "code": HSL_BALANCE_OVERRIDE_UNSAFE_CODE,
+                    "message": (
+                        "account-level HSL replay is unsafe with an active "
+                        "balance override"
+                    ),
+                    "account": record.get("account"),
+                    "config_path": config_path,
+                    "command_key": _redact_live_command_for_report(str(command_key))
+                    if command_key is not None
+                    else None,
+                    "hsl_signal_mode": signal_mode,
+                    "enabled_psides": enabled_psides,
+                    "balance_override_active": True,
+                    "balance_override_source": balance_override_source,
+                }
+            )
+    hard_failures = sum(1 for issue in issues if issue.get("severity") == "error")
+    return {
+        "enabled": True,
+        "ok": hard_failures == 0,
+        "checked": len(checked_keys),
+        "skipped": skipped,
+        "hard_failures": hard_failures,
+        "issues": issues,
+    }
+
+
+def _build_live_config_checks(
+    *,
+    expected: list[dict[str, Any]],
+    running: list[dict[str, Any]],
+    config_base_dir: Path | None = None,
+) -> dict[str, Any]:
+    records: list[dict[str, Any]] = []
+    records.extend(expected or [])
+    records.extend(running or [])
+    if not records:
+        return {
+            "enabled": False,
+            "ok": True,
+            "checked": 0,
+            "skipped": 0,
+            "hard_failures": 0,
+            "issues": [],
+        }
+    return _smoke_config_check_records(records, config_base_dir=config_base_dir)
+
+
 def parse_tmuxp_live_commands(config_path: str | Path | None) -> dict[str, Any]:
     """Return sanitized passivbot live commands from a tmuxp-style config."""
     config = _parse_tmuxp_live_commands(config_path)
@@ -2401,6 +2645,7 @@ def _build_process_report(
     include_processes: bool,
     supervisor_config: str | Path | None,
     process_command_match: str,
+    config_base_dir: Path | None = None,
 ) -> dict[str, Any]:
     enabled = bool(include_processes or supervisor_config)
     if not enabled:
@@ -2414,6 +2659,14 @@ def _build_process_report(
             "unexpected_running": [],
             "duplicate_configured_command_matches": [],
             "extra_passivbot_live_processes": [],
+            "config_checks": {
+                "enabled": False,
+                "ok": True,
+                "checked": 0,
+                "skipped": 0,
+                "hard_failures": 0,
+                "issues": [],
+            },
         }
 
     config = _parse_tmuxp_live_commands(supervisor_config)
@@ -2467,6 +2720,12 @@ def _build_process_report(
         config["error"] = "no_expected_live_commands"
     if running_scan.get("scan_error"):
         hard_failures += 1
+    config_checks = _build_live_config_checks(
+        expected=expected,
+        running=running,
+        config_base_dir=config_base_dir,
+    )
+    hard_failures += int(config_checks.get("hard_failures") or 0)
     return {
         "enabled": True,
         "ok": hard_failures == 0,
@@ -2488,6 +2747,7 @@ def _build_process_report(
         "extra_passivbot_live_processes": unexpected,
         "unexpected_running": unexpected,
         "running": [_public_process_record(process) for process in running],
+        "config_checks": config_checks,
     }
 
 
@@ -3284,6 +3544,7 @@ def build_live_smoke_report(
     max_log_matches: int = 50,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
 ) -> dict[str, Any]:
+    repository_root = _find_repository_root(monitor_root, repo_root=repo_root)
     event_report = build_event_report(
         monitor_root,
         include_rotated=include_rotated,
@@ -3419,8 +3680,9 @@ def build_live_smoke_report(
         include_processes=include_processes,
         supervisor_config=supervisor_config,
         process_command_match=process_command_match,
+        config_base_dir=repository_root,
     )
-    repository_report = _build_repository_report(monitor_root, repo_root=repo_root)
+    repository_report = _build_repository_report(monitor_root, repo_root=repository_root)
     hard_failures = (
         int(event_report["error_count"])
         + int(event_scan["invalid_rows"])
@@ -3569,6 +3831,11 @@ def summarize_live_smoke_report(
     processes = (
         report.get("processes") if isinstance(report.get("processes"), dict) else {}
     )
+    process_config_checks = (
+        processes.get("config_checks")
+        if isinstance(processes.get("config_checks"), dict)
+        else {}
+    )
     repository = (
         report.get("repository") if isinstance(report.get("repository"), dict) else {}
     )
@@ -3676,6 +3943,22 @@ def summarize_live_smoke_report(
                 processes.get("extra_passivbot_live_processes") or []
             )[:max_groups],
             "unexpected_running": (processes.get("unexpected_running") or [])[:max_groups],
+            "config_checks": {
+                key: process_config_checks.get(key)
+                for key in (
+                    "enabled",
+                    "ok",
+                    "checked",
+                    "skipped",
+                    "hard_failures",
+                )
+                if key in process_config_checks
+            }
+            | {
+                "issues": (process_config_checks.get("issues") or [])[:max_groups],
+                "issues_truncated": len(process_config_checks.get("issues") or [])
+                > max_groups,
+            },
         },
         "logs": {
             "root": logs.get("root"),
@@ -3767,6 +4050,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     logs = report.get("logs") if isinstance(report.get("logs"), dict) else {}
     processes = (
         report.get("processes") if isinstance(report.get("processes"), dict) else {}
+    )
+    process_config_checks = (
+        processes.get("config_checks")
+        if isinstance(processes.get("config_checks"), dict)
+        else {}
     )
     repository = (
         report.get("repository") if isinstance(report.get("repository"), dict) else {}
@@ -3869,6 +4157,20 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 processes.get("extra_passivbot_live_processes") or []
             ),
             "unexpected_running_count": len(processes.get("unexpected_running") or []),
+            "config_checks": {
+                key: process_config_checks.get(key)
+                for key in (
+                    "enabled",
+                    "ok",
+                    "checked",
+                    "skipped",
+                    "hard_failures",
+                )
+                if key in process_config_checks
+            }
+            | {
+                "issues_count": len(process_config_checks.get("issues") or []),
+            },
         },
         "logs": {
             "files_scanned": _count_value(logs.get("files_scanned")),
