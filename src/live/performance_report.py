@@ -95,12 +95,18 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "panic_events",
     "skipped_unsupported_symbols",
     "events",
+    "current_position_pairs",
     "price_replay_symbols",
     "priced_symbols",
     "empty_price_symbols",
     "approximate_price_symbols",
+    "skipped_price_symbols",
+    "missing_price_symbols",
     "history_minutes",
     "replay_concurrency",
+    "start_ts",
+    "end_ts",
+    "record_start_ts",
     "pair_idx",
     "applied_rows",
     "total_applied_rows",
@@ -108,7 +114,9 @@ _HSL_REPLAY_NUMERIC_FIELDS = (
     "skipped_pairs",
     "rows_per_second",
     "elapsed_s",
+    "history_build_elapsed_s",
     "price_history_fetch_elapsed_s",
+    "timeline_replay_elapsed_s",
     "full_elapsed_s",
     "startup_blocking_elapsed_s",
 )
@@ -1253,12 +1261,17 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
         out["observed_applied_rows"] = int(observed_rows)
     for source_key, target_key in (
         ("elapsed_s", "latest_elapsed_ms"),
+        ("history_build_elapsed_s", "history_build_elapsed_ms"),
+        ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
+        ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
         ("full_elapsed_s", "full_elapsed_ms"),
         ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
     ):
         value_ms = _elapsed_s_to_ms(data.get(source_key))
         if value_ms is not None:
             out[target_key] = value_ms
+            if source_key == "history_build_elapsed_s" and "latest_elapsed_ms" not in out:
+                out["latest_elapsed_ms"] = value_ms
     if data.get("startup_blocking_elapsed_s") is not None:
         out["startup_blocking"] = True
     return out

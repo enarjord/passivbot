@@ -1800,12 +1800,18 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "panic_events",
         "skipped_unsupported_symbols",
         "events",
+        "current_position_pairs",
         "price_replay_symbols",
         "priced_symbols",
         "empty_price_symbols",
         "approximate_price_symbols",
+        "skipped_price_symbols",
+        "missing_price_symbols",
         "history_minutes",
         "replay_concurrency",
+        "start_ts",
+        "end_ts",
+        "record_start_ts",
         "pair_idx",
         "applied_rows",
         "total_applied_rows",
@@ -1813,7 +1819,9 @@ def _compact_hsl_replay_data(live_event: dict[str, Any]) -> dict[str, Any]:
         "skipped_pairs",
         "rows_per_second",
         "elapsed_s",
+        "history_build_elapsed_s",
         "price_history_fetch_elapsed_s",
+        "timeline_replay_elapsed_s",
         "full_elapsed_s",
         "startup_blocking_elapsed_s",
     ):
@@ -1846,6 +1854,9 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
             )
     for source_key, target_key in (
         ("elapsed_s", "latest_elapsed_ms"),
+        ("history_build_elapsed_s", "history_build_elapsed_ms"),
+        ("price_history_fetch_elapsed_s", "price_history_fetch_elapsed_ms"),
+        ("timeline_replay_elapsed_s", "timeline_replay_elapsed_ms"),
         ("full_elapsed_s", "full_elapsed_ms"),
         ("startup_blocking_elapsed_s", "startup_blocking_elapsed_ms"),
     ):
@@ -1856,6 +1867,8 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
             continue
         if parsed == parsed and parsed >= 0.0:
             out[target_key] = int(round(parsed * 1000.0))
+            if source_key == "history_build_elapsed_s" and "latest_elapsed_ms" not in out:
+                out["latest_elapsed_ms"] = out[target_key]
     return out
 
 

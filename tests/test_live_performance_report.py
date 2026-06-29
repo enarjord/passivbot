@@ -1263,10 +1263,19 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
                     "timeframe": "1m",
                     "error_type": "TimeoutError",
                     "events": 2,
+                    "current_position_pairs": 1,
                     "price_replay_symbols": 3,
+                    "skipped_price_symbols": 1,
+                    "missing_price_symbols": 2,
                     "history_minutes": 10,
+                    "start_ts": 1782492000000,
+                    "end_ts": 1782492600000,
+                    "record_start_ts": 1782492000000,
                     "rows": 9,
                     "elapsed_s": 4.5,
+                    "history_build_elapsed_s": 17.25,
+                    "price_history_fetch_elapsed_s": 16.5,
+                    "timeline_replay_elapsed_s": 3.2,
                     "balance": 1000.0,
                     "equity": 999.0,
                     "raw_payload": {"leak_marker": "raw"},
@@ -1281,14 +1290,30 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
     rendered = json.dumps(report["hsl_replay_profile"], sort_keys=True)
 
     assert report["hsl_replay_profile"]["groups"][0]["progress"]["data"] == {
+        "current_position_pairs": 1,
+        "end_ts": 1782492600000,
         "elapsed_s": 4.5,
         "error_type": "TimeoutError",
         "events": 2,
+        "history_build_elapsed_s": 17.25,
         "history_minutes": 10,
+        "missing_price_symbols": 2,
+        "price_history_fetch_elapsed_s": 16.5,
         "price_replay_symbols": 3,
+        "record_start_ts": 1782492000000,
         "rows": 9,
+        "skipped_price_symbols": 1,
         "stage": "price_history_symbol_fetch_completed",
+        "start_ts": 1782492000000,
         "timeframe": "1m",
+        "timeline_replay_elapsed_s": 3.2,
+    }
+    assert report["hsl_replay_profile"]["groups"][0]["progress"]["derived"] == {
+        "history_build_elapsed_ms": 17250,
+        "latest_elapsed_ms": 4500,
+        "observed_applied_rows": 9,
+        "price_history_fetch_elapsed_ms": 16500,
+        "timeline_replay_elapsed_ms": 3200,
     }
     assert "balance" not in rendered
     assert "equity" not in rendered
@@ -1297,6 +1322,44 @@ def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
     assert "api_key" not in rendered
     assert "secret" not in rendered
     assert "drawdown_raw" not in rendered
+
+
+def test_live_performance_report_hsl_history_elapsed_is_latest_when_replay_not_started(
+    tmp_path,
+):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.replay.progress",
+                seq=1,
+                ts=1000,
+                exchange="gateio",
+                user="gateio_01",
+                component="risk.hsl",
+                status="started",
+                reason_code="hsl_price_history_fetch_started",
+                data={
+                    "stage": "price_history_fetch_started",
+                    "history_build_elapsed_s": 91.25,
+                    "history_minutes": 43201,
+                    "price_replay_symbols": 24,
+                    "replay_concurrency": 4,
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    group = report["hsl_replay_profile"]["groups"][0]
+
+    assert group["bot"] == "gateio/gateio_01"
+    assert group["latest"]["data"]["stage"] == "price_history_fetch_started"
+    assert group["latest"]["derived"] == {
+        "history_build_elapsed_ms": 91250,
+        "latest_elapsed_ms": 91250,
+    }
 
 
 def test_live_performance_report_hsl_replay_profile_summary_is_bounded(tmp_path):
