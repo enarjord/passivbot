@@ -543,6 +543,58 @@ def test_event_query_filters_by_remaining_event_ids(tmp_path):
     }
 
 
+def test_event_query_bot_filter_falls_back_to_monitor_path(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+            ),
+            _monitor_row(
+                event_type="hsl.cooldown_started",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        bot_id="gateio/gateio_01",
+        event_type=["hsl.status", "hsl.cooldown_started"],
+        symbol="ZEC/USDT:USDT",
+    )
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {
+        "bot_ids": ["gateio/gateio_01"],
+        "event_types": ["hsl.cooldown_started", "hsl.status"],
+        "symbols": ["ZEC/USDT:USDT"],
+    }
+    assert report["query"]["matched_events"] == 2
+    assert [event["event_type"] for event in report["query"]["events"]] == [
+        "hsl.status",
+        "hsl.cooldown_started",
+    ]
+
+    wrong_bot_report = build_event_report(
+        tmp_path / "monitor",
+        bot_id="binance/binance_01",
+        event_type=["hsl.status", "hsl.cooldown_started"],
+    )
+
+    assert wrong_bot_report["query"]["matched_events"] == 0
+
+
 def test_event_query_filters_legacy_snapshot_id_from_event_data(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

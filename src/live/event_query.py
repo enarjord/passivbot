@@ -111,6 +111,20 @@ def _event_ids(live_event: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _monitor_path_bot_id(path: Path) -> str | None:
+    """Return monitor path-derived bot id for .../<exchange>/<user>/events/*.ndjson."""
+    if path.parent.name != "events":
+        return None
+    try:
+        user = path.parent.parent.name
+        exchange = path.parent.parent.parent.name
+    except IndexError:
+        return None
+    if not exchange or not user:
+        return None
+    return f"{exchange}/{user}"
+
+
 def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
     if values is None:
         return set()
@@ -1047,7 +1061,9 @@ def build_event_report(
                         record_event_type, event_type_filter
                     )
                     cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
-                    bot_matches = _filter_matches(ids.get("bot_id"), bot_filter)
+                    bot_matches = _filter_matches(
+                        ids.get("bot_id") or _monitor_path_bot_id(path), bot_filter
+                    )
                     snapshot_matches = _filter_matches(
                         ids.get("snapshot_id"), snapshot_filter
                     )
