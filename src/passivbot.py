@@ -10243,6 +10243,46 @@ class Passivbot:
                 "disabled",
             )
 
+            def emit_fill_cache_doctor_event(
+                *,
+                reason_code: str,
+                refresh_mode: str,
+                report: dict | None = None,
+                status: str = "succeeded",
+                level: str = "debug",
+                doctor_action: str | None = None,
+                doctor_mode_value: str | None = None,
+                auto_repair: bool | None = None,
+                start_ms: int | None = None,
+                end_ms: int | None = None,
+                history_scope: str | None = None,
+                quarantine_created: bool | None = None,
+                quarantine_reason: str | None = None,
+            ) -> None:
+                report_data = report or {}
+                self._emit_fills_refresh_summary_event(
+                    source="startup",
+                    refresh_mode=refresh_mode,
+                    status=status,
+                    reason_code=reason_code,
+                    elapsed_ms=int(max(0, utc_ms() - init_started_ms)),
+                    history_scope=history_scope,
+                    start_ms=start_ms,
+                    end_ms=end_ms,
+                    doctor_mode=doctor_mode_value,
+                    doctor_action=doctor_action,
+                    auto_repair=auto_repair,
+                    anomaly_events=report_data.get("anomaly_events"),
+                    repaired=report_data.get("repaired"),
+                    degraded_events_after=report_data.get("degraded_events_after"),
+                    legacy_files_quarantined=report_data.get(
+                        "legacy_files_quarantined"
+                    ),
+                    quarantine_created=quarantine_created,
+                    quarantine_reason=quarantine_reason,
+                    level=level,
+                )
+
             async def rebuild_fill_cache_from_lookback() -> None:
                 lookback = parse_pnls_max_lookback_days(
                     self.live_value("pnls_max_lookback_days"),
@@ -10250,17 +10290,25 @@ class Passivbot:
                 )
                 age_limit = lookback.fill_cache_age_limit_ms(self.get_exchange_time())
                 start_ms = None if age_limit is None else int(age_limit)
+                history_scope = "all" if lookback.is_all else "window"
                 logging.warning(
                     "[fills] rebuilding fill-event cache after legacy contract quarantine | start=%s scope=%s",
                     ts_to_date(start_ms)[:19] if start_ms is not None else "all",
-                    "all" if lookback.is_all else "window",
+                    history_scope,
+                )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_REBUILD_STARTED,
+                    refresh_mode="cache_rebuild",
+                    start_ms=start_ms,
+                    end_ms=None,
+                    history_scope=history_scope,
                 )
                 await self._pnls_manager.refresh(start_ms=start_ms, end_ms=None)
                 cache = getattr(self._pnls_manager, "cache", None)
                 mark_covered_start = getattr(cache, "mark_covered_start", None)
                 if start_ms is not None and callable(mark_covered_start):
                     mark_covered_start(int(start_ms))
-                self._pnls_manager.set_history_scope("all" if lookback.is_all else "window")
+                self._pnls_manager.set_history_scope(history_scope)
 
             # Load cached events
             try:
@@ -10283,8 +10331,27 @@ class Passivbot:
                     doctor_action,
                     doctor_mode or "auto",
                 )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                    refresh_mode="doctor",
+                    report=report,
+                    doctor_action=doctor_action,
+                    doctor_mode_value=doctor_mode or "auto",
+                    auto_repair=True,
+                )
                 if report.get("repaired", False):
                     if doctor_action == "quarantine_legacy_files":
+                        emit_fill_cache_doctor_event(
+                            reason_code=ReasonCodes.FILL_CACHE_QUARANTINED,
+                            refresh_mode="cache_quarantine",
+                            report=report,
+                            status="succeeded",
+                            level="warning",
+                            quarantine_created=bool(
+                                report.get("legacy_files_quarantined", 0) or 0
+                            ),
+                            quarantine_reason="legacy_pnl_contract",
+                        )
                         await rebuild_fill_cache_from_lookback()
                 elif self.exchange == "kucoin" and "degraded_events_after" in report:
                     logging.warning(
@@ -10301,6 +10368,14 @@ class Passivbot:
                         self.user,
                         quarantine_path or "none",
                     )
+                    emit_fill_cache_doctor_event(
+                        reason_code=ReasonCodes.FILL_CACHE_QUARANTINED,
+                        refresh_mode="cache_quarantine",
+                        status="succeeded",
+                        level="warning",
+                        quarantine_created=quarantine_path is not None,
+                        quarantine_reason="legacy_pnl_contract",
+                    )
                     await rebuild_fill_cache_from_lookback()
 
             # Bybit cache doctor runs by default on startup to self-heal known duplicate-fill issues.
@@ -10313,6 +10388,14 @@ class Passivbot:
                         report.get("anomaly_events", 0),
                         report.get("repaired", False),
                         doctor_mode or ("repair" if auto_repair else "check"),
+                    )
+                    emit_fill_cache_doctor_event(
+                        reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                        refresh_mode="doctor",
+                        report=report,
+                        doctor_mode_value=doctor_mode
+                        or ("repair" if auto_repair else "check"),
+                        auto_repair=auto_repair,
                     )
             elif doctor_mode:
                 auto_repair = doctor_mode in (
@@ -10329,6 +10412,13 @@ class Passivbot:
                     report.get("anomaly_events", 0),
                     report.get("repaired", False),
                     doctor_mode,
+                )
+                emit_fill_cache_doctor_event(
+                    reason_code=ReasonCodes.FILL_CACHE_DOCTOR_REPORT,
+                    refresh_mode="doctor",
+                    report=report,
+                    doctor_mode_value=doctor_mode,
+                    auto_repair=auto_repair,
                 )
 
             cached_count = len(self._pnls_manager._events)

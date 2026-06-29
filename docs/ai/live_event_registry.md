@@ -148,7 +148,10 @@ across time.
 - `exchange_time_sync_unavailable`
 - `execution_loop_error_burst`
 - `entry_cooldown_position_delta`
+- `fill_cache_doctor_report`
+- `fill_cache_quarantined`
 - `fill_cache_ready`
+- `fill_cache_rebuild_started`
 - `hsl_balance_override_account_level_replay_unsafe`
 - `initial_entry_distance_gate`
 - `length_mismatch`
