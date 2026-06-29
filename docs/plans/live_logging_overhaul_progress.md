@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f63823a0` after PR #865, `Emit HSL flat finalization event`.
+- `d44c5132` after PR #866, `Show active HSL age in startup readiness`.
 
 Current review gate:
 
@@ -27,12 +27,26 @@ Current review gate:
   now Claude + Hermes + CI. For low-risk docs/tooling-only slices, a degraded
   gate may still be used after repeated Claude absence, but that exception must
   be called out in the progress evidence.
-- PR #866, `Show active HSL age in startup readiness`, is open and CI-green at
-  `a9f591e3`. It has a stale pre-rebase Claude approval and is waiting for
-  current-head reviewer confirmation before merge.
 
 VPS5 deployment status:
 
+- Repository pulled through PR #866 at `d44c5132`.
+- PR #866 added the active HSL replay age projection to
+  `live-performance-report` startup readiness summaries. It derives the field
+  from existing HSL replay profile data and reports `active_latest_age_ms` for
+  active replay stages without adding event producers, exchange calls, cache
+  mutation, readiness gates, console routing, or trading behavior.
+- PR #866 passed the normal review gate: Claude approved the current head,
+  Hermes approved, and CI was green. Local validation for the slice covered the
+  focused live performance report tests and `git diff --check`.
+- After deploying PR #866 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A later settled 5-minute smoke on `v8@d44c5132`
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`; known non-hard attention remained
+  from EMA readiness groups, existing HSL cooldown groups, and one GateIO
+  `RequestTimeout` text-log match.
 - Repository pulled through PR #865 at `f63823a0`.
 - PR #865 added the structured `hsl.red_finalized_without_order` event for HSL
   RED supervisor paths that finalize cooldown after authoritative state proves
