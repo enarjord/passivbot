@@ -1,6 +1,6 @@
 # VPS3 ebybitsub03 Wrong HSL Panic Incident
 
-Status: investigation report for the HSL balance-override safety guard
+Status: investigation report for HSL replay safety fixes
 Incident account: `ebybitsub03` on `vps3`
 Exchange: Bybit
 Observed command: `passivbot live -u ebybitsub03 configs/xmr_migrated.json -bo 1000`
@@ -20,9 +20,10 @@ the red thresholds:
 - short RED triggered: `2026-06-28T23:47:54Z`
 - XMR long `close_panic_long` fill: `2026-06-28T23:47:55Z`, `0.8` XMR at `311.44`
 
-The executor followed the HSL forced panic mode. The questionable decision was
+The executor followed the HSL forced panic mode. The wrong decision happened
 earlier: HSL reconstructed account-level drawdown from current balance override
-plus historical realized PnL.
+plus historical realized PnL, then combined inconsistent lookback anchors for
+the replay peak and the current sample.
 
 ## Key Evidence
 
@@ -48,9 +49,13 @@ peak_strategy_equity = baseline_balance + peak_strategy_pnl
 drawdown_raw ~= 1 - strategy_equity / peak_strategy_equity
 ```
 
-The problem is not arithmetic. The problem is that `balance=1000` came from
-`-bo 1000`, not necessarily from a real exchange balance continuous with the
-entire replayed fill-history window.
+The arithmetic explains the emitted panic, but the premise is wrong. First,
+`balance=1000` came from `-bo 1000`, not necessarily from a real exchange
+balance continuous with the replayed fill-history window. Second, follow-up
+inspection showed the replay peak used cumulative realized PnL outside the
+configured 30-day lookback while the current runtime sample used the 30-day
+realized-PnL function. That mixed-window state manufactured a peak/current
+relationship that did not represent the account's current drawdown.
 
 ## Timeline
 
@@ -71,12 +76,12 @@ crossed red:
 2026-06-28T23:47:55Z post XMR sell long 0.8@311.44 close_panic_long
 ```
 
-## Root Cause
+## Root Causes
 
-Unified/pside HSL assumes historical realized PnL can be mapped onto current
-balance by subtracting cumulative realized PnL from current balance. That is
-only safe if current balance is a real exchange balance continuous with the
-replayed fill window.
+1. Unified/pside HSL assumed historical realized PnL could be mapped onto
+   current balance by subtracting cumulative realized PnL from current balance.
+   That is only safe if current balance is a real exchange balance continuous
+   with the replayed fill window.
 
 With a balance override, that assumption can synthesize a historical peak
 unrelated to the current operator allocation. In this incident:
@@ -87,6 +92,12 @@ unrelated to the current operator allocation. In this incident:
 - reconstructed current raw drawdown: about `17.5%`
 
 That is unsafe for live panic decisions.
+
+2. Balance/equity replay used pre-lookback events to reconstruct the balance
+   path, but the HSL-facing realized-PnL timeline fields were not zero-anchored
+   at the configured lookback boundary. That let old realized PnL contribute to
+   the replayed peak while the current HSL sample used lookback-scoped realized
+   PnL. This violated the active PnL lookback contract.
 
 ## Immediate Contract
 
@@ -99,6 +110,16 @@ before replay starts.
 PnL cumsum semantics and does not reconstruct account-level historical equity
 from `balance - realized_pnl_total`.
 
+Separately, balance/equity replay may still use pre-lookback fills to reconstruct
+open positions and absolute balance continuity, but all HSL-facing realized-PnL
+fields in recorded timeline rows must be zero-anchored at the configured
+lookback boundary.
+
+This aligns replay with the live runtime sample path:
+`_equity_hard_stop_realized_pnl_now()` consumes the same active
+`live.pnls_max_lookback_days` window via `_pnls_lookback_start_ms()`, so replayed
+peaks and current samples must use the same realized-PnL scope.
+
 ## Follow-Up Work
 
 - Add explicit HSL baseline/checkpoint support for overridden strategy
@@ -106,5 +127,5 @@ from `balance - realized_pnl_total`.
 - Include baseline source in HSL metrics/latch payloads.
 - Add startup diagnostics when raw drawdown is above red but EMA has not caught
   up yet.
-- Decide how to treat existing latch files created by the unsafe overridden
-  account-level replay model.
+- Decide how to treat existing latch files or panic fills created by the unsafe
+  overridden account-level replay model.
