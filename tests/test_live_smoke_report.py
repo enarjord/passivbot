@@ -1924,13 +1924,37 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 },
             ),
             _monitor_row(
-                event_type="unstuck.selection",
+                event_type="hsl.red_finalized_without_order",
                 seq=5,
+                ts=4500,
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                reason_code="hsl_red_finalized_without_exchange_order",
+                ids={"cycle_id": "cy_risk_4"},
+                data={
+                    "no_exchange_close_needed": True,
+                    "exchange_close_order_submitted": False,
+                    "panic_order_submitted_count": 0,
+                    "symbol_position_open": False,
+                    "position_count": 0,
+                    "entry_orders": 0,
+                    "nonpanic_close_orders": 0,
+                    "flat_confirmations": 2,
+                    "stop_event_timestamp_ms": 4300,
+                    "cooldown_until_ms": 999999,
+                    "drawdown_raw": 0.42,
+                    "balance": 12345.67,
+                    "secret_marker": "flat-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="unstuck.selection",
+                seq=6,
                 ts=5000,
                 symbol="SUI/USDT:USDT",
                 pside="long",
                 reason_code="unstuck_selection",
-                ids={"cycle_id": "cy_risk_4"},
+                ids={"cycle_id": "cy_risk_5"},
                 data={
                     "allowance": -12.3,
                     "price_diff_pct": 10.0,
@@ -1949,9 +1973,10 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert report["ok"] is True
     assert report["attention"] is False
     assert report["risk_events"] == {
-        "total": 4,
+        "total": 5,
         "groups_truncated": False,
         "event_types": {
+            "hsl.red_finalized_without_order": 1,
             "hsl.status": 2,
             "risk.mode_changed": 1,
             "unstuck.selection": 1,
@@ -1971,6 +1996,31 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "latest_data": {
                     "changed": True,
                     "price_diff_pct": 10.0,
+                },
+                "latest_ids": {"cycle_id": "cy_risk_5"},
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "hsl.red_finalized_without_order",
+                "reason_code": "hsl_red_finalized_without_exchange_order",
+                "status": "succeeded",
+                "level": "info",
+                "symbol": "ZEC/USDT:USDT",
+                "pside": "long",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 4500,
+                "latest_data": {
+                    "cooldown_until_ms": 999999,
+                    "stop_event_timestamp_ms": 4300,
+                    "no_exchange_close_needed": True,
+                    "exchange_close_order_submitted": False,
+                    "panic_order_submitted_count": 0,
+                    "symbol_position_open": False,
+                    "position_count": 0,
+                    "entry_orders": 0,
+                    "nonpanic_close_orders": 0,
+                    "flat_confirmations": 2,
                 },
                 "latest_ids": {"cycle_id": "cy_risk_4"},
             },
@@ -2013,6 +2063,10 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             },
         ],
     }
+    rendered = json.dumps(report["risk_events"], sort_keys=True)
+    assert "12345.67" not in rendered
+    assert "0.42" not in rendered
+    assert "flat-secret" not in rendered
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
