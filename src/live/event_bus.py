@@ -123,6 +123,7 @@ class EventTypes:
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
     UNSTUCK_STATUS = "unstuck.status"
     UNSTUCK_SELECTION = "unstuck.selection"
+    RISK_ENTRY_COOLDOWN_DELTA_ANCHORED = "risk.entry_cooldown_delta_anchored"
     REALIZED_LOSS_GATE_BLOCKED = "risk.realized_loss_gate_blocked"
     SINK_DEGRADED = "sink.degraded"
 
@@ -202,6 +203,7 @@ class ReasonCodes:
     RANKING_FEATURES_UNAVAILABLE = "ranking_features_unavailable"
     RECENT_EXECUTION = "recent_execution"
     REMOTE_FETCH = "remote_fetch"
+    RISK_ENTRY_COOLDOWN_POSITION_DELTA = "entry_cooldown_position_delta"
     REQUIRED_CANDLE_DISK_COVERAGE = "required_candle_disk_coverage"
     REQUIRED_EMA_UNAVAILABLE = "required_ema_unavailable"
     RUST_OUTPUT_ACTIONS = "rust_output_actions"
@@ -352,6 +354,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_COOLDOWN_ENDED,
     EventTypes.UNSTUCK_STATUS,
     EventTypes.UNSTUCK_SELECTION,
+    EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED,
     EventTypes.REALIZED_LOSS_GATE_BLOCKED,
     EventTypes.SINK_DEGRADED,
 }
@@ -653,6 +656,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
     EventTypes.UNSTUCK_STATUS: EventRoute(console=False, text=False),
     EventTypes.UNSTUCK_SELECTION: EventRoute(console=False, text=False),
+    EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED: EventRoute(
+        console=False, text=False
+    ),
     EventTypes.REALIZED_LOSS_GATE_BLOCKED: EventRoute(console=False, text=False),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }

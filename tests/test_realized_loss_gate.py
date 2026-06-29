@@ -698,6 +698,101 @@ class TestLogRealizedLossGateBlocks:
         assert " SUI long " in caplog.text
 
 
+class TestEntryCooldownDeltaGuardEvents:
+    def _make_bot_with_event_sink(self):
+        bot = _make_bot_for_logging()
+        sink = ListEventSink()
+        bot.bot_id = "bot_entry_cooldown"
+        bot.exchange = "binance"
+        bot.user = "binance_01"
+        bot._live_event_current_cycle_id = "cy_entry_cooldown"
+        bot._live_event_pipeline = LiveEventPipeline(
+            structured_sinks=[sink],
+            monitor_sinks=[],
+        )
+        return bot, sink
+
+    def test_position_delta_anchor_emits_structured_event(self, caplog):
+        bot, sink = self._make_bot_with_event_sink()
+        try:
+            with caplog.at_level(logging.WARNING):
+                bot._log_entry_cooldown_delta_guard(
+                    symbol="BTCUSDT",
+                    pside="long",
+                    previous_abs_size=1.0,
+                    current_abs_size=1.5,
+                    qty_step=0.001,
+                    epsilon=0.0005,
+                    now_ms=123456,
+                )
+            assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        finally:
+            assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+        assert "entry cooldown position-delta guard anchored" in caplog.text
+        events = [
+            event
+            for event in sink.events
+            if event.event_type == EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED
+        ]
+        assert len(events) == 1
+        event = events[0]
+        assert event.level == "warning"
+        assert event.status == "deferred"
+        assert event.reason_code == "entry_cooldown_position_delta"
+        assert event.cycle_id == "cy_entry_cooldown"
+        assert event.symbol == "BTCUSDT"
+        assert event.pside == "long"
+        assert event.data["previous_abs_size"] == pytest.approx(1.0)
+        assert event.data["current_abs_size"] == pytest.approx(1.5)
+        assert event.data["qty_step"] == pytest.approx(0.001)
+        assert event.data["epsilon"] == pytest.approx(0.0005)
+        assert event.data["anchor_ts_ms"] == 123456
+        assert event.data["fallback_source"] == "exchange_position_delta"
+        assert event.data["text_log_emitted"] is True
+
+    def test_position_delta_anchor_event_emits_when_text_warning_throttled(self, caplog):
+        bot, sink = self._make_bot_with_event_sink()
+        try:
+            with caplog.at_level(logging.WARNING):
+                bot._log_entry_cooldown_delta_guard(
+                    symbol="BTCUSDT",
+                    pside="long",
+                    previous_abs_size=1.0,
+                    current_abs_size=1.5,
+                    qty_step=0.001,
+                    epsilon=0.0005,
+                    now_ms=123456,
+                )
+            caplog.clear()
+            with caplog.at_level(logging.WARNING):
+                bot._log_entry_cooldown_delta_guard(
+                    symbol="BTCUSDT",
+                    pside="long",
+                    previous_abs_size=1.5,
+                    current_abs_size=2.0,
+                    qty_step=0.001,
+                    epsilon=0.0005,
+                    now_ms=124456,
+                )
+            assert bot._live_event_pipeline.flush(timeout=2.0) is True
+        finally:
+            assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+        assert "entry cooldown position-delta guard anchored" not in caplog.text
+        events = [
+            event
+            for event in sink.events
+            if event.event_type == EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED
+        ]
+        assert len(events) == 2
+        assert events[0].data["text_log_emitted"] is True
+        assert events[1].data["text_log_emitted"] is False
+        assert events[1].data["previous_abs_size"] == pytest.approx(1.5)
+        assert events[1].data["current_abs_size"] == pytest.approx(2.0)
+        assert events[1].data["anchor_ts_ms"] == 124456
+
+
 # ---------------------------------------------------------------------------
 # prep_backtest_args passthrough
 # ---------------------------------------------------------------------------

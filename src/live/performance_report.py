@@ -120,6 +120,7 @@ _ACCOUNT_STATE_CHANGE_EVENT_TYPES = {
 }
 _RISK_ACTIVITY_EVENT_TYPES = {
     "risk.mode_changed",
+    "risk.entry_cooldown_delta_anchored",
     "risk.realized_loss_gate_blocked",
     "hsl.transition",
     "hsl.status",
