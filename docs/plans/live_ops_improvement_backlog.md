@@ -64,6 +64,11 @@ Related detailed plans:
    This is too slow for a live safety path: correctness from exhaustive replay
    is valuable, but not at the cost of delaying panic/protective action by
    tens of minutes while a held coin may already be beyond red threshold.
+   A 2026-06-29 VPS5 restart on `v8` head `7ce1aec9` re-confirmed the issue:
+   after roughly 20 minutes, Binance, Kucoin, GateIO, and OKX were still live
+   but not `READY`; their current logs had HSL coin reconstruction start lines
+   and no completion lines. Process smoke stayed hard-green, so this remains a
+   startup readiness latency issue rather than a process crash.
 
    Target contract: startup must prioritize fast protective HSL classification
    for currently held positions. Full historical replay can continue for
