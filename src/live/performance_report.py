@@ -1001,7 +1001,14 @@ class _StartupReadinessAccumulator:
                 if key in data:
                     hsl_state[key] = data[key]
 
-    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+    def to_dict(
+        self,
+        *,
+        group_limit: int = GROUP_LIMIT,
+        report_ts_ms: int | None = None,
+    ) -> dict[str, Any]:
+        if report_ts_ms is None:
+            report_ts_ms = utc_ms()
         bot_items = []
         ready_count = 0
         hsl_active_count = 0
@@ -1028,9 +1035,15 @@ class _StartupReadinessAccumulator:
                     for key, value in state["hsl_replay"].items()
                     if value is not None
                 }
-                item["hsl_replay"] = hsl_state
                 if hsl_state.get("status") not in ("succeeded", "failed"):
                     hsl_active_count += 1
+                    age_ms = _hsl_replay_latest_event_age_ms(
+                        {"ts": hsl_state.get("latest_ts")},
+                        report_ts_ms=int(report_ts_ms),
+                    )
+                    if age_ms is not None:
+                        hsl_state["latest_event_age_ms"] = int(age_ms)
+                item["hsl_replay"] = hsl_state
             debug_profiles = sorted(state.get("debug_profiles") or [])
             if debug_profiles:
                 item["debug_profiles"] = debug_profiles
@@ -3225,7 +3238,10 @@ def build_live_performance_report(
         "performance": accumulator.to_dict(group_limit=group_limit),
         "decision_boundary_lag": decision_boundary.to_dict(group_limit=group_limit),
         "input_staleness": input_staleness.to_dict(group_limit=group_limit),
-        "startup_readiness": startup_readiness.to_dict(group_limit=group_limit),
+        "startup_readiness": startup_readiness.to_dict(
+            group_limit=group_limit,
+            report_ts_ms=report_ts_ms,
+        ),
         "hsl_replay_profile": hsl_replay_profile.to_dict(
             group_limit=group_limit,
             report_ts_ms=report_ts_ms,
