@@ -2688,6 +2688,9 @@ class Passivbot:
     _equity_hard_stop_apply_sample = pb_hsl._equity_hard_stop_apply_sample
     _equity_hard_stop_apply_coin_sample = pb_hsl._equity_hard_stop_apply_coin_sample
     _equity_hard_stop_log_transition = pb_hsl._equity_hard_stop_log_transition
+    _equity_hard_stop_maybe_emit_raw_red_pending = (
+        pb_hsl._equity_hard_stop_maybe_emit_raw_red_pending
+    )
     _equity_hard_stop_format_remaining_time = staticmethod(
         pb_hsl._equity_hard_stop_format_remaining_time
     )

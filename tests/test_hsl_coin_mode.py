@@ -62,6 +62,7 @@ def bind_hsl_methods(bot):
         "_calc_upnl_sum_strict",
         "_equity_hard_stop_apply_coin_sample",
         "_equity_hard_stop_apply_coin_metrics_sample",
+        "_equity_hard_stop_maybe_emit_raw_red_pending",
         "_equity_hard_stop_activate_coin_red_from_metrics",
         "_equity_hard_stop_coin_active_pside",
         "_equity_hard_stop_coin_realized_pnl_peak_last",
@@ -457,6 +458,78 @@ async def test_coin_hsl_check_skips_enabled_side_with_zero_budget():
     assert events[0].pside == "long"
     assert events[0].data["signal_mode"] == "coin"
     assert events[0].data["dist_to_red"] == pytest.approx(0.5)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
+async def test_coin_hsl_check_emits_raw_red_pending_event_with_bounded_payload():
+    from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+
+    bot = make_coin_bot()
+    symbol = "A"
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    sink = ListEventSink()
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_coin_raw_red_pending"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._emit_live_event = MethodType(Passivbot._emit_live_event, bot)
+    bot._equity_hard_stop_status_log_interval_ms = 15 * 60 * 1000
+    bot.get_exchange_time = lambda: 1_000_000
+
+    def pending_metrics(_pside, _symbol, timestamp_ms, _balance, _current_upnl):
+        return {
+            "pside": "long",
+            "symbol": symbol,
+            "signal_mode": "coin",
+            "timestamp_ms": int(timestamp_ms),
+            "drawdown_raw": 0.20,
+            "drawdown_ema": 0.05,
+            "drawdown_score": 0.05,
+            "red_threshold": 0.10,
+            "tier": "orange",
+            "changed": False,
+            "elapsed_minutes": 1,
+            "slot_budget": 100.0,
+            "realized_pnl": 0.0,
+            "peak_realized_pnl": 20.0,
+            "unrealized_pnl": 0.0,
+        }
+
+    bot._equity_hard_stop_apply_coin_sample = pending_metrics
+
+    await bot._equity_hard_stop_check_coin()
+    await bot._equity_hard_stop_check_coin()
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_RAW_RED_PENDING
+    ]
+    assert len(events) == 1
+    event = events[0]
+    assert event.level == "warning"
+    assert event.status == "degraded"
+    assert event.reason_code == ReasonCodes.HSL_RAW_RED_PENDING_EMA_CONFIRMATION
+    assert event.cycle_id == "cy_coin_raw_red_pending"
+    assert event.symbol == symbol
+    assert event.pside == "long"
+    assert event.data["signal_mode"] == "coin"
+    assert event.data["drawdown_raw"] == pytest.approx(0.20)
+    assert event.data["drawdown_ema"] == pytest.approx(0.05)
+    assert event.data["dist_to_red"] == pytest.approx(0.05)
+    assert event.data["raw_excess"] == pytest.approx(0.10)
+    assert event.data["balance_override_active"] is False
+    assert "balance" not in event.data
+    assert "slot_budget" not in event.data
+    assert "realized_pnl" not in event.data
+    assert "peak_realized_pnl" not in event.data
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

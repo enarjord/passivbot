@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added structured `hsl.raw_red_pending` diagnostics when HSL raw drawdown is
+  already beyond red but EMA-confirmed drawdown has not crossed yet, helping
+  operators spot pending RED risk without changing trading behavior.
 - `passivbot tool live-smoke-report --processes` now performs a read-only
   local config check for running/expected live commands and reports a hard
   smoke failure when account-level HSL (`unified`/`pside`) is combined with an
