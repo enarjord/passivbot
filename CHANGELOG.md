@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes the structured event
+  window `enabled` flag, matching the full report and making unwindowed brief
+  smoke output explicit.
 - `passivbot tool live-smoke-report --brief` now includes bounded text-log
   window counters, making it clear when hard/attention log counts came from a
   time-windowed scan and how many log lines were skipped.

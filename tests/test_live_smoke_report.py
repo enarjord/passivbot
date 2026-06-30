@@ -954,6 +954,7 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "total": 3,
     }
     assert brief["monitor"]["live_events"] == 2
+    assert brief["event_window"]["enabled"] is False
     assert brief["logs"] == {
         "files_scanned": 1,
         "hard_matches": 0,
@@ -3502,6 +3503,7 @@ def test_live_smoke_report_cli_brief_projects_event_tail_metadata(tmp_path, caps
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["monitor"]["live_events"] == 1
+    assert summary["event_window"]["enabled"] is False
     assert summary["event_window"]["event_tail_lines"] == 1
     assert summary["event_window"]["event_tail_limited_files"] == 1
     assert summary["event_window"]["event_tail_skipped_lines"] == 1
