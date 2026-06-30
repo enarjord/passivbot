@@ -19,8 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `9b3c29adb` after PR #901, `Show completed HSL replay time in brief
-  smoke`.
+- `1dd115ccd` after PR #903, `Summarize HSL status in smoke reports`.
 
 Current review gate:
 
@@ -50,6 +49,32 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #903 at `1dd115cc`.
+- PR #903 added read-only `risk_events.hsl_status` projections to
+  `live-smoke-report` full, summary, and brief output, derived only from
+  existing `hsl.status` monitor events. The projection summarizes HSL status
+  totals, bot/symbol counts, tier counts, signal-mode counts, and bounded
+  closest-to-red labels.
+- PR #903 fixed issue #904 before merge by filtering shareable summary
+  `risk_events.groups[].latest_data` through a fixed value-safe whitelist.
+  Shareable summary and brief reports do not expose raw drawdown, distance, or
+  threshold magnitudes; the local full report keeps detailed HSL magnitudes for
+  local diagnostics.
+- PR #903 passed Claude + Hermes + CI. Local validation covered the focused
+  risk smoke-report regression, the full `tests/test_live_smoke_report.py`
+  suite, py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `852d4b89` to `1dd115cc` without bot restart because the
+  deployed change was read-only smoke-report projection code. The five
+  configured bots were left running.
+- A fresh 2-minute brief smoke after the pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at `1dd115cc`,
+  `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. The brief report included
+  `risk_events.hsl_status` with `tier_counts={"red":4}`, `bots=3`, and a
+  bounded symbol sample of `ZEC/USDT:USDT`; no magnitude fields were present in
+  the shareable brief output.
 - Repository pulled through PR #901 at `9b3c29ad`.
 - PR #901 added a read-only `live-smoke-report --brief` projection for
   `hsl_replay.max_completed_elapsed_ms`, derived only from existing sanitized
