@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `796ceb389` after PR #894, `Emit exchange config refresh events`.
+- `53b8accbe` after PR #896, `Summarize exchange config refresh health`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #896 at `53b8accb`.
+- PR #896 added read-only `live-smoke-report` projections for
+  `exchange.config_refresh` events: full report
+  `exchange_config_refresh_health`, summary limited groups, and brief
+  `exchange_config_refresh` counters. The projection intentionally excludes
+  raw free-text `data.error` and carries only bounded labels, `error_type`,
+  status/reason counts, and timing fields. It does not change smoke verdict
+  logic or text-log classification.
+- PR #896 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation covered the full
+  `tests/test_live_smoke_report.py` suite, py_compile for touched files, and
+  `git diff --check`.
+- After deploying PR #896 to VPS5 without bot restart, a 5-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, clean tracked repository state at `53b8accb`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`, and the
+  new `exchange_config_refresh` brief section present with `total=0`. This is
+  expected because the bots have not restarted since PR #894, so the new event
+  producer is not loaded by running processes yet. This short smoke window also
+  did not span an hourly Binance config refresh occurrence, so it is not
+  evidence that the intermittent `-4084` text-log traceback is resolved.
 - Repository pulled through PR #894 at `796ceb38`.
 - PR #894 added the off-console/text structured event
   `exchange.config_refresh` for hourly maintenance `init_markets` refresh
