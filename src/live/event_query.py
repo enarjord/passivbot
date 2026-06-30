@@ -104,6 +104,24 @@ def discover_event_files(
     ).files
 
 
+def discover_event_files_with_metadata(
+    root: str | Path,
+    *,
+    include_rotated: bool = False,
+    exchange: str | Iterable[str] | None = None,
+    user: str | Iterable[str] | None = None,
+    bot_id: str | Iterable[str] | None = None,
+) -> EventFileDiscovery:
+    """Find monitor event NDJSON segments and return bounded discovery metadata."""
+    return _discover_event_files(
+        root,
+        include_rotated=include_rotated,
+        exchange=exchange,
+        user=user,
+        bot_id=bot_id,
+    )
+
+
 def _discover_event_files(
     root: str | Path,
     *,

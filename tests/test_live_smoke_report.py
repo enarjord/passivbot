@@ -85,6 +85,9 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
     events_path = (
         tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
     )
+    rotated_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "20260629.ndjson.gz"
+    )
     _write_ndjson(
         events_path,
         [
@@ -102,6 +105,7 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
             ),
         ],
     )
+    rotated_path.write_bytes(b"")
     opened = []
     original_open_text = smoke_report_module._open_text
 
@@ -120,6 +124,14 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
     assert report["ok"] is True
     assert opened == [events_path]
     assert report["monitor"]["live_events"] == 2
+    assert report["monitor"]["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
     assert report["event_window"]["events_considered"] == 1
 
 
@@ -3661,6 +3673,14 @@ def test_live_smoke_report_cli_brief_projects_event_tail_metadata(tmp_path, caps
 
     summary = json.loads(capsys.readouterr().out)
     assert summary["monitor"]["live_events"] == 1
+    assert summary["monitor"]["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 1,
+        "event_segments": 1,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+    }
     assert summary["event_window"]["enabled"] is False
     assert summary["event_window"]["event_tail_lines"] == 1
     assert summary["event_window"]["event_tail_limited_files"] == 1

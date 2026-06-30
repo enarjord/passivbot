@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `f792f889f` after PR #907, `Prune live event queries by path bot id`.
+- `0c0024a3d` after PR #908, `Report live event file discovery metadata`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #908 at `0c0024a3`.
+- PR #908 added bounded `file_discovery` metadata to
+  `live-event-query` reports, while preserving the existing
+  `discover_event_files()` list-returning API. The slice does not add event
+  producers, exchange calls, live execution, smoke verdict changes, or trading
+  behavior.
+- PR #908 passed Claude + Hermes + CI. Local validation covered the full
+  `tests/test_live_event_query.py` suite, py_compile for touched query files
+  and tests, `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `f792f889` to `0c0024a3` without bot restart because the
+  deployed change was read-only query tooling and docs. The five configured
+  bots were left running.
+- Focused VPS5 query smoke showed bounded discovery metadata:
+  `--bot-id binance/binance_01` over monitor root completed with `ok=true`,
+  `files_scanned=1`, `file_discovery.bot_path_pruning_applied=true`,
+  `candidate_files=3749`, `event_segments=951`, `rotated_skipped=945`, and
+  `scope_pruned=5`, with no parser errors. A bounded 2-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, clean tracked repository state at `0c0024a3`,
+  `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 - Repository pulled through PR #907 at `f792f889`.
 - PR #907 added conservative `live-event-query --bot-id` path pruning for
   path-shaped bot ids such as `exchange/user`, while preserving full-scan
@@ -1606,7 +1627,7 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events, HSL replay failure events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events; PR #848 mirrors pre-create planning/market snapshot skips into off-console `execution.create_skipped` events; PR #850 mirrors fill-cache doctor startup report/quarantine/rebuild decisions into off-console `fills.refresh_summary` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices

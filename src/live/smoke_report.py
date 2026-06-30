@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
-from live.event_query import discover_event_files
+from live.event_query import discover_event_files_with_metadata
 
 
 PYTHON_TRACEBACK_HEADER_PATTERN = r"\bTraceback\s+\(most recent call last\):"
@@ -3462,8 +3462,20 @@ def _scan_events(
     event_tail_lines: int = 0,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
+    file_discovery: dict[str, Any] = {
+        "candidate_files": 0,
+        "event_segments": 0,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+        "bot_path_pruning_applied": False,
+        "opaque_bot_id_full_scan": False,
+    }
     try:
-        files = discover_event_files(root, include_rotated=include_rotated)
+        discovery = discover_event_files_with_metadata(
+            root, include_rotated=include_rotated
+        )
+        files = discovery.files
+        file_discovery = discovery.to_dict()
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -3820,6 +3832,7 @@ def _scan_events(
             "issues": issues,
             "error_count": error_count,
             "warning_count": warning_count,
+            "file_discovery": file_discovery,
             "event_types": dict(sorted(monitor_event_type_counts.items())),
             "cycle_ids_sample": [
                 {"cycle_id": key, "events": value}
@@ -4236,6 +4249,7 @@ def build_live_smoke_report(
             "legacy_events": event_report.get("legacy_events"),
             "error_count": event_report.get("error_count"),
             "warning_count": event_report.get("warning_count"),
+            "file_discovery": event_report.get("file_discovery"),
             "event_types": event_report["event_types"],
             "cycle_ids_sample": event_report["cycle_ids_sample"],
             "issues": event_report["issues"],
@@ -4523,6 +4537,7 @@ def summarize_live_smoke_report(
                 "legacy_events",
                 "error_count",
                 "warning_count",
+                "file_discovery",
             )
             if key in monitor
         },
@@ -4862,6 +4877,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "legacy_events",
                 "error_count",
                 "warning_count",
+                "file_discovery",
             )
             if key in monitor
         },
