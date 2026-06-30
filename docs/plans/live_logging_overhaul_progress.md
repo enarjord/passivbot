@@ -19,7 +19,8 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `53b8accbe` after PR #896, `Summarize exchange config refresh health`.
+- `aebc3667f` after PR #897, `Record exchange config refresh smoke
+  projection`.
 
 Current review gate:
 
@@ -49,6 +50,51 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #897 at `aebc3667`.
+- PR #897 was docs-only progress/backlog tracking for the
+  `exchange.config_refresh` smoke projection and did not change runtime code.
+- Bots were restarted from `/root/bots_vps5.yaml` after PR #897 so running
+  processes would load the PR #894 event producer and the PR #896 smoke-report
+  projection. Binance, GateIO, OKX, and Hyperliquid stopped within the bounded
+  restart procedure; Kucoin did not exit within a 180-second Ctrl+C observation
+  window and required SIGTERM before reload. All five configured bots were
+  restarted and left running.
+- A fresh 2-minute brief smoke after the restart reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at `aebc3667`,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Remaining attention was non-hard: two active HSL replay bots and one
+  `ema.unavailable` group.
+- A 20-minute summary smoke returned `ok=false` only because the window
+  included real GateIO risk/HSL CRITICAL text lines for ZEC:
+  `entering HSL coin RED supervisor loop` and `HSL[long:ZEC/USDT:USDT] RED
+  stop finalized`. Structured events also showed the same state as
+  `hsl.status` `cooldown_active`; process liveness, repo state, remote calls,
+  and account-critical remote calls were otherwise clean. This reinforces that
+  HSL RED/cooldown is a real risk signal, not a deploy/tooling failure.
+- The `exchange.config_refresh` query over the post-restart monitor events
+  still returned `matched_events=0`, and both 2-minute and 20-minute smoke
+  projections reported `exchange_config_refresh.total=0`. This is inconclusive
+  for the Binance hourly `-4084` maintenance traceback because the sampled
+  windows have not yet proven an hourly refresh occurrence after the restarted
+  processes loaded the producer.
+- The same restart/smoke re-confirmed the coin-HSL startup latency gap. In a
+  20-minute window, Binance, OKX, and Kucoin still had active HSL replay groups:
+  Binance was at pair `10/27` after `645s`, OKX at pair `22/28` after
+  `1522s`, and Kucoin was still in `price_history_symbol_fetch_started` after
+  `1541s`. GateIO completed enough replay to enter its ZEC cooldown path, with
+  `full-warmup` reported at about `1843s`.
+- A later 5-minute summary smoke on the same deployment remained clean for
+  processes, repository state, remote-call totals, and account-critical
+  remote-call totals, but was hard-red from real runtime signals: OKX finalized
+  `HSL[long:ZEC/USDT:USDT]` RED without an exchange order after a slow coin-HSL
+  replay, and Hyperliquid emitted one `fills.refresh_summary`
+  `fill_refresh_failed` event after several successful fill refreshes. Focused
+  OKX evidence showed coin-HSL replay completed after `1904.391s`,
+  `hsl-ready=2462.54s`, then `hsl.red_finalized_without_order`,
+  `hsl.red_triggered`, and `hsl.cooldown_started` for ZEC at
+  `17828078249xx`. This reinforces both the HSL startup-latency backlog item
+  and the value of the structured risk/exchange-health smoke sections.
 - Repository pulled through PR #896 at `53b8accb`.
 - PR #896 added read-only `live-smoke-report` projections for
   `exchange.config_refresh` events: full report

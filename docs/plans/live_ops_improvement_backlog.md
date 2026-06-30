@@ -102,6 +102,20 @@ Related detailed plans:
      bot had emitted `hsl_price_history_fetch_completed` or timeline replay
      stages in the early smoke window. This localizes the current bottleneck to
      HSL price/candle history fetching before dense timeline replay begins.
+   - 2026-06-30: After PR #897 deployed at `aebc3667` and bots were restarted,
+     a 20-minute smoke showed three forager bots still in active coin-HSL
+     replay: Binance at pair `10/27` after `645s`, OKX at pair `22/28` after
+     `1522s`, and Kucoin still in `price_history_symbol_fetch_started` after
+     `1541s`. GateIO reached ZEC cooldown handling, but its startup timing
+     reported `full-warmup` around `1843s`. This confirms the latency is still
+     present with the current HSL config and should remain a top-priority
+     trading-path optimization.
+   - 2026-06-30: A later VPS5 smoke on the same deployment showed OKX finished
+     coin-HSL replay after `1904.391s`, logged `hsl-ready=2462.54s`, then
+     finalized `HSL[long:ZEC/USDT:USDT]` RED without an exchange order and
+     entered cooldown. This is a second post-restart exchange/account example
+     of the same latency pattern and strengthens the case for a position-first
+     protective classification path before full cooldown replay completes.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -217,6 +231,13 @@ Related detailed plans:
      monitor segments. The default remains full monitor-event validation; the
      opt-in path reports tail-limit metadata in `event_window` so bounded smoke
      evidence is explicit.
+   - 2026-06-30: PR #897 deploy required a bot restart so running processes
+     would load the new `exchange.config_refresh` event producer. Kucoin did
+     not exit within a 180-second Ctrl+C observation window and required SIGTERM
+     before reload. The subsequent 2-minute brief smoke was green with all five
+     configured bots running. This adds another concrete data point for
+     per-bot shutdown timing, current-phase attribution, and a bounded
+     escalation ladder in future restart automation.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
@@ -309,6 +330,14 @@ Related detailed plans:
    remote-call health
    success/failure/throttle totals and a filtered
    `account_critical_remote_call_health` summary for a quick operator scan.
+
+   Work log:
+   - 2026-06-30: VPS5 smoke after PR #897 surfaced one Hyperliquid
+     `fills.refresh_summary` `fill_refresh_failed` event after several
+     successful fill refreshes in the same 10-minute window. This was separate
+     from account-critical remote-call health, which stayed green, and should
+     be treated as exchange/fill-refresh health evidence rather than a deploy
+     failure.
 
 7. [ ] Live config preflight/linter.
    Status: partial. `passivbot tool live-config-preflight` now emits a
@@ -579,7 +608,8 @@ Related detailed plans:
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
     Status: structured event plus smoke projection merged; live emission
-    evidence and smoke/report classification remain open.
+    evidence and smoke/report classification remain open after a restarted
+    process has crossed an hourly maintenance refresh.
 
     VPS5 smoke after PR #892 deployed to `v8@7e7ce16f` returned hard-red from
     a non-risk text-log traceback in the Binance bot while all five live
@@ -621,11 +651,19 @@ Related detailed plans:
       `53b8accb`; a 5-minute no-restart smoke was hard-green and showed the
       new `exchange_config_refresh` brief section with `total=0`, as expected
       before the next bot restart loads the event producer.
+    - 2026-06-30: After PR #897 deployed at `aebc3667`, bots were restarted so
+      running processes would load the PR #894 event producer. The following
+      fresh smoke windows were otherwise clean, but `exchange_config_refresh`
+      still reported `total=0` and a focused three-hour event query found no
+      `exchange.config_refresh` events. This is not yet proof that the Binance
+      `-4084` maintenance traceback is fixed or classified, because no sampled
+      window has proven an hourly refresh occurrence after restart.
 
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #0/#3/#18 Progress and evidence tracking | PR #897 / `aebc3667` | Recorded exchange-config-refresh smoke projection evidence; VPS5 was then restarted so live processes loaded the producer/projection, with a green settled smoke and a wider real HSL ZEC cooldown window | Prove `exchange.config_refresh` during an hourly refresh; implement HSL startup latency and safe restart orchestration separately |
 | 2026-06-25 | #1 Incident bundle generator | PR #641 / `e1f99002` | Added `passivbot tool live-incident-bundle`; bundle smoke on VPS5 created an archive with redacted monitor/config evidence | Supervisor/process status and tighter remote smoke integration |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #642 / `ad36d8ea` | Added bot/snapshot/plan/action/remote-call-group filters and shared ID-key timeline rendering; VPS5 query smoke passed | Richer reconstruction views |
