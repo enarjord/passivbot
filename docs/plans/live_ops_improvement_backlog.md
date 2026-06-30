@@ -172,7 +172,9 @@ Related detailed plans:
    over large current monitor segments. The default remains full event
    validation; bounded query output reports tail-limit metadata in
    `event_window`. Another 2026-06-30 follow-up added source, component, and
-   side filters for envelope-scoped queries.
+   side filters for envelope-scoped queries. A subsequent follow-up pruned
+   monitor file discovery for path-shaped `--bot-id` filters while preserving
+   full scans for opaque bot ids.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
@@ -690,6 +692,7 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #907 / `f792f889` | Added conservative monitor path pruning for path-shaped `live-event-query --bot-id` filters; VPS5 no-restart deploy stayed green, path-shaped bot-id query scanned one file, and opaque bot-id query preserved full-scan behavior | Continue query-pruning/index work only where concrete smoke cost appears; expose pruning/discovery metadata so operators can see when scope pruning occurred |
 | 2026-06-30 | #2 Event query and timeline CLI extensions | PR #906 / `b7b34758` | Added `live-event-query --source`, `--component`, and `--side` filters plus compact `source` output; folded #903/#904 deploy evidence into the same real observability PR; VPS5 no-restart deploy stayed green and focused single-bot query smokes validated the new filter echoes | Broad parallel root-level monitor scans were too slow for routine VPS smoke; prefer focused paths and continue query-pruning/index work where concrete smoke cost appears |
 | 2026-06-30 | #0/#3/#10 HSL status smoke evidence | PR #903 / `1dd115cc` | Added `risk_events.hsl_status` to `live-smoke-report` full, summary, and brief output from existing `hsl.status` events; fixed #904 by filtering shareable summary risk `latest_data` through a value-safe whitelist; VPS5 no-restart smoke stayed green and showed red HSL status counts for ZEC without magnitude fields in brief output | Actual HSL startup latency optimization remains open; broader event-driven console redesign remains open |
 | 2026-06-30 | #0/#3 HSL completed replay smoke evidence | PR #901 / `9b3c29ad` | Added `hsl_replay.max_completed_elapsed_ms` to `live-smoke-report --brief`; VPS5 no-restart smoke stayed green after deploy, with no HSL replay events in the sampled window | HSL startup latency remains a trading-path optimization; this slice only surfaces completed replay latency when completed replay events are in-window |
