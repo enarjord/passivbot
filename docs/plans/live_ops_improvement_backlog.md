@@ -577,6 +577,31 @@ Related detailed plans:
       within the configured forager staleness cap. Candidate-only symbols still
       remain unavailable instead of receiving synthetic ranking tails.
 
+18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
+    Status: open.
+
+    VPS5 smoke after PR #892 deployed to `v8@7e7ce16f` returned hard-red from
+    a non-risk text-log traceback in the Binance bot while all five live
+    processes remained running and structured monitor events showed no hard
+    problem event. The surrounding lines were:
+    `error setting hedge mode: binanceusdm {"code":-4084,"msg":"Method is not
+    allowed currently. Upcoming soon."}` and `error with maintain_hourly_cycle`.
+
+    Target contract: recurring exchange-config maintenance failures should be
+    represented as structured, bounded, exchange-surface diagnostics with clear
+    severity and retry/backoff context. If a failure is trading-critical, the
+    structured stream should make that explicit. If it is expected/non-critical
+    on an already-running Binance futures account, it should not appear only as
+    a raw traceback that makes operator smoke red without explaining whether
+    trading was impaired. Do not weaken fail-loud behavior for required startup
+    exchange config or order construction.
+
+    Investigation directions: inspect the hourly `maintain_hourly_cycle` /
+    hedge-mode refresh path; distinguish startup-required config from recurring
+    maintenance refresh; add a structured `exchange.config_refresh` or similar
+    event if the path remains in live; and adjust smoke/report classification
+    only after the event contract makes criticality explicit.
+
 ## Merged Work Log
 
 | Date | Item | PR / Commit | Result | Remaining |
@@ -653,6 +678,7 @@ Related detailed plans:
 | 2026-06-30 | #3/#4 Live restart/smoke automation and startup budget tracking | PR #886 / `60c79c3a` | Exposed existing startup timing evidence in `live-smoke-report --summary` and `--brief`; VPS5 5-minute smoke stayed hard-green and showed the new `startup_timings` brief key | Safe pull/stop/start orchestration and durable startup budget config/events remain open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #888 / `4b435d33` | Exposed bounded text-log window counters in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `logs.window.lines_skipped_before=1730` | Safe pull/stop/start orchestration remains open |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
+| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
 
 ## Suggested Priority
 
