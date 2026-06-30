@@ -100,6 +100,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             ),
         ],
     )
+    (events_dir / "20260629.ndjson.gz").write_bytes(b"")
     snapshot = tmp_path / "monitor" / "binance" / "binance_01" / "state.latest.json"
     snapshot.write_text(
         json.dumps(
@@ -145,6 +146,14 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["ok"] is True
     assert report["bundle_path"] == str(output)
     assert report["event_report"]["cycle_matched_events"] == 3
+    assert report["event_report"]["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
     assert report["event_report"]["trace_summary_matched_events"] == 3
     assert report["event_report"]["order_trace_matched_events"] == 2
     assert report["event_report"]["cycle_trace_matched_events"] == 3
@@ -161,6 +170,14 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
+    assert report["event_segments"]["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
 
     with tarfile.open(output, "r:gz") as tar:
         tar_names = tar.getnames()
@@ -179,6 +196,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
 
         manifest = _read_tar_json(tar, "manifest.json")
         event_report = _read_tar_json(tar, "event_report.json")
+        event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         window_report = _read_tar_json(tar, "time_window_report.json")
         smoke_report = _read_tar_json(tar, "smoke_report.json")
         config_hashes = _read_tar_json(tar, "config_hashes.json")
@@ -188,6 +206,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["event_segments"]["file_discovery"] == report["event_segments"][
+        "file_discovery"
+    ]
+    assert event_segments_manifest["file_discovery"] == report["event_segments"][
+        "file_discovery"
+    ]
     assert manifest["monitor_snapshots"][0]["redacted"] is True
     assert "do-not-copy" not in json.dumps(manifest)
     assert "do-not-copy" not in json.dumps(config_hashes)
@@ -200,6 +224,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert redacted_snapshot["nested"]["authorization"] == "[redacted]"
     assert redacted_snapshot["nested"]["url"] == "https://[redacted]@example.com/path"
     assert event_report["cycle"]["events"][0]["seq"] == 1
+    assert event_report["file_discovery"] == report["event_report"]["file_discovery"]
     assert "data" not in event_report["cycle"]["events"][0]
     assert event_report["cycle"]["trace_summary"]["matched_events"] == 3
     assert event_report["cycle"]["order_trace"]["matched_order_events"] == 2

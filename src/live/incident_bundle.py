@@ -16,7 +16,11 @@ from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
-from live.event_query import build_event_report, discover_event_files
+from live.event_query import (
+    build_event_report,
+    discover_event_files,
+    discover_event_files_with_metadata,
+)
 from live.smoke_report import (
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     _redact_log_text,
@@ -484,6 +488,7 @@ def _event_report_result_summary(event_report: dict[str, Any]) -> dict[str, Any]
     cycle_trace = trace_section.get("cycle_trace")
     return {
         "files_scanned": event_report.get("files_scanned"),
+        "file_discovery": event_report.get("file_discovery") or {},
         "live_events": event_report.get("live_events"),
         "error_count": event_report.get("error_count"),
         "warning_count": event_report.get("warning_count"),
@@ -521,8 +526,20 @@ def _copy_event_segments(
     include_segments: bool,
     max_total_bytes: int,
 ) -> dict[str, Any]:
+    file_discovery: dict[str, Any] = {
+        "candidate_files": 0,
+        "event_segments": 0,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+        "bot_path_pruning_applied": False,
+        "opaque_bot_id_full_scan": False,
+    }
     try:
-        discovered = discover_event_files(monitor_root, include_rotated=include_rotated)
+        discovery = discover_event_files_with_metadata(
+            monitor_root, include_rotated=include_rotated
+        )
+        discovered = discovery.files
+        file_discovery = discovery.to_dict()
     except FileNotFoundError:
         discovered = []
     matched_paths = _matched_segment_paths(event_report, window_report)
@@ -572,6 +589,7 @@ def _copy_event_segments(
         "include_segments": bool(include_segments),
         "include_rotated": bool(include_rotated),
         "max_total_bytes": int(max_total_bytes),
+        "file_discovery": file_discovery,
         "total_included_bytes": total_bytes,
         "files": files,
     }
@@ -786,6 +804,7 @@ def build_live_incident_bundle(
         "event_segments": {
             "files": len(segment_manifest["files"]),
             "included": sum(1 for item in segment_manifest["files"] if item.get("included")),
+            "file_discovery": segment_manifest.get("file_discovery") or {},
             "total_included_bytes": segment_manifest["total_included_bytes"],
         },
     }
