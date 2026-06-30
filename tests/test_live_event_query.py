@@ -502,6 +502,7 @@ def test_event_query_filters_by_source_and_component(tmp_path):
                 ts=1000,
                 source="executor",
                 component="order_wave",
+                side="buy",
             ),
             _monitor_row(
                 event_type="candle.tail_projected",
@@ -518,6 +519,7 @@ def test_event_query_filters_by_source_and_component(tmp_path):
                 ts=1200,
                 source="executor",
                 component="order_wave",
+                side="sell",
             ),
         ],
     )
@@ -527,18 +529,21 @@ def test_event_query_filters_by_source_and_component(tmp_path):
         cycle_id="cy_1",
         source="executor",
         component="order_wave",
+        side="buy",
     )
 
     assert report["ok"] is True
     assert report["cycle"]["filters"] == {
         "components": ["order_wave"],
         "cycle_id": "cy_1",
+        "sides": ["buy"],
         "sources": ["executor"],
     }
     assert report["cycle"]["matched_events"] == 1
     assert report["cycle"]["events"][0]["event_type"] == "execution.create_sent"
     assert report["cycle"]["events"][0]["source"] == "executor"
     assert report["cycle"]["events"][0]["component"] == "order_wave"
+    assert report["cycle"]["events"][0]["side"] == "buy"
 
 
 def test_event_query_filters_by_top_level_data_fields(tmp_path):
@@ -1366,6 +1371,7 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 ts=1000,
                 symbol="SOL/USDT:USDT",
                 pside="short",
+                side="sell",
                 status="failed",
                 reason_code="exchange_exception",
                 source="executor",
@@ -1379,6 +1385,7 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 ts=1100,
                 symbol="SOL/USDT:USDT",
                 pside="short",
+                side="buy",
                 status="succeeded",
                 reason_code="exchange_acknowledged",
                 source="executor",
@@ -1398,6 +1405,8 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 "SOL/USDT:USDT",
                 "--pside",
                 "short",
+                "--side",
+                "sell",
                 "--status",
                 "failed",
                 "--reason-code",
@@ -1418,6 +1427,7 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
         "components": ["order_wave"],
         "psides": ["short"],
         "reason_codes": ["exchange_exception"],
+        "sides": ["sell"],
         "sources": ["executor"],
         "statuses": ["failed"],
         "symbols": ["SOL/USDT:USDT"],
@@ -1426,7 +1436,7 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
     assert report["query"]["timeline"] == [
         (
             "1000 seq=1 execution.cancel_failed status=failed "
-            "reason_code=exchange_exception symbol=SOL/USDT:USDT pside=short "
+            "reason_code=exchange_exception symbol=SOL/USDT:USDT pside=short side=sell "
             "ids=cycle_id=cy_9,order_wave_id=ow_9"
         )
     ]

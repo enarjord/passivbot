@@ -262,6 +262,7 @@ def _filter_report(
     remote_call_group_ids: set[str],
     symbols: set[str],
     psides: set[str],
+    sides: set[str],
     reason_codes: set[str],
     statuses: set[str],
     sources: set[str],
@@ -304,6 +305,8 @@ def _filter_report(
         filters["symbols"] = sorted(symbols)
     if psides:
         filters["psides"] = sorted(psides)
+    if sides:
+        filters["sides"] = sorted(sides)
     if reason_codes:
         filters["reason_codes"] = sorted(reason_codes)
     if statuses:
@@ -995,6 +998,7 @@ def build_event_report(
     remote_call_group_id: str | Iterable[str] | None = None,
     symbol: str | Iterable[str] | None = None,
     pside: str | Iterable[str] | None = None,
+    side: str | Iterable[str] | None = None,
     reason_code: str | Iterable[str] | None = None,
     status: str | Iterable[str] | None = None,
     source: str | Iterable[str] | None = None,
@@ -1098,6 +1102,7 @@ def build_event_report(
     remote_call_group_filter = _normalize_filter_values(remote_call_group_id)
     symbol_filter = _normalize_filter_values(symbol)
     pside_filter = _normalize_filter_values(pside)
+    side_filter = _normalize_filter_values(side)
     reason_code_filter = _normalize_filter_values(reason_code)
     status_filter = _normalize_filter_values(status)
     source_filter = _normalize_filter_values(source)
@@ -1119,6 +1124,7 @@ def build_event_report(
             remote_call_group_filter,
             symbol_filter,
             pside_filter,
+            side_filter,
             reason_code_filter,
             status_filter,
             source_filter,
@@ -1242,6 +1248,7 @@ def build_event_report(
 
                     record_symbol = live_event.get("symbol") or row.get("symbol")
                     record_pside = live_event.get("pside") or row.get("pside")
+                    record_side = live_event.get("side")
                     record_status = live_event.get("status")
                     record_reason_code = live_event.get("reason_code")
                     record_source = live_event.get("source")
@@ -1286,6 +1293,7 @@ def build_event_report(
                     )
                     symbol_matches = _filter_matches(record_symbol, symbol_filter)
                     pside_matches = _filter_matches(record_pside, pside_filter)
+                    side_matches = _filter_matches(record_side, side_filter)
                     reason_code_matches = _filter_matches(
                         record_reason_code, reason_code_filter
                     )
@@ -1313,6 +1321,7 @@ def build_event_report(
                         and remote_call_group_matches
                         and symbol_matches
                         and pside_matches
+                        and side_matches
                         and reason_code_matches
                         and status_matches
                         and source_matches
@@ -1447,6 +1456,7 @@ def build_event_report(
             remote_call_group_ids=remote_call_group_filter,
             symbols=symbol_filter,
             psides=pside_filter,
+            sides=side_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
             sources=source_filter,
@@ -1488,6 +1498,7 @@ def build_event_report(
             remote_call_group_ids=remote_call_group_filter,
             symbols=symbol_filter,
             psides=pside_filter,
+            sides=side_filter,
             reason_codes=reason_code_filter,
             statuses=status_filter,
             sources=source_filter,
