@@ -578,8 +578,8 @@ Related detailed plans:
       remain unavailable instead of receiving synthetic ranking tails.
 
 18. [ ] Binance hourly hedge-mode/config refresh traceback classification.
-    Status: first structured-event slice merged; smoke/report classification
-    remains open.
+    Status: structured event plus smoke projection merged; live emission
+    evidence and smoke/report classification remain open.
 
     VPS5 smoke after PR #892 deployed to `v8@7e7ce16f` returned hard-red from
     a non-risk text-log traceback in the Binance bot while all five live
@@ -613,6 +613,14 @@ Related detailed plans:
       so live emission evidence is pending. Follow-up classification should use
       the structured event and must avoid down-classifying startup-required
       config or order-construction failures.
+    - 2026-06-30: PR #896 added read-only `live-smoke-report` full, summary,
+      and brief projections for `exchange.config_refresh` health. The smoke
+      projection excludes raw free-text `data.error`, keeps only bounded labels,
+      `error_type`, status/reason counts, and timing fields, and does not
+      change smoke verdict or text-log classification. VPS5 was pulled to
+      `53b8accb`; a 5-minute no-restart smoke was hard-green and showed the
+      new `exchange_config_refresh` brief section with `total=0`, as expected
+      before the next bot restart loads the event producer.
 
 ## Merged Work Log
 
@@ -692,6 +700,7 @@ Related detailed plans:
 | 2026-06-30 | #3 Live restart/smoke automation | PR #890 / `1498abc9` | Exposed `event_window.enabled` in `live-smoke-report --brief`; VPS5 5-minute smoke stayed hard-green and showed `event_window.enabled=true` | Safe pull/stop/start orchestration remains open |
 | 2026-06-30 | #2 Event query and timeline CLI extensions | PR #892 / `7e7ce16f` | Added `live-event-query --level` filtering for structured event severity; VPS5 query smoke matched 33 warning-level events with `ok=true` and all five bots still running | Cross-bot incident workflow remains open; Binance config-refresh traceback classification added as item #18 |
 | 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #894 / `796ceb38` | Added off-console/text `exchange.config_refresh` events for hourly maintenance refresh success/failure with sanitized bounded error fields and fail-loud behavior preserved | Live emission evidence after next bot restart; smoke/report classification remains open |
+| 2026-06-30 | #18 Binance hourly hedge-mode/config refresh classification | PR #896 / `53b8accb` | Added `live-smoke-report` full/summary/brief health projections for `exchange.config_refresh`, excluding raw error text; VPS5 no-restart smoke stayed hard-green and showed the new brief section | Live emission evidence after next bot restart; smoke/report classification remains open |
 
 ## Suggested Priority
 
