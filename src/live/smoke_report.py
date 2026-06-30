@@ -4511,6 +4511,76 @@ def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "total": _count_value(hsl_replay_health.get("total")),
+        "bots": _count_value(hsl_replay_health.get("bots")),
+        "active_bots": _count_value(hsl_replay_health.get("active_bots")),
+        "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
+        "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
+        "failed_attention_bots": _count_value(
+            hsl_replay_health.get("failed_attention_bots")
+        ),
+        "event_types": hsl_replay_health.get("event_types") or {},
+    }
+    groups = hsl_replay_health.get("groups")
+    if not isinstance(groups, list):
+        return out
+
+    max_active_latest_elapsed_ms: int | None = None
+    max_active_latest_event_age_ms: int | None = None
+    active_stage_counts: Counter[str] = Counter()
+    for group in groups:
+        if not isinstance(group, dict) or not bool(group.get("active")):
+            continue
+        event_age_ms = _non_negative_int(group.get("active_latest_event_age_ms"))
+        if event_age_ms is not None:
+            if max_active_latest_event_age_ms is None:
+                max_active_latest_event_age_ms = int(event_age_ms)
+            else:
+                max_active_latest_event_age_ms = max(
+                    max_active_latest_event_age_ms,
+                    int(event_age_ms),
+                )
+        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
+        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
+        elapsed_candidates = [
+            _non_negative_int(derived.get(key))
+            for key in (
+                "latest_elapsed_ms",
+                "startup_blocking_elapsed_ms",
+                "full_elapsed_ms",
+                "history_build_elapsed_ms",
+                "price_history_fetch_elapsed_ms",
+                "timeline_replay_elapsed_ms",
+            )
+        ]
+        elapsed_values = [
+            int(value) for value in elapsed_candidates if value is not None
+        ]
+        elapsed_ms = max(elapsed_values) if elapsed_values else None
+        if elapsed_ms is not None:
+            if max_active_latest_elapsed_ms is None:
+                max_active_latest_elapsed_ms = int(elapsed_ms)
+            else:
+                max_active_latest_elapsed_ms = max(
+                    max_active_latest_elapsed_ms,
+                    int(elapsed_ms),
+                )
+        data = latest.get("data") if isinstance(latest.get("data"), dict) else {}
+        stage = data.get("stage")
+        if isinstance(stage, str) and stage:
+            active_stage_counts[_redact_log_text(stage, max_len=80)] += 1
+
+    if max_active_latest_elapsed_ms is not None:
+        out["max_active_latest_elapsed_ms"] = int(max_active_latest_elapsed_ms)
+    if max_active_latest_event_age_ms is not None:
+        out["max_active_latest_event_age_ms"] = int(max_active_latest_event_age_ms)
+    if active_stage_counts:
+        out["active_stage_counts"] = dict(active_stage_counts.most_common())
+    return out
+
+
 def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     """Project a full smoke report into top-level smoke-loop counters."""
 
@@ -4743,17 +4813,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "event_types": event_pipeline_health.get("event_types") or {},
         },
-        "hsl_replay": {
-            "total": _count_value(hsl_replay_health.get("total")),
-            "bots": _count_value(hsl_replay_health.get("bots")),
-            "active_bots": _count_value(hsl_replay_health.get("active_bots")),
-            "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
-            "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
-            "failed_attention_bots": _count_value(
-                hsl_replay_health.get("failed_attention_bots")
-            ),
-            "event_types": hsl_replay_health.get("event_types") or {},
-        },
+        "hsl_replay": _brief_hsl_replay_health(hsl_replay_health),
         "risk_events": {
             "total": _count_value(risk_events.get("total")),
             "event_types": risk_events.get("event_types") or {},
