@@ -3,7 +3,7 @@ from __future__ import annotations
 import gzip
 import json
 from collections.abc import Iterable as IterableABC
-from collections import Counter, defaultdict
+from collections import Counter, defaultdict, deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -990,6 +990,7 @@ def build_event_report(
     data_eq: str | Iterable[str] | None = None,
     since_ms: int | None = None,
     until_ms: int | None = None,
+    event_tail_lines: int = 0,
     limit: int = 200,
     include_data: bool = False,
     include_rotated: bool = False,
@@ -1012,6 +1013,9 @@ def build_event_report(
     window_skipped_after = 0
     window_invalid_ts = 0
     files_skipped_before_window = 0
+    max_event_tail_lines = max(0, int(event_tail_lines))
+    event_tail_limited_files = 0
+    event_tail_skipped_lines = 0
     issues: list[EventIssue] = []
     try:
         files = discover_event_files(
@@ -1112,7 +1116,18 @@ def build_event_report(
     for path in files:
         try:
             with _open_text(path) as stream:
-                for line_no, raw_line in enumerate(stream, start=1):
+                if max_event_tail_lines:
+                    file_rows = deque(
+                        enumerate(stream, start=1),
+                        maxlen=max_event_tail_lines,
+                    )
+                    event_tail_limited_files += 1
+                    if file_rows:
+                        event_tail_skipped_lines += max(0, int(file_rows[0][0]) - 1)
+                    rows = file_rows
+                else:
+                    rows = enumerate(stream, start=1)
+                for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -1466,15 +1481,19 @@ def build_event_report(
             report["cycle"]["cycle_trace"] = cycle_cycle_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
-    if window_enabled:
+    if window_enabled or max_event_tail_lines:
         report["event_window"] = {
-            "enabled": True,
+            "enabled": window_enabled,
             "since_ms": since_filter,
             "until_ms": until_filter,
-            "events_considered": window_considered,
+            "events_considered": window_considered if window_enabled else live_events,
             "events_skipped_before": window_skipped_before,
             "events_skipped_after": window_skipped_after,
             "invalid_window_ts": window_invalid_ts,
             "files_skipped_before_window": files_skipped_before_window,
         }
+        if max_event_tail_lines:
+            report["event_window"]["event_tail_lines"] = max_event_tail_lines
+            report["event_window"]["event_tail_limited_files"] = event_tail_limited_files
+            report["event_window"]["event_tail_skipped_lines"] = event_tail_skipped_lines
     return report

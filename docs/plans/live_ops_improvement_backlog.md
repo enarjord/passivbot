@@ -138,6 +138,11 @@ Related detailed plans:
    `files_skipped_before_window=160`. If that remains too slow for larger
    incident windows, consider an event index or reverse chronological scanning
    with early stop, while preserving direct file/events-dir workflows.
+   A 2026-06-30 follow-up added opt-in
+   `live-event-query --event-tail-lines` for repeated recent-window queries
+   over large current monitor segments. The default remains full event
+   validation; bounded query output reports tail-limit metadata in
+   `event_window`.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
