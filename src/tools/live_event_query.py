@@ -144,6 +144,22 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--source",
+        action="append",
+        help=(
+            "Return compact records matching one event source. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--component",
+        action="append",
+        help=(
+            "Return compact records matching one event component. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--tag",
         action="append",
         help=(
@@ -274,6 +290,8 @@ def main(argv: list[str] | None = None) -> int:
             pside=args.pside,
             reason_code=args.reason_code,
             status=args.status,
+            source=args.source,
+            component=args.component,
             tag=args.tag,
             data_eq=args.data_eq,
             since_ms=since_ms,

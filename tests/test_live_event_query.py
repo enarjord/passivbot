@@ -490,6 +490,57 @@ def test_event_query_filters_by_tags(tmp_path):
     assert risk_report["cycle"]["events"][0]["event_type"] == "risk.hsl_status"
 
 
+def test_event_query_filters_by_source_and_component(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_sent",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                source="executor",
+                component="order_wave",
+            ),
+            _monitor_row(
+                event_type="candle.tail_projected",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                source="candles",
+                component="tail_projection",
+            ),
+            _monitor_row(
+                event_type="execution.cancel_sent",
+                cycle_id="cy_2",
+                seq=3,
+                ts=1200,
+                source="executor",
+                component="order_wave",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        cycle_id="cy_1",
+        source="executor",
+        component="order_wave",
+    )
+
+    assert report["ok"] is True
+    assert report["cycle"]["filters"] == {
+        "components": ["order_wave"],
+        "cycle_id": "cy_1",
+        "sources": ["executor"],
+    }
+    assert report["cycle"]["matched_events"] == 1
+    assert report["cycle"]["events"][0]["event_type"] == "execution.create_sent"
+    assert report["cycle"]["events"][0]["source"] == "executor"
+    assert report["cycle"]["events"][0]["component"] == "order_wave"
+
+
 def test_event_query_filters_by_top_level_data_fields(tmp_path):
     events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     _write_ndjson(
@@ -1317,6 +1368,8 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 pside="short",
                 status="failed",
                 reason_code="exchange_exception",
+                source="executor",
+                component="order_wave",
                 ids={"order_wave_id": "ow_9"},
             ),
             _monitor_row(
@@ -1328,6 +1381,8 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 pside="short",
                 status="succeeded",
                 reason_code="exchange_acknowledged",
+                source="executor",
+                component="order_wave",
                 ids={"order_wave_id": "ow_9"},
             ),
         ],
@@ -1347,6 +1402,10 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
                 "failed",
                 "--reason-code",
                 "exchange_exception",
+                "--source",
+                "executor",
+                "--component",
+                "order_wave",
                 "--timeline",
             ]
         )
@@ -1356,8 +1415,10 @@ def test_live_event_query_cli_accepts_scope_filters_and_timeline(tmp_path, capsy
     report = json.loads(capsys.readouterr().out)
     assert report["query"]["filters"] == {
         "order_wave_ids": ["ow_9"],
+        "components": ["order_wave"],
         "psides": ["short"],
         "reason_codes": ["exchange_exception"],
+        "sources": ["executor"],
         "statuses": ["failed"],
         "symbols": ["SOL/USDT:USDT"],
     }
