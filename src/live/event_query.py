@@ -319,6 +319,8 @@ def _compact_record(
     row: dict[str, Any],
     live_event: dict[str, Any],
     include_data: bool,
+    exchange: Any = None,
+    user: Any = None,
 ) -> dict[str, Any]:
     ids = _event_ids(live_event)
     compact = {
@@ -331,8 +333,8 @@ def _compact_record(
         "status": live_event.get("status"),
         "reason_code": live_event.get("reason_code"),
         "component": live_event.get("component"),
-        "exchange": live_event.get("exchange") or row.get("exchange"),
-        "user": live_event.get("user") or row.get("user"),
+        "exchange": exchange or live_event.get("exchange") or row.get("exchange"),
+        "user": user or live_event.get("user") or row.get("user"),
         "symbol": live_event.get("symbol") or row.get("symbol"),
         "pside": live_event.get("pside") or row.get("pside"),
         "side": live_event.get("side"),
@@ -732,6 +734,8 @@ class _CycleTraceBuilder:
         live_event: dict[str, Any],
         event_type: str | None,
         ids: dict[str, Any],
+        exchange: Any = None,
+        user: Any = None,
     ) -> None:
         item = _compact_record(
             path=path,
@@ -739,6 +743,8 @@ class _CycleTraceBuilder:
             row=row,
             live_event=live_event,
             include_data=self.include_data,
+            exchange=exchange,
+            user=user,
         )
         cycle_id = ids.get("cycle_id")
         if cycle_id is None:
@@ -770,6 +776,8 @@ class _CycleTraceBuilder:
             row=row,
             live_event=live_event,
             event_type=event_type,
+            exchange=exchange,
+            user=user,
         )
         cycle["order_trace"].add(
             path=path,
@@ -848,6 +856,8 @@ class _TraceSummaryBuilder:
         row: dict[str, Any],
         live_event: dict[str, Any],
         event_type: str | None,
+        exchange: Any = None,
+        user: Any = None,
     ) -> None:
         self.events += 1
         ts = row.get("ts")
@@ -860,12 +870,19 @@ class _TraceSummaryBuilder:
             ("level", self.levels),
             ("source", self.sources),
             ("component", self.components),
-            ("exchange", self.exchanges),
-            ("user", self.users),
             ("status", self.statuses),
             ("reason_code", self.reason_codes),
         ):
             value = live_event.get(key)
+            if value is not None:
+                counter[str(value)] += 1
+        for value, counter in (
+            (
+                exchange or live_event.get("exchange") or row.get("exchange"),
+                self.exchanges,
+            ),
+            (user or live_event.get("user") or row.get("user"), self.users),
+        ):
             if value is not None:
                 counter[str(value)] += 1
         for tag in _event_tags(row, live_event):
@@ -1266,6 +1283,8 @@ def build_event_report(
                                 row=row,
                                 live_event=live_event,
                                 event_type=record_event_type,
+                                exchange=record_exchange,
+                                user=record_user,
                             )
                         if order_trace:
                             query_order_trace.add(
@@ -1284,6 +1303,8 @@ def build_event_report(
                                 live_event=live_event,
                                 event_type=record_event_type,
                                 ids=ids,
+                                exchange=record_exchange,
+                                user=record_user,
                             )
                         if len(query_events) < max_events:
                             query_events.append(
@@ -1293,6 +1314,8 @@ def build_event_report(
                                     row=row,
                                     live_event=live_event,
                                     include_data=include_data,
+                                    exchange=record_exchange,
+                                    user=record_user,
                                 )
                             )
                     if cycle_id is not None and query_matches:
@@ -1302,6 +1325,8 @@ def build_event_report(
                                 row=row,
                                 live_event=live_event,
                                 event_type=record_event_type,
+                                exchange=record_exchange,
+                                user=record_user,
                             )
                         if order_trace:
                             cycle_order_trace.add(
@@ -1320,6 +1345,8 @@ def build_event_report(
                                 live_event=live_event,
                                 event_type=record_event_type,
                                 ids=ids,
+                                exchange=record_exchange,
+                                user=record_user,
                             )
                         if len(cycle_events) < max_events:
                             cycle_events.append(
@@ -1329,6 +1356,8 @@ def build_event_report(
                                     row=row,
                                     live_event=live_event,
                                     include_data=include_data,
+                                    exchange=record_exchange,
+                                    user=record_user,
                                 )
                             )
         except OSError as exc:

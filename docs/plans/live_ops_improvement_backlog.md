@@ -11,6 +11,12 @@ slice before implementation.
 The logging overhaul remains the foundation: a centralized event stream should
 make the items below easier to prove, test, and operate.
 
+This backlog feeds the logging-overhaul loop selectively. Items are in-scope for
+that loop when they improve diagnostics, smoke evidence, incident reconstruction,
+or operator workflow needed to complete the logging work. Trading-behavior bugs
+found through better observability should remain visible here, but should become
+separate focused trading-path PRs unless they block observability validation.
+
 Update policy:
 
 - Keep open work in `High-Value Follow-Ups` with checkboxes and short status
