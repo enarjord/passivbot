@@ -80,6 +80,7 @@ class EventTypes:
     CACHE_LOAD_COMPLETED = "cache.load.completed"
     CACHE_FLUSH_COMPLETED = "cache.flush.completed"
     CACHE_WARMUP_DECISION = "cache.warmup_decision"
+    EXCHANGE_CONFIG_REFRESH = "exchange.config_refresh"
     EXCHANGE_TIME_SYNC = "exchange.time_sync"
     REMOTE_CALL_STARTED = "remote_call.started"
     REMOTE_CALL_SUCCEEDED = "remote_call.succeeded"
@@ -190,6 +191,8 @@ class ReasonCodes:
     CANDLE_DISK_LOAD_COMPLETED = "candle_disk_load_completed"
     EMA_FALLBACK_USED = "ema_fallback_used"
     EXCHANGE_ACKNOWLEDGED = "exchange_acknowledged"
+    EXCHANGE_CONFIG_REFRESH = "exchange_config_refresh"
+    EXCHANGE_CONFIG_REFRESH_FAILED = "exchange_config_refresh_failed"
     EXCHANGE_EXCEPTION = "exchange_exception"
     EXCHANGE_TIME_SYNC = "exchange_time_sync"
     EXCHANGE_TIME_SYNC_UNAVAILABLE = "exchange_time_sync_unavailable"
@@ -343,6 +346,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.CACHE_LOAD_COMPLETED,
     EventTypes.CACHE_FLUSH_COMPLETED,
     EventTypes.CACHE_WARMUP_DECISION,
+    EventTypes.EXCHANGE_CONFIG_REFRESH,
     EventTypes.EXCHANGE_TIME_SYNC,
     EventTypes.REMOTE_CALL_STARTED,
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -644,6 +648,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.CACHE_LOAD_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_FLUSH_COMPLETED: EventRoute(console=False, text=False),
     EventTypes.CACHE_WARMUP_DECISION: EventRoute(console=False, text=False),
+    EventTypes.EXCHANGE_CONFIG_REFRESH: EventRoute(console=False, text=False),
     EventTypes.EXCHANGE_TIME_SYNC: EventRoute(console=False, text=False),
     EventTypes.REMOTE_CALL_STARTED: EventRoute(console=False),
     EventTypes.REMOTE_CALL_SUCCEEDED: EventRoute(console=False),

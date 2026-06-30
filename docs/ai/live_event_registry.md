@@ -31,6 +31,7 @@ across time.
 - `ema.bundle.started`
 - `ema.fallback_used`
 - `ema.unavailable`
+- `exchange.config_refresh`
 - `exchange.time_sync`
 - `execution.ambiguous`
 - `execution.cancel_ambiguous_terminal`
@@ -147,6 +148,8 @@ across time.
 - `candle_disk_load_completed`
 - `ema_fallback_used`
 - `exchange_acknowledged`
+- `exchange_config_refresh`
+- `exchange_config_refresh_failed`
 - `exchange_exception`
 - `exchange_time_sync`
 - `exchange_time_sync_unavailable`

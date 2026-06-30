@@ -616,6 +616,54 @@ def emit_exchange_time_sync_event(bot: Any, *args: Any, **kwargs: Any) -> None:
         logging.debug("[event] failed to emit exchange time-sync event: %s", exc)
 
 
+def _emit_exchange_config_refresh_event_unchecked(
+    bot: Any,
+    *,
+    context: str,
+    operation: str,
+    status: str,
+    started_ms: int | None = None,
+    elapsed_ms: int | None = None,
+    error: BaseException | None = None,
+) -> None:
+    status_value = str(status or "unknown")
+    failed = status_value == "failed"
+    data: dict[str, Any] = {
+        "context": str(context or "unknown"),
+        "operation": str(operation or "unknown"),
+        "started_ms": int(started_ms) if started_ms is not None else None,
+        "elapsed_ms": int(elapsed_ms) if elapsed_ms is not None else None,
+    }
+    if error is not None:
+        data["error_type"] = type(error).__name__
+        data["error"] = _sanitize_remote_text(error, max_len=500)
+    _safe_emit(
+        bot,
+        EventTypes.EXCHANGE_CONFIG_REFRESH,
+        level="warning" if failed else "debug",
+        component="exchange.config_refresh",
+        tags=(EventTags.EXCHANGE,),
+        cycle_id=current_live_event_cycle_id(bot),
+        status=status_value,
+        reason_code=(
+            ReasonCodes.EXCHANGE_CONFIG_REFRESH_FAILED
+            if failed
+            else ReasonCodes.EXCHANGE_CONFIG_REFRESH
+        ),
+        data={key: value for key, value in data.items() if value is not None},
+    )
+
+
+def emit_exchange_config_refresh_event(
+    bot: Any, *args: Any, **kwargs: Any
+) -> None:
+    """Best-effort structured visibility for periodic exchange config refresh."""
+    try:
+        _emit_exchange_config_refresh_event_unchecked(bot, *args, **kwargs)
+    except Exception as exc:
+        logging.debug("[event] failed to emit exchange config-refresh event: %s", exc)
+
+
 def begin_live_event_cycle(bot: Any, *, loop_start_ms: int) -> str:
     bot._live_event_cycle_seq = int(getattr(bot, "_live_event_cycle_seq", 0) or 0) + 1
     cycle_id = f"cy_{int(bot._live_event_cycle_seq)}"

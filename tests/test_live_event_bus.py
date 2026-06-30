@@ -80,6 +80,7 @@ def test_live_event_reason_code_registry_values_are_unique_and_query_safe():
 
     assert ReasonCodes.REQUIRED_EMA_UNAVAILABLE == "required_ema_unavailable"
     assert ReasonCodes.EXCHANGE_ACKNOWLEDGED == "exchange_acknowledged"
+    assert ReasonCodes.EXCHANGE_CONFIG_REFRESH == "exchange_config_refresh"
     assert ReasonCodes.EXECUTION_LOOP_ERROR_BURST == "execution_loop_error_burst"
     assert ReasonCodes.WARMUP_CACHE_DECISION == "warmup_cache_decision"
     assert authoritative_reason_code("balance") == "authoritative_balance"
@@ -219,6 +220,7 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.CACHE_LOAD_COMPLETED,
         EventTypes.CACHE_FLUSH_COMPLETED,
         EventTypes.CACHE_WARMUP_DECISION,
+        EventTypes.EXCHANGE_CONFIG_REFRESH,
         EventTypes.FILLS_REFRESH_SUMMARY,
         EventTypes.BOT_STARTUP_TIMING,
         EventTypes.HEALTH_SUMMARY,
