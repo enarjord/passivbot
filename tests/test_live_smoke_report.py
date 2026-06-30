@@ -2620,6 +2620,7 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         "failed_attention_bots": 1,
         "max_active_latest_elapsed_ms": 255750,
         "max_active_latest_event_age_ms": 60000,
+        "max_completed_elapsed_ms": 1623400,
         "active_stage_counts": {"pair_replay": 1},
         "event_types": {
             "hsl.replay.progress": 2,
