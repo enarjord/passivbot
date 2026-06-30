@@ -1025,6 +1025,86 @@ def test_event_query_prunes_rotated_files_before_time_window_by_mtime(tmp_path):
     ]
 
 
+def test_event_query_event_tail_lines_bounds_window_scan(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                exchange="gateio",
+                user="gateio_01",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_2",
+                seq=2,
+                ts=2000,
+                exchange="gateio",
+                user="gateio_01",
+            ),
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_3",
+                seq=3,
+                ts=3000,
+                exchange="gateio",
+                user="gateio_01",
+            ),
+            _monitor_row(
+                event_type="hsl.status",
+                cycle_id="cy_4",
+                seq=4,
+                ts=4000,
+                exchange="gateio",
+                user="gateio_01",
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_5",
+                seq=5,
+                ts=5000,
+                exchange="gateio",
+                user="gateio_01",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        exchange="gateio",
+        user="gateio_01",
+        since_ms=2500,
+        event_tail_lines=2,
+        timeline=True,
+    )
+
+    assert report["ok"] is True
+    assert report["records_total"] == 2
+    assert report["live_events"] == 2
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 2500,
+        "until_ms": None,
+        "events_considered": 2,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "files_skipped_before_window": 0,
+        "event_tail_lines": 2,
+        "event_tail_limited_files": 1,
+        "event_tail_skipped_lines": 3,
+    }
+    assert report["query"]["matched_events"] == 2
+    assert [event["ids"]["cycle_id"] for event in report["query"]["events"]] == [
+        "cy_4",
+        "cy_5",
+    ]
+
+
 def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(
@@ -1423,6 +1503,48 @@ def test_live_event_query_cli_accepts_recent_minutes(tmp_path, capsys, monkeypat
     assert report["query"]["events"][0]["seq"] == 2
 
 
+def test_live_event_query_cli_projects_event_tail_metadata(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_2",
+                seq=2,
+                ts=2000,
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--since-ms",
+                "1",
+                "--event-tail-lines",
+                "1",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["records_total"] == 1
+    assert report["event_window"]["event_tail_lines"] == 1
+    assert report["event_window"]["event_tail_limited_files"] == 1
+    assert report["event_window"]["event_tail_skipped_lines"] == 1
+    assert report["query"]["events"][0]["ids"]["cycle_id"] == "cy_2"
+
+
 def test_live_event_query_cli_rejects_invalid_time_window(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_event_query.main(
@@ -1431,6 +1553,14 @@ def test_live_event_query_cli_rejects_invalid_time_window(tmp_path, capsys):
     assert exc_info.value.code == 2
     err = capsys.readouterr().err
     assert "must be <= --until-ms" in err
+
+
+def test_live_event_query_cli_rejects_negative_event_tail_lines(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_event_query.main([str(tmp_path), "--event-tail-lines", "-1"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--event-tail-lines must be non-negative" in err
 
 
 def test_live_event_query_cli_accepts_additional_id_scopes(tmp_path, capsys):

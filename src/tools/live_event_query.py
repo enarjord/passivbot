@@ -167,6 +167,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only include live events from the last N minutes.",
     )
     parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in parser bound for monitor event segments: read only the last "
+            "N rows from each event file. Default 0 keeps full event validation."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=200,
@@ -236,6 +245,8 @@ def main(argv: list[str] | None = None) -> int:
         since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
     if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
+    if int(args.event_tail_lines) < 0:
+        parser.error("--event-tail-lines must be non-negative")
     try:
         report = build_event_report(
             args.path,
@@ -258,6 +269,7 @@ def main(argv: list[str] | None = None) -> int:
             data_eq=args.data_eq,
             since_ms=since_ms,
             until_ms=args.until_ms,
+            event_tail_lines=int(args.event_tail_lines),
             limit=args.limit,
             include_data=bool(args.include_data),
             include_rotated=bool(args.include_rotated),

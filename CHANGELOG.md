@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added opt-in `passivbot tool live-event-query --event-tail-lines` to bound
+  monitor event parsing for repeated recent-window queries while leaving full
+  event validation as the default.
 - Added opt-in `passivbot tool live-smoke-report --event-tail-lines` to bound
   monitor event parsing for repeated recent-window smoke checks while leaving
   full monitor-event validation as the default.

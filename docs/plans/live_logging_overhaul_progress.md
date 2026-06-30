@@ -28,12 +28,17 @@ Current review gate:
   gate may still be used after repeated Claude absence, but that exception must
   be called out in the progress evidence.
 
-Scope calibration:
+Retuned goal boundary:
 
 - The active loop remains the live logging/observability overhaul. Backlog work
   belongs in this loop when it directly improves structured diagnosis, operator
   smoke evidence, incident reconstruction, or the ability to finish the logging
   overhaul.
+- This loop should keep adding newly discovered operational gaps, non-urgent
+  bugs, and room-for-improvement notes to
+  `docs/plans/live_ops_improvement_backlog.md`, but implementation from that
+  backlog should stay selective: prioritize items that make the logging
+  overhaul easier to validate, deploy, and use.
 - Trading-behavior bugs discovered by the new observability, including HSL
   panic/cooldown contract issues and HSL startup replay latency, should be
   tracked in the backlog and handled as separate focused trading-path PRs unless

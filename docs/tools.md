@@ -152,7 +152,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`, `--data-eq`, and time-window
   filters to reconstruct incident slices. Use `--exchange EXCHANGE` and `--user USER` to
   focus one monitor account and prune unrelated monitor paths before scanning; `--bot-id`
-  remains available for event-envelope bot IDs.
+  remains available for event-envelope bot IDs. For repeated recent-window queries over
+  large current monitor segments, `--event-tail-lines N` bounds parsing to the last N rows
+  from each event file; the default `0` keeps full event validation.
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
   `--brief` for top-level counters suitable for repeated VPS smoke loops.
