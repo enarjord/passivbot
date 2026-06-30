@@ -9,6 +9,7 @@ from typing import Any, Iterable
 
 from live.event_bus import EventTypes, LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_file_rows import event_file_rows
+from live.problem_events import is_hard_problem_event, is_problem_event
 
 EVENT_ID_KEYS = LIVE_EVENT_ID_KEYS
 ORDER_TRACE_EVENT_TYPES = {
@@ -365,6 +366,8 @@ def _filter_report(
     components: set[str],
     tags: set[str],
     data_eq_filters: dict[str, set[str]],
+    problem_events: bool,
+    hard_problem_events: bool,
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> dict[str, Any]:
@@ -417,6 +420,10 @@ def _filter_report(
         filters["data_eq"] = {
             key: sorted(values) for key, values in sorted(data_eq_filters.items())
         }
+    if problem_events:
+        filters["problem_events"] = True
+    if hard_problem_events:
+        filters["hard_problem_events"] = True
     return filters
 
 
@@ -1101,6 +1108,8 @@ def build_event_report(
     component: str | Iterable[str] | None = None,
     tag: str | Iterable[str] | None = None,
     data_eq: str | Iterable[str] | None = None,
+    problem_events: bool = False,
+    hard_problem_events: bool = False,
     since_ms: int | None = None,
     until_ms: int | None = None,
     event_tail_lines: int = 0,
@@ -1212,6 +1221,8 @@ def build_event_report(
     component_filter = _normalize_filter_values(component)
     tag_filter = _normalize_filter_values(tag)
     data_eq_filters = _normalize_data_eq_filters(data_eq)
+    problem_event_filter = bool(problem_events)
+    hard_problem_event_filter = bool(hard_problem_events)
     has_non_cycle_filter = any(
         (
             event_type_filter,
@@ -1234,6 +1245,8 @@ def build_event_report(
             component_filter,
             tag_filter,
             data_eq_filters,
+            problem_event_filter,
+            hard_problem_event_filter,
         )
     )
     trace_without_cycle = (
@@ -1413,6 +1426,12 @@ def build_event_report(
                         set(record_tags).intersection(tag_filter)
                     )
                     data_matches = _data_filters_match(live_event, data_eq_filters)
+                    if hard_problem_event_filter:
+                        problem_matches = is_hard_problem_event(live_event)
+                    elif problem_event_filter:
+                        problem_matches = is_problem_event(live_event)
+                    else:
+                        problem_matches = True
                     query_matches = (
                         event_type_matches
                         and level_matches
@@ -1435,6 +1454,7 @@ def build_event_report(
                         and component_matches
                         and tag_matches
                         and data_matches
+                        and problem_matches
                     )
 
                     if has_query_filter and query_matches:
@@ -1571,6 +1591,8 @@ def build_event_report(
             components=component_filter,
             tags=tag_filter,
             data_eq_filters=data_eq_filters,
+            problem_events=problem_event_filter,
+            hard_problem_events=hard_problem_event_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )
@@ -1613,6 +1635,8 @@ def build_event_report(
             components=component_filter,
             tags=tag_filter,
             data_eq_filters=data_eq_filters,
+            problem_events=problem_event_filter,
+            hard_problem_events=hard_problem_event_filter,
             since_ms=since_filter,
             until_ms=until_filter,
         )

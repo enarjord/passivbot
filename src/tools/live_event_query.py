@@ -180,6 +180,23 @@ def build_parser() -> argparse.ArgumentParser:
             "matches key=value. May be repeated; filters are ANDed."
         ),
     )
+    problem_group = parser.add_mutually_exclusive_group()
+    problem_group.add_argument(
+        "--problem-events",
+        action="store_true",
+        help=(
+            "Return compact records matching the same non-hard/hard structured "
+            "problem-event predicate used by live-smoke-report attention."
+        ),
+    )
+    problem_group.add_argument(
+        "--hard-problem-events",
+        action="store_true",
+        help=(
+            "Return compact records matching the hard structured problem-event "
+            "predicate used by live-smoke-report hard failures."
+        ),
+    )
     parser.add_argument(
         "--since-ms",
         type=int,
@@ -302,6 +319,8 @@ def main(argv: list[str] | None = None) -> int:
             component=args.component,
             tag=args.tag,
             data_eq=args.data_eq,
+            problem_events=bool(args.problem_events),
+            hard_problem_events=bool(args.hard_problem_events),
             since_ms=since_ms,
             until_ms=args.until_ms,
             event_tail_lines=int(args.event_tail_lines),
