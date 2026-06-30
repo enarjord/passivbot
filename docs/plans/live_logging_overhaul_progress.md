@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `946d0757` after PR #918, `Add incident bundle query scope filters`.
+- `989b81c9` after PR #919, `Scope incident bundle time-window events`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #919 at `989b81c9`.
+- PR #919 applied incident-bundle query scope filters to
+  `time_window_report.json`, `timeline.txt`, and matched event-segment
+  selection, using one shared event-query predicate across event reports and
+  time-window reports. The slice was read-only incident-bundle/event-query
+  tooling and did not add event producers, exchange calls, live execution,
+  report verdict changes, console routing, order/risk logic, or trading
+  behavior.
+- PR #919 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `946d0757` to `989b81c9` without bot restart because the
+  deployed change was read-only incident-bundle/event-query tooling. The five
+  configured bots were left running.
+- A 5-minute smoke at `989b81c9` using `--event-tail-lines 1000`,
+  `--processes`, and `/root/bots_vps5.yaml` completed with `ok=true`,
+  `hard_failures=0`, all five configured bots matched, clean tracked repository
+  state, no failed remote calls, and no failed account-critical remote calls.
+  A focused OKX incident-bundle smoke verified the time-window scope fix:
+  `time_window_report.json` had `time_window_matched=9`, paths only under
+  `monitor/okx/okx_faisal/events/current.ndjson`, exchange/user only
+  `okx/okx_faisal`, `event_segments.files=1`, and `timeline_has_binance=false`.
 - Repository pulled through PR #918 at `946d0757`.
 - PR #918 added incident-bundle query scope filters for level, exchange, user,
   bot id, remote-call group, side, source, component, tag, and data equality.
@@ -1866,11 +1889,23 @@ VPS5 deployment status:
 
 ## Merged Slices
 
-### Pending PR: Incident Bundle Time-Window Scope Filters
+### Pending PR: Incident Bundle Time-Window Discovery Summary
+
+- Branch: `codex/v8-incident-window-discovery-summary`.
+- Scope: read-only incident bundle tooling and tests.
+- Result: pending review. The slice projects `time_window.files_scanned` and
+  `time_window.file_discovery` into the compact incident-bundle result so
+  focused bundle scoping can be verified without opening the archive.
+- Local validation: focused incident-bundle and event-query tests plus
+  py_compile passed before opening review. No event producers, exchange calls,
+  cache mutation, readiness gates, console routing, monitor writes, order/risk
+  logic, or trading behavior changed.
+
+### PR #919: Incident Bundle Time-Window Scope Filters
 
 - Branch: `codex/v8-incident-window-scopes`.
 - Scope: read-only incident bundle tooling and tests.
-- Result: pending review. The slice applies the incident-bundle query scope
+- Result: `passivbot tool live-incident-bundle` applies query scope
   filters to `time_window_report.json`, `timeline.txt`, and matched event
   segment selection, while preserving the existing behavior where a cycle-id
   bundle keeps surrounding time-window context instead of filtering the window
@@ -1879,6 +1914,11 @@ VPS5 deployment status:
   py_compile passed before opening review. No event producers, exchange calls,
   cache mutation, readiness gates, console routing, monitor writes, order/risk
   logic, or trading behavior changed.
+- Review evidence: Hermes, Claude, Cursor, and CI approved the branch.
+- VPS5 evidence: deployed at `989b81c9` without bot restart because this is
+  read-only tooling. Smoke stayed hard-green with all five bots matched, and a
+  focused OKX bundle verified scoped time-window paths, exchange/user values,
+  timeline, and event-segment selection from the live monitor tree.
 
 ### PR #918: Incident Bundle Query Scope Filters
 
