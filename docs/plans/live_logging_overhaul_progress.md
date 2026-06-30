@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7e7ce16f3` after PR #892, `Add live-event query level filter`.
+- `796ceb389` after PR #894, `Emit exchange config refresh events`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #894 at `796ceb38`.
+- PR #894 added the off-console/text structured event
+  `exchange.config_refresh` for hourly maintenance `init_markets` refresh
+  success/failure. Failures carry bounded sanitized error text, `error_type`,
+  `context=maintain_hourly_cycle`, `operation=init_markets`, elapsed timing,
+  and distinct success/failure reason codes. The wrapper re-raises the original
+  exception and has an extra best-effort guard so event emission cannot mask
+  refresh success or the original refresh failure.
+- PR #894 passed the normal review gate: Claude approved, Hermes approved, and
+  CI was green. Local validation covered
+  `tests/test_exchange_config_refresh_event.py`, `tests/test_live_event_bus.py`,
+  `tests/test_live_event_registry_docs.py`, py_compile for touched Python
+  files, and `git diff --check`.
+- After deploying PR #894 to VPS5, the bots were not restarted. All five
+  configured `passivbot live` processes remained running on the previously
+  loaded Python code while the repository was fast-forwarded to `796ceb38`.
+  Live emission evidence for `exchange.config_refresh` therefore remains
+  pending until the next planned bot restart and hourly maintenance cycle.
+- Repository pulled through PR #893 at `3be95aca`.
+- PR #893 was docs-only progress/backlog tracking for the PR #892 deploy and
+  the discovered Binance hourly hedge-mode/config-refresh traceback gap.
+  No bot restart or smoke was needed beyond confirming all five configured
+  `passivbot live` processes remained running.
 - Repository pulled through PR #892 at `7e7ce16f`.
 - PR #892 added read-only `passivbot tool live-event-query --level`, so local
   structured monitor-event queries can be scoped by envelope severity and
