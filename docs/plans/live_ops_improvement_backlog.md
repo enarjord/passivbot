@@ -116,6 +116,11 @@ Related detailed plans:
      entered cooldown. This is a second post-restart exchange/account example
      of the same latency pattern and strengthens the case for a position-first
      protective classification path before full cooldown replay completes.
+   - 2026-06-30: PR #899 added read-only `live-smoke-report --brief`
+     projection of the worst active HSL replay elapsed time, latest-event age,
+     and stage counts from existing sanitized HSL replay groups. This does not
+     reduce startup latency or change trading behavior, but it makes repeated
+     smoke loops surface active replay latency without opening the full report.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -238,6 +243,12 @@ Related detailed plans:
      configured bots running. This adds another concrete data point for
      per-bot shutdown timing, current-phase attribution, and a bounded
      escalation ladder in future restart automation.
+   - 2026-06-30: PR #899 added worst-active-HSL replay elapsed/event-age/stage
+     counters to `live-smoke-report --brief`, so short operator smoke loops can
+     see whether startup HSL replay is still active and how old the active
+     stage evidence is. VPS5 deploy smoke at `e1fcb038` was green, but its
+     sampled window had `hsl_replay.active_bots=0`, so the active fields were
+     not populated by live data in that run.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
@@ -663,6 +674,8 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #0/#3 HSL replay/startup smoke evidence | PR #899 / `e1fcb038` | Added `live-smoke-report --brief` projection for worst active HSL replay elapsed time, latest-event age, and active stage counts from existing sanitized groups; VPS5 no-restart smoke stayed green after deploy | HSL startup latency remains a trading-path optimization; this slice only surfaces active replay latency in brief smoke |
+| 2026-06-30 | Logging loop scope/progress tracking | PR #898 / `05c48b5` | Recorded the retuned logging-loop boundary: backlog work is in-loop only when it helps diagnostics, smoke evidence, incident reconstruction, or logging-overhaul validation | Continue keeping scope decisions and deploy evidence current as the loop proceeds |
 | 2026-06-30 | #0/#3/#18 Progress and evidence tracking | PR #897 / `aebc3667` | Recorded exchange-config-refresh smoke projection evidence; VPS5 was then restarted so live processes loaded the producer/projection, with a green settled smoke and a wider real HSL ZEC cooldown window | Prove `exchange.config_refresh` during an hourly refresh; implement HSL startup latency and safe restart orchestration separately |
 | 2026-06-25 | #1 Incident bundle generator | PR #641 / `e1f99002` | Added `passivbot tool live-incident-bundle`; bundle smoke on VPS5 created an archive with redacted monitor/config evidence | Supervisor/process status and tighter remote smoke integration |
 | 2026-06-25 | #2 Event query and timeline CLI extensions | PR #638 / `1b15b2d5` | Added broader live event query filters | More ID scopes still needed at that point |

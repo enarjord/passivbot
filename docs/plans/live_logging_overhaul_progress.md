@@ -19,8 +19,8 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `aebc3667f` after PR #897, `Record exchange config refresh smoke
-  projection`.
+- `e1fcb038c` after PR #899, `Show active HSL replay age in brief
+  smoke`.
 
 Current review gate:
 
@@ -50,6 +50,32 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #899 at `e1fcb038`.
+- PR #898 was docs-only retuned-loop progress tracking. PR #899 added a
+  read-only `live-smoke-report --brief` projection for the worst active HSL
+  replay elapsed time, latest-event age, and active stage counts from existing
+  sanitized HSL replay groups. PR #899 does not add event producers, exchange
+  calls, cache mutation, readiness gates, smoke verdict changes, console
+  routing, order/risk logic, or trading behavior.
+- PR #899 had one reviewer finding on the first head: the brief
+  `max_active_latest_elapsed_ms` field under-reported active replay time by
+  reading only `latest_elapsed_ms`. The final head fixed this by taking the
+  maximum across the bounded HSL elapsed fields already exposed by the summary
+  projection, and updated the regression test. Hermes approved the fixed head;
+  CI was green. Claude posted comment-type approvals on both final heads, but
+  not formal `APPROVED`-state reviews, so PR #898 and PR #899 used the
+  degraded low-risk docs/tooling gate.
+- VPS5 pulled from `aebc3667` to `e1fcb038` without bot restart because the
+  deployed changes were docs plus read-only smoke-report projection code. The
+  five configured bots were left running.
+- A fresh 2-minute brief smoke after the pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at `e1fcb038`,
+  `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. The short sampled window had
+  `hsl_replay.active_bots=0`, so the new active HSL replay brief fields were
+  not populated by live data in that smoke. Local tests and Hermes review
+  validated the active-HSL fixture path.
 - Repository pulled through PR #897 at `aebc3667`.
 - PR #897 was docs-only progress/backlog tracking for the
   `exchange.config_refresh` smoke projection and did not change runtime code.
