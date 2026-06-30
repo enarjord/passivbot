@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d0a8e0da5` after PR #885, `Add live event query tail limit`.
+- `60c79c3a4` after PR #886, `Expose startup timings in smoke summaries`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #886 at `60c79c3a4`.
+- PR #886 exposed already-computed `startup_timings` in
+  `live-smoke-report --summary` and `--brief`. The full report already had the
+  sanitized startup timing evidence; this slice made slow restart phases visible
+  in concise smoke-loop projections without adding event producers, exchange
+  calls, cache mutation, readiness gates, console routing, order/risk logic, or
+  trading behavior.
+- PR #886 passed the normal review gate: Claude approved head `87a3aa5`,
+  Hermes approved head `87a3aa5`, and CI was green. Local validation covered
+  `tests/test_live_smoke_report.py`, compileall for touched files,
+  `git diff --check`, and an added-diff silent-handling scan.
+- After deploying PR #886 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A no-window brief smoke proved the new
+  `startup_timings` projection was present, but returned `ok=false` because it
+  included older text-log hard matches. A 5-minute brief smoke on
+  `v8@60c79c3a` returned `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`, and the
+  new `startup_timings` brief key. Remaining attention was non-hard EMA
+  readiness, HSL/unstuck status, and text-log attention groups.
 - Repository pulled through PR #885 at `d0a8e0da5`.
 - PR #885 added opt-in `passivbot tool live-event-query --event-tail-lines N`
   for repeated recent-window event queries over large current monitor segments.
