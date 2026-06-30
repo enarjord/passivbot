@@ -126,6 +126,11 @@ Related detailed plans:
      sanitized completed replay groups. This keeps settled post-replay smoke
      useful after `active_bots` falls back to zero, while still leaving the
      actual HSL startup latency optimization open.
+   - 2026-06-30: PR #903 added read-only `live-smoke-report`
+     `risk_events.hsl_status` projections from existing `hsl.status` monitor
+     events, with value-safe shareable summary/brief output. This makes current
+     HSL tier/symbol/bot status visible in smoke loops, but does not reduce
+     startup replay latency or change panic/cooldown behavior.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -425,7 +430,8 @@ Related detailed plans:
     burst warning into a structured `health.summary` event without changing
     console volume or restart/backoff behavior. PR #707 added a throttled
     console projection for active coin-mode HSL positions using existing
-    `hsl.status` distance-to-red metrics.
+    `hsl.status` distance-to-red metrics. PR #903 made HSL status visible in
+    smoke reports from the same event source without increasing console noise.
 
     Continue moving console output to be a projection of structured events.
     Default console should focus on fills, positions, balance, order writes,
@@ -434,6 +440,10 @@ Related detailed plans:
     they directly explain a blocked trading action.
 
     Work log:
+    - 2026-06-30: Added value-safe `live-smoke-report` HSL status projections
+      for full, summary, and brief reports. The local full report keeps HSL
+      magnitudes for diagnostics; shareable summary/brief output strips raw
+      drawdown, distance, and threshold values.
     - 2026-06-26: Added periodic `[risk] HSL[pside:symbol] status` console
       lines for active coin-mode HSL positions, including distance to red,
       drawdown, slot budget, realized PnL peak, and unrealized PnL. The
@@ -679,6 +689,7 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #0/#3/#10 HSL status smoke evidence | PR #903 / `1dd115cc` | Added `risk_events.hsl_status` to `live-smoke-report` full, summary, and brief output from existing `hsl.status` events; fixed #904 by filtering shareable summary risk `latest_data` through a value-safe whitelist; VPS5 no-restart smoke stayed green and showed red HSL status counts for ZEC without magnitude fields in brief output | Actual HSL startup latency optimization remains open; broader event-driven console redesign remains open |
 | 2026-06-30 | #0/#3 HSL completed replay smoke evidence | PR #901 / `9b3c29ad` | Added `hsl_replay.max_completed_elapsed_ms` to `live-smoke-report --brief`; VPS5 no-restart smoke stayed green after deploy, with no HSL replay events in the sampled window | HSL startup latency remains a trading-path optimization; this slice only surfaces completed replay latency when completed replay events are in-window |
 | 2026-06-30 | #0/#3 HSL replay/startup smoke evidence | PR #899 / `e1fcb038` | Added `live-smoke-report --brief` projection for worst active HSL replay elapsed time, latest-event age, and active stage counts from existing sanitized groups; VPS5 no-restart smoke stayed green after deploy | HSL startup latency remains a trading-path optimization; this slice only surfaces active replay latency in brief smoke |
 | 2026-06-30 | Logging loop scope/progress tracking | PR #898 / `05c48b5` | Recorded the retuned logging-loop boundary: backlog work is in-loop only when it helps diagnostics, smoke evidence, incident reconstruction, or logging-overhaul validation | Continue keeping scope decisions and deploy evidence current as the loop proceeds |
