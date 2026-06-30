@@ -4020,6 +4020,83 @@ def _summary_limited_groups(
     }
 
 
+def _summary_startup_timings(
+    startup_timings: Any,
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    rows = startup_timings if isinstance(startup_timings, list) else []
+    limit = max(0, int(limit))
+    return {
+        "bots": len(rows),
+        "groups_truncated": len(rows) > limit,
+        "groups": rows[:limit],
+    }
+
+
+def _brief_startup_timings(startup_timings: Any) -> dict[str, Any]:
+    rows = startup_timings if isinstance(startup_timings, list) else []
+    phase_count = 0
+    over_budget_phases = 0
+    max_latest_elapsed_ms: int | None = None
+    max_latest_phase_ms: int | None = None
+    max_startup_elapsed_ms: int | None = None
+    startup_phase_bots = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        phases = row.get("phases")
+        if not isinstance(phases, dict):
+            continue
+        for phase, phase_data in phases.items():
+            if not isinstance(phase_data, dict):
+                continue
+            phase_count += 1
+            latest_elapsed = _non_negative_int(phase_data.get("latest_elapsed_ms"))
+            latest_phase = _non_negative_int(phase_data.get("latest_since_previous_ms"))
+            if latest_elapsed is not None:
+                max_latest_elapsed_ms = max(
+                    latest_elapsed,
+                    max_latest_elapsed_ms if max_latest_elapsed_ms is not None else 0,
+                )
+                if str(phase) == "startup":
+                    startup_phase_bots += 1
+                    max_startup_elapsed_ms = max(
+                        latest_elapsed,
+                        max_startup_elapsed_ms
+                        if max_startup_elapsed_ms is not None
+                        else 0,
+                    )
+            if latest_phase is not None:
+                max_latest_phase_ms = max(
+                    latest_phase,
+                    max_latest_phase_ms if max_latest_phase_ms is not None else 0,
+                )
+            elapsed_budget = phase_data.get("elapsed_budget")
+            phase_budget = phase_data.get("phase_budget")
+            if (
+                isinstance(elapsed_budget, dict)
+                and elapsed_budget.get("status") == "over_budget"
+            ) or (
+                isinstance(phase_budget, dict)
+                and phase_budget.get("status") == "over_budget"
+            ):
+                over_budget_phases += 1
+    return {
+        key: value
+        for key, value in {
+            "bots": len(rows),
+            "phases": phase_count,
+            "over_budget_phases": over_budget_phases,
+            "startup_phase_bots": startup_phase_bots,
+            "max_latest_elapsed_ms": max_latest_elapsed_ms,
+            "max_latest_phase_ms": max_latest_phase_ms,
+            "max_startup_elapsed_ms": max_startup_elapsed_ms,
+        }.items()
+        if value is not None
+    }
+
+
 def summarize_live_smoke_report(
     report: dict[str, Any],
     *,
@@ -4196,6 +4273,10 @@ def summarize_live_smoke_report(
         ),
         "account_critical_remote_calls": _summary_limited_groups(
             report.get("account_critical_remote_call_health") or {},
+            limit=max_groups,
+        ),
+        "startup_timings": _summary_startup_timings(
+            report.get("startup_timings"),
             limit=max_groups,
         ),
         "ema_readiness_health": _summary_limited_groups(
@@ -4406,6 +4487,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "account_critical_remote_calls": _brief_remote_call_health(
             report.get("account_critical_remote_call_health")
         ),
+        "startup_timings": _brief_startup_timings(report.get("startup_timings")),
         "ema_readiness": {
             "total": _count_value(ema_readiness_health.get("total")),
             "bots": _count_value(ema_readiness_health.get("bots")),

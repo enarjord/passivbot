@@ -167,7 +167,10 @@ Related detailed plans:
    `repository.root` for shareable reports and surfaces explicit
    dropped-unparsed attention/hard counters when the opt-in log-window drop
    policy suppresses contextless hard-looking log fragments. The safe restart
-   orchestration contract is not implemented.
+   orchestration contract is not implemented. A 2026-06-30 follow-up made the
+   existing startup timing evidence visible in `live-smoke-report --summary`
+   and `--brief`, so repeated smoke loops can see slow startup phases without
+   opening the full report.
    For Rust-touching deploys, the restart flow must also make extension rebuild
    and freshness verification explicit before stopping/restarting live bots; PR
    #756 showed that the VPS has Rust under `/root/.cargo/bin` but non-login SSH

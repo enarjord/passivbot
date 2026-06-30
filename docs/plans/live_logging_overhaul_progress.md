@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `5ca270800` after PR #883, `Add smoke event tail limit`.
+- `d0a8e0da5` after PR #885, `Add live event query tail limit`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #885 at `d0a8e0da5`.
+- PR #885 added opt-in `passivbot tool live-event-query --event-tail-lines N`
+  for repeated recent-window event queries over large current monitor segments.
+  The default remains full event validation; bounded query output reports
+  `event_tail_lines`, `event_tail_limited_files`, and
+  `event_tail_skipped_lines` in `event_window`. The slice did not add event
+  producers, exchange calls, cache mutation, readiness gates, console routing,
+  order/risk logic, or trading behavior.
+- PR #885 passed the normal review gate: Claude approved head `f9550f8f`,
+  Hermes approved head `f9550f8f`, and CI was green. Local validation covered
+  `tests/test_live_event_query.py`, compileall for touched files,
+  `git diff --check`, and a touched-diff silent-handling scan.
+- After deploying PR #885 to VPS5, the bots were not restarted because the
+  change was read-only query tooling. All five configured `passivbot live`
+  processes remained running. A full-validation 5-minute `hsl.status` query on
+  `v8@d0a8e0da` reported `ok=true`, `error_count=0`, and
+  `matched_events=40` in 6.69s. The same query with
+  `--event-tail-lines 5000` reported `ok=true`, `error_count=0`,
+  `matched_events=38`, and exposed `event_tail_limited_files=4` in 7.04s.
+  A smaller `--event-tail-lines 500` smoke reported `ok=true`,
+  `matched_events=37`, `event_tail_limited_files=4`, and
+  `event_tail_skipped_lines=9941` in 3.26s, proving bounded-evidence metadata
+  is visible on live artifacts.
 - Repository pulled through PR #883 at `5ca270800`.
 - PR #883 added opt-in `passivbot tool live-smoke-report --event-tail-lines N`
   for repeated recent-window smoke checks over large current monitor segments.
