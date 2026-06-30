@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `197d74942` after PR #881, `Avoid duplicate smoke monitor scans`.
+- `5ca270800` after PR #883, `Add smoke event tail limit`.
 
 Current review gate:
 
@@ -44,6 +44,29 @@ Scope calibration:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #883 at `5ca270800`.
+- PR #883 added opt-in `passivbot tool live-smoke-report --event-tail-lines N`
+  for repeated recent-window smoke checks over large current monitor segments.
+  The default remains full monitor-event validation; bounded runs report
+  `event_tail_lines`, `event_tail_limited_files`, and
+  `event_tail_skipped_lines` in `event_window`, so reduced evidence is explicit.
+  The slice did not add event producers, exchange calls, cache mutation,
+  readiness gates, console routing, order/risk logic, or trading behavior.
+- PR #883 passed the normal review gate: Claude approved head `16b8c419`,
+  Hermes approved head `16b8c419`, and CI was green. Local validation covered
+  `tests/test_live_smoke_report.py`, compileall for touched files,
+  `git diff --check`, and the silent-handling scan on touched Python files.
+- After deploying PR #883 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A full-validation 5-minute brief smoke on
+  `v8@5ca27080` completed in 16.74s and reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  clean tracked repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. The same 5-minute brief smoke with
+  `--event-tail-lines 5000` completed in 12.94s, reported the same hard-green
+  health counters, and exposed `event_tail_limited_files=6` plus
+  `event_tail_skipped_lines=6919` in `event_window`. Known non-hard attention
+  remained from EMA readiness and HSL/unstuck status groups.
 - Repository pulled through PR #881 at `197d74942`.
 - PR #881 made `live-smoke-report` reuse one monitor-event parse for both
   monitor validation/summary and windowed smoke aggregates. This removed the
