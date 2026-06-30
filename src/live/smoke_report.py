@@ -54,6 +54,7 @@ REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
+SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT = 5
 ACCOUNT_CRITICAL_REMOTE_CALL_KIND = "authoritative_state_fetch"
 ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
     {
@@ -937,6 +938,11 @@ def _merge_problem_event_group(
 def _summarize_problem_event_groups(
     groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
+    event_types: Counter[str] = Counter()
+    for group in groups.values():
+        event_type = group.get("event_type")
+        if isinstance(event_type, str) and event_type:
+            event_types[event_type] += int(_non_negative_int(group.get("count")) or 0)
     ordered = sorted(
         groups.values(),
         key=lambda item: (
@@ -960,6 +966,7 @@ def _summarize_problem_event_groups(
     return {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > PROBLEM_EVENT_GROUP_LIMIT,
+        "event_types": dict(event_types.most_common()),
         "groups": compact_groups,
     }
 
@@ -4708,6 +4715,56 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     }
 
 
+def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        groups = []
+    limit = max(0, int(SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT))
+    safe_group_keys = (
+        "bot",
+        "event_type",
+        "reason_code",
+        "status",
+        "level",
+        "hard",
+        "symbol",
+        "pside",
+        "component",
+        "count",
+        "latest_ts",
+    )
+    compact_groups: list[dict[str, Any]] = []
+    for group in groups[:limit]:
+        if not isinstance(group, dict):
+            continue
+        compact = {
+            key: group.get(key)
+            for key in safe_group_keys
+            if group.get(key) not in (None, "", {}, [])
+        }
+        if compact:
+            compact_groups.append(compact)
+    event_types = summary.get("event_types")
+    if not isinstance(event_types, dict):
+        event_types = {}
+    ordered_event_types = sorted(
+        event_types.items(),
+        key=lambda item: (-_count_value(item[1]), str(item[0])),
+    )
+    return {
+        "groups_truncated": bool(summary.get("groups_truncated")) or len(groups) > limit,
+        "event_types_truncated": len(ordered_event_types) > limit,
+        "event_types": {
+            str(key): _count_value(value)
+            for key, value in ordered_event_types[:limit]
+            if str(key)
+        },
+        "groups": compact_groups,
+    }
+
+
 def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
     window = logs.get("window") if isinstance(logs.get("window"), dict) else {}
     return {
@@ -4986,7 +5043,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "problem_events": {
             "total": _count_value(report.get("problem_event_count")),
             "hard": _count_value(report.get("hard_problem_event_count")),
-        },
+        }
+        | _brief_problem_event_groups(report.get("problem_event_groups")),
         "remote_calls": _brief_remote_call_health(report.get("remote_call_health")),
         "account_critical_remote_calls": _brief_remote_call_health(
             report.get("account_critical_remote_call_health")

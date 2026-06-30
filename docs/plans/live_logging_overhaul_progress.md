@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `d3f3264c` after PR #913, `Bound incident bundle event scans by tail`.
+- `9ff335e4` after PR #914, `Skip disabled incident segment hashing`.
 
 Current review gate:
 
@@ -49,6 +49,32 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #914 at `9ff335e4`.
+- PR #914 moved incident-bundle event-segment SHA-256 calculation behind actual
+  segment inclusion. Disabled event segments and byte-budget-skipped segments no
+  longer hash large monitor event files just to write an excluded manifest
+  entry. The slice was read-only incident-bundle/report tooling and did not add
+  event producers, exchange calls, live execution, report verdict changes,
+  console routing, order/risk logic, or trading behavior.
+- PR #914 passed Claude + Hermes + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, py_compile for touched files and tests,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `d3f3264c` to `9ff335e4` without bot restart because the
+  deployed change was read-only incident-bundle/report tooling. The five
+  configured bots were left running.
+- A bounded incident-bundle smoke at `9ff335e4` using `--recent-minutes 2`,
+  `--event-tail-lines 1000`, `--no-event-segments`, and `--no-trace-report`
+  completed in `9.77s` with `ok=true`, `hard_failures=0`,
+  `monitor_snapshots=12`, six seek-tailed current segments, roughly `16.18MB`
+  skipped by byte, `matched_events=652`, and `event_segments.included=0`.
+- A fresh brief smoke at `9ff335e4` completed in `4.33s` with `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, no
+  failed remote calls, and no failed account-critical remote calls. It still
+  returned `attention=true` from structured non-hard problem events, including
+  EMA-readiness and event-pipeline signals, but brief mode exposed only the
+  problem-event counts. The next useful reporting slice is to project bounded,
+  value-safe problem-event groups into brief output so smoke-loop attention is
+  immediately actionable.
 - Repository pulled through PR #913 at `d3f3264c`.
 - PR #913 added opt-in `--event-tail-lines` support to incident bundles and
   moved monitor event row tailing into a shared helper used by
