@@ -2228,6 +2228,30 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "truncated": 0,
             },
         },
+        "hsl_status": {
+            "total": 2,
+            "bots": 1,
+            "symbols": {
+                "count": 1,
+                "sample": ["ZEC/USDT:USDT"],
+                "truncated": 0,
+            },
+            "tier_counts": {"yellow": 2},
+            "signal_mode_counts": {"coin": 2},
+            "closest_to_red": [
+                {
+                    "bot": "binance/binance_01",
+                    "symbol": "ZEC/USDT:USDT",
+                    "pside": "long",
+                    "tier": "yellow",
+                    "signal_mode": "coin",
+                    "dist_to_red": 0.02,
+                    "red_threshold": 0.1,
+                    "latest_ts": 3000,
+                },
+            ],
+            "closest_to_red_truncated": 0,
+        },
         "groups": [
             {
                 "bot": "binance/binance_01",
@@ -2318,6 +2342,11 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "0.42" not in rendered
     assert "flat-secret" not in rendered
     summary = summarize_live_smoke_report(report)
+    summary_risk_json = json.dumps(summary["risk_events"], sort_keys=True)
+    assert "dist_to_red" not in summary_risk_json
+    assert "red_threshold" not in summary_risk_json
+    assert "drawdown_raw" not in summary_risk_json
+    assert "price_diff_pct" not in summary_risk_json
     assert summary["risk_events"]["hsl_flat_finalization_anchors"] == {
         "total": 1,
         "source_counts": {"current_time_fallback": 1},
@@ -2330,6 +2359,16 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "truncated": 0,
         },
     }
+    assert summary["risk_events"]["hsl_status"]["closest_to_red"] == [
+        {
+            "bot": "binance/binance_01",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "tier": "yellow",
+            "signal_mode": "coin",
+            "latest_ts": 3000,
+        }
+    ]
     brief = summarize_live_smoke_report_brief(report)
     assert brief["risk_events"]["hsl_flat_finalization_anchors"] == {
         "total": 1,
@@ -2343,6 +2382,30 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "truncated": 0,
         },
     }
+    assert brief["risk_events"]["hsl_status"] == {
+        "total": 2,
+        "bots": 1,
+        "symbols": {
+            "count": 1,
+            "sample": ["ZEC/USDT:USDT"],
+            "truncated": 0,
+        },
+        "tier_counts": {"yellow": 2},
+        "signal_mode_counts": {"coin": 2},
+        "closest_to_red": [
+            {
+                "bot": "binance/binance_01",
+                "symbol": "ZEC/USDT:USDT",
+                "pside": "long",
+                "tier": "yellow",
+                "signal_mode": "coin",
+                "latest_ts": 3000,
+            }
+        ],
+        "closest_to_red_truncated": 0,
+    }
+    assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
+    assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
