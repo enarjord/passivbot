@@ -587,7 +587,6 @@ def _copy_event_segments(
             continue
         size = int(stat.st_size)
         item["size_bytes"] = size
-        item["sha256"] = _sha256_file(path)
         if not include_segments:
             item.update({"included": False, "reason": "disabled"})
             files.append(item)
@@ -600,7 +599,9 @@ def _copy_event_segments(
         dest = bundle_root / "event_segments" / f"{digest}_{path.name}"
         dest.parent.mkdir(parents=True, exist_ok=True)
         try:
-            dest.write_bytes(path.read_bytes())
+            data = path.read_bytes()
+            item["sha256"] = hashlib.sha256(data).hexdigest()
+            dest.write_bytes(data)
         except OSError as exc:
             item.update({"included": False, "reason": str(exc)})
             files.append(item)
