@@ -76,6 +76,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter compact records by event type. May be repeated or comma-separated.",
     )
     parser.add_argument(
+        "--level",
+        action="append",
+        help="Filter compact records by event level. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--exchange",
+        action="append",
+        help="Filter compact records by exchange. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--user",
+        action="append",
+        help="Filter compact records by user/account. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--bot-id",
+        action="append",
+        help="Filter compact records by bot_id. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
         "--order-wave-id",
         action="append",
         help="Filter compact records by order_wave_id. May be repeated or comma-separated.",
@@ -84,6 +104,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--remote-call-id",
         action="append",
         help="Filter compact records by remote_call_id. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--remote-call-group-id",
+        action="append",
+        help=(
+            "Filter compact records by remote_call_group_id. May be repeated "
+            "or comma-separated."
+        ),
     )
     parser.add_argument(
         "--symbol",
@@ -96,6 +124,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Filter compact records by position side. May be repeated or comma-separated.",
     )
     parser.add_argument(
+        "--side",
+        action="append",
+        help="Filter compact records by order/event side. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
         "--reason-code",
         action="append",
         help="Filter compact records by reason_code. May be repeated or comma-separated.",
@@ -104,6 +137,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--status",
         action="append",
         help="Filter compact records by status. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--source",
+        action="append",
+        help="Filter compact records by event source. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--component",
+        action="append",
+        help="Filter compact records by component. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--tag",
+        action="append",
+        help="Filter compact records by structured event tag. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
+        "--data-eq",
+        action="append",
+        help=(
+            "Filter compact records whose top-level event data field exactly "
+            "matches key=value. May be repeated; filters are ANDed."
+        ),
     )
     parser.add_argument(
         "--since-ms",
@@ -236,39 +292,52 @@ def main(argv: list[str] | None = None) -> int:
         since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
     if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
-    report = build_live_incident_bundle(
-        args.monitor_root,
-        output_path=args.output,
-        logs_root=args.logs_root,
-        config_paths=list(args.config or []),
-        include_processes=bool(args.processes),
-        supervisor_config=args.supervisor_config,
-        process_command_match=str(args.process_match),
-        cycle_id=args.cycle_id,
-        event_type=args.event_types,
-        order_wave_id=args.order_wave_id,
-        remote_call_id=args.remote_call_id,
-        symbol=args.symbol,
-        pside=args.pside,
-        reason_code=args.reason_code,
-        status=args.status,
-        since_ms=since_ms,
-        until_ms=args.until_ms,
-        include_data=bool(args.include_data),
-        include_trace_report=not bool(args.no_trace_report),
-        include_problem_report=not bool(args.no_problem_report),
-        include_rotated=bool(args.include_rotated),
-        event_tail_lines=int(args.event_tail_lines),
-        include_event_segments=not bool(args.no_event_segments),
-        max_events=int(args.limit),
-        max_log_files=int(args.max_log_files),
-        log_tail_lines=int(args.log_tail_lines),
-        max_log_matches=int(args.max_log_matches),
-        log_window_unparsed_policy=str(args.log_window_unparsed_policy),
-        max_snapshot_files=int(args.max_snapshot_files),
-        max_snapshot_file_bytes=int(args.max_snapshot_file_bytes),
-        max_event_segment_bytes=int(args.max_event_segment_bytes),
-    )
+    try:
+        report = build_live_incident_bundle(
+            args.monitor_root,
+            output_path=args.output,
+            logs_root=args.logs_root,
+            config_paths=list(args.config or []),
+            include_processes=bool(args.processes),
+            supervisor_config=args.supervisor_config,
+            process_command_match=str(args.process_match),
+            cycle_id=args.cycle_id,
+            event_type=args.event_types,
+            level=args.level,
+            exchange=args.exchange,
+            user=args.user,
+            bot_id=args.bot_id,
+            order_wave_id=args.order_wave_id,
+            remote_call_id=args.remote_call_id,
+            remote_call_group_id=args.remote_call_group_id,
+            symbol=args.symbol,
+            pside=args.pside,
+            side=args.side,
+            reason_code=args.reason_code,
+            status=args.status,
+            source=args.source,
+            component=args.component,
+            tag=args.tag,
+            data_eq=args.data_eq,
+            since_ms=since_ms,
+            until_ms=args.until_ms,
+            include_data=bool(args.include_data),
+            include_trace_report=not bool(args.no_trace_report),
+            include_problem_report=not bool(args.no_problem_report),
+            include_rotated=bool(args.include_rotated),
+            event_tail_lines=int(args.event_tail_lines),
+            include_event_segments=not bool(args.no_event_segments),
+            max_events=int(args.limit),
+            max_log_files=int(args.max_log_files),
+            log_tail_lines=int(args.log_tail_lines),
+            max_log_matches=int(args.max_log_matches),
+            log_window_unparsed_policy=str(args.log_window_unparsed_policy),
+            max_snapshot_files=int(args.max_snapshot_files),
+            max_snapshot_file_bytes=int(args.max_snapshot_file_bytes),
+            max_event_segment_bytes=int(args.max_event_segment_bytes),
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
