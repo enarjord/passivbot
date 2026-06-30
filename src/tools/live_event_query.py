@@ -128,6 +128,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Return compact records matching one position side. May be repeated or comma-separated.",
     )
     parser.add_argument(
+        "--side",
+        action="append",
+        help="Return compact records matching one order side. May be repeated or comma-separated.",
+    )
+    parser.add_argument(
         "--reason-code",
         action="append",
         help=(
@@ -140,6 +145,22 @@ def build_parser() -> argparse.ArgumentParser:
         action="append",
         help=(
             "Return compact records matching one event status. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--source",
+        action="append",
+        help=(
+            "Return compact records matching one event source. May be repeated "
+            "or comma-separated."
+        ),
+    )
+    parser.add_argument(
+        "--component",
+        action="append",
+        help=(
+            "Return compact records matching one event component. May be repeated "
             "or comma-separated."
         ),
     )
@@ -272,8 +293,11 @@ def main(argv: list[str] | None = None) -> int:
             remote_call_group_id=args.remote_call_group_id,
             symbol=args.symbol,
             pside=args.pside,
+            side=args.side,
             reason_code=args.reason_code,
             status=args.status,
+            source=args.source,
+            component=args.component,
             tag=args.tag,
             data_eq=args.data_eq,
             since_ms=since_ms,
