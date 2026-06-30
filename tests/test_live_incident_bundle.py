@@ -157,6 +157,8 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["event_report"]["trace_summary_matched_events"] == 3
     assert report["event_report"]["order_trace_matched_events"] == 2
     assert report["event_report"]["cycle_trace_matched_events"] == 3
+    assert report["problem_event_report"]["enabled"] is True
+    assert report["problem_event_report"]["matched_events"] == 0
     assert report["time_window"]["matched_events"] == 1
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
@@ -185,6 +187,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         assert len(tar_names) == len(names)
         assert "manifest.json" in names
         assert "event_report.json" in names
+        assert "problem_event_report.json" in names
         assert "time_window_report.json" in names
         assert "smoke_report.json" in names
         assert "timeline.txt" in names
@@ -196,6 +199,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
 
         manifest = _read_tar_json(tar, "manifest.json")
         event_report = _read_tar_json(tar, "event_report.json")
+        problem_event_report = _read_tar_json(tar, "problem_event_report.json")
         event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         window_report = _read_tar_json(tar, "time_window_report.json")
         smoke_report = _read_tar_json(tar, "smoke_report.json")
@@ -225,6 +229,13 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert redacted_snapshot["nested"]["url"] == "https://[redacted]@example.com/path"
     assert event_report["cycle"]["events"][0]["seq"] == 1
     assert event_report["file_discovery"] == report["event_report"]["file_discovery"]
+    assert problem_event_report["query"]["filters"] == {
+        "cycle_id": "cy_1",
+        "problem_events": True,
+        "since_ms": 1500,
+        "until_ms": 2500,
+    }
+    assert problem_event_report["query"]["matched_events"] == 0
     assert "data" not in event_report["cycle"]["events"][0]
     assert event_report["cycle"]["trace_summary"]["matched_events"] == 3
     assert event_report["cycle"]["order_trace"]["matched_order_events"] == 2
@@ -239,6 +250,81 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert "remote_call.failed" in window_report["timeline"][0]
     assert smoke_report["event_window"] == report["smoke_report"]["event_window"]
     assert smoke_report["remote_call_failures"]["total"] == 1
+
+
+def test_live_incident_bundle_embeds_problem_event_report(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=1100,
+                status="failed",
+                level="warning",
+                reason_code="request_timeout",
+                symbol="BTC/USDT:USDT",
+                ids={"cycle_id": "cy_1", "remote_call_id": "rc_1"},
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=3,
+                ts=1200,
+                status="degraded",
+                level="warning",
+                reason_code="stale_ema",
+                symbol="ETH/USDT:USDT",
+                ids={"cycle_id": "cy_2"},
+            ),
+        ],
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    report = build_live_incident_bundle(
+        tmp_path / "monitor",
+        output_path=output,
+        logs_root="",
+        cycle_id="cy_1",
+        include_data=True,
+        max_problem_events=10,
+    )
+
+    assert report["ok"] is True
+    assert report["problem_event_report"] == {
+        "enabled": True,
+        "files_scanned": 1,
+        "live_events": 3,
+        "error_count": 0,
+        "warning_count": 0,
+        "matched_events": 1,
+        "events_truncated": False,
+        "trace_summary_matched_events": 1,
+    }
+
+    with tarfile.open(output, "r:gz") as tar:
+        problem_event_report = _read_tar_json(tar, "problem_event_report.json")
+
+    assert problem_event_report["query"]["filters"] == {
+        "cycle_id": "cy_1",
+        "problem_events": True,
+    }
+    assert problem_event_report["query"]["matched_events"] == 1
+    assert (
+        problem_event_report["query"]["events"][0]["event_type"]
+        == "remote_call.failed"
+    )
+    assert problem_event_report["query"]["events"][0]["data"] == {
+        "detail": "kept only when include_data is enabled",
+        "seq": 2,
+    }
+    assert problem_event_report["query"]["trace_summary"]["matched_events"] == 1
 
 
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
@@ -270,6 +356,7 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
                 "",
                 "--no-event-segments",
                 "--no-trace-report",
+                "--no-problem-report",
                 "--output",
                 str(output),
                 "--compact",
@@ -281,8 +368,20 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is True
     assert report["bundle_path"] == str(output)
+    assert report["problem_event_report"] == {
+        "enabled": False,
+        "files_scanned": None,
+        "live_events": None,
+        "error_count": None,
+        "warning_count": None,
+        "matched_events": None,
+        "events_truncated": None,
+        "trace_summary_matched_events": None,
+    }
     assert report["event_segments"]["included"] == 0
     assert output.exists()
+    with tarfile.open(output, "r:gz") as tar:
+        assert "problem_event_report.json" not in set(tar.getnames())
 
     with tarfile.open(output, "r:gz") as tar:
         tar_names = tar.getnames()

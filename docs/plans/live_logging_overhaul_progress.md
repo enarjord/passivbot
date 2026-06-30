@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `aef82af9` after PR #915, `Project brief smoke problem groups`.
+- `0f32aeff` after PR #916, `Filter live event query problem events`.
 
 Current review gate:
 
@@ -49,6 +49,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #916 at `0f32aeff`.
+- PR #916 added `live-event-query --problem-events` and
+  `--hard-problem-events`, using the same shared structured problem-event
+  predicate as `live-smoke-report`. The slice was read-only event-query tooling
+  and did not add event producers, exchange calls, live execution, report
+  verdict changes, console routing, order/risk logic, or trading behavior.
+- PR #916 used the documented degraded review gate: Claude remained absent
+  across repeated poll cycles, while Hermes approved the amended head, CI was
+  green, and the merge was clean. Local validation covered
+  `tests/test_live_event_query.py`, `tests/test_live_smoke_report.py`,
+  py_compile for touched files and tests, `git diff --check`, and a
+  touched-file silent-handling scan.
+- VPS5 pulled from `aef82af9` to `0f32aeff` without bot restart because the
+  deployed change was read-only event-query tooling. The five configured bots
+  were left running.
+- A 5-minute smoke at `0f32aeff` using `--event-tail-lines 1000`,
+  `--processes`, and `/root/bots_vps5.yaml` completed with `ok=true`,
+  `hard_failures=0`, all five configured bots matched, clean tracked repository
+  state, no failed remote calls, and no failed account-critical remote calls.
+  A focused `live-event-query --problem-events --trace-summary` over the same
+  recent window matched the same known non-hard EMA readiness and HSL status
+  attention groups shown by smoke.
 - Repository pulled through PR #915 at `aef82af9`.
 - PR #915 projected bounded, value-safe `problem_events.groups` and
   `event_types` into `live-smoke-report --brief`, with
@@ -1795,10 +1817,26 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events, HSL replay failure events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events; PR #848 mirrors pre-create planning/market snapshot skips into off-console `execution.create_skipped` events; PR #850 mirrors fill-cache doctor startup report/quarantine/rebuild decisions into off-console `fills.refresh_summary` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Merged Slices
+
+### Pending PR: Incident Bundle Problem Event Report
+
+- Branch: `codex/v8-incident-problem-query`.
+- Scope: read-only incident bundle tooling and tests.
+- Result: `passivbot tool live-incident-bundle` now embeds
+  `problem_event_report.json` by default. The report is built with the shared
+  `live-event-query --problem-events` predicate, honors the bundle's existing
+  cycle/symbol/status/reason/time/tail filters, includes a trace summary, and
+  can be disabled with `--no-problem-report` for compact bundles. Event segment
+  selection now considers the problem-event report too, so bundles keep the raw
+  segment needed to reconstruct smoke attention rows.
+- Local validation: focused incident-bundle and event-query tests plus
+  py_compile passed before opening review. No event producers, exchange calls,
+  cache mutation, readiness gates, console routing, monitor writes, order/risk
+  logic, or trading behavior changed.
 
 ### Foundation Before PR #619
 

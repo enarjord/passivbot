@@ -138,20 +138,23 @@ Related detailed plans:
    live-event trace reports, smoke summaries, redacted log excerpts, monitor
    snapshots, config hashes, runtime metadata, and bounded event segments into a
    tarball. Bundles can also include trace reports, optional smoke-report
-   process status, event-file discovery metadata, and recent time windows.
+   process status, event-file discovery metadata, recent time windows, and
+   problem-event reports that reuse the same predicate as smoke/report query
+   tooling.
 
    Remaining refinements: richer remote smoke integration when the
    restart/smoke automation exists; keep recent-window bundle scans bounded for
-   very large current monitor segments.
+   very large current monitor segments; continue cross-bot incident workflow
+   improvements only where concrete operator diagnostics require them.
 
 2. [x] Event query and timeline CLI extensions.
    Status: core filter/timeline work merged. `passivbot tool live-event-query`
    now supports event discovery, compact JSON output, current-vs-rotated segment
    selection, terse timeline rendering, and filters for event type/kind, cycle
    id, order wave id, remote call id/group id, bot id, snapshot id, plan id,
-   action id, symbol, pside, reason code, status, and event time window. It
-   also supports aggregate trace summaries over matched events and order waves,
-   plus a
+   action id, symbol, pside, reason code, status, problem-event state, and event
+   time window. It also supports aggregate trace summaries over matched events
+   and order waves, plus a
    dedicated order-trace reconstruction view for order waves/actions and a
    cycle-trace reconstruction view with nested order traces. Incident bundles
    now embed the existing trace-summary/order-trace reports and cycle traces
@@ -693,7 +696,9 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
-| 2026-06-30 | #2/#3 Event query and live restart/smoke automation | PR #915 / `aef82af9` | Projected bounded, value-safe `problem_events.groups` and `event_types` into `live-smoke-report --brief`; VPS5 no-restart deploy stayed hard-green with all five bots matched and remaining attention attributable to EMA readiness plus HSL cooldown groups | Add a matching event-query problem-event filter so operators can jump from brief smoke attention groups to exact event rows |
+| 2026-06-30 | #1/#2/#3 Incident bundle generator, event query, and live restart/smoke automation | pending PR / `codex/v8-incident-problem-query` | Embeds a bounded `problem_event_report.json` in incident bundles by default, using the same shared problem-event predicate as `live-smoke-report` and `live-event-query --problem-events`, with `--no-problem-report` for compact bundles | Review, merge, and VPS5 no-restart smoke pending |
+| 2026-06-30 | #2/#3 Event query and live restart/smoke automation | PR #916 / `0f32aeff` | Added `live-event-query --problem-events` and `--hard-problem-events` using the same shared predicate as `live-smoke-report`; VPS5 no-restart deploy stayed hard-green and a focused query matched the same EMA/HSL attention groups shown by brief smoke | Embed the problem-event query view into incident bundles so bundle artifacts carry the exact attention rows |
+| 2026-06-30 | #2/#3 Event query and live restart/smoke automation | PR #915 / `aef82af9` | Projected bounded, value-safe `problem_events.groups` and `event_types` into `live-smoke-report --brief`; VPS5 no-restart deploy stayed hard-green with all five bots matched and remaining attention attributable to EMA readiness plus HSL cooldown groups | Completed by PR #916 query filters and the pending incident-bundle embedding slice |
 | 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #914 / `9ff335e4` | Moved incident-bundle event-segment SHA hashing behind actual segment inclusion; VPS5 no-restart deploy stayed green, bounded bundle smoke completed in 9.77s with zero event-segment bytes copied, and brief smoke stayed hard-green with all five bots matched | Brief smoke still reports `attention=true` from structured problem events without bounded top-cause groups; continue safe restart orchestration |
 | 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #913 / `d3f3264c` | Added opt-in `--event-tail-lines` to incident bundles and shared seek-tail event-row iteration for plain NDJSON across event-query, smoke-report, and incident time-window scans; VPS5 no-restart deploy stayed green and bounded bundle smoke completed in 15.51s with seek-tail metadata | Avoid remaining disabled-segment manifest hashing; continue safe restart orchestration |
 | 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #912 / `0eb29545` | Added `--recent-minutes` to incident bundles and deployed it read-only to VPS5; bundle smoke showed the recent window active with clean hard-failure status but still many matched current-segment events | Add opt-in event-tail bounding for recent incident bundles; continue safe restart orchestration |

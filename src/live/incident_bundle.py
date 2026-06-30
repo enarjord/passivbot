@@ -544,12 +544,33 @@ def _event_report_result_summary(event_report: dict[str, Any]) -> dict[str, Any]
     }
 
 
+def _problem_report_result_summary(problem_report: dict[str, Any]) -> dict[str, Any]:
+    query = problem_report.get("query")
+    query_section = query if isinstance(query, dict) else {}
+    trace_summary = query_section.get("trace_summary")
+    return {
+        "enabled": bool(problem_report),
+        "files_scanned": problem_report.get("files_scanned"),
+        "live_events": problem_report.get("live_events"),
+        "error_count": problem_report.get("error_count"),
+        "warning_count": problem_report.get("warning_count"),
+        "matched_events": query_section.get("matched_events"),
+        "events_truncated": query_section.get("events_truncated"),
+        "trace_summary_matched_events": (
+            trace_summary.get("matched_events")
+            if isinstance(trace_summary, dict)
+            else None
+        ),
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
     bundle_root: Path,
     event_report: dict[str, Any],
     window_report: dict[str, Any],
+    problem_report: dict[str, Any],
     include_rotated: bool,
     include_segments: bool,
     max_total_bytes: int,
@@ -570,7 +591,7 @@ def _copy_event_segments(
         file_discovery = discovery.to_dict()
     except FileNotFoundError:
         discovered = []
-    matched_paths = _matched_segment_paths(event_report, window_report)
+    matched_paths = _matched_segment_paths(event_report, window_report, problem_report)
     if matched_paths:
         paths = [Path(path) for path in sorted(matched_paths)]
     else:
@@ -652,6 +673,7 @@ def build_live_incident_bundle(
     until_ms: int | None = None,
     include_data: bool = False,
     include_trace_report: bool = True,
+    include_problem_report: bool = True,
     include_rotated: bool = False,
     include_event_segments: bool = True,
     max_events: int = 500,
@@ -696,6 +718,30 @@ def build_live_incident_bundle(
         order_trace=include_trace_report,
         cycle_trace=include_trace_report and cycle_id is not None,
     )
+    problem_report = (
+        build_event_report(
+            monitor_path,
+            cycle_id=cycle_id,
+            event_type=event_type,
+            order_wave_id=order_wave_id,
+            remote_call_id=remote_call_id,
+            symbol=symbol,
+            pside=pside,
+            reason_code=reason_code,
+            status=status,
+            problem_events=True,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            event_tail_lines=event_tail_lines,
+            limit=max_problem_events,
+            include_data=include_data,
+            include_rotated=include_rotated,
+            timeline=True,
+            trace_summary=True,
+        )
+        if include_problem_report
+        else {}
+    )
     window_report = _build_time_window_report(
         monitor_path,
         since_ms=since_ms,
@@ -736,6 +782,7 @@ def build_live_incident_bundle(
             bundle_root=bundle_root,
             event_report=event_report,
             window_report=window_report,
+            problem_report=problem_report,
             include_rotated=include_rotated,
             include_segments=include_event_segments,
             max_total_bytes=max_event_segment_bytes,
@@ -762,6 +809,7 @@ def build_live_incident_bundle(
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
+                    "include_problem_report": include_problem_report,
                     "include_processes": include_processes,
                     "supervisor_config": str(supervisor_config)
                     if supervisor_config is not None
@@ -778,6 +826,8 @@ def build_live_incident_bundle(
 
         _write_json(bundle_root / "manifest.json", metadata)
         _write_json(bundle_root / "event_report.json", event_report)
+        if include_problem_report:
+            _write_json(bundle_root / "problem_event_report.json", problem_report)
         _write_json(bundle_root / "time_window_report.json", window_report)
         _write_json(bundle_root / "smoke_report.json", smoke_report)
         timeline_lines: list[str] = []
@@ -785,6 +835,11 @@ def build_live_incident_bundle(
             value = event_report.get(section)
             if isinstance(value, dict):
                 timeline_lines.extend(str(line) for line in value.get("timeline", []))
+        problem_query = problem_report.get("query")
+        if isinstance(problem_query, dict):
+            problem_timeline = problem_query.get("timeline")
+            if isinstance(problem_timeline, list):
+                timeline_lines.extend(str(line) for line in problem_timeline)
         timeline_lines.extend(str(line) for line in window_report.get("timeline", []))
         (bundle_root / "timeline.txt").write_text(
             "\n".join(timeline_lines) + ("\n" if timeline_lines else ""),
@@ -808,6 +863,7 @@ def build_live_incident_bundle(
         "bundle_version": BUNDLE_VERSION,
         "hard_failures": hard_failures,
         "event_report": _event_report_result_summary(event_report),
+        "problem_event_report": _problem_report_result_summary(problem_report),
         "time_window": {
             "enabled": window_report.get("enabled"),
             "matched_events": window_report.get("matched_events"),
