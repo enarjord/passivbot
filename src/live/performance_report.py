@@ -13,7 +13,7 @@ from live.event_bus import (
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
     utc_ms,
 )
-from live.event_query import discover_event_files
+from live.event_query import discover_event_files_with_metadata
 from live.smoke_report import _user_safe_display_path
 
 
@@ -3068,8 +3068,20 @@ def build_live_performance_report(
         "events_skipped": 0,
     }
     issues: list[dict[str, Any]] = []
+    file_discovery: dict[str, Any] = {
+        "candidate_files": 0,
+        "event_segments": 0,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+        "bot_path_pruning_applied": False,
+        "opaque_bot_id_full_scan": False,
+    }
     try:
-        files = discover_event_files(root, include_rotated=include_rotated)
+        discovery = discover_event_files_with_metadata(
+            root, include_rotated=include_rotated
+        )
+        files = discovery.files
+        file_discovery = discovery.to_dict()
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -3225,6 +3237,7 @@ def build_live_performance_report(
         "include_rotated": bool(include_rotated),
         "files": [_user_safe_display_path(path) for path in files],
         "files_scanned": len(files),
+        "file_discovery": file_discovery,
         "records_total": int(records_total),
         "live_events": int(live_events),
         "legacy_events": int(legacy_events),
@@ -3289,6 +3302,7 @@ def summarize_live_performance_report(
         "root": report.get("root"),
         "include_rotated": bool(report.get("include_rotated")),
         "files_scanned": int(report.get("files_scanned") or 0),
+        "file_discovery": report.get("file_discovery") or {},
         "records_total": int(report.get("records_total") or 0),
         "live_events": int(report.get("live_events") or 0),
         "legacy_events": int(report.get("legacy_events") or 0),

@@ -3,10 +3,25 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import live.performance_report as performance_report_module
 from live.performance_report import build_live_performance_report, summarize_live_performance_report
 from tools import live_performance_report
+
+
+def _fake_event_file_discovery(files):
+    return SimpleNamespace(
+        files=list(files),
+        to_dict=lambda: {
+            "bot_path_pruning_applied": False,
+            "candidate_files": len(files),
+            "event_segments": len(files),
+            "opaque_bot_id_full_scan": False,
+            "rotated_skipped": 0,
+            "scope_pruned": 0,
+        },
+    )
 
 
 def _monitor_row(
@@ -161,11 +176,20 @@ def test_live_performance_report_aggregates_cycle_state_remote_and_hsl_timings(t
             ),
         ],
     )
+    (events_dir / "20260629.ndjson.gz").write_bytes(b"")
 
     report = build_live_performance_report(tmp_path / "monitor")
 
     assert report["ok"] is True
     assert report["files_scanned"] == 1
+    assert report["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
     assert report["live_events"] == 6
     groups = _groups_by_operation(report)
     assert groups["cycle.elapsed"]["count"] == 2
@@ -2630,6 +2654,14 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out["live_events"] == 1
+    assert out["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 1,
+        "event_segments": 1,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+    }
     assert out["filters"]["exchanges"] == ["okx"]
     assert out["filters"]["events_skipped"] == 1
     assert len(out["performance"]["groups"]) == 1
@@ -2650,8 +2682,8 @@ def test_live_performance_report_redacts_file_paths_and_oserror_messages(monkeyp
 
     monkeypatch.setattr(
         performance_report_module,
-        "discover_event_files",
-        lambda root, *, include_rotated=False: [event_path],
+        "discover_event_files_with_metadata",
+        lambda root, *, include_rotated=False: _fake_event_file_discovery([event_path]),
     )
 
     def fail_open(path):
@@ -2682,8 +2714,8 @@ def test_live_performance_report_redacts_file_paths_for_valid_events(monkeypatch
 
     monkeypatch.setattr(
         performance_report_module,
-        "discover_event_files",
-        lambda root, *, include_rotated=False: [event_path],
+        "discover_event_files_with_metadata",
+        lambda root, *, include_rotated=False: _fake_event_file_discovery([event_path]),
     )
     monkeypatch.setattr(
         performance_report_module,
