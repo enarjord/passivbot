@@ -4529,21 +4529,13 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
 
     max_active_latest_elapsed_ms: int | None = None
     max_active_latest_event_age_ms: int | None = None
+    max_completed_elapsed_ms: int | None = None
     active_stage_counts: Counter[str] = Counter()
-    for group in groups:
-        if not isinstance(group, dict) or not bool(group.get("active")):
-            continue
-        event_age_ms = _non_negative_int(group.get("active_latest_event_age_ms"))
-        if event_age_ms is not None:
-            if max_active_latest_event_age_ms is None:
-                max_active_latest_event_age_ms = int(event_age_ms)
-            else:
-                max_active_latest_event_age_ms = max(
-                    max_active_latest_event_age_ms,
-                    int(event_age_ms),
-                )
-        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
-        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
+
+    def record_elapsed_ms(record: Any) -> int | None:
+        if not isinstance(record, dict):
+            return None
+        derived = record.get("derived") if isinstance(record.get("derived"), dict) else {}
         elapsed_candidates = [
             _non_negative_int(derived.get(key))
             for key in (
@@ -4558,7 +4550,33 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
         elapsed_values = [
             int(value) for value in elapsed_candidates if value is not None
         ]
-        elapsed_ms = max(elapsed_values) if elapsed_values else None
+        return max(elapsed_values) if elapsed_values else None
+
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        completed_elapsed_ms = record_elapsed_ms(group.get("completed"))
+        if completed_elapsed_ms is not None:
+            if max_completed_elapsed_ms is None:
+                max_completed_elapsed_ms = int(completed_elapsed_ms)
+            else:
+                max_completed_elapsed_ms = max(
+                    max_completed_elapsed_ms,
+                    int(completed_elapsed_ms),
+                )
+        if not bool(group.get("active")):
+            continue
+        event_age_ms = _non_negative_int(group.get("active_latest_event_age_ms"))
+        if event_age_ms is not None:
+            if max_active_latest_event_age_ms is None:
+                max_active_latest_event_age_ms = int(event_age_ms)
+            else:
+                max_active_latest_event_age_ms = max(
+                    max_active_latest_event_age_ms,
+                    int(event_age_ms),
+                )
+        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
+        elapsed_ms = record_elapsed_ms(latest)
         if elapsed_ms is not None:
             if max_active_latest_elapsed_ms is None:
                 max_active_latest_elapsed_ms = int(elapsed_ms)
@@ -4576,6 +4594,8 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
         out["max_active_latest_elapsed_ms"] = int(max_active_latest_elapsed_ms)
     if max_active_latest_event_age_ms is not None:
         out["max_active_latest_event_age_ms"] = int(max_active_latest_event_age_ms)
+    if max_completed_elapsed_ms is not None:
+        out["max_completed_elapsed_ms"] = int(max_completed_elapsed_ms)
     if active_stage_counts:
         out["active_stage_counts"] = dict(active_stage_counts.most_common())
     return out
