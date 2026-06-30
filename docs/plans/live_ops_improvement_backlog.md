@@ -121,6 +121,11 @@ Related detailed plans:
      and stage counts from existing sanitized HSL replay groups. This does not
      reduce startup latency or change trading behavior, but it makes repeated
      smoke loops surface active replay latency without opening the full report.
+   - 2026-06-30: PR #901 added read-only `live-smoke-report --brief`
+     projection of the worst completed HSL replay elapsed time from existing
+     sanitized completed replay groups. This keeps settled post-replay smoke
+     useful after `active_bots` falls back to zero, while still leaving the
+     actual HSL startup latency optimization open.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
@@ -674,6 +679,7 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #0/#3 HSL completed replay smoke evidence | PR #901 / `9b3c29ad` | Added `hsl_replay.max_completed_elapsed_ms` to `live-smoke-report --brief`; VPS5 no-restart smoke stayed green after deploy, with no HSL replay events in the sampled window | HSL startup latency remains a trading-path optimization; this slice only surfaces completed replay latency when completed replay events are in-window |
 | 2026-06-30 | #0/#3 HSL replay/startup smoke evidence | PR #899 / `e1fcb038` | Added `live-smoke-report --brief` projection for worst active HSL replay elapsed time, latest-event age, and active stage counts from existing sanitized groups; VPS5 no-restart smoke stayed green after deploy | HSL startup latency remains a trading-path optimization; this slice only surfaces active replay latency in brief smoke |
 | 2026-06-30 | Logging loop scope/progress tracking | PR #898 / `05c48b5` | Recorded the retuned logging-loop boundary: backlog work is in-loop only when it helps diagnostics, smoke evidence, incident reconstruction, or logging-overhaul validation | Continue keeping scope decisions and deploy evidence current as the loop proceeds |
 | 2026-06-30 | #0/#3/#18 Progress and evidence tracking | PR #897 / `aebc3667` | Recorded exchange-config-refresh smoke projection evidence; VPS5 was then restarted so live processes loaded the producer/projection, with a green settled smoke and a wider real HSL ZEC cooldown window | Prove `exchange.config_refresh` during an hourly refresh; implement HSL startup latency and safe restart orchestration separately |

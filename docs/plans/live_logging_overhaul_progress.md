@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `e1fcb038c` after PR #899, `Show active HSL replay age in brief
+- `9b3c29adb` after PR #901, `Show completed HSL replay time in brief
   smoke`.
 
 Current review gate:
@@ -50,6 +50,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #901 at `9b3c29ad`.
+- PR #901 added a read-only `live-smoke-report --brief` projection for
+  `hsl_replay.max_completed_elapsed_ms`, derived only from existing sanitized
+  completed HSL replay groups and the same bounded elapsed-field policy used
+  for active replay timing. The slice does not add event producers, exchange
+  calls, cache mutation, readiness gates, smoke verdict changes, console
+  routing, order/risk logic, or trading behavior.
+- PR #901 passed Claude + Hermes + CI. Local validation covered the focused HSL
+  replay smoke-report regression, the full `tests/test_live_smoke_report.py`
+  suite, py_compile for touched files, `git diff --check`, and a
+  touched-file silent-handling scan.
+- VPS5 pulled from `e1fcb038` to `9b3c29ad` without bot restart because the
+  deployed change was read-only smoke-report projection code. The five
+  configured bots were left running.
+- A fresh 2-minute brief smoke after the pull reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `missing_expected_count=0`, clean tracked repository state at `9b3c29ad`,
+  `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`. The short sampled window had
+  `hsl_replay.total=0`, so the new completed-HSL replay brief field was not
+  populated by live data in that smoke.
 - Repository pulled through PR #899 at `e1fcb038`.
 - PR #898 was docs-only retuned-loop progress tracking. PR #899 added a
   read-only `live-smoke-report --brief` projection for the worst active HSL
