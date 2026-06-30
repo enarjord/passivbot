@@ -250,6 +250,7 @@ def _filter_report(
     *,
     cycle_id: str | None,
     event_types: set[str],
+    levels: set[str],
     exchanges: set[str],
     users: set[str],
     bot_ids: set[str],
@@ -277,6 +278,8 @@ def _filter_report(
         filters["until_ms"] = int(until_ms)
     if event_types:
         filters["event_types"] = sorted(event_types)
+    if levels:
+        filters["levels"] = sorted(levels)
     if exchanges:
         filters["exchanges"] = sorted(exchanges)
     if users:
@@ -973,6 +976,7 @@ def build_event_report(
     *,
     cycle_id: str | None = None,
     event_type: str | Iterable[str] | None = None,
+    level: str | Iterable[str] | None = None,
     exchange: str | Iterable[str] | None = None,
     user: str | Iterable[str] | None = None,
     bot_id: str | Iterable[str] | None = None,
@@ -1073,6 +1077,7 @@ def build_event_report(
         include_data=include_data,
     )
     event_type_filter = _normalize_filter_values(event_type)
+    level_filter = _normalize_filter_values(level)
     exchange_filter = _normalize_filter_values(exchange)
     user_filter = _normalize_filter_values(user)
     bot_filter = _normalize_filter_values(bot_id)
@@ -1091,6 +1096,7 @@ def build_event_report(
     has_non_cycle_filter = any(
         (
             event_type_filter,
+            level_filter,
             exchange_filter,
             user_filter,
             bot_filter,
@@ -1176,6 +1182,7 @@ def build_event_report(
                         window_considered += 1
 
                     record_event_type = live_event.get("event_type") or row.get("kind")
+                    record_level = live_event.get("level")
                     if not record_event_type:
                         issues.append(
                             EventIssue(
@@ -1236,6 +1243,7 @@ def build_event_report(
                     event_type_matches = _filter_matches(
                         record_event_type, event_type_filter
                     )
+                    level_matches = _filter_matches(record_level, level_filter)
                     cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
                     exchange_matches = _filter_matches(
                         record_exchange,
@@ -1273,6 +1281,7 @@ def build_event_report(
                     data_matches = _data_filters_match(live_event, data_eq_filters)
                     query_matches = (
                         event_type_matches
+                        and level_matches
                         and cycle_matches
                         and exchange_matches
                         and user_matches
@@ -1405,6 +1414,7 @@ def build_event_report(
         query_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            levels=level_filter,
             exchanges=exchange_filter,
             users=user_filter,
             bot_ids=bot_filter,
@@ -1443,6 +1453,7 @@ def build_event_report(
         cycle_filters = _filter_report(
             cycle_id=cycle_id,
             event_types=event_type_filter,
+            levels=level_filter,
             exchanges=exchange_filter,
             users=user_filter,
             bot_ids=bot_filter,

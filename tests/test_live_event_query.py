@@ -23,6 +23,7 @@ def _monitor_row(
     reason_code: str = "test",
     ids: dict | None = None,
     data: dict | None = None,
+    level: str = "debug",
     source: str = "live",
     component: str = "test",
     tags: list[str] | None = None,
@@ -38,7 +39,7 @@ def _monitor_row(
         "schema_version": 1,
         "event_id": f"evt_{seq}",
         "event_type": event_type,
-        "level": "debug",
+        "level": level,
         "source": source,
         "component": component,
         "exchange": exchange,
@@ -252,6 +253,66 @@ def test_event_query_filters_by_event_type_without_changing_summary_counts(tmp_p
         "SOL/USDT:USDT",
     ]
     assert report["query"]["events"][0]["data"] == {"seq": 1}
+
+
+def test_event_query_filters_by_level(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.started",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                level="info",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_1",
+                seq=2,
+                ts=1100,
+                level="warning",
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                cycle_id="cy_1",
+                seq=3,
+                ts=1200,
+                level="error",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        level=["warning,error"],
+        timeline=True,
+        trace_summary=True,
+    )
+
+    assert report["event_types"] == {
+        "cycle.started": 1,
+        "execution.create_failed": 1,
+        "remote_call.failed": 1,
+    }
+    assert report["query"]["filters"] == {"levels": ["error", "warning"]}
+    assert report["query"]["matched_events"] == 2
+    assert [event["level"] for event in report["query"]["events"]] == [
+        "warning",
+        "error",
+    ]
+    assert report["query"]["trace_summary"]["levels"] == {"error": 1, "warning": 1}
+    assert report["query"]["timeline"] == [
+        (
+            "1100 seq=2 remote_call.failed status=succeeded "
+            "reason_code=test ids=cycle_id=cy_1"
+        ),
+        (
+            "1200 seq=3 execution.create_failed status=succeeded "
+            "reason_code=test ids=cycle_id=cy_1"
+        ),
+    ]
 
 
 def test_event_query_combines_cycle_and_event_type_filters(tmp_path):
@@ -1411,6 +1472,47 @@ def test_live_event_query_cli_accepts_time_window(tmp_path, capsys):
     assert report["query"]["filters"] == {"since_ms": 1100, "until_ms": 1300}
     assert report["query"]["matched_events"] == 1
     assert report["query"]["events"][0]["seq"] == 2
+
+
+def test_live_event_query_cli_accepts_level_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                cycle_id="cy_9",
+                seq=1,
+                ts=1000,
+                level="info",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_9",
+                seq=2,
+                ts=1100,
+                level="error",
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--level",
+                "error",
+                "--include-data",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {"levels": ["error"]}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "remote_call.failed"
+    assert report["query"]["events"][0]["level"] == "error"
 
 
 def test_live_event_query_cli_accepts_data_eq_filter(tmp_path, capsys):

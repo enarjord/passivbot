@@ -38,6 +38,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--level",
+        action="append",
+        help=(
+            "Return compact records matching one live-event level, for example "
+            "warning,error,critical. May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--bot-id",
         action="append",
         help=(
@@ -252,6 +260,7 @@ def main(argv: list[str] | None = None) -> int:
             args.path,
             cycle_id=args.cycle_id,
             event_type=args.event_types,
+            level=args.level,
             exchange=args.exchange,
             user=args.user,
             bot_id=args.bot_id,

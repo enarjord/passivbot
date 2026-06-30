@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added `--level` filtering to `passivbot tool live-event-query`, so operator
+  event, timeline, trace-summary, order-trace, and cycle-trace reports can be
+  scoped by live-event severity.
 - `passivbot tool live-smoke-report --brief` now includes the structured event
   window `enabled` flag, matching the full report and making unwindowed brief
   smoke output explicit.
