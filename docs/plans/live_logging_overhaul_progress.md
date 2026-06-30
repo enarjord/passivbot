@@ -19,7 +19,7 @@ Last updated: 2026-06-29.
 
 Current `origin/v8` logging-overhaul head:
 
-- `1c9d05036` after PR #877, `Prune old event segments for windowed queries`.
+- `72d450ba6` after PR #879, `Label path-scoped event query output`.
 
 Current review gate:
 
@@ -44,6 +44,31 @@ Scope calibration:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #879 at `72d450ba6`.
+- PR #879 made read-only `live-event-query` output use the same path-resolved
+  exchange/user labels that filtering already uses for legacy monitor rows.
+  Compact query events, cycle-trace timelines, and trace-summary exchange/user
+  counters now remain self-describing even when older rows lack embedded
+  exchange/user fields. The slice did not add event producers, exchange calls,
+  cache mutation, readiness gates, console routing, order/risk logic, or trading
+  behavior.
+- PR #879 passed the normal review gate: Claude approved head `558bca5e`,
+  Hermes approved head `558bca5e`, and CI was green. Local validation covered
+  the full `tests/test_live_event_query.py` suite, compileall for touched files,
+  `git diff --check`, and the silent-handling scan on touched files.
+- After deploying PR #879 to VPS5, the bots were not restarted because the
+  change was read-only query tooling. All five configured `passivbot live`
+  processes remained running. A focused Gate.io HSL status query over the last
+  30 minutes completed under a 20-second timeout wrapper and showed path-scoped
+  labels in both compact output and trace summary:
+  `query.events[0].exchange=gateio`, `query.events[0].user=gateio_01`,
+  `trace_summary.exchanges.gateio=115`, and
+  `trace_summary.users.gateio_01=115`.
+- A 5-minute brief smoke on `v8@72d450ba` reported `ok=true`,
+  `hard_failures=0`, `hard_failure_sources.total=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state, `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Known non-hard attention remained from EMA readiness and HSL status groups.
 - Repository pulled through PR #877 at `1c9d05036`.
 - PR #877 added read-only `live-event-query` file-level window pruning: when
   `--since-ms` or `--recent-minutes` is set, files whose filesystem mtime is
