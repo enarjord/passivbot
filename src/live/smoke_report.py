@@ -4327,6 +4327,27 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     }
 
 
+def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
+    window = logs.get("window") if isinstance(logs.get("window"), dict) else {}
+    return {
+        key: window.get(key)
+        for key in (
+            "enabled",
+            "since_ms",
+            "until_ms",
+            "lines_considered",
+            "lines_skipped_before",
+            "lines_skipped_after",
+            "unparsed_ts",
+            "unparsed_policy",
+            "lines_skipped_unparsed",
+            "dropped_unparsed_attention_matches",
+            "dropped_unparsed_hard_matches",
+        )
+        if key in window
+    }
+
+
 def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     """Project a full smoke report into top-level smoke-loop counters."""
 
@@ -4478,6 +4499,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "dropped_unparsed_hard_matches": _count_value(
                 logs.get("dropped_unparsed_hard_matches")
             ),
+            "window": _brief_log_window(logs),
         },
         "problem_events": {
             "total": _count_value(report.get("problem_event_count")),

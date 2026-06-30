@@ -964,6 +964,19 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "non_risk_hard_matches": 0,
         "dropped_unparsed_attention_matches": 0,
         "dropped_unparsed_hard_matches": 0,
+        "window": {
+            "enabled": False,
+            "since_ms": None,
+            "until_ms": None,
+            "lines_considered": 1,
+            "lines_skipped_before": 0,
+            "lines_skipped_after": 0,
+            "unparsed_ts": 0,
+            "unparsed_policy": "keep",
+            "lines_skipped_unparsed": 0,
+            "dropped_unparsed_attention_matches": 0,
+            "dropped_unparsed_hard_matches": 0,
+        },
     }
     assert brief["problem_events"] == {"total": 2, "hard": 0}
     assert brief["remote_calls"]["total"] == 1
@@ -3015,6 +3028,8 @@ def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):
     ]
     assert report["logs"]["matches"][0]["ts"] == 3000
     assert "future hard skipped" not in json.dumps(report["logs"]["matches"])
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["logs"]["window"] == report["logs"]["window"]
 
     drop_report = build_live_smoke_report(
         tmp_path / "monitor",

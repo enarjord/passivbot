@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes bounded text-log
+  window counters, making it clear when hard/attention log counts came from a
+  time-windowed scan and how many log lines were skipped.
 - `passivbot tool live-smoke-report --summary` and `--brief` now expose
   existing startup timing evidence, making slow restart phases visible in the
   concise smoke-loop projections.
