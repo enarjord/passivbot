@@ -71,11 +71,13 @@ def discover_event_files(
     include_rotated: bool = False,
     exchange: str | Iterable[str] | None = None,
     user: str | Iterable[str] | None = None,
+    bot_id: str | Iterable[str] | None = None,
 ) -> list[Path]:
     """Find monitor event NDJSON segments below a monitor root, bot root, or events dir."""
     path = Path(root).expanduser()
     exchange_filter = _normalize_filter_values(exchange)
     user_filter = _normalize_filter_values(user)
+    bot_path_filter = _path_like_bot_id_filter(_normalize_filter_values(bot_id))
     if path.is_file():
         return [path] if _is_event_segment(path) else []
     if not path.exists():
@@ -95,6 +97,7 @@ def discover_event_files(
                 candidate,
                 exchange_filter=exchange_filter,
                 user_filter=user_filter,
+                bot_path_filter=bot_path_filter,
             )
         ),
         key=_event_path_sort_key,
@@ -161,9 +164,10 @@ def _monitor_path_scope_matches_under_root(
     *,
     exchange_filter: set[str],
     user_filter: set[str],
+    bot_path_filter: set[str],
 ) -> bool:
     """Conservatively prune only obvious <monitor>/<exchange>/<user>/events files."""
-    if not exchange_filter and not user_filter:
+    if not exchange_filter and not user_filter and not bot_path_filter:
         return True
     try:
         relative_parts = path.relative_to(root).parts
@@ -172,10 +176,19 @@ def _monitor_path_scope_matches_under_root(
     if len(relative_parts) != 4 or relative_parts[2] != "events":
         return True
     exchange, user = relative_parts[0], relative_parts[1]
+    if bot_path_filter and f"{exchange}/{user}" not in bot_path_filter:
+        return False
     return _filter_matches(exchange, exchange_filter) and _filter_matches(
         user,
         user_filter,
     )
+
+
+def _path_like_bot_id_filter(bot_filter: set[str]) -> set[str]:
+    """Return path-derived bot ids only when pruning cannot drop opaque bot ids."""
+    if not bot_filter:
+        return set()
+    return set(bot_filter) if all("/" in value for value in bot_filter) else set()
 
 
 def _normalize_filter_values(values: str | Iterable[str] | None) -> set[str]:
@@ -1040,6 +1053,7 @@ def build_event_report(
             include_rotated=include_rotated,
             exchange=exchange,
             user=user,
+            bot_id=bot_id,
         )
     except FileNotFoundError as exc:
         files = []

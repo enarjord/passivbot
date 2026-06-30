@@ -814,6 +814,50 @@ def test_discover_event_files_filters_monitor_paths_by_exchange_and_user(tmp_pat
     assert missing_files == []
 
 
+def test_discover_event_files_prunes_path_like_bot_ids(tmp_path):
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    kucoin_events = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(gateio_events / "current.ndjson", [])
+    _write_gz_ndjson(gateio_events / "20260629.ndjson.gz", [])
+    _write_ndjson(binance_events / "current.ndjson", [])
+    _write_ndjson(kucoin_events / "current.ndjson", [])
+
+    gateio_files = discover_event_files(
+        tmp_path / "monitor",
+        include_rotated=True,
+        bot_id="gateio/gateio_01",
+    )
+
+    assert [path.name for path in gateio_files] == [
+        "20260629.ndjson.gz",
+        "current.ndjson",
+    ]
+    assert {path.parent.parent.parent.name for path in gateio_files} == {"gateio"}
+    assert {path.parent.parent.name for path in gateio_files} == {"gateio_01"}
+
+    multi_bot_files = discover_event_files(
+        tmp_path / "monitor",
+        bot_id="gateio/gateio_01,kucoin/kucoin_01",
+    )
+
+    assert {path.parent.parent.parent.name for path in multi_bot_files} == {
+        "gateio",
+        "kucoin",
+    }
+
+    opaque_bot_files = discover_event_files(
+        tmp_path / "monitor",
+        bot_id="bot_1",
+    )
+
+    assert {path.parent.parent.parent.name for path in opaque_bot_files} == {
+        "binance",
+        "gateio",
+        "kucoin",
+    }
+
+
 def test_event_query_filters_exchange_user_and_prunes_monitor_paths(tmp_path):
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
