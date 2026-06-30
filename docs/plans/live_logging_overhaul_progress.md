@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `0eb295452` after PR #912, `Add recent window option to incident bundles`.
+- `d3f3264c` after PR #913, `Bound incident bundle event scans by tail`.
 
 Current review gate:
 
@@ -49,6 +49,36 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #913 at `d3f3264c`.
+- PR #913 added opt-in `--event-tail-lines` support to incident bundles and
+  moved monitor event row tailing into a shared helper used by
+  `live-event-query`, `live-smoke-report`, and the incident-bundle time-window
+  report. Plain NDJSON current segments seek from file end; compressed segments
+  remain sequential. The slice was read-only report/query tooling and did not
+  add event producers, exchange calls, live execution, report verdict changes,
+  console routing, order/risk logic, or trading behavior.
+- PR #913 passed Claude + Hermes + CI on the amended head. Local validation
+  covered `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  and `tests/test_live_smoke_report.py`, py_compile for touched files and tests,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `0eb29545` to `d3f3264c` without bot restart because the
+  deployed change was read-only report/query tooling. The five configured bots
+  were left running.
+- A first full incident-bundle smoke was manually interrupted after roughly
+  three minutes, then component timing localized the remaining cost away from
+  event-row parsing: `live-event-query --recent-minutes 2 --event-tail-lines
+  1000` completed in `5.12s`, and `live-smoke-report --brief
+  --recent-minutes 2 --event-tail-lines 1000` completed in `5.58s`. Both
+  reported `event_tail_methods={"seek_tail": ...}` and skipped roughly `24.8MB`
+  by byte with no hard failures.
+- A retried bounded incident-bundle smoke at `d3f3264c` using
+  `--recent-minutes 2`, `--event-tail-lines 1000`, `--no-event-segments`, and
+  `--no-trace-report` completed in `15.51s` with `ok=true`, `hard_failures=0`,
+  `monitor_snapshots=12`, `event_report.files_scanned=6`, six seek-tailed
+  current segments, roughly `26MB` skipped by byte, `matched_events=953`, and
+  `event_segments.included=0`. This exposed a follow-up optimization: the
+  disabled event-segment manifest still hashes matched segment files even when
+  segment copying is disabled.
 - Repository pulled through PR #912 at `0eb29545`.
 - PR #912 added `--recent-minutes` to `passivbot tool live-incident-bundle`,
   resolving it to the existing `since_ms` event/log time-window contract. The

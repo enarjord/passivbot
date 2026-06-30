@@ -290,8 +290,13 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
         assert len(tar_names) == len(names)
         assert "event_segments_manifest.json" in names
         assert not any(name.startswith("event_segments/") for name in names)
+        event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         event_report = _read_tar_json(tar, "event_report.json")
         smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert event_segments_manifest["files"]
+    assert event_segments_manifest["files"][0]["included"] is False
+    assert event_segments_manifest["files"][0]["reason"] == "disabled"
+    assert "sha256" not in event_segments_manifest["files"][0]
     assert "trace_summary" not in event_report["query"]
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
