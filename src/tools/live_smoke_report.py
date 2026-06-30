@@ -120,6 +120,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Maximum recent log files to inspect.",
     )
     parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in parser bound for monitor event segments: read only the last "
+            "N rows from each event file. Default 0 keeps full monitor validation."
+        ),
+    )
+    parser.add_argument(
         "--log-tail-lines",
         type=int,
         default=300,
@@ -171,6 +180,8 @@ def main(argv: list[str] | None = None) -> int:
     until_ms = args.until_ms
     if since_ms is not None and until_ms is not None and since_ms > until_ms:
         parser.error("--since-ms must be <= --until-ms")
+    if int(args.event_tail_lines) < 0:
+        parser.error("--event-tail-lines must be non-negative")
     report = build_live_smoke_report(
         args.monitor_root,
         logs_root=logs_root,
@@ -182,6 +193,7 @@ def main(argv: list[str] | None = None) -> int:
         until_ms=until_ms,
         max_problem_events=int(args.max_problem_events),
         max_log_files=int(args.max_log_files),
+        event_tail_lines=int(args.event_tail_lines),
         log_tail_lines=int(args.log_tail_lines),
         max_log_matches=int(args.max_log_matches),
         log_window_unparsed_policy=str(args.log_window_unparsed_policy),

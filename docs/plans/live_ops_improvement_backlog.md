@@ -201,6 +201,11 @@ Related detailed plans:
      roughly 600 in-window events. First-pass fix: make `live-smoke-report`
      reuse one monitor-event parse for both monitor validation/summary and
      windowed smoke aggregates instead of parsing every event segment twice.
+   - 2026-06-30: Added an opt-in `live-smoke-report --event-tail-lines`
+     parser bound for repeated recent-window smoke checks over large current
+     monitor segments. The default remains full monitor-event validation; the
+     opt-in path reports tail-limit metadata in `event_window` so bounded smoke
+     evidence is explicit.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes

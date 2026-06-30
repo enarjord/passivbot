@@ -3136,8 +3136,11 @@ def _event_window_report(
     events_skipped_before: int,
     events_skipped_after: int,
     invalid_window_ts: int,
+    event_tail_lines: int = 0,
+    event_tail_limited_files: int = 0,
+    event_tail_skipped_lines: int = 0,
 ) -> dict[str, Any]:
-    return {
+    report = {
         "enabled": since_ms is not None or until_ms is not None,
         "since_ms": since_ms,
         "until_ms": until_ms,
@@ -3146,6 +3149,11 @@ def _event_window_report(
         "events_skipped_after": int(events_skipped_after),
         "invalid_window_ts": int(invalid_window_ts),
     }
+    if int(event_tail_lines) > 0:
+        report["event_tail_lines"] = int(event_tail_lines)
+        report["event_tail_limited_files"] = int(event_tail_limited_files)
+        report["event_tail_skipped_lines"] = int(event_tail_skipped_lines)
+    return report
 
 
 def _monitor_issue(
@@ -3171,6 +3179,7 @@ def _scan_events(
     max_problem_events: int,
     since_ms: int | None = None,
     until_ms: int | None = None,
+    event_tail_lines: int = 0,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     try:
@@ -3215,6 +3224,9 @@ def _scan_events(
     events_skipped_before = 0
     events_skipped_after = 0
     invalid_window_ts = 0
+    max_event_tail_lines = max(0, int(event_tail_lines))
+    event_tail_limited_files = 0
+    event_tail_skipped_lines = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -3236,7 +3248,18 @@ def _scan_events(
     for path in files:
         try:
             with _open_text(path) as stream:
-                for line_no, raw_line in enumerate(stream, start=1):
+                if max_event_tail_lines:
+                    file_rows = deque(
+                        enumerate(stream, start=1),
+                        maxlen=max_event_tail_lines,
+                    )
+                    event_tail_limited_files += 1
+                    if file_rows:
+                        event_tail_skipped_lines += max(0, int(file_rows[0][0]) - 1)
+                    rows = file_rows
+                else:
+                    rows = enumerate(stream, start=1)
+                for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -3571,6 +3594,9 @@ def _scan_events(
             events_skipped_before=events_skipped_before,
             events_skipped_after=events_skipped_after,
             invalid_window_ts=invalid_window_ts,
+            event_tail_lines=max_event_tail_lines,
+            event_tail_limited_files=event_tail_limited_files,
+            event_tail_skipped_lines=event_tail_skipped_lines,
         ),
     }
 
@@ -3825,6 +3851,7 @@ def build_live_smoke_report(
     until_ms: int | None = None,
     max_problem_events: int = 50,
     max_log_files: int = 8,
+    event_tail_lines: int = 0,
     log_tail_lines: int = 300,
     max_log_matches: int = 50,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
@@ -3836,6 +3863,7 @@ def build_live_smoke_report(
         max_problem_events=max_problem_events,
         since_ms=since_ms,
         until_ms=until_ms,
+        event_tail_lines=event_tail_lines,
     )
     event_report = event_scan["monitor"]
     log_scan = _scan_logs(
@@ -4304,6 +4332,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "events_skipped_before",
                 "events_skipped_after",
                 "invalid_window_ts",
+                "event_tail_lines",
+                "event_tail_limited_files",
+                "event_tail_skipped_lines",
             )
             if key in event_window
         },

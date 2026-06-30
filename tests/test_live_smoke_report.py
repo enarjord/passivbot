@@ -123,6 +123,74 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
     assert report["event_window"]["events_considered"] == 1
 
 
+def test_live_smoke_report_event_tail_lines_bounds_monitor_scan(tmp_path):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(
+                event_type="bot.stopped",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="critical",
+                reason_code="old_failure_outside_tail",
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_old"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=3000,
+                ids={"cycle_id": "cy_old"},
+            ),
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=4,
+                ts=4000,
+                ids={"cycle_id": "cy_fresh"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=5,
+                ts=5000,
+                ids={"cycle_id": "cy_fresh"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        since_ms=3500,
+        event_tail_lines=2,
+    )
+
+    assert report["ok"] is True
+    assert report["monitor"]["records_total"] == 2
+    assert report["monitor"]["live_events"] == 2
+    assert report["hard_problem_event_count"] == 0
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 3500,
+        "until_ms": None,
+        "events_considered": 2,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "event_tail_lines": 2,
+        "event_tail_limited_files": 1,
+        "event_tail_skipped_lines": 3,
+    }
+    assert report["bots"][0]["events"] == 2
+
+
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -3365,6 +3433,48 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert "groups" not in summary["account_critical_remote_calls"]
 
 
+def test_live_smoke_report_cli_brief_projects_event_tail_metadata(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_old"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_fresh"},
+            ),
+        ],
+    )
+
+    assert (
+        live_smoke_report.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--event-tail-lines",
+                "1",
+                "--brief",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["monitor"]["live_events"] == 1
+    assert summary["event_window"]["event_tail_lines"] == 1
+    assert summary["event_window"]["event_tail_limited_files"] == 1
+    assert summary["event_window"]["event_tail_skipped_lines"] == 1
+
+
 def test_live_smoke_report_cli_can_drop_unparseable_window_log_lines(
     tmp_path,
     capsys,
@@ -3429,6 +3539,14 @@ def test_live_smoke_report_cli_rejects_invalid_window_timestamp(capsys):
 
     assert exc_info.value.code == 2
     assert "invalid int value" in capsys.readouterr().err
+
+
+def test_live_smoke_report_cli_rejects_negative_event_tail_lines(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(["monitor", "--event-tail-lines", "-1"])
+
+    assert exc_info.value.code == 2
+    assert "--event-tail-lines must be non-negative" in capsys.readouterr().err
 
 
 def test_live_smoke_report_process_status_matches_supervisor_config(
