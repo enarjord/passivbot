@@ -996,7 +996,25 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
             "dropped_unparsed_hard_matches": 0,
         },
     }
-    assert brief["problem_events"] == {"total": 2, "hard": 0}
+    assert brief["problem_events"]["total"] == 2
+    assert brief["problem_events"]["hard"] == 0
+    assert brief["problem_events"]["groups_truncated"] is False
+    assert brief["problem_events"]["event_types_truncated"] is False
+    assert brief["problem_events"]["event_types"] == {
+        "ema.unavailable": 1,
+        "remote_call.failed": 1,
+    }
+    problem_groups = brief["problem_events"]["groups"]
+    assert len(problem_groups) == 2
+    assert {group["event_type"] for group in problem_groups} == {
+        "ema.unavailable",
+        "remote_call.failed",
+    }
+    for group in problem_groups:
+        assert "latest_data" not in group
+        assert "latest_ids" not in group
+        assert "latest_path" not in group
+        assert "latest_line" not in group
     assert brief["remote_calls"]["total"] == 1
     assert brief["remote_calls"]["failed"] == 1
     assert brief["account_critical_remote_calls"]["total"] == 1
@@ -1029,6 +1047,36 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert "matches" not in brief["logs"]
     assert "groups" not in brief["remote_calls"]
     assert "groups" not in brief["account_critical_remote_calls"]
+
+
+def test_live_smoke_report_brief_bounds_problem_event_types(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    limit = smoke_report_module.SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type=f"problem.type_{idx}",
+                seq=idx + 1,
+                ts=1000 + idx,
+                status="degraded",
+                level="warning",
+                reason_code=f"reason_{idx}",
+            )
+            for idx in range(limit + 1)
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert brief["problem_events"]["total"] == limit + 1
+    assert brief["problem_events"]["hard"] == 0
+    assert brief["problem_events"]["groups_truncated"] is True
+    assert brief["problem_events"]["event_types_truncated"] is True
+    assert len(brief["problem_events"]["groups"]) == limit
+    assert len(brief["problem_events"]["event_types"]) == limit
+    assert f"problem.type_{limit}" not in brief["problem_events"]["event_types"]
 
 
 def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
@@ -2904,6 +2952,7 @@ def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
     assert report["problem_event_groups"] == {
         "total": 3,
         "groups_truncated": False,
+        "event_types": {"ema.unavailable": 2, "bot.stopped": 1},
         "groups": [
             {
                 "bot": "binance/binance_01",
@@ -3633,7 +3682,23 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert summary["attention"] is True
     assert summary["attention_count"] == 2
     assert summary["logs"]["attention_matches"] == 1
-    assert summary["problem_events"] == {"hard": 0, "total": 1}
+    assert summary["problem_events"]["hard"] == 0
+    assert summary["problem_events"]["total"] == 1
+    assert summary["problem_events"]["event_types"] == {"remote_call.failed": 1}
+    assert summary["problem_events"]["event_types_truncated"] is False
+    assert summary["problem_events"]["groups"] == [
+        {
+            "bot": "binance/binance_01",
+            "event_type": "remote_call.failed",
+            "reason_code": "authoritative_balance",
+            "status": "failed",
+            "level": "warning",
+            "hard": False,
+            "component": "test",
+            "count": 1,
+            "latest_ts": 1000,
+        }
+    ]
     assert summary["account_critical_remote_calls"]["failed"] == 1
     assert "bots" not in summary
     assert "matches" not in summary["logs"]
