@@ -6,6 +6,7 @@ import os
 
 import pytest
 
+from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
     discover_event_files,
@@ -1317,12 +1318,34 @@ def test_event_query_event_tail_lines_bounds_window_scan(tmp_path):
         "event_tail_lines": 2,
         "event_tail_limited_files": 1,
         "event_tail_skipped_lines": 3,
+        "event_tail_skipped_lines_exact": True,
+        "event_tail_skipped_bytes": 0,
+        "event_tail_line_numbers_exact": True,
+        "event_tail_methods": {"seek_tail": 1},
     }
     assert report["query"]["matched_events"] == 2
     assert [event["ids"]["cycle_id"] for event in report["query"]["events"]] == [
         "cy_4",
         "cy_5",
     ]
+
+
+def test_event_file_rows_seek_tail_skips_plain_ndjson_prefix(tmp_path):
+    path = tmp_path / "current.ndjson"
+    old_prefix = json.dumps({"seq": 1, "payload": "x" * 80_000})
+    row_2 = json.dumps({"seq": 2})
+    row_3 = json.dumps({"seq": 3})
+    path.write_text(f"{old_prefix}\n{row_2}\n{row_3}\n", encoding="utf-8")
+
+    with event_file_rows(path, max_tail_lines=2) as (rows, window):
+        kept_rows = list(rows)
+
+    assert window.method == "seek_tail"
+    assert window.skipped_bytes > 0
+    assert window.skipped_lines is None
+    assert window.skipped_lines_exact is False
+    assert window.line_numbers_exact is False
+    assert [json.loads(raw_line)["seq"] for _, raw_line in kept_rows] == [2, 3]
 
 
 def test_event_query_timeline_renders_cycle_and_query_matches(tmp_path):

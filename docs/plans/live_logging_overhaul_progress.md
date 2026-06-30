@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `7c5c96f4a` after PR #911, `Expose incident bundle event discovery metadata`.
+- `0eb295452` after PR #912, `Add recent window option to incident bundles`.
 
 Current review gate:
 
@@ -49,6 +49,30 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #912 at `0eb29545`.
+- PR #912 added `--recent-minutes` to `passivbot tool live-incident-bundle`,
+  resolving it to the existing `since_ms` event/log time-window contract. The
+  slice was read-only incident-bundle/report tooling and did not add event
+  producers, exchange calls, live execution, report verdict changes, console
+  routing, order/risk logic, or trading behavior.
+- PR #912 passed Claude + Hermes + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, py_compile for touched files and tests,
+  `git diff --check`, and a touched-file silent-handling scan. The optional
+  passivbot CLI dispatch test was not collected because the local Rust
+  extension freshness guard tripped on import.
+- VPS5 pulled from `7c5c96f4` to `0eb29545` without bot restart because the
+  deployed change was read-only incident-bundle/report tooling and docs. The
+  five configured bots were left running.
+- A bounded incident-bundle smoke at `0eb29545` using `--recent-minutes 2`,
+  `--no-event-segments`, and `--no-trace-report` reported `ok=true`,
+  `hard_failures=0`, `time_window.enabled=true`, `matched_events=906`,
+  `events_truncated=true`, `event_report.files_scanned=6`, and matching
+  discovery counts in the event report and segment manifest
+  (`candidate_files=3750`, `event_segments=950`, `rotated_skipped=944`,
+  `scope_pruned=0`). A fresh 2-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 - Repository pulled through PR #911 at `7c5c96f4`.
 - PR #911 projected bounded event-file discovery metadata into incident-bundle
   event-report summaries and event-segment manifests, using the same

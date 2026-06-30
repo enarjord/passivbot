@@ -148,6 +148,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Also scan rotated/compressed monitor event segments.",
     )
     parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=0,
+        help=(
+            "Only scan the last N lines from each monitor event segment for "
+            "event reports and smoke checks. Plain NDJSON segments seek from "
+            "file end; compressed segments may still be scanned sequentially. "
+            "Default 0 scans full segments."
+        ),
+    )
+    parser.add_argument(
         "--no-event-segments",
         action="store_true",
         help="Do not copy bounded event segment files into the bundle.",
@@ -207,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.since_ms is not None and args.recent_minutes is not None:
         parser.error("--since-ms and --recent-minutes are mutually exclusive")
+    if int(args.event_tail_lines) < 0:
+        parser.error("--event-tail-lines must be >= 0")
     since_ms = args.since_ms
     if args.recent_minutes is not None:
         if args.recent_minutes <= 0:
@@ -235,6 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         include_data=bool(args.include_data),
         include_trace_report=not bool(args.no_trace_report),
         include_rotated=bool(args.include_rotated),
+        event_tail_lines=int(args.event_tail_lines),
         include_event_segments=not bool(args.no_event_segments),
         max_events=int(args.limit),
         max_log_files=int(args.max_log_files),

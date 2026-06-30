@@ -124,8 +124,10 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=0,
         help=(
-            "Opt-in parser bound for monitor event segments: read only the last "
-            "N rows from each event file. Default 0 keeps full monitor validation."
+            "Opt-in bound for monitor event segments: inspect only the last N "
+            "rows from each event file. Plain NDJSON segments seek from file "
+            "end; compressed segments may still scan sequentially. Default 0 "
+            "keeps full monitor validation."
         ),
     )
     parser.add_argument(

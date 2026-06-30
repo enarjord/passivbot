@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import os
@@ -10,12 +9,14 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
     discover_event_files,
@@ -59,12 +60,6 @@ def _write_json(path: Path, data: Any) -> None:
         json.dumps(data, indent=2, sort_keys=True, default=_json_default) + "\n",
         encoding="utf-8",
     )
-
-
-def _open_text(path: Path):
-    if path.name.endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
-    return open(path, "r", encoding="utf-8", errors="replace")
 
 
 def _sha256_file(path: Path) -> str:
@@ -163,6 +158,7 @@ def _build_time_window_report(
     until_ms: int | None,
     include_rotated: bool,
     include_data: bool,
+    event_tail_lines: int = 0,
     limit: int,
 ) -> dict[str, Any]:
     if since_ms is None and until_ms is None:
@@ -184,6 +180,13 @@ def _build_time_window_report(
     events: list[dict[str, Any]] = []
     matched_events = 0
     max_events = max(0, int(limit))
+    max_event_tail_lines = max(0, int(event_tail_lines))
+    event_tail_limited_files = 0
+    event_tail_skipped_lines = 0
+    event_tail_skipped_lines_exact = True
+    event_tail_skipped_bytes = 0
+    event_tail_line_numbers_exact = True
+    event_tail_methods: Counter[str] = Counter()
     try:
         files = discover_event_files(monitor_root, include_rotated=include_rotated)
     except FileNotFoundError as exc:
@@ -200,8 +203,23 @@ def _build_time_window_report(
 
     for path in files:
         try:
-            with _open_text(path) as stream:
-                for line_no, raw_line in enumerate(stream, start=1):
+            with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
+                rows,
+                row_window,
+            ):
+                if max_event_tail_lines and row_window.limited:
+                    event_tail_limited_files += 1
+                    if row_window.skipped_lines is None:
+                        event_tail_skipped_lines_exact = False
+                    else:
+                        event_tail_skipped_lines += int(row_window.skipped_lines)
+                    event_tail_skipped_bytes += int(row_window.skipped_bytes)
+                    event_tail_line_numbers_exact = (
+                        event_tail_line_numbers_exact
+                        and bool(row_window.line_numbers_exact)
+                    )
+                    event_tail_methods[str(row_window.method)] += 1
+                for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -251,7 +269,7 @@ def _build_time_window_report(
                     "message": str(exc),
                 }
             )
-    return {
+    report = {
         "enabled": True,
         "filters": filters,
         "matched_events": matched_events,
@@ -260,6 +278,15 @@ def _build_time_window_report(
         "timeline": [_timeline_line(event) for event in events],
         "issues": issues,
     }
+    if max_event_tail_lines:
+        report["event_tail_lines"] = max_event_tail_lines
+        report["event_tail_limited_files"] = event_tail_limited_files
+        report["event_tail_skipped_lines"] = event_tail_skipped_lines
+        report["event_tail_skipped_lines_exact"] = event_tail_skipped_lines_exact
+        report["event_tail_skipped_bytes"] = event_tail_skipped_bytes
+        report["event_tail_line_numbers_exact"] = event_tail_line_numbers_exact
+        report["event_tail_methods"] = dict(sorted(event_tail_methods.items()))
+    return report
 
 
 def _git_metadata(cwd: str | Path | None = None) -> dict[str, Any]:
@@ -492,6 +519,7 @@ def _event_report_result_summary(event_report: dict[str, Any]) -> dict[str, Any]
         "live_events": event_report.get("live_events"),
         "error_count": event_report.get("error_count"),
         "warning_count": event_report.get("warning_count"),
+        "event_window": event_report.get("event_window"),
         "cycle_matched_events": (
             cycle_section.get("matched_events") if cycle_section is not None else None
         ),
@@ -631,6 +659,7 @@ def build_live_incident_bundle(
     log_tail_lines: int = 500,
     max_log_matches: int = 100,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    event_tail_lines: int = 0,
     max_snapshot_files: int = 20,
     max_snapshot_file_bytes: int = 1_000_000,
     max_event_segment_bytes: int = 10_000_000,
@@ -657,6 +686,7 @@ def build_live_incident_bundle(
         pside=pside,
         reason_code=reason_code,
         status=status,
+        event_tail_lines=event_tail_lines,
         limit=max_events,
         include_data=include_data,
         include_rotated=include_rotated,
@@ -671,6 +701,7 @@ def build_live_incident_bundle(
         until_ms=until_ms,
         include_rotated=include_rotated,
         include_data=include_data,
+        event_tail_lines=event_tail_lines,
         limit=max_events,
     )
     smoke_report = build_live_smoke_report(
@@ -682,6 +713,7 @@ def build_live_incident_bundle(
         include_rotated=include_rotated,
         since_ms=since_ms,
         until_ms=until_ms,
+        event_tail_lines=event_tail_lines,
         max_problem_events=max_problem_events,
         max_log_files=max_log_files,
         log_tail_lines=log_tail_lines,
@@ -725,6 +757,7 @@ def build_live_incident_bundle(
                     "status": status,
                     "since_ms": since_ms,
                     "until_ms": until_ms,
+                    "event_tail_lines": event_tail_lines if event_tail_lines else None,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -778,6 +811,17 @@ def build_live_incident_bundle(
             "enabled": window_report.get("enabled"),
             "matched_events": window_report.get("matched_events"),
             "events_truncated": window_report.get("events_truncated"),
+            "event_tail_lines": window_report.get("event_tail_lines"),
+            "event_tail_limited_files": window_report.get("event_tail_limited_files"),
+            "event_tail_skipped_lines": window_report.get("event_tail_skipped_lines"),
+            "event_tail_skipped_lines_exact": window_report.get(
+                "event_tail_skipped_lines_exact"
+            ),
+            "event_tail_skipped_bytes": window_report.get("event_tail_skipped_bytes"),
+            "event_tail_line_numbers_exact": window_report.get(
+                "event_tail_line_numbers_exact"
+            ),
+            "event_tail_methods": window_report.get("event_tail_methods"),
         },
         "smoke_report": {
             "ok": smoke_report.get("ok"),
