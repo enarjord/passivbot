@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `4b435d33e` after PR #888, `Expose log window in brief smoke reports`.
+- `1498abc9c` after PR #890, `Expose event window flag in brief smoke`.
 
 Current review gate:
 
@@ -49,6 +49,24 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #890 at `1498abc9c`.
+- PR #890 exposed the structured event-window `enabled` flag in
+  `live-smoke-report --brief`, matching the full report and the existing
+  `logs.window.enabled` projection. The slice did not add event producers,
+  exchange calls, cache mutation, readiness gates, console routing, order/risk
+  logic, or trading behavior.
+- PR #890 passed the normal review gate: Claude approved head `f655a8c`,
+  Hermes approved head `f655a8c`, and CI was green. Local validation covered
+  `tests/test_live_smoke_report.py`, compileall for touched files,
+  `git diff --check`, and an added-diff silent-handling scan.
+- After deploying PR #890 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@1498abc9` returned
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  clean tracked repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and the new
+  `event_window.enabled=true` brief projection. Remaining attention was
+  non-hard EMA readiness and HSL/unstuck status groups.
 - Repository pulled through PR #888 at `4b435d33e`.
 - PR #888 exposed already-computed text-log window counters in
   `live-smoke-report --brief`, making concise smoke output show whether
