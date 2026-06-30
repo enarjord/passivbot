@@ -607,6 +607,9 @@ class Passivbot:
     _emit_live_cycle_degraded = live_event_emitters.emit_live_cycle_degraded
     _emit_live_event = live_event_emitters.emit_live_event
     _emit_startup_timing_event = live_event_emitters.emit_startup_timing_event
+    _emit_exchange_config_refresh_event = (
+        live_event_emitters.emit_exchange_config_refresh_event
+    )
     _emit_execution_confirmation_requested_event = (
         live_event_emitters.emit_execution_confirmation_requested_event
     )
@@ -17300,7 +17303,7 @@ class Passivbot:
                     self.init_markets_last_update_ms = 0
                 if now - int(last_markets_update_ms) > hourly_interval_ms:
                     try:
-                        await self.init_markets(verbose=False)
+                        await self._refresh_markets_for_maintenance()
                     except RateLimitExceeded:
                         self._health_rate_limits += 1
                         logging.warning(
@@ -17312,6 +17315,38 @@ class Passivbot:
                 logging.error("error with %s %s", get_function_name(), e, exc_info=True)
                 await self.restart_bot_on_too_many_errors()
                 await asyncio.sleep(5)
+
+    def _emit_maintenance_exchange_config_refresh_event(self, **kwargs):
+        try:
+            self._emit_exchange_config_refresh_event(**kwargs)
+        except Exception as exc:
+            logging.debug(
+                "[event] failed to emit maintenance exchange config-refresh event: %s",
+                exc,
+            )
+
+    async def _refresh_markets_for_maintenance(self):
+        started_ms = utc_ms()
+        try:
+            result = await self.init_markets(verbose=False)
+        except Exception as exc:
+            self._emit_maintenance_exchange_config_refresh_event(
+                context="maintain_hourly_cycle",
+                operation="init_markets",
+                status="failed",
+                started_ms=started_ms,
+                elapsed_ms=max(0, utc_ms() - started_ms),
+                error=exc,
+            )
+            raise
+        self._emit_maintenance_exchange_config_refresh_event(
+            context="maintain_hourly_cycle",
+            operation="init_markets",
+            status="succeeded",
+            started_ms=started_ms,
+            elapsed_ms=max(0, utc_ms() - started_ms),
+        )
+        return result
 
     async def start_data_maintainers(self):
         """Spawn background tasks responsible for market metadata and order watching."""
