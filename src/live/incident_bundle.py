@@ -20,7 +20,6 @@ from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
     build_event_query_filters,
-    discover_event_files,
     discover_event_files_with_metadata,
     event_matches_query_filters,
     event_query_filter_report,
@@ -185,6 +184,8 @@ def _build_time_window_report(
         return {
             "enabled": False,
             "filters": {},
+            "files_scanned": 0,
+            "file_discovery": {},
             "matched_events": 0,
             "events_truncated": False,
             "events": [],
@@ -225,14 +226,24 @@ def _build_time_window_report(
     event_tail_skipped_bytes = 0
     event_tail_line_numbers_exact = True
     event_tail_methods: Counter[str] = Counter()
+    file_discovery: dict[str, Any] = {
+        "candidate_files": 0,
+        "event_segments": 0,
+        "rotated_skipped": 0,
+        "scope_pruned": 0,
+        "bot_path_pruning_applied": False,
+        "opaque_bot_id_full_scan": False,
+    }
     try:
-        files = discover_event_files(
+        discovery = discover_event_files_with_metadata(
             monitor_root,
             include_rotated=include_rotated,
             exchange=exchange,
             user=user,
             bot_id=bot_id,
         )
+        files = discovery.files
+        file_discovery = discovery.to_dict()
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -323,6 +334,8 @@ def _build_time_window_report(
     report = {
         "enabled": True,
         "filters": filters,
+        "files_scanned": len(files),
+        "file_discovery": file_discovery,
         "matched_events": matched_events,
         "events_truncated": matched_events > len(events),
         "events": events,
@@ -976,6 +989,8 @@ def build_live_incident_bundle(
         "problem_event_report": _problem_report_result_summary(problem_report),
         "time_window": {
             "enabled": window_report.get("enabled"),
+            "files_scanned": window_report.get("files_scanned"),
+            "file_discovery": window_report.get("file_discovery") or {},
             "matched_events": window_report.get("matched_events"),
             "events_truncated": window_report.get("events_truncated"),
             "event_tail_lines": window_report.get("event_tail_lines"),

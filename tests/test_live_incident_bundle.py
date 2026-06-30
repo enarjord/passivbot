@@ -170,6 +170,15 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert report["event_report"]["cycle_trace_matched_events"] == 3
     assert report["problem_event_report"]["enabled"] is True
     assert report["problem_event_report"]["matched_events"] == 0
+    assert report["time_window"]["files_scanned"] == 1
+    assert report["time_window"]["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
     assert report["time_window"]["matched_events"] == 1
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
@@ -441,6 +450,15 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert report["event_report"]["query_matched_events"] == 1
     assert report["problem_event_report"]["matched_events"] == 1
     assert report["event_report"]["file_discovery"] == {
+        "bot_path_pruning_applied": True,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 1,
+    }
+    assert report["time_window"]["files_scanned"] == 1
+    assert report["time_window"]["file_discovery"] == {
         "bot_path_pruning_applied": True,
         "candidate_files": 2,
         "event_segments": 2,
