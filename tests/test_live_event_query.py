@@ -858,6 +858,49 @@ def test_discover_event_files_prunes_path_like_bot_ids(tmp_path):
     }
 
 
+def test_event_query_reports_file_discovery_metadata(tmp_path):
+    gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    kucoin_events = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(gateio_events / "current.ndjson", [])
+    _write_gz_ndjson(gateio_events / "20260629.ndjson.gz", [])
+    _write_ndjson(binance_events / "current.ndjson", [])
+    _write_ndjson(kucoin_events / "current.ndjson", [])
+
+    path_bot_report = build_event_report(
+        tmp_path / "monitor",
+        bot_id="gateio/gateio_01",
+        include_rotated=True,
+    )
+
+    assert path_bot_report["ok"] is True
+    assert path_bot_report["files_scanned"] == 2
+    assert path_bot_report["file_discovery"] == {
+        "bot_path_pruning_applied": True,
+        "candidate_files": 4,
+        "event_segments": 4,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 2,
+    }
+
+    opaque_bot_report = build_event_report(
+        tmp_path / "monitor",
+        bot_id="bot_1",
+    )
+
+    assert opaque_bot_report["ok"] is True
+    assert opaque_bot_report["files_scanned"] == 3
+    assert opaque_bot_report["file_discovery"] == {
+        "bot_path_pruning_applied": False,
+        "candidate_files": 4,
+        "event_segments": 4,
+        "opaque_bot_id_full_scan": True,
+        "rotated_skipped": 1,
+        "scope_pruned": 0,
+    }
+
+
 def test_event_query_filters_exchange_user_and_prunes_monitor_paths(tmp_path):
     gateio_events = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
     binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"

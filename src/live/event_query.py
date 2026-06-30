@@ -57,6 +57,27 @@ class EventIssue:
         return asdict(self)
 
 
+@dataclass(frozen=True)
+class EventFileDiscovery:
+    files: list[Path]
+    candidate_files: int = 0
+    event_segments: int = 0
+    rotated_skipped: int = 0
+    scope_pruned: int = 0
+    bot_path_pruning_applied: bool = False
+    opaque_bot_id_full_scan: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "candidate_files": int(self.candidate_files),
+            "event_segments": int(self.event_segments),
+            "rotated_skipped": int(self.rotated_skipped),
+            "scope_pruned": int(self.scope_pruned),
+            "bot_path_pruning_applied": bool(self.bot_path_pruning_applied),
+            "opaque_bot_id_full_scan": bool(self.opaque_bot_id_full_scan),
+        }
+
+
 def _is_event_segment(path: Path) -> bool:
     return path.name.endswith(".ndjson") or path.name.endswith(".ndjson.gz")
 
@@ -74,33 +95,83 @@ def discover_event_files(
     bot_id: str | Iterable[str] | None = None,
 ) -> list[Path]:
     """Find monitor event NDJSON segments below a monitor root, bot root, or events dir."""
+    return _discover_event_files(
+        root,
+        include_rotated=include_rotated,
+        exchange=exchange,
+        user=user,
+        bot_id=bot_id,
+    ).files
+
+
+def _discover_event_files(
+    root: str | Path,
+    *,
+    include_rotated: bool = False,
+    exchange: str | Iterable[str] | None = None,
+    user: str | Iterable[str] | None = None,
+    bot_id: str | Iterable[str] | None = None,
+) -> EventFileDiscovery:
+    """Find monitor event NDJSON segments and report bounded discovery metadata."""
     path = Path(root).expanduser()
     exchange_filter = _normalize_filter_values(exchange)
     user_filter = _normalize_filter_values(user)
-    bot_path_filter = _path_like_bot_id_filter(_normalize_filter_values(bot_id))
+    bot_filter = _normalize_filter_values(bot_id)
+    bot_path_filter = _path_like_bot_id_filter(bot_filter)
+    opaque_bot_full_scan = bool(bot_filter and not bot_path_filter)
     if path.is_file():
-        return [path] if _is_event_segment(path) else []
+        files = [path] if _is_event_segment(path) else []
+        return EventFileDiscovery(
+            files=files,
+            candidate_files=1,
+            event_segments=len(files),
+            bot_path_pruning_applied=False,
+            opaque_bot_id_full_scan=opaque_bot_full_scan,
+        )
     if not path.exists():
         raise FileNotFoundError(str(path))
     if not path.is_dir():
-        return []
-    return sorted(
-        (
-            candidate
-            for candidate in path.rglob("*.ndjson*")
-            if candidate.is_file()
-            and candidate.parent.name == "events"
+        return EventFileDiscovery(
+            files=[],
+            bot_path_pruning_applied=bool(bot_path_filter),
+            opaque_bot_id_full_scan=opaque_bot_full_scan,
+        )
+    files: list[Path] = []
+    candidate_files = 0
+    event_segments = 0
+    rotated_skipped = 0
+    scope_pruned = 0
+    for candidate in path.rglob("*.ndjson*"):
+        if not candidate.is_file():
+            continue
+        candidate_files += 1
+        if not (
+            candidate.parent.name == "events"
             and _is_event_segment(candidate)
-            and (include_rotated or candidate.name == "current.ndjson")
-            and _monitor_path_scope_matches_under_root(
-                path,
-                candidate,
-                exchange_filter=exchange_filter,
-                user_filter=user_filter,
-                bot_path_filter=bot_path_filter,
-            )
-        ),
-        key=_event_path_sort_key,
+        ):
+            continue
+        event_segments += 1
+        if not include_rotated and candidate.name != "current.ndjson":
+            rotated_skipped += 1
+            continue
+        if not _monitor_path_scope_matches_under_root(
+            path,
+            candidate,
+            exchange_filter=exchange_filter,
+            user_filter=user_filter,
+            bot_path_filter=bot_path_filter,
+        ):
+            scope_pruned += 1
+            continue
+        files.append(candidate)
+    return EventFileDiscovery(
+        files=sorted(files, key=_event_path_sort_key),
+        candidate_files=candidate_files,
+        event_segments=event_segments,
+        rotated_skipped=rotated_skipped,
+        scope_pruned=scope_pruned,
+        bot_path_pruning_applied=bool(bot_path_filter),
+        opaque_bot_id_full_scan=opaque_bot_full_scan,
     )
 
 
@@ -1047,14 +1118,16 @@ def build_event_report(
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
     issues: list[EventIssue] = []
+    discovery = EventFileDiscovery(files=[])
     try:
-        files = discover_event_files(
+        discovery = _discover_event_files(
             root,
             include_rotated=include_rotated,
             exchange=exchange,
             user=user,
             bot_id=bot_id,
         )
+        files = discovery.files
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -1441,6 +1514,7 @@ def build_event_report(
         "include_rotated": bool(include_rotated),
         "files": [str(path) for path in files],
         "files_scanned": len(files),
+        "file_discovery": discovery.to_dict(),
         "records_total": records_total,
         "live_events": live_events,
         "legacy_events": legacy_events,

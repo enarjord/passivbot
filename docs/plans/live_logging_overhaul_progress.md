@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `b7b347581` after PR #906, `Filter live events by envelope fields`.
+- `f792f889f` after PR #907, `Prune live event queries by path bot id`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #907 at `f792f889`.
+- PR #907 added conservative `live-event-query --bot-id` path pruning for
+  path-shaped bot ids such as `exchange/user`, while preserving full-scan
+  behavior for opaque event-level bot ids such as `bot_1`. The slice does not
+  add event producers, exchange calls, live execution, smoke verdict changes,
+  or trading behavior.
+- PR #907 passed Claude + Hermes + CI. Local validation covered the full
+  `tests/test_live_event_query.py` suite, py_compile for touched query files
+  and tests, `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `b7b34758` to `f792f889` without bot restart because the
+  deployed change was read-only query tooling and docs. The five configured
+  bots were left running.
+- Focused VPS5 query smoke showed the new path-pruning behavior:
+  `--bot-id binance/binance_01` over monitor root completed with `ok=true`,
+  `files_scanned=1`, and `event_tail_limited_files=1`; an opaque
+  `--bot-id bot_opaque_no_match` query preserved full-scan behavior with
+  `files_scanned=4` and no matched events. A bounded 2-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `logs.hard_matches=0`,
+  `matched_expected=5`, clean tracked repository state at `f792f889`,
+  `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 - Repository pulled through PR #906 at `b7b34758`.
 - PR #906 added read-only `live-event-query` filters for envelope labels
   `source`, `component`, and `side`, using the existing repeated/
