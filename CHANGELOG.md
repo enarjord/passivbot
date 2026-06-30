@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Added opt-in `passivbot tool live-smoke-report --event-tail-lines` to bound
+  monitor event parsing for repeated recent-window smoke checks while leaving
+  full monitor-event validation as the default.
 - Added structured `hsl.raw_red_pending` diagnostics when HSL raw drawdown is
   already beyond red but EMA-confirmed drawdown has not crossed yet, helping
   operators spot pending RED risk without changing trading behavior.
