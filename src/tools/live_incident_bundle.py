@@ -143,6 +143,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--no-problem-report",
+        action="store_true",
+        help=(
+            "Do not include the bundled live-event-query problem-event report. "
+            "Enabled by default so smoke attention can be reconstructed from "
+            "the incident bundle."
+        ),
+    )
+    parser.add_argument(
         "--include-rotated",
         action="store_true",
         help="Also scan rotated/compressed monitor event segments.",
@@ -247,6 +256,7 @@ def main(argv: list[str] | None = None) -> int:
         until_ms=args.until_ms,
         include_data=bool(args.include_data),
         include_trace_report=not bool(args.no_trace_report),
+        include_problem_report=not bool(args.no_problem_report),
         include_rotated=bool(args.include_rotated),
         event_tail_lines=int(args.event_tail_lines),
         include_event_segments=not bool(args.no_event_segments),
