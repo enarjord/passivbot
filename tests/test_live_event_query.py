@@ -6,7 +6,11 @@ import os
 
 import pytest
 
-from live.event_query import build_event_report, discover_event_files
+from live.event_query import (
+    build_event_report,
+    discover_event_files,
+    discover_event_files_with_metadata,
+)
 from tools import live_event_query
 
 
@@ -899,6 +903,18 @@ def test_event_query_reports_file_discovery_metadata(tmp_path):
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
+
+    metadata = discover_event_files_with_metadata(
+        tmp_path / "monitor",
+        bot_id="gateio/gateio_01",
+        include_rotated=True,
+    )
+    assert metadata.files == discover_event_files(
+        tmp_path / "monitor",
+        bot_id="gateio/gateio_01",
+        include_rotated=True,
+    )
+    assert metadata.to_dict() == path_bot_report["file_discovery"]
 
 
 def test_event_query_filters_exchange_user_and_prunes_monitor_paths(tmp_path):
