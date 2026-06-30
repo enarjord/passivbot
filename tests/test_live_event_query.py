@@ -464,6 +464,34 @@ def test_event_query_combines_cycle_and_event_type_filters(tmp_path):
     ]
 
 
+def test_event_query_cycle_filter_matches_non_string_event_id(tmp_path):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id=None,
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": 7},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="8",
+                seq=2,
+                ts=1100,
+            ),
+        ],
+    )
+
+    report = build_event_report(tmp_path / "monitor", cycle_id="7")
+
+    assert "query" not in report
+    assert report["cycle"]["matched_events"] == 1
+    assert report["cycle"]["events"][0]["ids"]["cycle_id"] == 7
+
+
 def test_event_query_filters_by_ids_symbol_pside_reason_and_status(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

@@ -422,6 +422,10 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 "scope=target",
                 "--remote-call-group-id",
                 "group_target",
+                "--since-ms",
+                "0",
+                "--until-ms",
+                "2000",
                 "--include-data",
                 "--no-event-segments",
                 "--output",
@@ -448,6 +452,9 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     with tarfile.open(output, "r:gz") as tar:
         event_report = _read_tar_json(tar, "event_report.json")
         problem_event_report = _read_tar_json(tar, "problem_event_report.json")
+        time_window_report = _read_tar_json(tar, "time_window_report.json")
+        timeline_text = tar.extractfile("timeline.txt").read().decode("utf-8")
+        event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         manifest = _read_tar_json(tar, "manifest.json")
 
     expected_filters = {
@@ -466,14 +473,31 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert problem_event_report["query"]["filters"] == {
         **expected_filters,
         "problem_events": True,
+        "since_ms": 0,
+        "until_ms": 2000,
     }
+    assert time_window_report["filters"] == {
+        **expected_filters,
+        "since_ms": 0,
+        "until_ms": 2000,
+    }
+    assert time_window_report["matched_events"] == 1
     assert event_report["query"]["events"][0]["exchange"] == "okx"
     assert event_report["query"]["events"][0]["user"] == "okx_01"
     assert event_report["query"]["events"][0]["side"] == "sell"
     assert event_report["query"]["events"][0]["data"]["scope"] == "target"
+    assert time_window_report["events"][0]["exchange"] == "okx"
+    assert "seq=2" in timeline_text
+    assert "seq=1" not in timeline_text
+    assert len(event_segments_manifest["files"]) == 1
+    assert event_segments_manifest["files"][0]["path"].endswith(
+        "okx/okx_01/events/current.ndjson"
+    )
     assert manifest["filters"]["exchange"] == ["okx"]
     assert manifest["filters"]["bot_id"] == ["okx/okx_01"]
     assert manifest["filters"]["data_eq"] == ["scope=target"]
+    assert manifest["filters"]["since_ms"] == 0
+    assert manifest["filters"]["until_ms"] == 2000
 
 
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):

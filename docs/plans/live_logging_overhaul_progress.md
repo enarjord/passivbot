@@ -19,14 +19,14 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `29d026a` after PR #917, `Embed problem event reports in incident bundles`.
+- `946d0757` after PR #918, `Add incident bundle query scope filters`.
 
 Current review gate:
 
 - Composer has been stopped/retired from this loop. The normal review gate is
-  now Claude + Hermes + CI. For low-risk docs/tooling-only slices, a degraded
-  gate may still be used after repeated Claude absence, but that exception must
-  be called out in the progress evidence.
+  now Claude + Hermes + Cursor + CI. For low-risk docs/tooling-only slices, a
+  degraded gate may still be used after repeated reviewer absence, but that
+  exception must be called out in the progress evidence.
 
 Retuned goal boundary:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #918 at `946d0757`.
+- PR #918 added incident-bundle query scope filters for level, exchange, user,
+  bot id, remote-call group, side, source, component, tag, and data equality.
+  The slice was read-only incident-bundle tooling and did not add event
+  producers, exchange calls, live execution, report verdict changes, console
+  routing, order/risk logic, or trading behavior.
+- PR #918 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `29d026a` to `946d0757` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A 5-minute smoke at `946d0757` using `--event-tail-lines 1000`,
+  `--processes`, and `/root/bots_vps5.yaml` completed with `ok=true`,
+  `hard_failures=0`, all five configured bots matched, clean tracked repository
+  state, no failed remote calls, and no failed account-critical remote calls.
+  A focused OKX incident-bundle smoke verified the new query filters against
+  live monitor files: `event_report.file_discovery.bot_path_pruning_applied`
+  was `true`, `scope_pruned=5`, `event_report.query_matched_events=2`, and
+  `problem_event_report.matched_events=2`.
 - Repository pulled through PR #917 at `29d026a`.
 - PR #917 embedded `problem_event_report.json` in incident bundles by default,
   using the same shared structured problem-event predicate as
@@ -1845,7 +1866,21 @@ VPS5 deployment status:
 
 ## Merged Slices
 
-### Pending PR: Incident Bundle Query Scope Filters
+### Pending PR: Incident Bundle Time-Window Scope Filters
+
+- Branch: `codex/v8-incident-window-scopes`.
+- Scope: read-only incident bundle tooling and tests.
+- Result: pending review. The slice applies the incident-bundle query scope
+  filters to `time_window_report.json`, `timeline.txt`, and matched event
+  segment selection, while preserving the existing behavior where a cycle-id
+  bundle keeps surrounding time-window context instead of filtering the window
+  down to that cycle only.
+- Local validation: focused incident-bundle and event-query tests plus
+  py_compile passed before opening review. No event producers, exchange calls,
+  cache mutation, readiness gates, console routing, monitor writes, order/risk
+  logic, or trading behavior changed.
+
+### PR #918: Incident Bundle Query Scope Filters
 
 - Branch: `codex/v8-incident-query-scopes`.
 - Scope: read-only incident bundle tooling and tests.
@@ -1860,6 +1895,12 @@ VPS5 deployment status:
   py_compile passed before opening review. No event producers, exchange calls,
   cache mutation, readiness gates, console routing, monitor writes, order/risk
   logic, or trading behavior changed.
+- Review evidence: Hermes, Claude, Cursor, and CI approved the branch.
+- VPS5 evidence: deployed at `946d0757` without bot restart because this is
+  read-only incident-bundle tooling. Smoke stayed hard-green with all five bots
+  matched, and a focused OKX bundle verified scoped event/problem reports from
+  the live monitor tree. That smoke also showed the remaining gap addressed by
+  the next slice: the time-window report still scanned broader root context.
 
 ### PR #917: Incident Bundle Problem Event Report
 

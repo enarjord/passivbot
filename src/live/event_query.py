@@ -427,6 +427,181 @@ def _filter_report(
     return filters
 
 
+def build_event_query_filters(
+    *,
+    cycle_id: str | None = None,
+    event_type: str | Iterable[str] | None = None,
+    level: str | Iterable[str] | None = None,
+    exchange: str | Iterable[str] | None = None,
+    user: str | Iterable[str] | None = None,
+    bot_id: str | Iterable[str] | None = None,
+    snapshot_id: str | Iterable[str] | None = None,
+    plan_id: str | Iterable[str] | None = None,
+    action_id: str | Iterable[str] | None = None,
+    order_wave_id: str | Iterable[str] | None = None,
+    remote_call_id: str | Iterable[str] | None = None,
+    remote_call_group_id: str | Iterable[str] | None = None,
+    symbol: str | Iterable[str] | None = None,
+    pside: str | Iterable[str] | None = None,
+    side: str | Iterable[str] | None = None,
+    reason_code: str | Iterable[str] | None = None,
+    status: str | Iterable[str] | None = None,
+    source: str | Iterable[str] | None = None,
+    component: str | Iterable[str] | None = None,
+    tag: str | Iterable[str] | None = None,
+    data_eq: str | Iterable[str] | None = None,
+    problem_events: bool = False,
+    hard_problem_events: bool = False,
+    since_ms: int | None = None,
+    until_ms: int | None = None,
+) -> dict[str, Any]:
+    since_filter = int(since_ms) if since_ms is not None else None
+    until_filter = int(until_ms) if until_ms is not None else None
+    if (
+        since_filter is not None
+        and until_filter is not None
+        and since_filter > until_filter
+    ):
+        raise ValueError("since_ms must be <= until_ms")
+    return {
+        "cycle_id": str(cycle_id) if cycle_id is not None else None,
+        "event_types": _normalize_filter_values(event_type),
+        "levels": _normalize_filter_values(level),
+        "exchanges": _normalize_filter_values(exchange),
+        "users": _normalize_filter_values(user),
+        "bot_ids": _normalize_filter_values(bot_id),
+        "snapshot_ids": _normalize_filter_values(snapshot_id),
+        "plan_ids": _normalize_filter_values(plan_id),
+        "action_ids": _normalize_filter_values(action_id),
+        "order_wave_ids": _normalize_filter_values(order_wave_id),
+        "remote_call_ids": _normalize_filter_values(remote_call_id),
+        "remote_call_group_ids": _normalize_filter_values(remote_call_group_id),
+        "symbols": _normalize_filter_values(symbol),
+        "psides": _normalize_filter_values(pside),
+        "sides": _normalize_filter_values(side),
+        "reason_codes": _normalize_filter_values(reason_code),
+        "statuses": _normalize_filter_values(status),
+        "sources": _normalize_filter_values(source),
+        "components": _normalize_filter_values(component),
+        "tags": _normalize_filter_values(tag),
+        "data_eq_filters": _normalize_data_eq_filters(data_eq),
+        "problem_events": bool(problem_events),
+        "hard_problem_events": bool(hard_problem_events),
+        "since_ms": since_filter,
+        "until_ms": until_filter,
+    }
+
+
+def event_query_filter_report(filters: dict[str, Any]) -> dict[str, Any]:
+    return _filter_report(
+        cycle_id=filters.get("cycle_id"),
+        event_types=filters["event_types"],
+        levels=filters["levels"],
+        exchanges=filters["exchanges"],
+        users=filters["users"],
+        bot_ids=filters["bot_ids"],
+        snapshot_ids=filters["snapshot_ids"],
+        plan_ids=filters["plan_ids"],
+        action_ids=filters["action_ids"],
+        order_wave_ids=filters["order_wave_ids"],
+        remote_call_ids=filters["remote_call_ids"],
+        remote_call_group_ids=filters["remote_call_group_ids"],
+        symbols=filters["symbols"],
+        psides=filters["psides"],
+        sides=filters["sides"],
+        reason_codes=filters["reason_codes"],
+        statuses=filters["statuses"],
+        sources=filters["sources"],
+        components=filters["components"],
+        tags=filters["tags"],
+        data_eq_filters=filters["data_eq_filters"],
+        problem_events=bool(filters["problem_events"]),
+        hard_problem_events=bool(filters["hard_problem_events"]),
+        since_ms=filters.get("since_ms"),
+        until_ms=filters.get("until_ms"),
+    )
+
+
+def event_matches_query_filters(
+    *,
+    path: Path,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    filters: dict[str, Any],
+) -> bool:
+    ids = _event_ids(live_event)
+    record_event_type = live_event.get("event_type") or row.get("kind")
+    record_level = live_event.get("level")
+    record_symbol = live_event.get("symbol") or row.get("symbol")
+    record_pside = live_event.get("pside") or row.get("pside")
+    record_side = live_event.get("side")
+    record_status = live_event.get("status")
+    record_reason_code = live_event.get("reason_code")
+    record_source = live_event.get("source")
+    record_component = live_event.get("component")
+    record_tags = _event_tags(row, live_event)
+    path_scope = _monitor_path_exchange_user(path)
+    record_exchange = live_event.get("exchange") or row.get("exchange")
+    record_user = live_event.get("user") or row.get("user")
+    if path_scope is not None:
+        if record_exchange is None:
+            record_exchange = path_scope[0]
+        if record_user is None:
+            record_user = path_scope[1]
+    cycle_id = filters.get("cycle_id")
+    if cycle_id is not None and str(ids.get("cycle_id")) != str(cycle_id):
+        return False
+    if not _filter_matches(record_event_type, filters["event_types"]):
+        return False
+    if not _filter_matches(record_level, filters["levels"]):
+        return False
+    if not _filter_matches(record_exchange, filters["exchanges"]):
+        return False
+    if not _filter_matches(record_user, filters["users"]):
+        return False
+    if not _filter_matches(
+        ids.get("bot_id") or _monitor_path_bot_id(path), filters["bot_ids"]
+    ):
+        return False
+    if not _filter_matches(ids.get("snapshot_id"), filters["snapshot_ids"]):
+        return False
+    if not _filter_matches(ids.get("plan_id"), filters["plan_ids"]):
+        return False
+    if not _filter_matches(ids.get("action_id"), filters["action_ids"]):
+        return False
+    if not _filter_matches(ids.get("order_wave_id"), filters["order_wave_ids"]):
+        return False
+    if not _filter_matches(ids.get("remote_call_id"), filters["remote_call_ids"]):
+        return False
+    if not _filter_matches(
+        ids.get("remote_call_group_id"), filters["remote_call_group_ids"]
+    ):
+        return False
+    if not _filter_matches(record_symbol, filters["symbols"]):
+        return False
+    if not _filter_matches(record_pside, filters["psides"]):
+        return False
+    if not _filter_matches(record_side, filters["sides"]):
+        return False
+    if not _filter_matches(record_reason_code, filters["reason_codes"]):
+        return False
+    if not _filter_matches(record_status, filters["statuses"]):
+        return False
+    if not _filter_matches(record_source, filters["sources"]):
+        return False
+    if not _filter_matches(record_component, filters["components"]):
+        return False
+    if filters["tags"] and not set(record_tags).intersection(filters["tags"]):
+        return False
+    if not _data_filters_match(live_event, filters["data_eq_filters"]):
+        return False
+    if filters["hard_problem_events"]:
+        return is_hard_problem_event(live_event)
+    if filters["problem_events"]:
+        return is_problem_event(live_event)
+    return True
+
+
 def _compact_record(
     *,
     path: Path,
@@ -1121,14 +1296,35 @@ def build_event_report(
     order_trace: bool = False,
     cycle_trace: bool = False,
 ) -> dict[str, Any]:
-    since_filter = int(since_ms) if since_ms is not None else None
-    until_filter = int(until_ms) if until_ms is not None else None
-    if (
-        since_filter is not None
-        and until_filter is not None
-        and since_filter > until_filter
-    ):
-        raise ValueError("since_ms must be <= until_ms")
+    query_filters = build_event_query_filters(
+        cycle_id=cycle_id,
+        event_type=event_type,
+        level=level,
+        exchange=exchange,
+        user=user,
+        bot_id=bot_id,
+        snapshot_id=snapshot_id,
+        plan_id=plan_id,
+        action_id=action_id,
+        order_wave_id=order_wave_id,
+        remote_call_id=remote_call_id,
+        remote_call_group_id=remote_call_group_id,
+        symbol=symbol,
+        pside=pside,
+        side=side,
+        reason_code=reason_code,
+        status=status,
+        source=source,
+        component=component,
+        tag=tag,
+        data_eq=data_eq,
+        problem_events=problem_events,
+        hard_problem_events=hard_problem_events,
+        since_ms=since_ms,
+        until_ms=until_ms,
+    )
+    since_filter = query_filters["since_ms"]
+    until_filter = query_filters["until_ms"]
     window_enabled = since_filter is not None or until_filter is not None
     window_considered = 0
     window_skipped_before = 0
@@ -1201,28 +1397,28 @@ def build_event_report(
         event_limit=max_events,
         include_data=include_data,
     )
-    event_type_filter = _normalize_filter_values(event_type)
-    level_filter = _normalize_filter_values(level)
-    exchange_filter = _normalize_filter_values(exchange)
-    user_filter = _normalize_filter_values(user)
-    bot_filter = _normalize_filter_values(bot_id)
-    snapshot_filter = _normalize_filter_values(snapshot_id)
-    plan_filter = _normalize_filter_values(plan_id)
-    action_filter = _normalize_filter_values(action_id)
-    order_wave_filter = _normalize_filter_values(order_wave_id)
-    remote_call_filter = _normalize_filter_values(remote_call_id)
-    remote_call_group_filter = _normalize_filter_values(remote_call_group_id)
-    symbol_filter = _normalize_filter_values(symbol)
-    pside_filter = _normalize_filter_values(pside)
-    side_filter = _normalize_filter_values(side)
-    reason_code_filter = _normalize_filter_values(reason_code)
-    status_filter = _normalize_filter_values(status)
-    source_filter = _normalize_filter_values(source)
-    component_filter = _normalize_filter_values(component)
-    tag_filter = _normalize_filter_values(tag)
-    data_eq_filters = _normalize_data_eq_filters(data_eq)
-    problem_event_filter = bool(problem_events)
-    hard_problem_event_filter = bool(hard_problem_events)
+    event_type_filter = query_filters["event_types"]
+    level_filter = query_filters["levels"]
+    exchange_filter = query_filters["exchanges"]
+    user_filter = query_filters["users"]
+    bot_filter = query_filters["bot_ids"]
+    snapshot_filter = query_filters["snapshot_ids"]
+    plan_filter = query_filters["plan_ids"]
+    action_filter = query_filters["action_ids"]
+    order_wave_filter = query_filters["order_wave_ids"]
+    remote_call_filter = query_filters["remote_call_ids"]
+    remote_call_group_filter = query_filters["remote_call_group_ids"]
+    symbol_filter = query_filters["symbols"]
+    pside_filter = query_filters["psides"]
+    side_filter = query_filters["sides"]
+    reason_code_filter = query_filters["reason_codes"]
+    status_filter = query_filters["statuses"]
+    source_filter = query_filters["sources"]
+    component_filter = query_filters["components"]
+    tag_filter = query_filters["tags"]
+    data_eq_filters = query_filters["data_eq_filters"]
+    problem_event_filter = bool(query_filters["problem_events"])
+    hard_problem_event_filter = bool(query_filters["hard_problem_events"])
     has_non_cycle_filter = any(
         (
             event_type_filter,
@@ -1321,7 +1517,6 @@ def build_event_report(
                         window_considered += 1
 
                     record_event_type = live_event.get("event_type") or row.get("kind")
-                    record_level = live_event.get("level")
                     if not record_event_type:
                         issues.append(
                             EventIssue(
@@ -1366,14 +1561,6 @@ def build_event_report(
                         record_cycle_id = str(record_cycle_id)
                         cycle_counts[record_cycle_id] += 1
 
-                    record_symbol = live_event.get("symbol") or row.get("symbol")
-                    record_pside = live_event.get("pside") or row.get("pside")
-                    record_side = live_event.get("side")
-                    record_status = live_event.get("status")
-                    record_reason_code = live_event.get("reason_code")
-                    record_source = live_event.get("source")
-                    record_component = live_event.get("component")
-                    record_tags = _event_tags(row, live_event)
                     path_scope = _monitor_path_exchange_user(path)
                     record_exchange = live_event.get("exchange") or row.get("exchange")
                     record_user = live_event.get("user") or row.get("user")
@@ -1382,79 +1569,11 @@ def build_event_report(
                             record_exchange = path_scope[0]
                         if record_user is None:
                             record_user = path_scope[1]
-                    event_type_matches = _filter_matches(
-                        record_event_type, event_type_filter
-                    )
-                    level_matches = _filter_matches(record_level, level_filter)
-                    cycle_matches = cycle_id is None or record_cycle_id == str(cycle_id)
-                    exchange_matches = _filter_matches(
-                        record_exchange,
-                        exchange_filter,
-                    )
-                    user_matches = _filter_matches(record_user, user_filter)
-                    bot_matches = _filter_matches(
-                        ids.get("bot_id") or _monitor_path_bot_id(path), bot_filter
-                    )
-                    snapshot_matches = _filter_matches(
-                        ids.get("snapshot_id"), snapshot_filter
-                    )
-                    plan_matches = _filter_matches(ids.get("plan_id"), plan_filter)
-                    action_matches = _filter_matches(
-                        ids.get("action_id"), action_filter
-                    )
-                    order_wave_matches = _filter_matches(
-                        ids.get("order_wave_id"), order_wave_filter
-                    )
-                    remote_call_matches = _filter_matches(
-                        ids.get("remote_call_id"), remote_call_filter
-                    )
-                    remote_call_group_matches = _filter_matches(
-                        ids.get("remote_call_group_id"), remote_call_group_filter
-                    )
-                    symbol_matches = _filter_matches(record_symbol, symbol_filter)
-                    pside_matches = _filter_matches(record_pside, pside_filter)
-                    side_matches = _filter_matches(record_side, side_filter)
-                    reason_code_matches = _filter_matches(
-                        record_reason_code, reason_code_filter
-                    )
-                    status_matches = _filter_matches(record_status, status_filter)
-                    source_matches = _filter_matches(record_source, source_filter)
-                    component_matches = _filter_matches(
-                        record_component, component_filter
-                    )
-                    tag_matches = not tag_filter or bool(
-                        set(record_tags).intersection(tag_filter)
-                    )
-                    data_matches = _data_filters_match(live_event, data_eq_filters)
-                    if hard_problem_event_filter:
-                        problem_matches = is_hard_problem_event(live_event)
-                    elif problem_event_filter:
-                        problem_matches = is_problem_event(live_event)
-                    else:
-                        problem_matches = True
-                    query_matches = (
-                        event_type_matches
-                        and level_matches
-                        and cycle_matches
-                        and exchange_matches
-                        and user_matches
-                        and bot_matches
-                        and snapshot_matches
-                        and plan_matches
-                        and action_matches
-                        and order_wave_matches
-                        and remote_call_matches
-                        and remote_call_group_matches
-                        and symbol_matches
-                        and pside_matches
-                        and side_matches
-                        and reason_code_matches
-                        and status_matches
-                        and source_matches
-                        and component_matches
-                        and tag_matches
-                        and data_matches
-                        and problem_matches
+                    query_matches = event_matches_query_filters(
+                        path=path,
+                        row=row,
+                        live_event=live_event,
+                        filters=query_filters,
                     )
 
                     if has_query_filter and query_matches:

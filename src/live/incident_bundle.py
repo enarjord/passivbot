@@ -19,8 +19,11 @@ from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
+    build_event_query_filters,
     discover_event_files,
     discover_event_files_with_metadata,
+    event_matches_query_filters,
+    event_query_filter_report,
 )
 from live.smoke_report import (
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
@@ -154,6 +157,23 @@ def _timeline_line(record: dict[str, Any]) -> str:
 def _build_time_window_report(
     monitor_root: str | Path,
     *,
+    event_type: str | list[str] | None = None,
+    level: str | list[str] | None = None,
+    exchange: str | list[str] | None = None,
+    user: str | list[str] | None = None,
+    bot_id: str | list[str] | None = None,
+    order_wave_id: str | list[str] | None = None,
+    remote_call_id: str | list[str] | None = None,
+    remote_call_group_id: str | list[str] | None = None,
+    symbol: str | list[str] | None = None,
+    pside: str | list[str] | None = None,
+    side: str | list[str] | None = None,
+    reason_code: str | list[str] | None = None,
+    status: str | list[str] | None = None,
+    source: str | list[str] | None = None,
+    component: str | list[str] | None = None,
+    tag: str | list[str] | None = None,
+    data_eq: str | list[str] | None = None,
     since_ms: int | None,
     until_ms: int | None,
     include_rotated: bool,
@@ -171,11 +191,29 @@ def _build_time_window_report(
             "timeline": [],
             "issues": [],
         }
-    filters = {
-        key: value
-        for key, value in {"since_ms": since_ms, "until_ms": until_ms}.items()
-        if value is not None
-    }
+    query_filters = build_event_query_filters(
+        cycle_id=None,
+        event_type=event_type,
+        level=level,
+        exchange=exchange,
+        user=user,
+        bot_id=bot_id,
+        order_wave_id=order_wave_id,
+        remote_call_id=remote_call_id,
+        remote_call_group_id=remote_call_group_id,
+        symbol=symbol,
+        pside=pside,
+        side=side,
+        reason_code=reason_code,
+        status=status,
+        source=source,
+        component=component,
+        tag=tag,
+        data_eq=data_eq,
+        since_ms=since_ms,
+        until_ms=until_ms,
+    )
+    filters = event_query_filter_report(query_filters)
     issues: list[dict[str, Any]] = []
     events: list[dict[str, Any]] = []
     matched_events = 0
@@ -188,7 +226,13 @@ def _build_time_window_report(
     event_tail_line_numbers_exact = True
     event_tail_methods: Counter[str] = Counter()
     try:
-        files = discover_event_files(monitor_root, include_rotated=include_rotated)
+        files = discover_event_files(
+            monitor_root,
+            include_rotated=include_rotated,
+            exchange=exchange,
+            user=user,
+            bot_id=bot_id,
+        )
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -247,6 +291,13 @@ def _build_time_window_report(
                         continue
                     live_event = _live_event_payload(row)
                     if live_event is None:
+                        continue
+                    if not event_matches_query_filters(
+                        path=path,
+                        row=row,
+                        live_event=live_event,
+                        filters=query_filters,
+                    ):
                         continue
                     matched_events += 1
                     if len(events) < max_events:
@@ -774,6 +825,25 @@ def build_live_incident_bundle(
     )
     window_report = _build_time_window_report(
         monitor_path,
+        # Keep historical behavior: a cycle-focused bundle still includes other
+        # matching events in the requested surrounding time window.
+        event_type=event_type,
+        level=level,
+        exchange=exchange,
+        user=user,
+        bot_id=bot_id,
+        order_wave_id=order_wave_id,
+        remote_call_id=remote_call_id,
+        remote_call_group_id=remote_call_group_id,
+        symbol=symbol,
+        pside=pside,
+        side=side,
+        reason_code=reason_code,
+        status=status,
+        source=source,
+        component=component,
+        tag=tag,
+        data_eq=data_eq,
         since_ms=since_ms,
         until_ms=until_ms,
         include_rotated=include_rotated,
