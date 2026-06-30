@@ -3495,7 +3495,6 @@ def _scan_events(
         "monitor": {
             "root": str(Path(root).expanduser()),
             "include_rotated": bool(include_rotated),
-            "files": [str(path) for path in files],
             "files_scanned": len(files),
             "records_total": records_total,
             "live_events": live_events,
