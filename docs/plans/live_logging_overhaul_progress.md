@@ -15,11 +15,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-06-29.
+Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `72d450ba6` after PR #879, `Label path-scoped event query output`.
+- `197d74942` after PR #881, `Avoid duplicate smoke monitor scans`.
 
 Current review gate:
 
@@ -44,6 +44,37 @@ Scope calibration:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #881 at `197d74942`.
+- PR #881 made `live-smoke-report` reuse one monitor-event parse for both
+  monitor validation/summary and windowed smoke aggregates. This removed the
+  previous `build_event_report()` plus `_scan_events()` double parse for the
+  same monitor segments. The slice did not add event producers, exchange calls,
+  cache mutation, readiness gates, console routing, order/risk logic, or
+  trading behavior.
+- PR #881 passed the normal review gate: Claude approved head `520b3916`,
+  Hermes approved head `520b3916`, and CI was green. Local validation covered
+  `tests/test_live_smoke_report.py`, `tests/test_live_event_query.py`,
+  compileall for touched files, and `git diff --check`.
+- After deploying PR #881 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A no-log 1-minute brief smoke improved from the
+  pre-merge 15-19s range to 10.6s while reporting `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  A 5-minute brief smoke with logs enabled completed in 15.4s after the same
+  command had previously hit a 30s timeout wrapper; it reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  `remote_calls.failed=0`, and `account_critical_remote_calls.failed=0`.
+  Known non-hard attention remained from EMA readiness and HSL/unstuck status
+  groups. Current monitor segments still required row-level skipping of roughly
+  25k-27k older events, so tail scanning or a lightweight local index remains a
+  possible future operator-tooling optimization.
+- Repository pulled through PR #880 at `74a07640`.
+- PR #880 was progress-ledger-only and recorded the deployment/smoke evidence
+  for PR #879. VPS5 was pulled without restarting bots; all five configured
+  `passivbot live` processes remained running. Before PR #881, a 5-minute brief
+  smoke on `v8@74a07640` hit a 30s timeout wrapper, which motivated the
+  single-pass smoke-report slice.
 - Repository pulled through PR #879 at `72d450ba6`.
 - PR #879 made read-only `live-event-query` output use the same path-resolved
   exchange/user labels that filtering already uses for legacy monitor rows.
