@@ -1802,6 +1802,153 @@ def _summarize_hsl_flat_finalization_anchors(
     }
 
 
+def _summarize_hsl_status(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+) -> dict[str, Any]:
+    total = 0
+    bots: set[str] = set()
+    symbols: Counter[str] = Counter()
+    tier_counts: Counter[str] = Counter()
+    signal_mode_counts: Counter[str] = Counter()
+    closest: list[dict[str, Any]] = []
+    for group in groups.values():
+        if group.get("event_type") != EventTypes.HSL_STATUS:
+            continue
+        count = int(group.get("count") or 0)
+        if count <= 0:
+            continue
+        total += count
+        bot = group.get("bot")
+        if bot not in (None, ""):
+            bots.add(str(bot))
+        symbol = group.get("symbol")
+        if symbol not in (None, ""):
+            symbols[str(symbol)] += count
+        latest_data = group.get("latest_data")
+        data = latest_data if isinstance(latest_data, dict) else {}
+        tier = data.get("tier")
+        if tier not in (None, ""):
+            tier_counts[str(tier)] += count
+        signal_mode = data.get("signal_mode")
+        if signal_mode not in (None, ""):
+            signal_mode_counts[str(signal_mode)] += count
+        dist_to_red = _numeric_value(data.get("dist_to_red"))
+        if dist_to_red is None:
+            continue
+        sample = {
+            key: value
+            for key, value in {
+                "bot": bot,
+                "symbol": symbol,
+                "pside": group.get("pside"),
+                "tier": str(tier) if tier not in (None, "") else None,
+                "signal_mode": str(signal_mode)
+                if signal_mode not in (None, "")
+                else None,
+                "dist_to_red": dist_to_red,
+                "red_threshold": _numeric_value(data.get("red_threshold")),
+                "latest_ts": _non_negative_int(group.get("latest_ts")),
+            }.items()
+            if value not in (None, "", {})
+        }
+        closest.append(sample)
+    if total <= 0:
+        return {
+            "total": 0,
+            "bots": 0,
+            "symbols": {"count": 0, "sample": [], "truncated": 0},
+            "tier_counts": {},
+            "signal_mode_counts": {},
+            "closest_to_red": [],
+        }
+    closest_sorted = sorted(
+        closest,
+        key=lambda item: (
+            float(item.get("dist_to_red")),
+            str(item.get("bot") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+        ),
+    )
+    return {
+        "total": total,
+        "bots": len(bots),
+        "symbols": _symbol_sample(symbols, limit=8),
+        "tier_counts": dict(tier_counts.most_common()),
+        "signal_mode_counts": dict(signal_mode_counts.most_common()),
+        "closest_to_red": closest_sorted[:5],
+        "closest_to_red_truncated": max(0, len(closest_sorted) - 5),
+    }
+
+
+def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
+    if not isinstance(hsl_status, dict):
+        return {}
+    out = {
+        key: hsl_status.get(key)
+        for key in (
+            "total",
+            "bots",
+            "symbols",
+            "tier_counts",
+            "signal_mode_counts",
+            "closest_to_red_truncated",
+        )
+        if hsl_status.get(key) is not None
+    }
+    closest = hsl_status.get("closest_to_red")
+    if isinstance(closest, list):
+        out["closest_to_red"] = [
+            {
+                key: item.get(key)
+                for key in (
+                    "bot",
+                    "symbol",
+                    "pside",
+                    "tier",
+                    "signal_mode",
+                    "latest_ts",
+                )
+                if isinstance(item, dict) and item.get(key) not in (None, "", {})
+            }
+            for item in closest[:5]
+            if isinstance(item, dict)
+        ]
+    return out
+
+
+SHAREABLE_RISK_LATEST_DATA_KEYS = frozenset(
+    {
+        "signal_mode",
+        "tier",
+        "previous_tier",
+        "action",
+        "mode",
+        "previous_mode",
+        "cooldown_until_ms",
+        "cooldown_remaining",
+        "cooldown_remaining_seconds",
+        "last_red_ts",
+        "pending_red_since_ms",
+        "stop_event_timestamp_ms",
+        "stop_event_anchor_source",
+        "stop_event_anchor_timestamp_ms",
+        "stop_event_anchor_fallback_used",
+        "no_exchange_close_needed",
+        "exchange_close_order_submitted",
+        "panic_order_submitted_count",
+        "symbol_position_open",
+        "position_count",
+        "entry_orders",
+        "nonpanic_close_orders",
+        "flat_confirmations",
+        "changed",
+        "status_counts",
+        "over_budget_sides",
+    }
+)
+
+
 def _summarize_risk_events(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
@@ -1839,6 +1986,7 @@ def _summarize_risk_events(
         "hsl_flat_finalization_anchors": _summarize_hsl_flat_finalization_anchors(
             groups
         ),
+        "hsl_status": _summarize_hsl_status(groups),
         "groups": compact_groups,
     }
 
@@ -4124,11 +4272,18 @@ def _summary_limited_groups(
     summary: dict[str, Any],
     *,
     limit: int,
+    shareable_latest_data_keys: frozenset[str] | None = None,
 ) -> dict[str, Any]:
     groups = summary.get("groups")
     if not isinstance(groups, list):
         groups = []
     limit = max(0, int(limit))
+    limited_groups = groups[:limit]
+    if shareable_latest_data_keys is not None:
+        limited_groups = [
+            _shareable_summary_group(group, latest_data_keys=shareable_latest_data_keys)
+            for group in limited_groups
+        ]
     return {
         key: value
         for key, value in {
@@ -4166,12 +4321,35 @@ def _summary_limited_groups(
             "hsl_flat_finalization_anchors": summary.get(
                 "hsl_flat_finalization_anchors"
             ),
+            "hsl_status": _shareable_hsl_status(summary.get("hsl_status")),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
-            "groups": groups[:limit],
+            "groups": limited_groups,
         }.items()
         if value is not None
     }
+
+
+def _shareable_summary_group(
+    group: Any,
+    *,
+    latest_data_keys: frozenset[str],
+) -> dict[str, Any]:
+    if not isinstance(group, dict):
+        return {}
+    out = dict(group)
+    latest_data = out.get("latest_data")
+    if isinstance(latest_data, dict):
+        safe_latest_data = {
+            key: value
+            for key, value in latest_data.items()
+            if key in latest_data_keys and value not in (None, {}, [])
+        }
+        if safe_latest_data:
+            out["latest_data"] = safe_latest_data
+        else:
+            out.pop("latest_data", None)
+    return {key: value for key, value in out.items() if value not in (None, {}, [])}
 
 
 def _summary_startup_timings(
@@ -4458,7 +4636,11 @@ def summarize_live_smoke_report(
             hsl_replay_health,
             limit=max_groups,
         ),
-        "risk_events": _summary_limited_groups(risk_events, limit=max_groups),
+        "risk_events": _summary_limited_groups(
+            risk_events,
+            limit=max_groups,
+            shareable_latest_data_keys=SHAREABLE_RISK_LATEST_DATA_KEYS,
+        ),
         "shutdown_events": _summary_limited_groups(
             shutdown_events,
             limit=max_groups,
@@ -4841,6 +5023,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "hsl_flat_finalization_anchors"
             )
             or {},
+            "hsl_status": _shareable_hsl_status(risk_events.get("hsl_status")),
         },
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
