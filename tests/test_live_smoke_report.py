@@ -1761,6 +1761,8 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     )
 
     report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
 
     assert report["startup_timings"] == [
         {
@@ -1852,6 +1854,21 @@ def test_live_smoke_report_summarizes_startup_phase_baselines(tmp_path):
     latest_details = report["startup_timings"][0]["phases"]["startup"]["latest_details"]
     assert "AKIA123" not in latest_details
     assert "TOKEN123" not in latest_details
+    assert summary["startup_timings"]["bots"] == 1
+    assert summary["startup_timings"]["groups"][0]["bot"] == "binance/binance_01"
+    assert (
+        summary["startup_timings"]["groups"][0]["phases"]["startup"]["latest_details"]
+        == "ready api_key=[redacted] Authorization: [redacted]"
+    )
+    assert brief["startup_timings"] == {
+        "bots": 1,
+        "phases": 2,
+        "over_budget_phases": 2,
+        "startup_phase_bots": 1,
+        "max_latest_elapsed_ms": 10000,
+        "max_latest_phase_ms": 7000,
+        "max_startup_elapsed_ms": 10000,
+    }
 
 
 def test_live_smoke_report_startup_budget_no_baseline(tmp_path):

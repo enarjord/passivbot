@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --summary` and `--brief` now expose
+  existing startup timing evidence, making slow restart phases visible in the
+  concise smoke-loop projections.
 - Added opt-in `passivbot tool live-event-query --event-tail-lines` to bound
   monitor event parsing for repeated recent-window queries while leaving full
   event validation as the default.
