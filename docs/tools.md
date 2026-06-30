@@ -163,7 +163,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   window, or dropped by the unparseable-line policy.
   For repeated recent-window smoke checks over large current monitor segments,
   `--event-tail-lines N` bounds monitor event parsing to the last N rows from
-  each event file; the default `0` keeps full monitor-event validation.
+  each event file; the default `0` keeps full monitor-event validation. Brief
+  output includes the structured event-window `enabled` flag plus the bounded
+  event-window counters.
   Startup timing summaries include report-only budget projections from prior local p95
   phase baselines when enough monitor evidence exists, and the summary/brief projections
   surface bounded startup timing counters for repeated smoke loops.

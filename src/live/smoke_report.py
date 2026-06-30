@@ -4428,6 +4428,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "event_window": {
             key: event_window.get(key)
             for key in (
+                "enabled",
                 "since_ms",
                 "until_ms",
                 "events_considered",
