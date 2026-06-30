@@ -992,6 +992,15 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "latest_optional_drop_total": 0,
         "event_types": {"ema.unavailable": 1},
     }
+    assert brief["exchange_config_refresh"] == {
+        "total": 0,
+        "bots": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "failure_pct": 0,
+        "failed_bots": 0,
+        "event_types": {},
+    }
     assert brief["staged_readiness"] == {
         "total": 0,
         "bots": 0,
@@ -1296,6 +1305,88 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
         "latest_unavailable_total": 5,
         "latest_optional_drop_total": 2,
         "event_types": {"ema.unavailable": 2},
+    }
+
+
+def test_live_smoke_report_summarizes_exchange_config_refresh_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                level="debug",
+                reason_code="exchange_config_refresh",
+                ids={"cycle_id": "cy_cfg_1"},
+                data={
+                    "context": "maintain_hourly_cycle",
+                    "operation": "init_markets",
+                    "started_ms": 900,
+                    "elapsed_ms": 100,
+                },
+            ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="warning",
+                reason_code="exchange_config_refresh_failed",
+                ids={"cycle_id": "cy_cfg_2"},
+                data={
+                    "context": "maintain_hourly_cycle",
+                    "operation": "init_markets",
+                    "started_ms": 1800,
+                    "elapsed_ms": 200,
+                    "error_type": "ExchangeError",
+                    "error": "binanceusdm apiKey=supersecret code=-4084",
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    health = report["exchange_config_refresh_health"]
+    assert health["total"] == 2
+    assert health["succeeded"] == 1
+    assert health["failed"] == 1
+    assert health["failure_pct"] == 50.0
+    assert health["bots"] == 1
+    assert health["failed_bots"] == 1
+    assert health["event_types"] == {"exchange.config_refresh": 2}
+    assert health["statuses"] == {"succeeded": 1, "failed": 1}
+    assert health["groups"][0]["status"] == "failed"
+    assert health["groups"][0]["latest_data"] == {
+        "context": "maintain_hourly_cycle",
+        "operation": "init_markets",
+        "error_type": "ExchangeError",
+        "elapsed_ms": 200,
+        "started_ms": 1800,
+    }
+    rendered = json.dumps(health, sort_keys=True)
+    assert "supersecret" not in rendered
+    assert "apiKey" not in rendered
+    assert "code=-4084" not in rendered
+
+    assert summary["exchange_config_refresh_health"]["total"] == 2
+    assert summary["exchange_config_refresh_health"]["statuses"] == {
+        "succeeded": 1,
+        "failed": 1,
+    }
+    assert brief["exchange_config_refresh"] == {
+        "total": 2,
+        "bots": 1,
+        "succeeded": 1,
+        "failed": 1,
+        "failure_pct": 50.0,
+        "failed_bots": 1,
+        "event_types": {"exchange.config_refresh": 2},
     }
 
 

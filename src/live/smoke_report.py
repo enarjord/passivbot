@@ -73,6 +73,7 @@ EMA_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_GROUP_LIMIT = 20
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
+EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
@@ -1128,6 +1129,137 @@ def _summarize_ema_readiness_health(
             int(group.get("latest_optional_drop_count") or 0)
             for group in groups.values()
         ),
+        "groups": compact_groups,
+    }
+
+
+def _exchange_config_refresh_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    latest_data: dict[str, Any] = {}
+    for key in ("context", "operation", "error_type"):
+        value = payload.get(key)
+        if isinstance(value, str) and value:
+            latest_data[key] = _redact_log_text(value, max_len=120)
+    elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
+    if elapsed_ms is not None:
+        latest_data["elapsed_ms"] = elapsed_ms
+    started_ms = _non_negative_int(payload.get("started_ms"))
+    if started_ms is not None:
+        latest_data["started_ms"] = started_ms
+    return {
+        "bot": bot_key,
+        "event_type": live_event.get("event_type") or row.get("kind"),
+        "reason_code": live_event.get("reason_code"),
+        "status": live_event.get("status"),
+        "level": live_event.get("level"),
+        "component": live_event.get("component"),
+        "count": 1,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_data": latest_data,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "remote_call_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_exchange_config_refresh_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("status"),
+        group.get("reason_code"),
+        (group.get("latest_data") or {}).get("operation"),
+        (group.get("latest_data") or {}).get("error_type"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count", 0)) + 1
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "level",
+            "component",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _summarize_exchange_config_refresh_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    event_type_counts: Counter[str],
+) -> dict[str, Any]:
+    ordered = sorted(
+        groups.values(),
+        key=lambda item: (
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("status") or ""),
+            str(item.get("reason_code") or ""),
+        ),
+    )
+    compact_groups = [
+        {
+            key: value
+            for key, value in group.items()
+            if key not in {"latest_path", "latest_line", "latest_seq"}
+            and value not in (None, {}, [])
+        }
+        for group in ordered[:EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT]
+    ]
+    status_counts: Counter[str] = Counter()
+    failed_bots: set[str] = set()
+    for group in groups.values():
+        count = int(group.get("count") or 0)
+        status = str(group.get("status") or "unknown")
+        status_counts[status] += count
+        if status == "failed" and count > 0 and group.get("bot") not in (None, ""):
+            failed_bots.add(str(group.get("bot")))
+    total = sum(int(group.get("count", 0)) for group in groups.values())
+    failed = int(status_counts.get("failed", 0))
+    return {
+        "total": total,
+        "succeeded": int(status_counts.get("succeeded", 0)),
+        "failed": failed,
+        "failure_pct": round((failed / total) * 100.0, 3) if total else 0,
+        "groups_truncated": len(ordered) > EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT,
+        "event_types": dict(event_type_counts.most_common()),
+        "statuses": dict(status_counts.most_common()),
+        "bots": len({group.get("bot") for group in groups.values()}),
+        "failed_bots": len(failed_bots),
         "groups": compact_groups,
     }
 
@@ -3233,6 +3365,8 @@ def _scan_events(
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_event_type_counts: Counter[str] = Counter()
+    exchange_config_refresh_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    exchange_config_refresh_event_type_counts: Counter[str] = Counter()
     staged_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     staged_readiness_event_type_counts: Counter[str] = Counter()
     event_pipeline_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -3406,6 +3540,18 @@ def _scan_events(
                                 line_no=line_no,
                             ),
                         )
+                    if event_type == EventTypes.EXCHANGE_CONFIG_REFRESH:
+                        exchange_config_refresh_event_type_counts[str(event_type)] += 1
+                        _merge_exchange_config_refresh_group(
+                            exchange_config_refresh_groups,
+                            _exchange_config_refresh_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if _staged_readiness_event(live_event):
                         staged_readiness_event_type_counts[str(event_type)] += 1
                         _merge_staged_readiness_group(
@@ -3565,6 +3711,10 @@ def _scan_events(
         "ema_readiness_health": _summarize_ema_readiness_health(
             ema_readiness_groups,
             ema_readiness_event_type_counts,
+        ),
+        "exchange_config_refresh_health": _summarize_exchange_config_refresh_health(
+            exchange_config_refresh_groups,
+            exchange_config_refresh_event_type_counts,
         ),
         "staged_readiness_health": _summarize_staged_readiness_health(
             staged_readiness_groups,
@@ -3951,6 +4101,9 @@ def build_live_smoke_report(
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
+        "exchange_config_refresh_health": event_scan[
+            "exchange_config_refresh_health"
+        ],
         "staged_readiness_health": event_scan["staged_readiness_health"],
         "event_pipeline_health": event_scan["event_pipeline_health"],
         "hsl_replay_health": event_scan["hsl_replay_health"],
@@ -3986,6 +4139,7 @@ def _summary_limited_groups(
             "failure_pct": summary.get("failure_pct"),
             "throttled_pct": summary.get("throttled_pct"),
             "event_types": summary.get("event_types"),
+            "statuses": summary.get("statuses"),
             "bots": summary.get("bots"),
             "active_bots": summary.get("active_bots"),
             "completed_bots": summary.get("completed_bots"),
@@ -4137,6 +4291,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("ema_readiness_health"), dict)
         else {}
     )
+    exchange_config_refresh_health = (
+        report.get("exchange_config_refresh_health")
+        if isinstance(report.get("exchange_config_refresh_health"), dict)
+        else {}
+    )
     staged_readiness_health = (
         report.get("staged_readiness_health")
         if isinstance(report.get("staged_readiness_health"), dict)
@@ -4283,6 +4442,10 @@ def summarize_live_smoke_report(
             ema_readiness_health,
             limit=max_groups,
         ),
+        "exchange_config_refresh_health": _summary_limited_groups(
+            exchange_config_refresh_health,
+            limit=max_groups,
+        ),
         "staged_readiness_health": _summary_limited_groups(
             staged_readiness_health,
             limit=max_groups,
@@ -4370,6 +4533,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     ema_readiness_health = (
         report.get("ema_readiness_health")
         if isinstance(report.get("ema_readiness_health"), dict)
+        else {}
+    )
+    exchange_config_refresh_health = (
+        report.get("exchange_config_refresh_health")
+        if isinstance(report.get("exchange_config_refresh_health"), dict)
         else {}
     )
     staged_readiness_health = (
@@ -4524,6 +4692,19 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 ema_readiness_health.get("latest_optional_drop_total")
             ),
             "event_types": ema_readiness_health.get("event_types") or {},
+        },
+        "exchange_config_refresh": {
+            "total": _count_value(exchange_config_refresh_health.get("total")),
+            "bots": _count_value(exchange_config_refresh_health.get("bots")),
+            "succeeded": _count_value(
+                exchange_config_refresh_health.get("succeeded")
+            ),
+            "failed": _count_value(exchange_config_refresh_health.get("failed")),
+            "failure_pct": exchange_config_refresh_health.get("failure_pct"),
+            "failed_bots": _count_value(
+                exchange_config_refresh_health.get("failed_bots")
+            ),
+            "event_types": exchange_config_refresh_health.get("event_types") or {},
         },
         "staged_readiness": {
             "total": _count_value(staged_readiness_health.get("total")),
