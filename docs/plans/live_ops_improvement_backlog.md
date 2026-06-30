@@ -171,7 +171,8 @@ Related detailed plans:
    `live-event-query --event-tail-lines` for repeated recent-window queries
    over large current monitor segments. The default remains full event
    validation; bounded query output reports tail-limit metadata in
-   `event_window`.
+   `event_window`. Another 2026-06-30 follow-up added source, component, and
+   side filters for envelope-scoped queries.
 
 3. [ ] Live restart/smoke automation.
    Status: partial. The read-only `live-smoke-report` tool exists and can now
@@ -689,6 +690,7 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #2 Event query and timeline CLI extensions | PR #906 / `b7b34758` | Added `live-event-query --source`, `--component`, and `--side` filters plus compact `source` output; folded #903/#904 deploy evidence into the same real observability PR; VPS5 no-restart deploy stayed green and focused single-bot query smokes validated the new filter echoes | Broad parallel root-level monitor scans were too slow for routine VPS smoke; prefer focused paths and continue query-pruning/index work where concrete smoke cost appears |
 | 2026-06-30 | #0/#3/#10 HSL status smoke evidence | PR #903 / `1dd115cc` | Added `risk_events.hsl_status` to `live-smoke-report` full, summary, and brief output from existing `hsl.status` events; fixed #904 by filtering shareable summary risk `latest_data` through a value-safe whitelist; VPS5 no-restart smoke stayed green and showed red HSL status counts for ZEC without magnitude fields in brief output | Actual HSL startup latency optimization remains open; broader event-driven console redesign remains open |
 | 2026-06-30 | #0/#3 HSL completed replay smoke evidence | PR #901 / `9b3c29ad` | Added `hsl_replay.max_completed_elapsed_ms` to `live-smoke-report --brief`; VPS5 no-restart smoke stayed green after deploy, with no HSL replay events in the sampled window | HSL startup latency remains a trading-path optimization; this slice only surfaces completed replay latency when completed replay events are in-window |
 | 2026-06-30 | #0/#3 HSL replay/startup smoke evidence | PR #899 / `e1fcb038` | Added `live-smoke-report --brief` projection for worst active HSL replay elapsed time, latest-event age, and active stage counts from existing sanitized groups; VPS5 no-restart smoke stayed green after deploy | HSL startup latency remains a trading-path optimization; this slice only surfaces active replay latency in brief smoke |

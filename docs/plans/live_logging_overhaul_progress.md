@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `1dd115ccd` after PR #903, `Summarize HSL status in smoke reports`.
+- `b7b347581` after PR #906, `Filter live events by envelope fields`.
 
 Current review gate:
 
@@ -49,6 +49,32 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #906 at `b7b34758`.
+- PR #906 added read-only `live-event-query` filters for envelope labels
+  `source`, `component`, and `side`, using the existing repeated/
+  comma-separated filter contract. The slice also made `source` visible in
+  compact query records and folded the PR #903/#904 progress evidence into the
+  same real observability PR, replacing the closed docs-only PR #905.
+- PR #906 passed Claude + Hermes + CI on the final head. Local validation
+  covered the full `tests/test_live_event_query.py` suite, py_compile for
+  touched query files and tests, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `1dd115cc` to `b7b34758` without bot restart because the
+  deployed change was read-only query tooling and docs. The five configured
+  bots were left running.
+- Focused VPS5 query smoke on Binance current monitor events showed the new
+  filter echo and no parser errors: `--source executor --component order_wave`
+  returned `ok=true` with `files_scanned=1`, and `--side buy,sell` returned
+  `ok=true` with one matched `entry.initial_distance_gate_blocked` event.
+  A bounded 2-minute brief smoke reported `ok=true`, `hard_failures=0`,
+  `logs.hard_matches=0`, `matched_expected=5`, clean tracked repository state
+  at `b7b34758`, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
+- Broad parallel VPS5 monitor scans over the full root were interrupted after
+  about 90 seconds. Follow-up smoke used single-bot/current-segment paths and
+  completed in under 13 seconds. Future VPS smoke probes should avoid parallel
+  broad monitor scans unless the query path is intentionally being stress
+  tested.
 - Repository pulled through PR #903 at `1dd115cc`.
 - PR #903 added read-only `risk_events.hsl_status` projections to
   `live-smoke-report` full, summary, and brief output, derived only from
