@@ -14,6 +14,7 @@ from typing import Any
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
 from live.event_file_rows import event_file_rows
 from live.event_query import discover_event_files_with_metadata
+from live.problem_events import is_hard_problem_event, is_problem_event
 
 
 PYTHON_TRACEBACK_HEADER_PATTERN = r"\bTraceback\s+\(most recent call last\):"
@@ -3396,26 +3397,6 @@ def _summarize_startup_timings(
     return summaries
 
 
-def _is_problem_event(live_event: dict[str, Any]) -> bool:
-    level = str(live_event.get("level") or "").lower()
-    status = str(live_event.get("status") or "").lower()
-    event_type = str(live_event.get("event_type") or "")
-    reason_code = str(live_event.get("reason_code") or "")
-    if event_type == EventTypes.HSL_REPLAY_FAILED and reason_code == "shutdown_cancelled":
-        return False
-    return (
-        level in {"error", "critical"}
-        or status in {"failed", "degraded"}
-        or event_type == "sink.degraded"
-    )
-
-
-def _is_hard_problem_event(live_event: dict[str, Any]) -> bool:
-    level = str(live_event.get("level") or "").lower()
-    event_type = str(live_event.get("event_type") or "")
-    return level in {"error", "critical"} or event_type == "sink.degraded"
-
-
 def _event_window_report(
     *,
     since_ms: int | None,
@@ -3802,9 +3783,9 @@ def _scan_events(
                     status = live_event.get("status")
                     if status:
                         bot["statuses"][str(status).lower()] += 1
-                    if _is_problem_event(live_event):
+                    if is_problem_event(live_event):
                         bot["problem_events"] += 1
-                        hard = _is_hard_problem_event(live_event)
+                        hard = is_hard_problem_event(live_event)
                         if hard:
                             bot["hard_problem_events"] += 1
                         _merge_problem_event_group(

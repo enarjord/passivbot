@@ -260,6 +260,97 @@ def test_event_query_filters_by_event_type_without_changing_summary_counts(tmp_p
     assert report["query"]["events"][0]["data"] == {"seq": 1}
 
 
+def test_event_query_filters_by_problem_event_predicate(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_ok",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                level="info",
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                cycle_id="cy_degraded",
+                seq=2,
+                ts=1100,
+                status="degraded",
+                level="warning",
+            ),
+            _monitor_row(
+                event_type="remote_call.failed",
+                cycle_id="cy_failed",
+                seq=3,
+                ts=1200,
+                status="failed",
+                level="warning",
+            ),
+            _monitor_row(
+                event_type="execution.create_failed",
+                cycle_id="cy_error",
+                seq=4,
+                ts=1300,
+                status="succeeded",
+                level="error",
+            ),
+            _monitor_row(
+                event_type="sink.degraded",
+                cycle_id=None,
+                seq=5,
+                ts=1400,
+                status="succeeded",
+                level="info",
+            ),
+            _monitor_row(
+                event_type="hsl.replay.failed",
+                cycle_id="cy_shutdown",
+                seq=6,
+                ts=1500,
+                status="failed",
+                level="warning",
+                reason_code="shutdown_cancelled",
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        problem_events=True,
+        trace_summary=True,
+    )
+
+    assert report["query"]["filters"] == {"problem_events": True}
+    assert report["query"]["matched_events"] == 4
+    assert [event["event_type"] for event in report["query"]["events"]] == [
+        "ema.unavailable",
+        "remote_call.failed",
+        "execution.create_failed",
+        "sink.degraded",
+    ]
+    assert report["query"]["trace_summary"]["event_types"] == {
+        "ema.unavailable": 1,
+        "execution.create_failed": 1,
+        "remote_call.failed": 1,
+        "sink.degraded": 1,
+    }
+
+    hard_report = build_event_report(
+        tmp_path / "monitor",
+        hard_problem_events=True,
+    )
+
+    assert hard_report["query"]["filters"] == {"hard_problem_events": True}
+    assert hard_report["query"]["matched_events"] == 2
+    assert [event["event_type"] for event in hard_report["query"]["events"]] == [
+        "execution.create_failed",
+        "sink.degraded",
+    ]
+
+
 def test_event_query_filters_by_level(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
@@ -1710,6 +1801,47 @@ def test_live_event_query_cli_accepts_level_filter(tmp_path, capsys):
     assert report["query"]["matched_events"] == 1
     assert report["query"]["events"][0]["event_type"] == "remote_call.failed"
     assert report["query"]["events"][0]["level"] == "error"
+
+
+def test_live_event_query_cli_accepts_problem_event_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_ok",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                level="info",
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                cycle_id="cy_problem",
+                seq=2,
+                ts=1100,
+                status="degraded",
+                level="warning",
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--problem-events",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {"problem_events": True}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "ema.unavailable"
 
 
 def test_live_event_query_cli_accepts_data_eq_filter(tmp_path, capsys):
