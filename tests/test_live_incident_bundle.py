@@ -357,12 +357,89 @@ def test_live_incident_bundle_cli_passes_log_window_unparsed_policy(
     assert smoke_report["logs"]["window"]["lines_skipped_unparsed"] == 1
 
 
+def test_live_incident_bundle_cli_recent_minutes_sets_since_ms(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="cycle.completed", seq=1, ts=1000),
+            _monitor_row(event_type="cycle.completed", seq=2, ts=2500),
+        ],
+    )
+    monkeypatch.setattr(live_incident_bundle.time, "time", lambda: 5.0)
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--recent-minutes",
+                "0.05",
+                "--no-event-segments",
+                "--no-trace-report",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["time_window"]["matched_events"] == 1
+    with tarfile.open(output, "r:gz") as tar:
+        manifest = _read_tar_json(tar, "manifest.json")
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+        window_report = _read_tar_json(tar, "time_window_report.json")
+    assert manifest["filters"]["since_ms"] == 2000
+    assert manifest["filters"]["include_rotated"] is False
+    assert smoke_report["event_window"]["since_ms"] == 2000
+    assert window_report["filters"] == {"since_ms": 2000}
+
+
 def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_incident_bundle.main(["monitor", "--since-ms", "not-an-int"])
 
     assert exc_info.value.code == 2
     assert "invalid int value" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_cli_rejects_conflicting_recent_window(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(
+            ["monitor", "--since-ms", "1000", "--recent-minutes", "1"]
+        )
+
+    assert exc_info.value.code == 2
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_cli_rejects_non_positive_recent_minutes(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(["monitor", "--recent-minutes", "0"])
+
+    assert exc_info.value.code == 2
+    assert "must be greater than 0" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_cli_rejects_recent_window_after_until(capsys, monkeypatch):
+    monkeypatch.setattr(live_incident_bundle.time, "time", lambda: 5.0)
+
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(
+            ["monitor", "--recent-minutes", "0.05", "--until-ms", "1500"]
+        )
+
+    assert exc_info.value.code == 2
+    assert "--since-ms/--recent-minutes must be <= --until-ms" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_includes_process_status_when_requested(

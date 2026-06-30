@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ac949f03b` after PR #910, `Expose performance report event discovery metadata`.
+- `7c5c96f4a` after PR #911, `Expose incident bundle event discovery metadata`.
 
 Current review gate:
 
@@ -49,6 +49,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #911 at `7c5c96f4`.
+- PR #911 projected bounded event-file discovery metadata into incident-bundle
+  event-report summaries and event-segment manifests, using the same
+  metadata-returning discovery helper as the query, smoke, and performance
+  report tools. The slice does not add event producers, exchange calls, live
+  execution, report verdict changes, console routing, order/risk logic, or
+  trading behavior.
+- PR #911 passed Claude + Hermes + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`, and
+  `tests/test_live_smoke_report.py`, py_compile for touched files and tests,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `ac949f03` to `7c5c96f4` without bot restart because the
+  deployed change was read-only incident-bundle/report tooling and docs. The
+  five configured bots were left running.
+- A bounded incident-bundle smoke at `7c5c96f4` with event segments disabled
+  reported `ok=true`, `hard_failures=0`, `event_report.files_scanned=6`, and
+  matching `file_discovery` blocks in `event_report` and `event_segments`
+  (`candidate_files=3751`, `event_segments=952`, `rotated_skipped=946`,
+  `scope_pruned=0`). A fresh 2-minute brief smoke reported `ok=true`,
+  `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
+  repository state, `remote_calls.failed=0`, and
+  `account_critical_remote_calls.failed=0`.
 - Repository pulled through PR #910 at `ac949f03`.
 - PR #910 projected bounded event-file discovery metadata into
   `live-performance-report` full and summary output, using the same public

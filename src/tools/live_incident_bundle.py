@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 SRC_ROOT = Path(__file__).resolve().parents[1]
@@ -115,6 +116,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include live events at or before this monitor ts.",
     )
     parser.add_argument(
+        "--recent-minutes",
+        type=float,
+        help=(
+            "Include live events and timestamped text log lines from the last "
+            "N minutes. Equivalent to --since-ms based on local wall-clock time."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=500,
@@ -196,6 +205,15 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.since_ms is not None and args.recent_minutes is not None:
+        parser.error("--since-ms and --recent-minutes are mutually exclusive")
+    since_ms = args.since_ms
+    if args.recent_minutes is not None:
+        if args.recent_minutes <= 0:
+            parser.error("--recent-minutes must be greater than 0")
+        since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
+    if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
+        parser.error("--since-ms/--recent-minutes must be <= --until-ms")
     report = build_live_incident_bundle(
         args.monitor_root,
         output_path=args.output,
@@ -212,7 +230,7 @@ def main(argv: list[str] | None = None) -> int:
         pside=args.pside,
         reason_code=args.reason_code,
         status=args.status,
-        since_ms=args.since_ms,
+        since_ms=since_ms,
         until_ms=args.until_ms,
         include_data=bool(args.include_data),
         include_trace_report=not bool(args.no_trace_report),
