@@ -81,6 +81,48 @@ def _write_minimal_monitor_event(monitor_root):
     )
 
 
+def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+    opened = []
+    original_open_text = smoke_report_module._open_text
+
+    def spy_open_text(path):
+        opened.append(path)
+        return original_open_text(path)
+
+    monkeypatch.setattr(smoke_report_module, "_open_text", spy_open_text)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        since_ms=1500,
+    )
+
+    assert report["ok"] is True
+    assert opened == [events_path]
+    assert report["monitor"]["live_events"] == 2
+    assert report["event_window"]["events_considered"] == 1
+
+
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

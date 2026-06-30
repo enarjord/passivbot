@@ -194,6 +194,13 @@ Related detailed plans:
      restart orchestration should record per-bot shutdown timings, identify the
      current blocking phase, and apply an explicit escalation ladder while
      leaving bots running after smoke.
+   - 2026-06-30: After PR #880 deployed at `74a07640`, VPS5 5-minute brief
+     smoke hit a 30-second timeout wrapper and a narrower 1-minute smoke took
+     roughly 15-19 seconds while reporting `ok=true`. With text logs disabled,
+     the report still skipped roughly 14.7k old monitor events to summarize
+     roughly 600 in-window events. First-pass fix: make `live-smoke-report`
+     reuse one monitor-event parse for both monitor validation/summary and
+     windowed smoke aggregates instead of parsing every event segment twice.
 
    Remaining refinements: safe pull/stop/start orchestration remains open.
    The concise and brief summaries are intentionally bounded; further changes
