@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `60c79c3a4` after PR #886, `Expose startup timings in smoke summaries`.
+- `4b435d33e` after PR #888, `Expose log window in brief smoke reports`.
 
 Current review gate:
 
@@ -49,6 +49,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #888 at `4b435d33e`.
+- PR #888 exposed already-computed text-log window counters in
+  `live-smoke-report --brief`, making concise smoke output show whether
+  log-derived hard/attention counts came from a time-windowed scan and how many
+  log lines were considered, skipped before/after the window, unparseable, or
+  dropped by the unparseable-line policy. The slice did not add event
+  producers, exchange calls, cache mutation, readiness gates, console routing,
+  order/risk logic, or trading behavior.
+- PR #888 passed the normal review gate: Claude approved head `fd4f918`,
+  Hermes approved head `fd4f918`, and CI was green. Local validation covered
+  `tests/test_live_smoke_report.py`, compileall for touched files,
+  `git diff --check`, and an added-diff silent-handling scan.
+- After deploying PR #888 to VPS5, the bots were not restarted because the
+  change was read-only report tooling. All five configured `passivbot live`
+  processes remained running. A 5-minute brief smoke on `v8@4b435d33` returned
+  `ok=true`, `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`,
+  clean tracked repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and the new `logs.window` brief
+  projection with `enabled=true`, `lines_considered=28`,
+  `lines_skipped_before=1730`, `unparsed_ts=56`, and
+  `unparsed_policy=keep`. Remaining attention was non-hard EMA readiness and
+  HSL/unstuck status groups.
 - Repository pulled through PR #886 at `60c79c3a4`.
 - PR #886 exposed already-computed `startup_timings` in
   `live-smoke-report --summary` and `--brief`. The full report already had the
