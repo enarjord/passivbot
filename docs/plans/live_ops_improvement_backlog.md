@@ -137,11 +137,12 @@ Related detailed plans:
    `passivbot tool live-incident-bundle` collects local monitor event reports,
    live-event trace reports, smoke summaries, redacted log excerpts, monitor
    snapshots, config hashes, runtime metadata, and bounded event segments into a
-   tarball. Bundles can also include trace reports and optional smoke-report
-   process status.
+   tarball. Bundles can also include trace reports, optional smoke-report
+   process status, event-file discovery metadata, and recent time windows.
 
    Remaining refinements: richer remote smoke integration when the
-   restart/smoke automation exists.
+   restart/smoke automation exists; keep recent-window bundle scans bounded for
+   very large current monitor segments.
 
 2. [x] Event query and timeline CLI extensions.
    Status: core filter/timeline work merged. `passivbot tool live-event-query`
@@ -692,6 +693,7 @@ Related detailed plans:
 
 | Date | Item | PR / Commit | Result | Remaining |
 |------|------|-------------|--------|-----------|
+| 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #912 / `0eb29545` | Added `--recent-minutes` to incident bundles and deployed it read-only to VPS5; bundle smoke showed the recent window active with clean hard-failure status but still many matched current-segment events | Add opt-in event-tail bounding for recent incident bundles; continue safe restart orchestration |
 | 2026-06-30 | #1/#3 Incident bundle generator and live restart/smoke automation | PR #911 / `7c5c96f4` | Projected bounded event-file discovery metadata into incident-bundle event-report summaries and event-segment manifests; VPS5 no-restart deploy stayed green and bundle smoke showed matching discovery counts without copying event segments | Continue safe restart orchestration; add small incident-bundle CLI ergonomics where they reduce operator mistakes |
 | 2026-06-30 | #3/#4 Live restart/smoke automation and performance readiness | PR #910 / `ac949f03` | Projected bounded event-file discovery metadata into `live-performance-report` full and summary output; VPS5 no-restart deploy stayed green and concise performance smoke showed discovery counts without file paths | Continue safe restart orchestration; carry discovery visibility into incident bundles where it explains copied segment scope |
 | 2026-06-30 | #3 Live restart/smoke automation | PR #909 / `c8c51d73` | Projected bounded event-file discovery metadata into `live-smoke-report` full, summary, and brief output; VPS5 no-restart deploy stayed green and brief smoke showed discovery counts without file paths | Continue safe restart orchestration; carry discovery visibility into other read-only report surfaces where it explains scan cost |

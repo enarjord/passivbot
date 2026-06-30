@@ -10,6 +10,7 @@ import sys
 import tarfile
 import tempfile
 import time
+from collections import deque
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,7 @@ def _build_time_window_report(
     until_ms: int | None,
     include_rotated: bool,
     include_data: bool,
+    event_tail_lines: int = 0,
     limit: int,
 ) -> dict[str, Any]:
     if since_ms is None and until_ms is None:
@@ -184,6 +186,9 @@ def _build_time_window_report(
     events: list[dict[str, Any]] = []
     matched_events = 0
     max_events = max(0, int(limit))
+    max_event_tail_lines = max(0, int(event_tail_lines))
+    event_tail_limited_files = 0
+    event_tail_skipped_lines = 0
     try:
         files = discover_event_files(monitor_root, include_rotated=include_rotated)
     except FileNotFoundError as exc:
@@ -201,7 +206,18 @@ def _build_time_window_report(
     for path in files:
         try:
             with _open_text(path) as stream:
-                for line_no, raw_line in enumerate(stream, start=1):
+                if max_event_tail_lines:
+                    file_rows = deque(
+                        enumerate(stream, start=1),
+                        maxlen=max_event_tail_lines,
+                    )
+                    event_tail_limited_files += 1
+                    if file_rows:
+                        event_tail_skipped_lines += max(0, int(file_rows[0][0]) - 1)
+                    rows = file_rows
+                else:
+                    rows = enumerate(stream, start=1)
+                for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
                         continue
@@ -251,7 +267,7 @@ def _build_time_window_report(
                     "message": str(exc),
                 }
             )
-    return {
+    report = {
         "enabled": True,
         "filters": filters,
         "matched_events": matched_events,
@@ -260,6 +276,11 @@ def _build_time_window_report(
         "timeline": [_timeline_line(event) for event in events],
         "issues": issues,
     }
+    if max_event_tail_lines:
+        report["event_tail_lines"] = max_event_tail_lines
+        report["event_tail_limited_files"] = event_tail_limited_files
+        report["event_tail_skipped_lines"] = event_tail_skipped_lines
+    return report
 
 
 def _git_metadata(cwd: str | Path | None = None) -> dict[str, Any]:
@@ -492,6 +513,7 @@ def _event_report_result_summary(event_report: dict[str, Any]) -> dict[str, Any]
         "live_events": event_report.get("live_events"),
         "error_count": event_report.get("error_count"),
         "warning_count": event_report.get("warning_count"),
+        "event_window": event_report.get("event_window"),
         "cycle_matched_events": (
             cycle_section.get("matched_events") if cycle_section is not None else None
         ),
@@ -631,6 +653,7 @@ def build_live_incident_bundle(
     log_tail_lines: int = 500,
     max_log_matches: int = 100,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    event_tail_lines: int = 0,
     max_snapshot_files: int = 20,
     max_snapshot_file_bytes: int = 1_000_000,
     max_event_segment_bytes: int = 10_000_000,
@@ -657,6 +680,7 @@ def build_live_incident_bundle(
         pside=pside,
         reason_code=reason_code,
         status=status,
+        event_tail_lines=event_tail_lines,
         limit=max_events,
         include_data=include_data,
         include_rotated=include_rotated,
@@ -671,6 +695,7 @@ def build_live_incident_bundle(
         until_ms=until_ms,
         include_rotated=include_rotated,
         include_data=include_data,
+        event_tail_lines=event_tail_lines,
         limit=max_events,
     )
     smoke_report = build_live_smoke_report(
@@ -682,6 +707,7 @@ def build_live_incident_bundle(
         include_rotated=include_rotated,
         since_ms=since_ms,
         until_ms=until_ms,
+        event_tail_lines=event_tail_lines,
         max_problem_events=max_problem_events,
         max_log_files=max_log_files,
         log_tail_lines=log_tail_lines,
@@ -725,6 +751,7 @@ def build_live_incident_bundle(
                     "status": status,
                     "since_ms": since_ms,
                     "until_ms": until_ms,
+                    "event_tail_lines": event_tail_lines if event_tail_lines else None,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -778,6 +805,9 @@ def build_live_incident_bundle(
             "enabled": window_report.get("enabled"),
             "matched_events": window_report.get("matched_events"),
             "events_truncated": window_report.get("events_truncated"),
+            "event_tail_lines": window_report.get("event_tail_lines"),
+            "event_tail_limited_files": window_report.get("event_tail_limited_files"),
+            "event_tail_skipped_lines": window_report.get("event_tail_skipped_lines"),
         },
         "smoke_report": {
             "ok": smoke_report.get("ok"),

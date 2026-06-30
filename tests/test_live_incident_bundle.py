@@ -404,6 +404,82 @@ def test_live_incident_bundle_cli_recent_minutes_sets_since_ms(
     assert window_report["filters"] == {"since_ms": 2000}
 
 
+def test_live_incident_bundle_cli_event_tail_lines_bounds_event_scans(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="cycle.completed", seq=1, ts=1000),
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=2000,
+                status="failed",
+                level="warning",
+            ),
+            _monitor_row(event_type="cycle.completed", seq=3, ts=3000),
+        ],
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--since-ms",
+                "1000",
+                "--event-type",
+                "cycle.completed",
+                "--event-tail-lines",
+                "1",
+                "--no-event-segments",
+                "--no-trace-report",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["event_report"]["query_matched_events"] == 1
+    assert report["event_report"]["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 1,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "files_skipped_before_window": 0,
+        "event_tail_lines": 1,
+        "event_tail_limited_files": 1,
+        "event_tail_skipped_lines": 2,
+    }
+    assert report["time_window"]["matched_events"] == 1
+    assert report["time_window"]["event_tail_lines"] == 1
+    assert report["time_window"]["event_tail_limited_files"] == 1
+    assert report["time_window"]["event_tail_skipped_lines"] == 2
+    assert report["smoke_report"]["event_window"]["event_tail_lines"] == 1
+    assert report["smoke_report"]["event_window"]["event_tail_limited_files"] == 1
+    assert report["smoke_report"]["event_window"]["event_tail_skipped_lines"] == 2
+
+    with tarfile.open(output, "r:gz") as tar:
+        manifest = _read_tar_json(tar, "manifest.json")
+        event_report = _read_tar_json(tar, "event_report.json")
+        window_report = _read_tar_json(tar, "time_window_report.json")
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+    assert manifest["filters"]["event_tail_lines"] == 1
+    assert event_report["query"]["events"][0]["seq"] == 3
+    assert event_report["event_window"]["event_tail_skipped_lines"] == 2
+    assert window_report["events"][0]["seq"] == 3
+    assert smoke_report["event_window"]["event_tail_skipped_lines"] == 2
+
+
 def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_incident_bundle.main(["monitor", "--since-ms", "not-an-int"])
@@ -428,6 +504,14 @@ def test_live_incident_bundle_cli_rejects_non_positive_recent_minutes(capsys):
 
     assert exc_info.value.code == 2
     assert "must be greater than 0" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_cli_rejects_negative_event_tail_lines(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(["monitor", "--event-tail-lines", "-1"])
+
+    assert exc_info.value.code == 2
+    assert "--event-tail-lines must be >= 0" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_cli_rejects_recent_window_after_until(capsys, monkeypatch):
