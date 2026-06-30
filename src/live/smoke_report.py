@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
-from live.event_query import build_event_report, discover_event_files
+from live.event_query import discover_event_files
 
 
 PYTHON_TRACEBACK_HEADER_PATTERN = r"\bTraceback\s+\(most recent call last\):"
@@ -3148,6 +3148,22 @@ def _event_window_report(
     }
 
 
+def _monitor_issue(
+    path: str | Path,
+    line: int | None,
+    severity: str,
+    code: str,
+    message: str,
+) -> dict[str, Any]:
+    return {
+        "path": str(path),
+        "line": line,
+        "severity": str(severity),
+        "code": str(code),
+        "message": str(message),
+    }
+
+
 def _scan_events(
     root: str | Path,
     *,
@@ -3156,8 +3172,31 @@ def _scan_events(
     since_ms: int | None = None,
     until_ms: int | None = None,
 ) -> dict[str, Any]:
-    files = discover_event_files(root, include_rotated=include_rotated)
+    issues: list[dict[str, Any]] = []
+    try:
+        files = discover_event_files(root, include_rotated=include_rotated)
+    except FileNotFoundError as exc:
+        files = []
+        issues.append(
+            _monitor_issue(str(root), None, "error", "path_not_found", str(exc))
+        )
+    if not files and not issues:
+        issues.append(
+            _monitor_issue(
+                str(root),
+                None,
+                "error",
+                "no_event_files",
+                "no event NDJSON files found",
+            )
+        )
     report_ts_ms = utc_ms()
+    records_total = 0
+    live_events = 0
+    legacy_events = 0
+    missing_cycle_id = 0
+    monitor_event_type_counts: Counter[str] = Counter()
+    cycle_counts: Counter[str] = Counter()
     bots: dict[str, dict[str, Any]] = defaultdict(
         lambda: {
             "events": 0,
@@ -3201,17 +3240,80 @@ def _scan_events(
                     line = raw_line.strip()
                     if not line:
                         continue
+                    records_total += 1
                     try:
                         row = json.loads(line)
-                    except json.JSONDecodeError:
+                    except json.JSONDecodeError as exc:
+                        issues.append(
+                            _monitor_issue(
+                                path,
+                                line_no,
+                                "error",
+                                "invalid_json",
+                                str(exc),
+                            )
+                        )
                         invalid_rows += 1
                         continue
                     if not isinstance(row, dict):
+                        issues.append(
+                            _monitor_issue(
+                                path,
+                                line_no,
+                                "error",
+                                "invalid_record",
+                                "event row is not a JSON object",
+                            )
+                        )
                         invalid_rows += 1
                         continue
                     live_event = _live_event_payload(row)
                     if live_event is None:
+                        legacy_events += 1
                         continue
+                    live_events += 1
+                    event_type = live_event.get("event_type") or row.get("kind")
+                    if event_type:
+                        event_type = str(event_type)
+                        monitor_event_type_counts[event_type] += 1
+                        if row.get("kind") and str(row.get("kind")) != event_type:
+                            issues.append(
+                                _monitor_issue(
+                                    path,
+                                    line_no,
+                                    "warning",
+                                    "kind_event_type_mismatch",
+                                    f"kind={row.get('kind')} event_type={event_type}",
+                                )
+                            )
+                    else:
+                        issues.append(
+                            _monitor_issue(
+                                path,
+                                line_no,
+                                "error",
+                                "missing_event_type",
+                                "live event is missing event_type",
+                            )
+                        )
+                    if live_event.get("ids") is not None and not isinstance(
+                        live_event.get("ids"), dict
+                    ):
+                        issues.append(
+                            _monitor_issue(
+                                path,
+                                line_no,
+                                "error",
+                                "invalid_ids",
+                                "live event ids field is not an object",
+                            )
+                        )
+                    ids = _event_ids(live_event)
+                    cycle_id = ids.get("cycle_id")
+                    if cycle_id is None:
+                        missing_cycle_id += 1
+                    else:
+                        cycle_counts[str(cycle_id)] += 1
                     row_ts = _non_negative_int(row.get("ts"))
                     if since_ms is not None or until_ms is not None:
                         if row_ts is None:
@@ -3233,7 +3335,6 @@ def _scan_events(
                             bot["last_ts"] = max(int(bot["last_ts"] or 0), int(ts))
                         except (TypeError, ValueError):
                             bot["invalid_ts"] += 1
-                    event_type = live_event.get("event_type") or row.get("kind")
                     if event_type:
                         bot["event_types"][str(event_type)] += 1
                     if event_type == EventTypes.REMOTE_CALL_FAILED:
@@ -3382,10 +3483,33 @@ def _scan_events(
                     )
                     if startup_timing is not None:
                         startup_timing_records[bot_key].append(startup_timing)
-        except OSError:
+        except OSError as exc:
+            issues.append(
+                _monitor_issue(path, None, "error", "read_failed", str(exc))
+            )
             invalid_rows += 1
 
+    error_count = sum(1 for issue in issues if issue.get("severity") == "error")
+    warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
     return {
+        "monitor": {
+            "root": str(Path(root).expanduser()),
+            "include_rotated": bool(include_rotated),
+            "files": [str(path) for path in files],
+            "files_scanned": len(files),
+            "records_total": records_total,
+            "live_events": live_events,
+            "legacy_events": legacy_events,
+            "missing_cycle_id": missing_cycle_id,
+            "issues": issues,
+            "error_count": error_count,
+            "warning_count": warning_count,
+            "event_types": dict(sorted(monitor_event_type_counts.items())),
+            "cycle_ids_sample": [
+                {"cycle_id": key, "events": value}
+                for key, value in cycle_counts.most_common(20)
+            ],
+        },
         "invalid_rows": invalid_rows,
         "bots": [
             {
@@ -3707,128 +3831,14 @@ def build_live_smoke_report(
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
 ) -> dict[str, Any]:
     repository_root = _find_repository_root(monitor_root, repo_root=repo_root)
-    event_report = build_event_report(
+    event_scan = _scan_events(
         monitor_root,
         include_rotated=include_rotated,
-        limit=max_problem_events,
+        max_problem_events=max_problem_events,
+        since_ms=since_ms,
+        until_ms=until_ms,
     )
-    event_scan: dict[str, Any]
-    if event_report.get("files_scanned"):
-        event_scan = _scan_events(
-            monitor_root,
-            include_rotated=include_rotated,
-            max_problem_events=max_problem_events,
-            since_ms=since_ms,
-            until_ms=until_ms,
-        )
-    else:
-        event_scan = {
-            "invalid_rows": 0,
-            "bots": [],
-            "problem_events": [],
-            "problem_event_groups": {
-                "total": 0,
-                "groups_truncated": False,
-                "groups": [],
-            },
-            "problem_event_count": 0,
-            "hard_problem_event_count": 0,
-            "startup_timings": [],
-            "remote_call_failures": {
-                "total": 0,
-                "groups_truncated": False,
-                "groups": [],
-            },
-            "remote_call_health": {
-                "total": 0,
-                "succeeded": 0,
-                "failed": 0,
-                "throttled": 0,
-                "failure_pct": None,
-                "throttled_pct": None,
-                "groups_truncated": False,
-                "groups": [],
-            },
-            "account_critical_remote_call_health": {
-                "total": 0,
-                "succeeded": 0,
-                "failed": 0,
-                "throttled": 0,
-                "failure_pct": None,
-                "throttled_pct": None,
-                "groups_truncated": False,
-                "groups": [],
-            },
-            "remote_call_timings": {
-                "total": 0,
-                "groups_truncated": False,
-                "groups": [],
-            },
-            "ema_readiness_health": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "bots": 0,
-                "latest_candidate_unavailable_total": 0,
-                "latest_unavailable_total": 0,
-                "latest_optional_drop_total": 0,
-                "groups": [],
-            },
-            "staged_readiness_health": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "bots": 0,
-                "latest_missing_surface_total": 0,
-                "latest_invalid_surface_total": 0,
-                "groups": [],
-            },
-            "event_pipeline_health": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "bots": 0,
-                "latest_queue_depth_total": 0,
-                "latest_queue_unfinished_total": 0,
-                "latest_dropped_total": 0,
-                "latest_sink_error_total": 0,
-                "latest_degraded_total": 0,
-                "latest_worker_not_alive_count": 0,
-                "latest_stopping_count": 0,
-                "groups": [],
-            },
-            "hsl_replay_health": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "bots": 0,
-                "active_bots": 0,
-                "completed_bots": 0,
-                "failed_bots": 0,
-                "failed_attention_bots": 0,
-                "groups": [],
-            },
-            "risk_events": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "groups": [],
-            },
-            "shutdown_events": {
-                "total": 0,
-                "groups_truncated": False,
-                "event_types": {},
-                "groups": [],
-            },
-            "event_window": _event_window_report(
-                since_ms=since_ms,
-                until_ms=until_ms,
-                events_considered=0,
-                events_skipped_before=0,
-                events_skipped_after=0,
-                invalid_window_ts=0,
-            ),
-        }
+    event_report = event_scan["monitor"]
     log_scan = _scan_logs(
         logs_root,
         max_files=max_log_files,
