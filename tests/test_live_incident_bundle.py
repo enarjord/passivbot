@@ -18,29 +18,40 @@ def _monitor_row(
     status: str = "succeeded",
     level: str = "info",
     reason_code: str = "test",
+    exchange: str = "binance",
+    user: str = "binance_01",
+    source: str = "live",
+    component: str = "test",
     symbol: str | None = None,
+    side: str | None = None,
     ids: dict | None = None,
+    tags: list[str] | None = None,
+    data: dict | None = None,
 ) -> dict:
+    event_data = {"seq": seq, "detail": "kept only when include_data is enabled"}
+    if data is not None:
+        event_data.update(data)
     live_event = {
         "schema_version": 1,
         "event_id": f"evt_{seq}",
         "event_type": event_type,
         "level": level,
-        "source": "live",
-        "component": "test",
-        "exchange": "binance",
-        "user": "binance_01",
+        "source": source,
+        "component": component,
+        "exchange": exchange,
+        "user": user,
         "symbol": symbol,
+        "side": side,
         "status": status,
         "reason_code": reason_code,
-        "data": {"seq": seq, "detail": "kept only when include_data is enabled"},
+        "data": event_data,
         "ids": dict(ids or {}),
     }
     return {
-        "exchange": "binance",
-        "user": "binance_01",
+        "exchange": exchange,
+        "user": user,
         "kind": event_type,
-        "tags": ["test"],
+        "tags": list(tags or ["test"]),
         "payload": {"_live_event": live_event},
         "seq": seq,
         "ts": ts,
@@ -327,6 +338,144 @@ def test_live_incident_bundle_embeds_problem_event_report(tmp_path):
     assert problem_event_report["query"]["trace_summary"]["matched_events"] == 1
 
 
+def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
+    tmp_path, capsys
+):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    _write_ndjson(
+        binance_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="warning",
+                reason_code="request_timeout",
+                exchange="binance",
+                user="binance_01",
+                source="live",
+                component="ema.bundle",
+                side="buy",
+                tags=["ema"],
+                data={"scope": "other"},
+                ids={
+                    "cycle_id": "cy_1",
+                    "remote_call_id": "rc_binance",
+                    "remote_call_group_id": "group_other",
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        okx_events / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.failed",
+                seq=2,
+                ts=1100,
+                status="failed",
+                level="warning",
+                reason_code="request_timeout",
+                exchange="okx",
+                user="okx_01",
+                source="live",
+                component="execution",
+                symbol="ZEC/USDT:USDT",
+                side="sell",
+                tags=["order", "execution"],
+                data={"scope": "target"},
+                ids={
+                    "cycle_id": "cy_2",
+                    "remote_call_id": "rc_okx",
+                    "remote_call_group_id": "group_target",
+                },
+            ),
+        ],
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--exchange",
+                "okx",
+                "--user",
+                "okx_01",
+                "--bot-id",
+                "okx/okx_01",
+                "--level",
+                "warning",
+                "--source",
+                "live",
+                "--component",
+                "execution",
+                "--side",
+                "sell",
+                "--tag",
+                "order",
+                "--data-eq",
+                "scope=target",
+                "--remote-call-group-id",
+                "group_target",
+                "--include-data",
+                "--no-event-segments",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["event_report"]["query_matched_events"] == 1
+    assert report["problem_event_report"]["matched_events"] == 1
+    assert report["event_report"]["file_discovery"] == {
+        "bot_path_pruning_applied": True,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 1,
+    }
+
+    with tarfile.open(output, "r:gz") as tar:
+        event_report = _read_tar_json(tar, "event_report.json")
+        problem_event_report = _read_tar_json(tar, "problem_event_report.json")
+        manifest = _read_tar_json(tar, "manifest.json")
+
+    expected_filters = {
+        "bot_ids": ["okx/okx_01"],
+        "components": ["execution"],
+        "data_eq": {"scope": ["target"]},
+        "exchanges": ["okx"],
+        "levels": ["warning"],
+        "remote_call_group_ids": ["group_target"],
+        "sides": ["sell"],
+        "sources": ["live"],
+        "tags": ["order"],
+        "users": ["okx_01"],
+    }
+    assert event_report["query"]["filters"] == expected_filters
+    assert problem_event_report["query"]["filters"] == {
+        **expected_filters,
+        "problem_events": True,
+    }
+    assert event_report["query"]["events"][0]["exchange"] == "okx"
+    assert event_report["query"]["events"][0]["user"] == "okx_01"
+    assert event_report["query"]["events"][0]["side"] == "sell"
+    assert event_report["query"]["events"][0]["data"]["scope"] == "target"
+    assert manifest["filters"]["exchange"] == ["okx"]
+    assert manifest["filters"]["bot_id"] == ["okx/okx_01"]
+    assert manifest["filters"]["data_eq"] == ["scope=target"]
+
+
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "okx" / "okx_01" / "events"
     _write_ndjson(
@@ -400,6 +549,20 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
     assert smoke_report["logs"]["hard_matches"] == 0
+
+
+def test_live_incident_bundle_cli_rejects_malformed_data_eq_filter(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--data-eq",
+                "missing_equals",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "key=value" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_cli_passes_log_window_unparsed_policy(
