@@ -4,6 +4,7 @@ import json
 
 import pytest
 
+import live.event_file_rows as event_file_rows_module
 import live.smoke_report as smoke_report_module
 from live.smoke_report import (
     build_live_smoke_report,
@@ -107,13 +108,13 @@ def test_live_smoke_report_scans_monitor_segments_once(tmp_path, monkeypatch):
     )
     rotated_path.write_bytes(b"")
     opened = []
-    original_open_text = smoke_report_module._open_text
+    original_open_text = event_file_rows_module._open_text
 
     def spy_open_text(path):
         opened.append(path)
         return original_open_text(path)
 
-    monkeypatch.setattr(smoke_report_module, "_open_text", spy_open_text)
+    monkeypatch.setattr(event_file_rows_module, "_open_text", spy_open_text)
 
     report = build_live_smoke_report(
         tmp_path / "monitor",
@@ -199,6 +200,10 @@ def test_live_smoke_report_event_tail_lines_bounds_monitor_scan(tmp_path):
         "event_tail_lines": 2,
         "event_tail_limited_files": 1,
         "event_tail_skipped_lines": 3,
+        "event_tail_skipped_lines_exact": True,
+        "event_tail_skipped_bytes": 0,
+        "event_tail_line_numbers_exact": True,
+        "event_tail_methods": {"seek_tail": 1},
     }
     assert report["bots"][0]["events"] == 2
 

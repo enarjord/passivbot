@@ -153,7 +153,9 @@ def build_parser() -> argparse.ArgumentParser:
         default=0,
         help=(
             "Only scan the last N lines from each monitor event segment for "
-            "event reports and smoke checks. Default 0 scans full segments."
+            "event reports and smoke checks. Plain NDJSON segments seek from "
+            "file end; compressed segments may still be scanned sequentially. "
+            "Default 0 scans full segments."
         ),
     )
     parser.add_argument(

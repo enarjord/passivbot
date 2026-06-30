@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
+from live.event_file_rows import event_file_rows
 from live.event_query import discover_event_files_with_metadata
 
 
@@ -3419,6 +3420,10 @@ def _event_window_report(
     event_tail_lines: int = 0,
     event_tail_limited_files: int = 0,
     event_tail_skipped_lines: int = 0,
+    event_tail_skipped_lines_exact: bool = True,
+    event_tail_skipped_bytes: int = 0,
+    event_tail_line_numbers_exact: bool = True,
+    event_tail_methods: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     report = {
         "enabled": since_ms is not None or until_ms is not None,
@@ -3433,6 +3438,10 @@ def _event_window_report(
         report["event_tail_lines"] = int(event_tail_lines)
         report["event_tail_limited_files"] = int(event_tail_limited_files)
         report["event_tail_skipped_lines"] = int(event_tail_skipped_lines)
+        report["event_tail_skipped_lines_exact"] = bool(event_tail_skipped_lines_exact)
+        report["event_tail_skipped_bytes"] = int(event_tail_skipped_bytes)
+        report["event_tail_line_numbers_exact"] = bool(event_tail_line_numbers_exact)
+        report["event_tail_methods"] = dict(sorted((event_tail_methods or {}).items()))
     return report
 
 
@@ -3519,6 +3528,10 @@ def _scan_events(
     max_event_tail_lines = max(0, int(event_tail_lines))
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
+    event_tail_skipped_lines_exact = True
+    event_tail_skipped_bytes = 0
+    event_tail_line_numbers_exact = True
+    event_tail_methods: Counter[str] = Counter()
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -3541,18 +3554,22 @@ def _scan_events(
 
     for path in files:
         try:
-            with _open_text(path) as stream:
-                if max_event_tail_lines:
-                    file_rows = deque(
-                        enumerate(stream, start=1),
-                        maxlen=max_event_tail_lines,
-                    )
+            with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
+                rows,
+                row_window,
+            ):
+                if max_event_tail_lines and row_window.limited:
                     event_tail_limited_files += 1
-                    if file_rows:
-                        event_tail_skipped_lines += max(0, int(file_rows[0][0]) - 1)
-                    rows = file_rows
-                else:
-                    rows = enumerate(stream, start=1)
+                    if row_window.skipped_lines is None:
+                        event_tail_skipped_lines_exact = False
+                    else:
+                        event_tail_skipped_lines += int(row_window.skipped_lines)
+                    event_tail_skipped_bytes += int(row_window.skipped_bytes)
+                    event_tail_line_numbers_exact = (
+                        event_tail_line_numbers_exact
+                        and bool(row_window.line_numbers_exact)
+                    )
+                    event_tail_methods[str(row_window.method)] += 1
                 for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
@@ -3908,6 +3925,10 @@ def _scan_events(
             event_tail_lines=max_event_tail_lines,
             event_tail_limited_files=event_tail_limited_files,
             event_tail_skipped_lines=event_tail_skipped_lines,
+            event_tail_skipped_lines_exact=event_tail_skipped_lines_exact,
+            event_tail_skipped_bytes=event_tail_skipped_bytes,
+            event_tail_line_numbers_exact=event_tail_line_numbers_exact,
+            event_tail_methods=dict(event_tail_methods),
         ),
     }
 
@@ -4894,6 +4915,10 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "event_tail_lines",
                 "event_tail_limited_files",
                 "event_tail_skipped_lines",
+                "event_tail_skipped_lines_exact",
+                "event_tail_skipped_bytes",
+                "event_tail_line_numbers_exact",
+                "event_tail_methods",
             )
             if key in event_window
         },

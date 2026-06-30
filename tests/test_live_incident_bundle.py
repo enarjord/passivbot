@@ -459,6 +459,10 @@ def test_live_incident_bundle_cli_event_tail_lines_bounds_event_scans(tmp_path, 
         "event_tail_lines": 1,
         "event_tail_limited_files": 1,
         "event_tail_skipped_lines": 2,
+        "event_tail_skipped_lines_exact": True,
+        "event_tail_skipped_bytes": 0,
+        "event_tail_line_numbers_exact": True,
+        "event_tail_methods": {"seek_tail": 1},
     }
     assert report["time_window"]["matched_events"] == 1
     assert report["time_window"]["event_tail_lines"] == 1

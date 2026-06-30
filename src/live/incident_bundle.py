@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import os
@@ -10,13 +9,14 @@ import sys
 import tarfile
 import tempfile
 import time
-from collections import deque
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
+from live.event_file_rows import event_file_rows
 from live.event_query import (
     build_event_report,
     discover_event_files,
@@ -60,12 +60,6 @@ def _write_json(path: Path, data: Any) -> None:
         json.dumps(data, indent=2, sort_keys=True, default=_json_default) + "\n",
         encoding="utf-8",
     )
-
-
-def _open_text(path: Path):
-    if path.name.endswith(".gz"):
-        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
-    return open(path, "r", encoding="utf-8", errors="replace")
 
 
 def _sha256_file(path: Path) -> str:
@@ -189,6 +183,10 @@ def _build_time_window_report(
     max_event_tail_lines = max(0, int(event_tail_lines))
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
+    event_tail_skipped_lines_exact = True
+    event_tail_skipped_bytes = 0
+    event_tail_line_numbers_exact = True
+    event_tail_methods: Counter[str] = Counter()
     try:
         files = discover_event_files(monitor_root, include_rotated=include_rotated)
     except FileNotFoundError as exc:
@@ -205,18 +203,22 @@ def _build_time_window_report(
 
     for path in files:
         try:
-            with _open_text(path) as stream:
-                if max_event_tail_lines:
-                    file_rows = deque(
-                        enumerate(stream, start=1),
-                        maxlen=max_event_tail_lines,
-                    )
+            with event_file_rows(path, max_tail_lines=max_event_tail_lines) as (
+                rows,
+                row_window,
+            ):
+                if max_event_tail_lines and row_window.limited:
                     event_tail_limited_files += 1
-                    if file_rows:
-                        event_tail_skipped_lines += max(0, int(file_rows[0][0]) - 1)
-                    rows = file_rows
-                else:
-                    rows = enumerate(stream, start=1)
+                    if row_window.skipped_lines is None:
+                        event_tail_skipped_lines_exact = False
+                    else:
+                        event_tail_skipped_lines += int(row_window.skipped_lines)
+                    event_tail_skipped_bytes += int(row_window.skipped_bytes)
+                    event_tail_line_numbers_exact = (
+                        event_tail_line_numbers_exact
+                        and bool(row_window.line_numbers_exact)
+                    )
+                    event_tail_methods[str(row_window.method)] += 1
                 for line_no, raw_line in rows:
                     line = raw_line.strip()
                     if not line:
@@ -280,6 +282,10 @@ def _build_time_window_report(
         report["event_tail_lines"] = max_event_tail_lines
         report["event_tail_limited_files"] = event_tail_limited_files
         report["event_tail_skipped_lines"] = event_tail_skipped_lines
+        report["event_tail_skipped_lines_exact"] = event_tail_skipped_lines_exact
+        report["event_tail_skipped_bytes"] = event_tail_skipped_bytes
+        report["event_tail_line_numbers_exact"] = event_tail_line_numbers_exact
+        report["event_tail_methods"] = dict(sorted(event_tail_methods.items()))
     return report
 
 
@@ -808,6 +814,14 @@ def build_live_incident_bundle(
             "event_tail_lines": window_report.get("event_tail_lines"),
             "event_tail_limited_files": window_report.get("event_tail_limited_files"),
             "event_tail_skipped_lines": window_report.get("event_tail_skipped_lines"),
+            "event_tail_skipped_lines_exact": window_report.get(
+                "event_tail_skipped_lines_exact"
+            ),
+            "event_tail_skipped_bytes": window_report.get("event_tail_skipped_bytes"),
+            "event_tail_line_numbers_exact": window_report.get(
+                "event_tail_line_numbers_exact"
+            ),
+            "event_tail_methods": window_report.get("event_tail_methods"),
         },
         "smoke_report": {
             "ok": smoke_report.get("ok"),
