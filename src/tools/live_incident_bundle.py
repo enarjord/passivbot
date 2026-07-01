@@ -284,6 +284,16 @@ def build_parser() -> argparse.ArgumentParser:
             "lines without in-window timestamp context."
         ),
     )
+    parser.add_argument(
+        "--smoke-section",
+        action="append",
+        default=[],
+        help=(
+            "Only keep one top-level section from the embedded full "
+            "smoke_report.json plus common smoke metadata. May be repeated; "
+            "section names are validated by live-smoke-report."
+        ),
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact single-line JSON.")
     return parser
 
@@ -345,6 +355,7 @@ def main(argv: list[str] | None = None) -> int:
             log_tail_lines=int(args.log_tail_lines),
             max_log_matches=int(args.max_log_matches),
             log_window_unparsed_policy=str(args.log_window_unparsed_policy),
+            smoke_sections=args.smoke_section,
             max_snapshot_files=int(args.max_snapshot_files),
             max_snapshot_file_bytes=int(args.max_snapshot_file_bytes),
             max_event_segment_bytes=int(args.max_event_segment_bytes),

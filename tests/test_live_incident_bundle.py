@@ -670,6 +670,69 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert smoke_report["logs"]["hard_matches"] == 0
 
 
+def test_live_incident_bundle_cli_can_focus_embedded_smoke_report(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                reason_code="fills_refresh_succeeded",
+                component="fills.refresh",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "history_scope": "all",
+                    "coverage_ready_after": True,
+                    "elapsed_ms": 30,
+                },
+            )
+        ],
+    )
+    output = tmp_path / "incident.tar.gz"
+    logs_dir = tmp_path / "logs"
+    logs_dir.mkdir()
+    (logs_dir / "bot.log").write_text(
+        "1970-01-01T00:00:01Z ERROR kept in compact summary\n",
+        encoding="utf-8",
+    )
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                str(logs_dir),
+                "--no-event-segments",
+                "--no-trace-report",
+                "--no-problem-report",
+                "--smoke-section",
+                "fill_refresh_health",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["smoke_report"]["logs"]["files_scanned"] == 1
+    assert report["smoke_report"]["logs"]["attention_matches"] == 1
+    with tarfile.open(output, "r:gz") as tar:
+        smoke_report = _read_tar_json(tar, "smoke_report.json")
+        manifest = _read_tar_json(tar, "manifest.json")
+    assert smoke_report["ok"] is True
+    assert smoke_report["fill_refresh_health"]["total"] == 1
+    assert "logs" not in smoke_report
+    assert "remote_call_health" not in smoke_report
+    assert manifest["filters"]["smoke_sections"] == ["fill_refresh_health"]
+
+
 def test_live_incident_bundle_cli_rejects_malformed_data_eq_filter(tmp_path, capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_incident_bundle.main(

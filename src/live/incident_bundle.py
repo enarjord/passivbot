@@ -30,6 +30,7 @@ from live.smoke_report import (
     _redact_log_text,
     build_live_smoke_report,
     default_logs_root_for_monitor,
+    project_live_smoke_report_sections,
 )
 
 
@@ -840,6 +841,7 @@ def build_live_incident_bundle(
     log_tail_lines: int = 500,
     max_log_matches: int = 100,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    smoke_sections: list[str] | tuple[str, ...] | None = None,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
     max_snapshot_files: int = 20,
@@ -857,6 +859,11 @@ def build_live_incident_bundle(
         if output_path is not None
         else Path(f"passivbot_incident_bundle_{_utc_stamp()}.tar.gz")
     )
+    smoke_sections = [
+        str(section).strip()
+        for section in (smoke_sections or ())
+        if str(section).strip()
+    ]
 
     event_report = build_event_report(
         monitor_path,
@@ -969,6 +976,10 @@ def build_live_incident_bundle(
         max_log_matches=max_log_matches,
         log_window_unparsed_policy=log_window_unparsed_policy,
     )
+    embedded_smoke_report = project_live_smoke_report_sections(
+        smoke_report,
+        smoke_sections,
+    )
 
     with tempfile.TemporaryDirectory(prefix="passivbot_incident_bundle_") as tmp_name:
         bundle_root = Path(tmp_name)
@@ -1026,6 +1037,7 @@ def build_live_incident_bundle(
                     "log_tail_lines": log_tail_lines if log_tail_lines else None,
                     "max_log_matches": max_log_matches if max_log_matches else None,
                     "log_window_unparsed_policy": log_window_unparsed_policy,
+                    "smoke_sections": list(smoke_sections),
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -1049,7 +1061,7 @@ def build_live_incident_bundle(
         if include_problem_report:
             _write_json(bundle_root / "problem_event_report.json", problem_report)
         _write_json(bundle_root / "time_window_report.json", window_report)
-        _write_json(bundle_root / "smoke_report.json", smoke_report)
+        _write_json(bundle_root / "smoke_report.json", embedded_smoke_report)
         timeline_lines: list[str] = []
         for section in ("cycle", "query"):
             value = event_report.get(section)
