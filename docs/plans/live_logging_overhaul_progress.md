@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `908c955e` after PR #932, `Default restart smoke plans to brief output`.
+- `0fd30b6b` after PR #933, `Bound planned restart smoke event scans`.
 
 Current review gate:
 
@@ -49,6 +49,30 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #933 at `0fd30b6b`.
+- PR #933 made the read-only `live-restart-smoke-plan` generated smoke command
+  include `--event-tail-lines 2000` and `--max-event-files-per-bot 2` by
+  default, with `0` escape hatches for full event validation. The slice was
+  plan-only operator tooling and did not execute restarts, send signals, invoke
+  tmux, run SSH, pull git, start bots, contact exchanges, load credentials, add
+  event producers, mutate caches, change readiness gates, write monitor events,
+  route console output, or alter order/risk/trading behavior.
+- PR #933 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `908c955e` to `0fd30b6b` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan` run against `/root/bots_vps5.yaml` completed
+  with `ok=true`, five configured bots, `execute=false`, and planned smoke
+  commands containing `--event-tail-lines 2000`,
+  `--max-event-files-per-bot 2`, `--brief`, and `--compact`. The planned
+  command was then run as a 5-minute brief smoke; it reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `0fd30b6b`, five
+  matched expected live processes, no missing/extra/duplicate live processes,
+  no failed account-critical remote calls, `event_tail_limited_files=6`, and
+  `event_files_skipped_by_limit=0`. Remaining attention came from known
+  non-hard EMA readiness, HSL status/cooldown, and staged-readiness diagnostics.
 - Repository pulled through PR #932 at `908c955e`.
 - PR #932 made the read-only `live-restart-smoke-plan` generated smoke command
   default to `live-smoke-report --brief --compact`, with explicit

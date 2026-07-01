@@ -188,9 +188,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool live-restart-smoke-plan` emits a read-only dry-run restart
   plan from a tmuxp-style supervisor config. The planned smoke command defaults
   to a brief compact smoke command with `--event-tail-lines 2000` and
-  `--max-event-files-per-bot 2` for repeated operator loops; use
-  `--event-tail-lines 0` and `--max-event-files-per-bot 0` in the planner to
-  request full event validation in the generated smoke command. Use
+  `--max-event-files-per-bot 2`, plus `--log-tail-lines 1200` and
+  `--max-log-matches 20`, for repeated operator loops; use
+  `--event-tail-lines 0`, `--max-event-files-per-bot 0`, `--log-tail-lines 0`,
+  or `--max-log-matches 0` in the planner to omit those explicit bounds from
+  the generated smoke command. Use
   `--summary-smoke-report` for bounded groups or `--full-smoke-report` for the
   full smoke report. The planner does not execute the restart, send signals,
   invoke tmux, run SSH, pull git, start bots, contact exchanges, or load
