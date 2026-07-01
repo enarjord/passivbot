@@ -224,9 +224,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   timestamped `/tmp/passivbot_incident_bundle_restart_smoke_<utc>.tar.gz`
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured
-  live config path found in the supervisor config. Use planner `--summary` when
-  you only need the bot count, phase names, preflight commands, smoke command,
-  and incident-bundle command without every per-bot phase detail.
+  live config path found in the supervisor config, plus a skip count for any
+  configured live command whose config path could not be derived. Use planner
+  `--summary` when you only need the bot count, phase names, preflight commands,
+  smoke command, and incident-bundle command without every per-bot phase detail.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

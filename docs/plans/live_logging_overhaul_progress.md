@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `79478e1f` after PR #948, `Plan restart log window policy`.
+- `c7b09bf8` after PR #949, `Plan restart config preflights`.
 
 Current review gate:
 
@@ -49,6 +49,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #949 at `c7b09bf8`.
+- PR #949 added deduplicated planned `live-config-preflight ... --compact`
+  commands to `live-restart-smoke-plan` pre-restart readiness and summary
+  output. The slice was read-only dry-run planner tooling and did not add
+  restart execution, process signaling, tmux calls, SSH/git operations, exchange
+  calls, event producers, smoke verdict changes, console routing, order logic,
+  risk logic, or trading behavior.
+- PR #949 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `79478e1f` to `c7b09bf8` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan /root/bots_vps5.yaml --smoke-section
+  fill_refresh_health --log-window-unparsed-policy drop --summary --compact`
+  run reported `ok=true`, five configured bots, six planned phases,
+  `execute=false`, zero issues, and two deduplicated config-preflight commands
+  for the configured forager and tradfi configs. A follow-up 1-minute smoke
+  reported `ok=true`, `hard_failures=0`, clean tracked repository state at
+  `c7b09bf8`, all five configured bots matched, config checks green, zero
+  failed remote calls, zero failed account-critical remote calls, and only known
+  non-hard EMA/HSL cooldown attention groups.
 - Repository pulled through PR #948 at `79478e1f`.
 - PR #948 added `live-restart-smoke-plan --log-window-unparsed-policy`, passing
   the existing `keep`/`drop` text-log window policy through to both planned
