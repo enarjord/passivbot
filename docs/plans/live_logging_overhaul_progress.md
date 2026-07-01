@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `109c4342` after PR #929, `Add per-bot incident bundle event file cap`.
+- `103a4d11` after PR #930, `Add per-bot smoke report event file cap`.
 
 Current review gate:
 
@@ -49,6 +49,31 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #930 at `103a4d11`.
+- PR #930 added `live-smoke-report --max-event-files-per-bot` and the matching
+  `build_live_smoke_report()` option for fair, opt-in per-events-directory caps
+  in smoke-report event scanning. The slice was read-only smoke/report tooling
+  and did not add event producers, exchange calls, cache mutation, readiness
+  gates, console routing, monitor writes, order/risk logic, or trading
+  behavior.
+- PR #930 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_smoke_report.py`, `tests/test_live_incident_bundle.py`,
+  py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `109c4342` to `103a4d11` without bot restart because the
+  deployed change was read-only smoke/incident tooling. The five configured bots
+  were left running.
+- A bounded 5-minute smoke at `103a4d11` completed with `ok=true`,
+  `hard_failures=0`, clean tracked repository state, all five live bot
+  processes running, and no failed account-critical remote calls. A bounded
+  all-rotated incident-bundle smoke with `--max-event-files-per-bot=2`
+  completed successfully with `event_report.files_scanned=12`,
+  `event_report.event_window.event_files_before_limit=945`,
+  `event_report.event_window.event_files_skipped_by_limit=933`,
+  `time_window.files_scanned=12`, and the embedded smoke report carrying the
+  same per-bot file cap metadata. This verified the embedded smoke-report gap
+  from PR #929, but event-segment copying still needs the same cap on its
+  fallback-discovered path when no report has matched exact segment paths.
 - Repository pulled through PR #929 at `109c4342`.
 - PR #929 added `live-incident-bundle --max-event-files-per-bot` and the
   matching `build_live_incident_bundle()` option for fair, opt-in

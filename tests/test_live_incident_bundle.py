@@ -3,11 +3,16 @@ from __future__ import annotations
 import json
 import os
 import tarfile
+from pathlib import Path
 
 import pytest
 
 import live.smoke_report as smoke_report_module
-from live.incident_bundle import _redact_url_userinfo, build_live_incident_bundle
+from live.incident_bundle import (
+    _copy_event_segments,
+    _redact_url_userinfo,
+    build_live_incident_bundle,
+)
 from tools import live_incident_bundle
 
 
@@ -945,6 +950,176 @@ def test_live_incident_bundle_cli_max_event_files_per_bot_is_fair(tmp_path, caps
     } == kept_labels
     assert {event["data"]["label"] for event in window_report["events"]} == kept_labels
     assert window_report["event_file_limit_order"] == "current_then_recent_mtime"
+
+
+def test_live_incident_bundle_cli_caps_fallback_event_segments_per_bot(tmp_path, capsys):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    files = [
+        (
+            binance_events / "current.ndjson",
+            10,
+            "binance",
+            "binance_01",
+            "binance_current",
+        ),
+        (
+            binance_events / "new.ndjson",
+            11,
+            "binance",
+            "binance_01",
+            "binance_new",
+        ),
+        (
+            binance_events / "old.ndjson",
+            12,
+            "binance",
+            "binance_01",
+            "binance_old",
+        ),
+        (okx_events / "current.ndjson", 20, "okx", "okx_01", "okx_current"),
+        (okx_events / "new.ndjson", 21, "okx", "okx_01", "okx_new"),
+        (okx_events / "old.ndjson", 22, "okx", "okx_01", "okx_old"),
+    ]
+    for path, seq, exchange, user, label in files:
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=seq,
+                    ts=seq * 100,
+                    exchange=exchange,
+                    user=user,
+                    data={"label": label},
+                )
+            ],
+        )
+    for path in (binance_events / "old.ndjson", okx_events / "old.ndjson"):
+        _set_mtime(path, 100)
+    for path in (binance_events / "new.ndjson", okx_events / "new.ndjson"):
+        _set_mtime(path, 200)
+    for path in (binance_events / "current.ndjson", okx_events / "current.ndjson"):
+        _set_mtime(path, 50)
+
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--event-type",
+                "no.such.event",
+                "--include-rotated",
+                "--max-event-files-per-bot",
+                "2",
+                "--max-event-segment-bytes",
+                "1000000",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["event_report"]["query_matched_events"] == 0
+    assert report["event_segments"]["files"] == 4
+    assert report["event_segments"]["included"] == 4
+    assert report["event_segments"]["selection"] == "fallback_discovered_paths"
+    assert report["event_segments"]["max_event_files_per_bot"] == 2
+    assert report["event_segments"]["event_file_limit_applies_to"] == (
+        "fallback_discovered_segments"
+    )
+    assert report["event_segments"]["event_file_limit_groups"] == 2
+    assert report["event_segments"]["event_files_before_limit"] == 6
+    assert report["event_segments"]["event_files_skipped_by_limit"] == 2
+
+    with tarfile.open(output, "r:gz") as tar:
+        names = set(tar.getnames())
+        event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
+        manifest = _read_tar_json(tar, "manifest.json")
+
+    included_paths = {
+        item["path"]
+        for item in event_segments_manifest["files"]
+        if item.get("included")
+    }
+    assert {Path(path).name for path in included_paths} == {
+        "current.ndjson",
+        "new.ndjson",
+    }
+    assert len(included_paths) == 4
+    assert not any(path.endswith("old.ndjson") for path in included_paths)
+    assert sum(1 for name in names if name.startswith("event_segments/")) == 4
+    assert event_segments_manifest["event_file_limit_order"] == (
+        "current_then_recent_mtime"
+    )
+    assert manifest["event_segments"]["event_files_skipped_by_limit"] == 2
+
+
+def test_live_incident_bundle_preserves_matched_event_segments_under_cap(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    files = [
+        events_dir / "current.ndjson",
+        events_dir / "new.ndjson",
+        events_dir / "old.ndjson",
+    ]
+    for seq, path in enumerate(files, start=1):
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=seq,
+                    ts=seq * 100,
+                    exchange="binance",
+                    user="binance_01",
+                )
+            ],
+        )
+    _set_mtime(events_dir / "old.ndjson", 100)
+    _set_mtime(events_dir / "new.ndjson", 200)
+    _set_mtime(events_dir / "current.ndjson", 50)
+
+    bundle_root = tmp_path / "bundle"
+    manifest = _copy_event_segments(
+        monitor_root=tmp_path / "monitor",
+        bundle_root=bundle_root,
+        event_report={
+            "query": {
+                "events": [
+                    {"path": str(events_dir / "current.ndjson")},
+                    {"path": str(events_dir / "new.ndjson")},
+                    {"path": str(events_dir / "old.ndjson")},
+                ]
+            }
+        },
+        window_report={},
+        problem_report={},
+        include_rotated=True,
+        include_segments=True,
+        max_total_bytes=1_000_000,
+        max_event_files_per_bot=1,
+    )
+
+    included_paths = {
+        item["path"]
+        for item in manifest["files"]
+        if item.get("included")
+    }
+    assert included_paths == {str(path) for path in files}
+    assert manifest["selection"] == "matched_report_paths"
+    assert manifest["max_event_files_per_bot"] == 1
+    assert manifest["event_file_limit_applies_to"] == "matched_report_paths_preserved"
+    assert manifest["event_file_limit_groups"] == 0
+    assert manifest["event_files_before_limit"] == 3
+    assert manifest["event_files_skipped_by_limit"] == 0
+    assert len(list((bundle_root / "event_segments").iterdir())) == 3
 
 
 def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
