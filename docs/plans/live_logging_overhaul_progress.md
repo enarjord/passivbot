@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `31ef4d40` after PR #923, `Summarize market snapshot staleness`.
+- `652b019e` after PR #924, `Summarize startup phase readiness timing`.
 
 Current review gate:
 
@@ -49,6 +49,30 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #924 at `652b019e`.
+- PR #924 added aggregate startup phase timing counters to
+  `live-performance-report` `startup_readiness`, exposing bounded phase counts
+  plus elapsed and since-previous timing summaries from existing
+  `bot.startup_timing` events. It also routes startup phase labels through a
+  whitelist before they appear in `startup_readiness` or
+  `operation_durations`. The slice was read-only report tooling and did not add
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, order/risk logic, or trading behavior.
+- PR #924 passed Hermes + Claude + Cursor + CI after fixing the
+  `operation_durations` phase-label leak found by Hermes. Local validation
+  covered `tests/test_live_performance_report.py`, py_compile for touched
+  files, `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `31ef4d40` to `652b019e` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A 5-minute smoke at `652b019e` completed with `ok=true`,
+  `hard_failures=0`, all five configured bots matched, clean tracked
+  repository state, no failed remote calls, and no failed account-critical
+  remote calls. Current monitor segments had no startup timing events, so
+  `startup_readiness` showed the new aggregate keys as empty. An attempted
+  full rotated `live-performance-report --include-rotated` verification was
+  interrupted after it proved too slow for smoke use, which motivated the next
+  bounded performance-report scan slice.
 - Repository pulled through PR #923 at `31ef4d40`.
 - PR #923 added aggregate market snapshot staleness counters to
   `live-performance-report` `input_staleness`, exposing snapshot observations,
@@ -1966,24 +1990,47 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events, HSL replay failure events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events; PR #848 mirrors pre-create planning/market snapshot skips into off-console `execution.create_skipped` events; PR #850 mirrors fill-cache doctor startup report/quarantine/rebuild decisions into off-console `fills.refresh_summary` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer startup/protective-readiness summaries, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, startup phase timing summaries, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, bounded historical performance-report scans, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Current Work
 
-### Pending PR: Startup Phase Readiness Summary
+### Pending PR: Performance Report Tail Window
 
-- Branch: `codex/v8-startup-readiness-summary`.
+- Branch: `codex/v8-performance-report-tail-window`.
 - Scope: read-only live performance report tooling and tests.
-- Result: adds bounded aggregate startup phase timing counters to
-  `startup_readiness`, so operators can see cross-bot startup phase elapsed and
-  since-previous summaries without opening every per-bot phase row.
+- Result: adds an opt-in `--event-tail-lines` scan bound to
+  `live-performance-report`, reusing the shared monitor-event tail reader so
+  smoke/debug runs can inspect recent rows from large monitor histories without
+  full rotated scans.
 - Expected validation: focused live-performance-report tests plus py_compile
   and `git diff --check`. No event producers, exchange calls, cache mutation,
   readiness gates, console routing, monitor writes, order/risk logic, or
   trading behavior should change.
 
 ## Merged Slices
+
+### PR #924: Startup Phase Readiness Summary
+
+- Branch: `codex/v8-startup-readiness-summary`.
+- Scope: read-only live performance report tooling and tests.
+- Result: `passivbot tool live-performance-report` now adds bounded aggregate
+  startup phase timing counters to `startup_readiness`, so operators can see
+  cross-bot startup phase elapsed and since-previous summaries without opening
+  every per-bot phase row. Startup phase labels are whitelisted before they
+  appear in either `startup_readiness` or `operation_durations`.
+- Review evidence: Cursor, Hermes, Claude, and CI approved the final head
+  after the Hermes finding about raw startup phase labels in
+  `operation_durations` was fixed. Local validation covered focused
+  live-performance-report tests plus py_compile and `git diff --check`. No
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, order/risk logic, or trading behavior changed.
+- VPS5 evidence: deployed to `v8` at `652b019e` without bot restart because
+  the change is read-only tooling. Smoke stayed hard-green with all five
+  configured bots running, clean tracked repository state, no failed remote
+  calls, and no failed account-critical remote calls. Current monitor segments
+  had no startup timing rows, so the new `startup_readiness` aggregate fields
+  were present but empty.
 
 ### PR #923: Market Snapshot Staleness Summary
 

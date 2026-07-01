@@ -53,6 +53,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in bound for monitor event segments: inspect only the last N rows "
+            "from each event file. Plain NDJSON segments seek from file end; "
+            "compressed segments may still scan sequentially. Default 0 keeps "
+            "full monitor validation."
+        ),
+    )
+    parser.add_argument(
         "--group-limit",
         type=int,
         default=80,
@@ -103,11 +114,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
     if args.group_limit < 0:
         parser.error("--group-limit must be >= 0")
+    if args.event_tail_lines < 0:
+        parser.error("--event-tail-lines must be >= 0")
     report = build_live_performance_report(
         args.path,
         since_ms=since_ms,
         until_ms=args.until_ms,
         include_rotated=bool(args.include_rotated),
+        event_tail_lines=int(args.event_tail_lines),
         group_limit=int(args.group_limit),
         bot_filters=args.bot,
         exchange_filters=args.exchange,

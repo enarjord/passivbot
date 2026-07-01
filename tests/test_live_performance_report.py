@@ -2921,6 +2921,131 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
     assert "files" not in out
 
 
+def test_live_performance_report_event_tail_lines_bounds_monitor_scan(tmp_path):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_old"},
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_old"},
+                data={"elapsed_ms": 2000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=3000,
+                ids={"cycle_id": "cy_old"},
+                data={"elapsed_ms": 3000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=4,
+                ts=4000,
+                ids={"cycle_id": "cy_fresh"},
+                data={"elapsed_ms": 4000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=5,
+                ts=5000,
+                ids={"cycle_id": "cy_fresh"},
+                data={"elapsed_ms": 5000},
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        since_ms=3500,
+        event_tail_lines=2,
+    )
+
+    assert report["ok"] is True
+    assert report["records_total"] == 2
+    assert report["live_events"] == 2
+    assert report["event_window"] == {
+        "enabled": True,
+        "since_ms": 3500,
+        "until_ms": None,
+        "events_considered": 2,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "event_tail_lines": 2,
+        "event_tail_limited_files": 1,
+        "event_tail_skipped_lines": 3,
+        "event_tail_skipped_lines_exact": True,
+        "event_tail_skipped_bytes": 0,
+        "event_tail_line_numbers_exact": True,
+        "event_tail_methods": {"seek_tail": 1},
+    }
+    assert report["bots"] == [{"bot": "binance/binance_01", "events": 2}]
+    assert report["performance"]["groups"][0]["count"] == 2
+
+
+def test_live_performance_report_cli_event_tail_lines(tmp_path, capsys):
+    events_path = (
+        tmp_path / "monitor" / "binance" / "binance_01" / "events" / "current.ndjson"
+    )
+    _write_ndjson(
+        events_path,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                data={"elapsed_ms": 2000},
+            ),
+        ],
+    )
+
+    rc = live_performance_report.main(
+        [
+            str(tmp_path / "monitor"),
+            "--summary",
+            "--compact",
+            "--event-tail-lines",
+            "1",
+        ]
+    )
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["records_total"] == 1
+    assert out["event_window"]["event_tail_lines"] == 1
+    assert out["event_window"]["event_tail_limited_files"] == 1
+    assert out["event_window"]["event_tail_methods"] == {"seek_tail": 1}
+
+
+def test_live_performance_report_cli_rejects_negative_event_tail_lines(capsys):
+    try:
+        live_performance_report.main(["monitor", "--event-tail-lines", "-1"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("negative --event-tail-lines must be rejected")
+
+    assert "--event-tail-lines must be >= 0" in capsys.readouterr().err
+
+
 def test_live_performance_report_redacts_missing_root_paths():
     report = build_live_performance_report("/Users/operator/passivbot/missing-monitor")
 
