@@ -3234,6 +3234,19 @@ class Passivbot:
         signature_parts = []
         for pside in ["long", "short"]:
             info = self._calc_unstuck_allowance_for_logging(pside)
+            runtime_hints = getattr(self, "_monitor_runtime_unstuck_hints", {})
+            if isinstance(runtime_hints, dict):
+                hint = runtime_hints.get(pside)
+                if isinstance(hint, dict):
+                    info = dict(info or {})
+                    for key in (
+                        "next_symbol",
+                        "next_target_price",
+                        "next_target_distance_ratio",
+                        "next_unstuck_trigger_distance_ratio",
+                    ):
+                        if hint.get(key) is not None:
+                            info[key] = hint[key]
             side_infos[pside] = dict(info or {})
             status = info.get("status")
             if status == "disabled":
@@ -3270,6 +3283,23 @@ class Passivbot:
                         "over_budget" if allowance < 0 else "ok",
                         round(float(snapped_allowance), 2),
                         tuple(sorted(info.get("override_loss_allowance_pcts", {}).items())),
+                        str(info.get("next_symbol") or ""),
+                        round(
+                            self._trailing_status_float(info.get("next_target_price")),
+                            8,
+                        ),
+                        round(
+                            self._trailing_status_float(
+                                info.get("next_target_distance_ratio")
+                            ),
+                            8,
+                        ),
+                        round(
+                            self._trailing_status_float(
+                                info.get("next_unstuck_trigger_distance_ratio")
+                            ),
+                            8,
+                        ),
                     )
                 )
         return side_infos, parts, tuple(signature_parts)

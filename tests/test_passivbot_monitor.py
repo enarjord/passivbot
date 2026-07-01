@@ -2757,6 +2757,10 @@ def test_unstuck_status_event_emits_structured_summary():
                     "ETH/USDT:USDT": -3.0,
                     "BTC/USDT:USDT": -5.0,
                 },
+                "next_symbol": "BTC/USDT:USDT",
+                "next_target_price": 101_000.0,
+                "next_target_distance_ratio": 0.005,
+                "next_unstuck_trigger_distance_ratio": 0.0125,
             },
             "short": {"status": "disabled"},
         },
@@ -2786,6 +2790,10 @@ def test_unstuck_status_event_emits_structured_summary():
         "BTC/USDT:USDT": pytest.approx(-5.0),
         "ETH/USDT:USDT": pytest.approx(-3.0),
     }
+    assert long["next_symbol"] == "BTC/USDT:USDT"
+    assert long["next_target_price"] == pytest.approx(101_000.0)
+    assert long["next_target_distance_ratio"] == pytest.approx(0.005)
+    assert long["next_unstuck_trigger_distance_ratio"] == pytest.approx(0.0125)
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

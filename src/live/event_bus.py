@@ -1083,6 +1083,9 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     threshold_price = _data_float(data, "threshold_price")
     if threshold_price:
         parts.append(f"threshold_price={threshold_price}")
+    threshold_dist = _data_number(data, "current_vs_threshold_ratio")
+    if threshold_dist is not None:
+        parts.append(f"threshold_dist={threshold_dist * 100.0:.4f}%")
     retracement_met = data.get("retracement_met")
     if retracement_met is not None:
         parts.append(f"retracement_met={bool(retracement_met)}")
@@ -1092,6 +1095,9 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     retracement_price = _data_float(data, "retracement_price")
     if retracement_price:
         parts.append(f"retracement_price={retracement_price}")
+    retracement_dist = _data_number(data, "current_vs_retracement_ratio")
+    if retracement_dist is not None:
+        parts.append(f"retracement_dist={retracement_dist * 100.0:.4f}%")
     projected = _data_float(data, "threshold_projection_retracement_price")
     if projected:
         parts.append(f"threshold_retrace_price={projected}")
@@ -1124,6 +1130,9 @@ def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
             target_price = _data_float(info, "next_target_price")
             if target_price:
                 bit += f":target={target_price}"
+            target_dist = _data_number(info, "next_target_distance_ratio")
+            if target_dist is not None:
+                bit += f":target_dist={target_dist * 100.0:.4f}%"
             trigger_dist = _data_number(info, "next_unstuck_trigger_distance_ratio")
             if trigger_dist is not None:
                 bit += f":ema_gate={trigger_dist * 100.0:.4f}%"

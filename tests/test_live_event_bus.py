@@ -957,14 +957,16 @@ def test_console_format_summarizes_trailing_status():
             "retracement_price": 99_145.0,
             "threshold_projection_retracement_price": 99_145.0,
             "current_price": 101_000.0,
+            "current_vs_threshold_ratio": 101_000.0 / 98_750.0 - 1.0,
+            "current_vs_retracement_ratio": 101_000.0 / 99_145.0 - 1.0,
         },
     )
 
     assert format_console_event(event) == (
         "[trailing] succeeded cycle=cy_trailing kind=entry "
         "trailing_status=waiting_threshold mode=grid threshold_met=False threshold=1.2500% "
-        "threshold_price=98750 retracement_met=False retracement=0.4000% "
-        "retracement_price=99145 threshold_retrace_price=99145 current=101000 "
+        "threshold_price=98750 threshold_dist=2.2785% retracement_met=False retracement=0.4000% "
+        "retracement_price=99145 retracement_dist=1.8710% threshold_retrace_price=99145 current=101000 "
         "symbol=BTC/USDT:USDT pside=long reason=trailing_status"
     )
 
@@ -1006,6 +1008,7 @@ def test_console_format_summarizes_unstuck_status():
                     "over_budget": True,
                     "next_symbol": "BTC/USDT:USDT",
                     "next_target_price": 101_000.0,
+                    "next_target_distance_ratio": 0.005,
                     "next_unstuck_trigger_distance_ratio": 0.0125,
                 },
                 "short": {"status": "disabled"},
@@ -1015,7 +1018,7 @@ def test_console_format_summarizes_unstuck_status():
 
     assert format_console_event(event) == (
         "[unstuck] succeeded long:ok:allowance=-12.3:over_budget:"
-        "next=BTC/USDT:USDT:target=101000:ema_gate=1.2500% "
+        "next=BTC/USDT:USDT:target=101000:target_dist=0.5000%:ema_gate=1.2500% "
         "short:disabled over_budget=long changed=true reason=unstuck_status"
     )
 

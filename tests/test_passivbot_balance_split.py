@@ -2781,6 +2781,14 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     bot._unstuck_allowance_log_snap_by_pside = {}
     bot._unstuck_last_status_signature = None
     bot._unstuck_last_status_info_ms = 0
+    bot._monitor_runtime_unstuck_hints = {
+        "long": {
+            "next_symbol": "BTC/USDT:USDT",
+            "next_target_price": 101_000.0,
+            "next_target_distance_ratio": 0.005,
+            "next_unstuck_trigger_distance_ratio": 0.0125,
+        }
+    }
     captured_events = []
     bot._emit_unstuck_status_event = lambda **kwargs: captured_events.append(kwargs)
     now = [5 * 60 * 1000]
@@ -2809,6 +2817,12 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
             "peak": 16550.0,
             "pct_from_peak": -0.2,
         }
+        bot._monitor_runtime_unstuck_hints["long"] = {
+            "next_symbol": "ETH/USDT:USDT",
+            "next_target_price": 2_500.0,
+            "next_target_distance_ratio": -0.01,
+            "next_unstuck_trigger_distance_ratio": 0.02,
+        }
         now[0] += 5 * 60 * 1000
         bot._maybe_log_unstuck_status()
         state_by_pside["long"] = {
@@ -2825,11 +2839,16 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     unstuck_logs = [
         record.message for record in caplog.records if "[unstuck]" in record.message
     ]
-    assert len(unstuck_logs) == 3
-    assert len(captured_events) == 3
-    assert [event["changed"] for event in captured_events] == [True, True, False]
+    assert len(unstuck_logs) == 4
+    assert len(captured_events) == 4
+    assert [event["changed"] for event in captured_events] == [True, True, True, False]
     assert captured_events[0]["side_statuses"]["long"]["allowance"] == pytest.approx(
         -41.01
+    )
+    assert captured_events[0]["side_statuses"]["long"]["next_symbol"] == "BTC/USDT:USDT"
+    assert captured_events[1]["side_statuses"]["long"]["next_symbol"] == "ETH/USDT:USDT"
+    assert captured_events[1]["side_statuses"]["long"]["next_target_distance_ratio"] == pytest.approx(
+        -0.01
     )
     assert captured_events[0]["side_statuses"]["short"]["status"] == "disabled"
 
