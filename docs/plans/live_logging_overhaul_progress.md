@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `989b81c9` after PR #919, `Scope incident bundle time-window events`.
+- `570875ab` after PR #920, `Summarize incident time-window discovery`.
 
 Current review gate:
 
@@ -49,6 +49,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #920 at `570875ab`.
+- PR #920 projected `time_window.files_scanned` and
+  `time_window.file_discovery` into compact incident-bundle output so focused
+  recent-window bundle scope can be verified without opening the tarball. The
+  slice was read-only incident-bundle tooling and did not add event producers,
+  exchange calls, live execution, report verdict changes, console routing,
+  order/risk logic, or trading behavior.
+- PR #920 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  py_compile for touched files, and `git diff --check`.
+- VPS5 pulled from `989b81c9` to `570875ab` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A 5-minute smoke at `570875ab` completed with `ok=true`, `hard_failures=0`,
+  all five configured bots matched, clean tracked repository state, no failed
+  remote calls, and no failed account-critical remote calls. A focused OKX
+  incident-bundle smoke verified compact output with
+  `time_window.files_scanned=1`, path-pruned discovery metadata, and one
+  included event segment for `monitor/okx/okx_faisal/events/current.ndjson`.
 - Repository pulled through PR #919 at `989b81c9`.
 - PR #919 applied incident-bundle query scope filters to
   `time_window_report.json`, `timeline.txt`, and matched event-segment
@@ -1887,19 +1906,41 @@ VPS5 deployment status:
 | Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, initial input-staleness, HSL replay pair/rate, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, richer symbol/market/config staleness performance metrics, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
+## Current Work
+
+### Pending PR: Incident Bundle Problem Report Discovery Summary
+
+- Branch: `codex/v8-incident-problem-discovery-summary`.
+- Scope: read-only incident bundle tooling and tests.
+- Result: projects problem-event report file-discovery and event-window
+  metadata into the compact incident-bundle result, so scoped problem-event
+  queries can be verified without opening `problem_event_report.json` from the
+  archive.
+- Expected validation: focused incident-bundle and event-query tests plus
+  py_compile and `git diff --check`. No event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior should change.
+
 ## Merged Slices
 
-### Pending PR: Incident Bundle Time-Window Discovery Summary
+### PR #920: Incident Bundle Time-Window Discovery Summary
 
 - Branch: `codex/v8-incident-window-discovery-summary`.
 - Scope: read-only incident bundle tooling and tests.
-- Result: pending review. The slice projects `time_window.files_scanned` and
+- Result: `passivbot tool live-incident-bundle` now projects
+  `time_window.files_scanned` and
   `time_window.file_discovery` into the compact incident-bundle result so
   focused bundle scoping can be verified without opening the archive.
-- Local validation: focused incident-bundle and event-query tests plus
-  py_compile passed before opening review. No event producers, exchange calls,
-  cache mutation, readiness gates, console routing, monitor writes, order/risk
-  logic, or trading behavior changed.
+- Review evidence: Cursor, Hermes, Claude, and CI approved the final head.
+  Local validation covered focused incident-bundle and event-query tests plus
+  py_compile and `git diff --check`. No event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior changed.
+- VPS5 evidence: deployed to `v8` at `570875ab` without bot restart because
+  the change is read-only tooling. Smoke stayed hard-green with all five
+  configured bots running, clean tracked repository state, and focused OKX
+  incident-bundle output showing `time_window.files_scanned=1` plus path-pruned
+  discovery metadata.
 
 ### PR #919: Incident Bundle Time-Window Scope Filters
 
