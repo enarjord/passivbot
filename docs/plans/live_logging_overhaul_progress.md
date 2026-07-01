@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `42999f19` after PR #944, `Filter live smoke report sections`.
+- `1a7c83ee` after PR #945, `Plan focused restart smoke sections`.
 
 Current review gate:
 
@@ -49,6 +49,31 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #945 at `1a7c83ee`.
+- PR #945 added `live-restart-smoke-plan --smoke-section`, allowing the
+  plan-only restart smoke command to include focused `live-smoke-report
+  --section` values while recording the selected sections in plan inputs. The
+  slice was read-only dry-run planner tooling and did not add restart
+  execution, process signaling, tmux calls, SSH/git operations, exchange calls,
+  event producers, smoke verdict changes, console routing, order logic, risk
+  logic, or trading behavior.
+- PR #945 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `42999f19` to `1a7c83ee` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan /root/bots_vps5.yaml --smoke-section
+  fill_refresh --summary --compact` run reported `ok=true`, five configured
+  bots, six planned phases, `execute=false`, zero issues, and a planned smoke
+  command containing `--brief --section fill_refresh --compact`.
+- The first post-deploy 2-minute smoke surfaced one real transient GateIO
+  `cycle.degraded` hard event from `RequestTimeout` in cycle `cy_2130`,
+  involving one `authoritative_balance` timeout and one candle `fetch_ohlcv`
+  timeout for `POL/USDT:USDT`. A settled 1-minute smoke then reported
+  `ok=true`, `hard_failures=0`, clean tracked repository state at `1a7c83ee`,
+  all five configured bots matched, no failed remote calls, and no failed
+  account-critical remote calls.
 - Repository pulled through PR #944 at `42999f19`.
 - PR #944 added `live-smoke-report --section`, allowing focused top-level
   smoke-report sections plus common smoke metadata after the full, summary, or
