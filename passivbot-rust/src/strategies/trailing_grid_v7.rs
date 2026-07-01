@@ -2497,6 +2497,27 @@ mod tests {
         }
     }
 
+    fn expected_mode_from_order_type(order_type: OrderType) -> &'static str {
+        match order_type {
+            OrderType::EntryTrailingNormalLong
+            | OrderType::EntryTrailingCroppedLong
+            | OrderType::EntryTrailingNormalShort
+            | OrderType::EntryTrailingCroppedShort
+            | OrderType::CloseTrailingLong
+            | OrderType::CloseTrailingShort => "trailing",
+            OrderType::EntryGridNormalLong
+            | OrderType::EntryGridCroppedLong
+            | OrderType::EntryGridInflatedLong
+            | OrderType::EntryGridNormalShort
+            | OrderType::EntryGridCroppedShort
+            | OrderType::EntryGridInflatedShort
+            | OrderType::CloseGridLong
+            | OrderType::CloseGridShort => "grid",
+            OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceWelShort => "auto_reduce",
+            other => panic!("unexpected order type for v7 diagnostic parity: {other:?}"),
+        }
+    }
+
     #[test]
     fn diagnostic_reports_trailing_grid_v7_threshold_and_projection() {
         let exchange = exchange();
@@ -2555,6 +2576,106 @@ mod tests {
         assert_eq!(close["status"].as_str(), Some("waiting_threshold"));
         assert_eq!(close["threshold_price"].as_f64().unwrap(), 102.0);
         assert!((close["projected_retracement_price"].as_f64().unwrap() - 100.98).abs() < 1e-12);
+    }
+
+    #[test]
+    fn diagnostic_selected_modes_match_next_orders_for_split_branches() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let trailing = TrailingPriceBundle {
+            min_since_open: 98.0,
+            max_since_min: 99.0,
+            max_since_open: 102.0,
+            min_since_max: 101.0,
+        };
+        let entry = entry_params();
+        let close = TrailingGridV7CloseParams {
+            grid_markup_start: 0.01,
+            grid_markup_end: 0.005,
+            grid_qty_pct: 0.2,
+            trailing_grid_ratio: 0.5,
+            trailing_qty_pct: 0.25,
+            trailing_retracement_pct: 0.005,
+            trailing_threshold_pct: 0.01,
+        };
+        let params = TrailingGridV7Params {
+            ema_span_0: 10.0,
+            ema_span_1: 20.0,
+            entry,
+            close,
+        };
+
+        let cases = [
+            (
+                StrategySide::Long,
+                Position {
+                    size: 40.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Long,
+                Position {
+                    size: 80.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Short,
+                Position {
+                    size: -40.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Short,
+                Position {
+                    size: -80.0,
+                    price: 100.0,
+                },
+            ),
+        ];
+
+        for (side, position) in cases {
+            let diagnostic = calc_trailing_grid_v7_diagnostics(
+                side, &exchange, &state, &bot, &runtime, &params, &position, &trailing,
+            );
+            let entry_order = match side {
+                StrategySide::Long => calc_next_entry_long(
+                    &exchange, &state, &bot, &runtime, &entry, &position, &trailing,
+                ),
+                StrategySide::Short => calc_next_entry_short(
+                    &exchange, &state, &bot, &runtime, &entry, &position, &trailing,
+                ),
+            };
+            let close_order = match side {
+                StrategySide::Long => calc_next_close_long(
+                    &exchange, &state, &bot, &runtime, &close, &position, &trailing,
+                ),
+                StrategySide::Short => calc_next_close_short(
+                    &exchange, &state, &bot, &runtime, &close, &position, &trailing,
+                ),
+            };
+
+            assert_eq!(
+                diagnostic["entry"]["selected_mode"].as_str(),
+                Some(expected_mode_from_order_type(entry_order.order_type))
+            );
+            assert_eq!(
+                diagnostic["close"]["selected_mode"].as_str(),
+                Some(expected_mode_from_order_type(close_order.order_type))
+            );
+            assert_eq!(
+                diagnostic["entry"]["order"]["order_type"].as_str(),
+                Some(entry_order.order_type.to_string().as_str())
+            );
+            assert_eq!(
+                diagnostic["close"]["order"]["order_type"].as_str(),
+                Some(close_order.order_type.to_string().as_str())
+            );
+        }
     }
 
     #[test]
