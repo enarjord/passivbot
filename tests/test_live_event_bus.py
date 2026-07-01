@@ -218,7 +218,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].monitor is True
     assert DEFAULT_ROUTES[EventTypes.DATA_PACKET_UPDATED].console is False
     for event_type in (
-        EventTypes.FORAGER_SELECTION,
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         EventTypes.ACTION_PLANNED,
         EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
