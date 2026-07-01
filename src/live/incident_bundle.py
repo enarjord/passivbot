@@ -898,6 +898,7 @@ def build_live_incident_bundle(
         since_ms=since_ms,
         until_ms=until_ms,
         event_tail_lines=event_tail_lines,
+        max_event_files_per_bot=max_event_files_per_bot,
         max_problem_events=max_problem_events,
         max_log_files=max_log_files,
         log_tail_lines=log_tail_lines,

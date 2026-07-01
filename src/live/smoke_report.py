@@ -13,7 +13,10 @@ from typing import Any
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
 from live.event_file_rows import event_file_rows
-from live.event_query import discover_event_files_with_metadata
+from live.event_query import (
+    _limit_recent_event_files_per_bot,
+    discover_event_files_with_metadata,
+)
 from live.problem_events import is_hard_problem_event, is_problem_event
 
 
@@ -3412,6 +3415,10 @@ def _event_window_report(
     event_tail_skipped_bytes: int = 0,
     event_tail_line_numbers_exact: bool = True,
     event_tail_methods: dict[str, int] | None = None,
+    max_event_files_per_bot: int = 0,
+    event_file_limit_groups: int = 0,
+    event_files_before_limit: int = 0,
+    event_files_skipped_by_limit: int = 0,
 ) -> dict[str, Any]:
     report = {
         "enabled": since_ms is not None or until_ms is not None,
@@ -3430,6 +3437,13 @@ def _event_window_report(
         report["event_tail_skipped_bytes"] = int(event_tail_skipped_bytes)
         report["event_tail_line_numbers_exact"] = bool(event_tail_line_numbers_exact)
         report["event_tail_methods"] = dict(sorted((event_tail_methods or {}).items()))
+    if int(max_event_files_per_bot) > 0:
+        report["max_event_files_per_bot"] = int(max_event_files_per_bot)
+        report["event_file_limit_scope"] = "per_bot"
+        report["event_file_limit_groups"] = int(event_file_limit_groups)
+        report["event_files_before_limit"] = int(event_files_before_limit)
+        report["event_files_skipped_by_limit"] = int(event_files_skipped_by_limit)
+        report["event_file_limit_order"] = "current_then_recent_mtime"
     return report
 
 
@@ -3457,6 +3471,7 @@ def _scan_events(
     since_ms: int | None = None,
     until_ms: int | None = None,
     event_tail_lines: int = 0,
+    max_event_files_per_bot: int = 0,
 ) -> dict[str, Any]:
     issues: list[dict[str, Any]] = []
     file_discovery: dict[str, Any] = {
@@ -3514,12 +3529,16 @@ def _scan_events(
     events_skipped_after = 0
     invalid_window_ts = 0
     max_event_tail_lines = max(0, int(event_tail_lines))
+    max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
     event_tail_skipped_lines_exact = True
     event_tail_skipped_bytes = 0
     event_tail_line_numbers_exact = True
     event_tail_methods: Counter[str] = Counter()
+    event_files_before_limit = 0
+    event_files_skipped_by_limit = 0
+    event_file_limit_groups = 0
     startup_timing_records: dict[str, list[dict[str, Any]]] = defaultdict(list)
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -3539,6 +3558,11 @@ def _scan_events(
     shutdown_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     shutdown_event_type_counts: Counter[str] = Counter()
     problem_event_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    if max_event_file_count_per_bot and files:
+        event_files_before_limit = len(files)
+        files, event_files_skipped_by_limit, event_file_limit_groups = (
+            _limit_recent_event_files_per_bot(files, max_event_file_count_per_bot)
+        )
 
     for path in files:
         try:
@@ -3917,6 +3941,10 @@ def _scan_events(
             event_tail_skipped_bytes=event_tail_skipped_bytes,
             event_tail_line_numbers_exact=event_tail_line_numbers_exact,
             event_tail_methods=dict(event_tail_methods),
+            max_event_files_per_bot=max_event_file_count_per_bot,
+            event_file_limit_groups=event_file_limit_groups,
+            event_files_before_limit=event_files_before_limit or len(files),
+            event_files_skipped_by_limit=event_files_skipped_by_limit,
         ),
     }
 
@@ -4172,6 +4200,7 @@ def build_live_smoke_report(
     max_problem_events: int = 50,
     max_log_files: int = 8,
     event_tail_lines: int = 0,
+    max_event_files_per_bot: int = 0,
     log_tail_lines: int = 300,
     max_log_matches: int = 50,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
@@ -4184,6 +4213,7 @@ def build_live_smoke_report(
         since_ms=since_ms,
         until_ms=until_ms,
         event_tail_lines=event_tail_lines,
+        max_event_files_per_bot=max_event_files_per_bot,
     )
     event_report = event_scan["monitor"]
     log_scan = _scan_logs(
@@ -4957,6 +4987,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 "event_tail_skipped_bytes",
                 "event_tail_line_numbers_exact",
                 "event_tail_methods",
+                "max_event_files_per_bot",
+                "event_file_limit_scope",
+                "event_file_limit_groups",
+                "event_files_before_limit",
+                "event_files_skipped_by_limit",
+                "event_file_limit_order",
             )
             if key in event_window
         },
