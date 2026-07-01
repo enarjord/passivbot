@@ -213,7 +213,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and
   `--bot EXCHANGE/USER`, `--exchange EXCHANGE`, or `--user USER` to focus one account or
-  exchange. The report includes decision-boundary lag groups showing how far after the
+  exchange. Use `--section SECTION` one or more times to emit selected top-level report
+  sections plus common metadata, for example `--summary --section fill_refresh`; use
+  `--section all` for the default full output. The report includes
+  decision-boundary lag groups showing how far after the
   whole-minute boundary cycles reached start, Rust planning, action planning, writes,
   confirmations, and completion. It also includes an input-staleness section derived from
   existing packet, snapshot, EMA, and Rust-call events, covering account packet age at
