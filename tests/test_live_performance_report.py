@@ -688,6 +688,61 @@ def test_live_performance_report_input_staleness(tmp_path):
     assert report["input_staleness"]["snapshot_surface_age_rows"] == 2
     assert report["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert report["input_staleness"]["snapshot_market_stale_count"] == 1
+    assert report["input_staleness"]["market_snapshot"] == {
+        "observations": 1,
+        "count": {"count": 1, "max": 2, "mean": 2, "median": 2, "min": 2, "p95": 2},
+        "symbol_count": {
+            "count": 1,
+            "max": 2,
+            "mean": 2,
+            "median": 2,
+            "min": 2,
+            "p95": 2,
+        },
+        "missing_count": {
+            "count": 1,
+            "max": 0,
+            "mean": 0,
+            "median": 0,
+            "min": 0,
+            "p95": 0,
+        },
+        "missing_symbols_total": 0,
+        "missing_observation_count": 0,
+        "max_age_ms": {
+            "count": 1,
+            "max": 700,
+            "mean": 700,
+            "median": 700,
+            "min": 700,
+            "p95": 700,
+        },
+        "mean_age_ms": {
+            "count": 1,
+            "max": 450,
+            "mean": 450,
+            "median": 450,
+            "min": 450,
+            "p95": 450,
+        },
+        "configured_max_age_ms": {
+            "count": 1,
+            "max": 600,
+            "mean": 600,
+            "median": 600,
+            "min": 600,
+            "p95": 600,
+        },
+        "configured_excess_ms": {
+            "count": 1,
+            "max": 100,
+            "mean": 100,
+            "median": 100,
+            "min": 100,
+            "p95": 100,
+        },
+        "sources": {"ticker": 1},
+    }
     assert report["input_staleness"]["rust_calls_seen"] == 1
     assert report["input_staleness"]["packet_refs_missing"] == 0
     assert report["input_staleness"]["snapshot_to_rust_exact_matches"] == 0
@@ -713,6 +768,64 @@ def test_live_performance_report_input_staleness(tmp_path):
     assert staleness_groups["input_staleness.ema_bundle_to_rust"]["trading_impact"] == (
         "blocks_indicator_readiness"
     )
+
+
+def test_live_performance_report_market_snapshot_summary_counts_missing_sources(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=1,
+                ts=1000,
+                data={
+                    "market_snapshot_summary": {
+                        "count": 5,
+                        "symbol_count": 6,
+                        "missing_count": 1,
+                        "max_age_ms": 1500,
+                        "mean_age_ms": 400,
+                        "configured_max_age_ms": 1000,
+                        "sources": ["ticker", "websocket"],
+                    }
+                },
+            ),
+            _monitor_row(
+                event_type="snapshot.built",
+                seq=2,
+                ts=2000,
+                data={
+                    "market_snapshot_summary": {
+                        "count": 6,
+                        "symbol_count": 6,
+                        "missing_count": 0,
+                        "max_age_ms": 800,
+                        "mean_age_ms": 300,
+                        "configured_max_age_ms": 1000,
+                        "sources": ["ticker"],
+                    }
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    market = report["input_staleness"]["market_snapshot"]
+
+    assert report["input_staleness"]["snapshot_market_summaries_seen"] == 2
+    assert report["input_staleness"]["snapshot_market_stale_count"] == 1
+    assert market["observations"] == 2
+    assert market["count"]["max"] == 6
+    assert market["symbol_count"]["min"] == 6
+    assert market["missing_count"]["max"] == 1
+    assert market["missing_symbols_total"] == 1
+    assert market["missing_observation_count"] == 1
+    assert market["max_age_ms"]["max"] == 1500
+    assert market["mean_age_ms"]["mean"] == 350
+    assert market["configured_max_age_ms"]["median"] == 1000
+    assert market["configured_excess_ms"]["max"] == 500
+    assert market["sources"] == {"ticker": 2, "websocket": 1}
 
 
 def test_live_performance_report_input_staleness_handles_cycle_id_reuse(tmp_path):
@@ -887,6 +1000,10 @@ def test_live_performance_report_summary_includes_bounded_input_staleness(tmp_pa
     assert summary["input_staleness"]["snapshot_surface_age_rows"] == 1
     assert summary["input_staleness"]["snapshot_market_summaries_seen"] == 1
     assert summary["input_staleness"]["snapshot_market_stale_count"] == 1
+    assert summary["input_staleness"]["market_snapshot"]["observations"] == 1
+    assert summary["input_staleness"]["market_snapshot"]["configured_excess_ms"][
+        "max"
+    ] == 50
     assert summary["input_staleness"]["rust_calls_seen"] == 1
     assert summary["input_staleness"]["snapshot_to_rust_latest_snapshot_matches"] == 1
     assert summary["input_staleness"]["rust_calls_missing_ema"] == 1

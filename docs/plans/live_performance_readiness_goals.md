@@ -318,8 +318,10 @@ classification when enough source events exist.
   forager feature age, candle remote fetch latency, synthetic/no-trade gap
   repair counts.
   - Status: partial. New `snapshot.built` metadata and performance-report
-    groups expose planning surface ages plus market-snapshot max/mean age at
-    snapshot build. Existing `forager.selection`,
+    groups expose planning surface ages plus market-snapshot max/mean age,
+    missing symbol counts, configured-age excess counts, source labels, and
+    aggregate market-snapshot age summaries at snapshot build. Existing
+    `forager.selection`,
     `forager.feature_unavailable`, `ema.unavailable`, and
     `ema.fallback_used` events are now summarized as
     `forager_ema_readiness`, including bounded selection counts,
