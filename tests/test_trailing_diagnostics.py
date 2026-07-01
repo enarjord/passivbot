@@ -8,6 +8,7 @@ import pytest
 from trailing_diagnostics import (
     build_trailing_diagnostic,
     build_trailing_inputs_from_snapshot,
+    selected_mode_from_order_type,
 )
 from trailing_diagnostics_tool import (
     TrailingDiagnosticsState,
@@ -201,6 +202,23 @@ def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
     assert diagnostic["close"]["threshold_met"] is False
     assert diagnostic["close"]["threshold_price"] == pytest.approx(101000.0)
     assert diagnostic["close"]["retracement_pct"] == pytest.approx(0.0)
+
+
+@pytest.mark.parametrize(
+    ("order_type", "has_order", "expected"),
+    [
+        ("close_trailing_long", True, "trailing"),
+        ("close_auto_reduce_wel_long", True, "auto_reduce"),
+        ("close_unstuck_long", True, "unstuck"),
+        ("close_grid_long", True, "grid"),
+        ("empty", False, "none"),
+        ("unknown_custom_order", True, "other"),
+    ],
+)
+def test_selected_mode_from_order_type_uses_specific_non_trailing_labels(
+    order_type, has_order, expected
+):
+    assert selected_mode_from_order_type(order_type, has_order=has_order) == expected
 
 
 def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monkeypatch):

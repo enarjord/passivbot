@@ -19,19 +19,20 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `23552121` after PR #961, `Add trailing grid v7 diagnostics`.
+- `675e93ba` after PR #962, `Keep waiting trailing diagnostics visible`.
 
 Current logging-overhaul head:
 
-- `23552121` after PR #961, `Add trailing grid v7 diagnostics`.
+- `675e93ba` after PR #962, `Keep waiting trailing diagnostics visible`.
 
 Current work:
 
-- Branch `codex/v8-trailing-waiting-diagnostics` keeps trailing-martingale
-  diagnostics visible when the current next order is grid/non-trailing. This
-  follow-up prevents active positions from being mislabeled as unsupported
-  merely because threshold or retracement has not selected a trailing order yet,
-  and exposes `selected_mode` in the structured event/console summary.
+- Branch `codex/v8-trailing-selected-mode-labels` refines the
+  trailing-martingale `selected_mode` label after VPS5 showed a live
+  `close_auto_reduce_wel_long` diagnostic being generically labeled as `grid`.
+  The follow-up keeps the diagnostic behavior from PR #962 but classifies
+  `auto_reduce`, `unstuck`, explicit `grid`, `trailing`, `none`, and `other`
+  separately for clearer operator console output.
 
 Current review gate:
 
@@ -61,6 +62,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #962 at `675e93ba`.
+- PR #962 kept trailing-martingale diagnostics visible when the current next
+  order is grid/non-trailing, exposed `selected_mode` in `trailing.status`, and
+  kept `triggered` false for non-trailing next orders. It merged after Claude
+  and Hermes approved with CI green.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, GateIO, and OKX exited within the longer
+  graceful window; Kucoin still required SIGTERM after the full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=675e93ba`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  `logs.attention_matches=0`. Remaining attention was non-hard: active HSL
+  replay workers, Hyperliquid EMA-unavailable diagnostics for cache-only stock
+  symbols, and shutdown-slow history from the restart.
+- The deployed Hyperliquid `XYZ-MU/USDC:USDC` long `trailing.status` event now
+  emits `diagnostics_supported=true` with threshold/retracement fields instead
+  of `active_unsupported`. It also showed `order_type=close_auto_reduce_wel_long`
+  with `selected_mode=grid`, motivating the current label-refinement follow-up.
 - Repository pulled through PR #961 at `23552121`.
 - PR #961 added Rust-aligned `trailing_grid_v7` monitor diagnostics so the same
   position-status stream can explain v7 compatibility positions instead of
