@@ -19,18 +19,19 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `69603923` after PR #955, `Infer incident bundle git metadata from monitor root`.
+- `df10b379` after PR #956, `Limit incident bundle git status to tracked changes`.
 
 Current work:
 
-- Branch `codex/v8-incident-tracked-git-status` limits
-  `live-incident-bundle` manifest git status to tracked changes so local
-  untracked configs and monitor artifacts do not dominate incident metadata.
-  The slice is read-only incident-response tooling: no new event producers,
-  exchange calls, cache mutation, readiness gates, smoke verdict changes,
-  process signaling, console routing, order logic, risk logic, or trading
-  behavior. Expected validation is focused incident-bundle tests, py_compile
-  for touched files, `git diff --check`, and an added-line silent-handling scan.
+- Branch `codex/v8-live-event-console-sink-opt-in` adds an opt-in
+  `logging.live_event_console` / `PASSIVBOT_LIVE_EVENT_CONSOLE` path that wires
+  the existing structured-event `ConsoleSummarySink` into the live event
+  pipeline. The slice is disabled by default and only affects operator
+  observability when explicitly enabled: no new event producers, exchange
+  calls, cache mutation, readiness gates, smoke verdict changes, process
+  signaling, order logic, risk logic, or trading behavior. Expected validation
+  is focused event-bus/monitor tests, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
 
 Current review gate:
 
@@ -60,6 +61,32 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #956 at `df10b379`.
+- PR #956 limited `live-incident-bundle` manifest git status to tracked changes
+  via `git status --short --untracked-files=no`, preserving tracked dirty-tree
+  evidence while keeping local untracked configs and monitor artifacts out of
+  the manifest status block. The slice was read-only incident-bundle tooling and
+  did not add event producers, exchange calls, cache mutation, readiness gates,
+  smoke verdict changes, process signaling, console routing, order logic, risk
+  logic, or trading behavior.
+- PR #956 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `69603923` to `df10b379` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A VPS5 2-minute bounded smoke after deploy reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `df10b379`, all five
+  configured bots matched, config checks green, zero failed remote calls, zero
+  failed account-critical remote calls, and a populated brief `execution`
+  section with recent create/cancel/confirmation events. A focused
+  incident-bundle run from outside the repo with absolute `/root/passivbot`
+  monitor/log paths reported `ok=true` and populated `smoke_report.execution`;
+  archive inspection confirmed `manifest.git.cwd=/root/passivbot`,
+  `manifest.git.branch=v8`, `manifest.git.head=df10b379...`, and
+  `manifest.git.status_short=""` despite the known untracked local config and
+  monitor artifacts. Remaining attention came from known non-hard EMA/HSL/candle
+  coverage groups.
 - Repository pulled through PR #955 at `69603923`.
 - PR #955 made `live-incident-bundle` infer manifest git metadata from the
   monitor tree when invoked from outside the repo with an absolute monitor

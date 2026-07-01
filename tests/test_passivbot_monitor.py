@@ -10,7 +10,13 @@ import numpy as np
 import pytest
 
 import live.event_emitters as live_event_emitters
-from live.event_bus import EventTypes, ListEventSink, LiveEventPipeline, ReasonCodes
+from live.event_bus import (
+    EventTypes,
+    ListEventSink,
+    LiveEvent,
+    LiveEventPipeline,
+    ReasonCodes,
+)
 
 
 class RecorderPublisher:
@@ -3814,6 +3820,54 @@ def test_live_event_pipeline_install_routes_diagnostics_to_monitor_projection():
     assert live_event["event_type"] == EventTypes.PLANNING_UNAVAILABLE
     assert live_event["ids"]["bot_id"] == "bot_1"
     assert live_event["data"]["apiKey"] == "[redacted]"
+    assert bot._close_live_event_pipeline(timeout=2.0) is True
+    assert bot._live_event_pipeline is None
+
+
+def test_live_event_pipeline_install_can_enable_console_projection_without_monitor(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _install_live_event_pipeline = pb_mod.Passivbot._install_live_event_pipeline
+        _close_live_event_pipeline = pb_mod.Passivbot._close_live_event_pipeline
+
+        def __init__(self):
+            self.monitor_publisher = None
+            self._live_event_pipeline = None
+            self.exchange = "bybit"
+            self.user = "bybit_01"
+            self.bot_id = "bot_1"
+            self.live_event_console_enabled = True
+            self.live_event_debug_profiles = ()
+
+    bot = FakeBot()
+    with caplog.at_level(logging.INFO, logger="passivbot.live_event_console"):
+        pipeline = bot._install_live_event_pipeline()
+        emitted = pipeline.emit(
+            LiveEvent(
+                EventTypes.ORDER_WAVE_COMPLETED,
+                status="succeeded",
+                order_wave_id="ow_1",
+                data={
+                    "planned_cancel": 1,
+                    "cancel_posted": 1,
+                    "planned_create": 2,
+                    "create_posted": 2,
+                    "elapsed_ms": 123,
+                },
+            )
+        )
+
+    assert emitted.event_type == EventTypes.ORDER_WAVE_COMPLETED
+    assert emitted.exchange == "bybit"
+    assert emitted.user == "bybit_01"
+    assert emitted.bot_id == "bot_1"
+    assert any(
+        record.name == "passivbot.live_event_console"
+        and "[execute] succeeded wave=ow_1 cancel=1/1 create=2/2 elapsed=123ms"
+        in record.message
+        for record in caplog.records
+    )
     assert bot._close_live_event_pipeline(timeout=2.0) is True
     assert bot._live_event_pipeline is None
 

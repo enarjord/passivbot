@@ -27,6 +27,7 @@ LIVE_EVENT_ID_KEYS = (
     "remote_call_group_id",
 )
 LIVE_EVENT_DEBUG_PROFILE_ENV = "PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES"
+LIVE_EVENT_CONSOLE_ENV = "PASSIVBOT_LIVE_EVENT_CONSOLE"
 LIVE_EVENT_DEBUG_PROFILES = (
     "candles",
     "ema",
@@ -317,6 +318,18 @@ def live_event_debug_profile_enabled(holder: Any, profile: str) -> bool:
         pipeline = getattr(holder, "_live_event_pipeline", None)
         profiles = getattr(pipeline, "debug_profiles", ())
     return item in set(profiles or ())
+
+
+def normalize_live_event_console_enabled(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"", "0", "false", "no", "none", "off"}:
+            return False
+        if cleaned in {"1", "true", "yes", "on", "console"}:
+            return True
+    return bool(value)
 
 
 PHASE1_EVENT_TYPES = {
