@@ -19,14 +19,14 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `8981464a` after PR #953, `Report execution health in live smoke`.
+- `3425a14a` after PR #954, `Summarize execution health in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-execution-summary` summarizes existing
-  `execution_health` smoke-report counters in `live-incident-bundle` report and
-  manifest output. The slice is read-only incident-response tooling: no new
-  event producers, exchange calls, cache mutation, readiness gates, smoke
+- Branch `codex/v8-incident-infer-repo` makes `live-incident-bundle` infer git
+  metadata from the monitor tree when invoked from outside the repo with an
+  absolute monitor path. The slice is read-only incident-response tooling: no
+  new event producers, exchange calls, cache mutation, readiness gates, smoke
   verdict changes, process signaling, console routing, order logic, risk logic,
   or trading behavior. Expected validation is focused incident-bundle tests,
   py_compile for touched files, `git diff --check`, and an added-line
@@ -60,6 +60,30 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #954 at `3425a14a`.
+- PR #954 added a compact `execution` summary to `live-incident-bundle` report
+  and manifest output, sourced from the existing `live-smoke-report`
+  `execution_health` section. The projection includes only aggregate execution
+  counters and event/status/outcome maps. The slice was read-only
+  incident-bundle tooling and did not add event producers, exchange calls,
+  cache mutation, readiness gates, smoke verdict changes, process signaling,
+  console routing, order logic, risk logic, or trading behavior.
+- PR #954 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `8981464a` to `3425a14a` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A VPS5 2-minute bounded smoke after deploy reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `3425a14a`, all five
+  configured bots matched, config checks green, zero failed remote calls, zero
+  failed account-critical remote calls, and the new brief `execution` section
+  present with zero recent execution events. A focused incident-bundle run with
+  `--smoke-section execution_health --no-event-segments` reported `ok=true`
+  and returned `smoke_report.execution` with aggregate zero counters for the
+  quiet sample window; archive inspection confirmed
+  `manifest.smoke_report.execution` was present. Remaining attention came from
+  known non-hard EMA/HSL cooldown groups.
 - Repository pulled through PR #953 at `8981464a`.
 - PR #953 added an `execution_health` section to `live-smoke-report` full and
   summary output and an `execution` line to brief output, deriving aggregate

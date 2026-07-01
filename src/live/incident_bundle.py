@@ -37,6 +37,7 @@ from live.restart_smoke_plan import (
 )
 from live.smoke_report import (
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    _find_repository_root,
     _redact_log_text,
     build_live_smoke_report,
     default_logs_root_for_monitor,
@@ -406,6 +407,16 @@ def _git_metadata(cwd: str | Path | None = None) -> dict[str, Any]:
         "status_short": run_git(["status", "--short"]),
         "remote_url": _redact_url_userinfo(run_git(["remote", "get-url", "origin"])),
     }
+
+
+def _incident_git_metadata_cwd(
+    *,
+    cwd: str | Path | None,
+    monitor_root: str | Path,
+) -> Path:
+    if cwd is not None:
+        return Path(cwd).expanduser()
+    return _find_repository_root(monitor_root, repo_root=None)
 
 
 def _redact_url_userinfo(value: str | None) -> str | None:
@@ -1145,7 +1156,9 @@ def build_live_incident_bundle(
                 if value not in (None, [], "")
             },
             "runtime": _runtime_metadata(),
-            "git": _git_metadata(cwd=cwd),
+            "git": _git_metadata(
+                cwd=_incident_git_metadata_cwd(cwd=cwd, monitor_root=monitor_path)
+            ),
             "config_hashes": config_hashes,
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
