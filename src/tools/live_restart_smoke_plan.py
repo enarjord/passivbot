@@ -60,10 +60,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_SMOKE_WINDOW_MINUTES,
         help="Recent time window for the planned smoke-report command.",
     )
-    parser.add_argument(
+    smoke_projection = parser.add_mutually_exclusive_group()
+    smoke_projection.add_argument(
+        "--brief-smoke-report",
+        action="store_true",
+        help="Plan a brief live-smoke-report command; this is the default.",
+    )
+    smoke_projection.add_argument(
+        "--summary-smoke-report",
+        action="store_true",
+        help="Plan a summary live-smoke-report command instead of --brief.",
+    )
+    smoke_projection.add_argument(
         "--full-smoke-report",
         action="store_true",
-        help="Plan a full live-smoke-report command instead of --summary.",
+        help="Plan a full live-smoke-report command instead of --brief.",
     )
     parser.add_argument(
         "--pretty-smoke-report",
@@ -100,7 +111,10 @@ def main(argv: list[str] | None = None) -> int:
             startup_wait_s=int(args.startup_wait_s),
             smoke_window_minutes=int(args.smoke_window_minutes),
             compact_smoke_report=not bool(args.pretty_smoke_report),
-            summary_smoke_report=not bool(args.full_smoke_report),
+            brief_smoke_report=not (
+                bool(args.full_smoke_report) or bool(args.summary_smoke_report)
+            ),
+            summary_smoke_report=bool(args.summary_smoke_report),
             execute=False,
         )
     except (NotImplementedError, ValueError) as exc:

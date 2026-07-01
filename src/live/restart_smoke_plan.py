@@ -44,6 +44,7 @@ def _smoke_report_command(
     supervisor_config: str | Path,
     smoke_window_minutes: int,
     compact: bool,
+    brief: bool,
     summary: bool,
 ) -> str:
     args = [
@@ -61,6 +62,8 @@ def _smoke_report_command(
         args.extend(["--logs-root", str(logs_root)])
     if summary:
         args.append("--summary")
+    elif brief:
+        args.append("--brief")
     if compact:
         args.append("--compact")
     return _shell_join(args)
@@ -187,7 +190,8 @@ def build_live_restart_smoke_plan(
     startup_wait_s: int = DEFAULT_STARTUP_WAIT_S,
     smoke_window_minutes: int = DEFAULT_SMOKE_WINDOW_MINUTES,
     compact_smoke_report: bool = True,
-    summary_smoke_report: bool = True,
+    brief_smoke_report: bool = True,
+    summary_smoke_report: bool = False,
     execute: bool = False,
 ) -> dict[str, Any]:
     if execute:
@@ -241,6 +245,7 @@ def build_live_restart_smoke_plan(
         supervisor_config=supervisor_config,
         smoke_window_minutes=smoke_window_minutes,
         compact=compact_smoke_report,
+        brief=brief_smoke_report,
         summary=summary_smoke_report,
     )
     planned_bots = []

@@ -54,6 +54,8 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "passivbot tool live-smoke-report" in report["smoke_report"]["command"]
     assert "--supervisor-config" in report["smoke_report"]["command"]
     assert "--recent-minutes 15" in report["smoke_report"]["command"]
+    assert "--brief" in report["smoke_report"]["command"]
+    assert "--summary" not in report["smoke_report"]["command"]
     assert report["process_signal_safety"]["strategy"] == (
         "exact_tmux_pane_or_exact_pid_only"
     )
@@ -181,6 +183,43 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is True
     assert report["inputs"]["shutdown_timeout_s"] == 30
+    assert "--brief" in report["smoke_report"]["command"]
+
+
+def test_live_restart_smoke_plan_can_plan_summary_or_full_smoke_projection(
+    tmp_path, capsys
+):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [str(supervisor_config), "--summary-smoke-report", "--compact"]
+        )
+        == 0
+    )
+    summary_report = json.loads(capsys.readouterr().out)
+    assert "--summary" in summary_report["smoke_report"]["command"]
+    assert "--brief" not in summary_report["smoke_report"]["command"]
+
+    assert (
+        live_restart_smoke_plan.main(
+            [str(supervisor_config), "--full-smoke-report", "--compact"]
+        )
+        == 0
+    )
+    full_report = json.loads(capsys.readouterr().out)
+    assert "--summary" not in full_report["smoke_report"]["command"]
+    assert "--brief" not in full_report["smoke_report"]["command"]
 
 
 def test_live_restart_smoke_plan_cli_rejects_execute(capsys):
