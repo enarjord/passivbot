@@ -201,6 +201,34 @@ def _file_mtime_ms(path: Path) -> int | None:
         return None
 
 
+def _recent_event_file_sort_key(path: Path) -> tuple[int, int, str, str]:
+    mtime_ms = _file_mtime_ms(path)
+    return (
+        0 if path.name == "current.ndjson" else 1,
+        -(mtime_ms if mtime_ms is not None else -1),
+        str(path.parent),
+        path.name,
+    )
+
+
+def _limit_recent_event_files_per_bot(
+    files: list[Path],
+    max_event_files_per_bot: int,
+) -> tuple[list[Path], int, int]:
+    if max_event_files_per_bot <= 0:
+        return files, 0, 0
+    grouped: dict[Path, list[Path]] = {}
+    for path in files:
+        grouped.setdefault(path.parent, []).append(path)
+    selected: list[Path] = []
+    skipped = 0
+    for _, group_files in sorted(grouped.items(), key=lambda item: str(item[0])):
+        ordered = sorted(group_files, key=_recent_event_file_sort_key)
+        selected.extend(ordered[:max_event_files_per_bot])
+        skipped += max(0, len(ordered) - max_event_files_per_bot)
+    return sorted(selected, key=_recent_event_file_sort_key), skipped, len(grouped)
+
+
 def _live_event_payload(row: dict[str, Any]) -> dict[str, Any] | None:
     payload = row.get("payload")
     if not isinstance(payload, dict):
@@ -1288,6 +1316,7 @@ def build_event_report(
     since_ms: int | None = None,
     until_ms: int | None = None,
     event_tail_lines: int = 0,
+    max_event_files_per_bot: int = 0,
     limit: int = 200,
     include_data: bool = False,
     include_rotated: bool = False,
@@ -1332,6 +1361,10 @@ def build_event_report(
     window_invalid_ts = 0
     files_skipped_before_window = 0
     max_event_tail_lines = max(0, int(event_tail_lines))
+    max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
+    event_files_before_limit = 0
+    event_files_skipped_by_limit = 0
+    event_file_limit_groups = 0
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
     event_tail_skipped_lines_exact = True
@@ -1373,6 +1406,11 @@ def build_event_report(
                 continue
             window_files.append(event_file)
         files = window_files
+    if max_event_file_count_per_bot and files:
+        event_files_before_limit = len(files)
+        files, event_files_skipped_by_limit, event_file_limit_groups = (
+            _limit_recent_event_files_per_bot(files, max_event_file_count_per_bot)
+        )
 
     event_type_counts: Counter[str] = Counter()
     cycle_counts: Counter[str] = Counter()
@@ -1779,7 +1817,7 @@ def build_event_report(
             report["cycle"]["cycle_trace"] = cycle_cycle_trace.to_dict()
         if not event_type_filter:
             report["cycle"].pop("event_types", None)
-    if window_enabled or max_event_tail_lines:
+    if window_enabled or max_event_tail_lines or max_event_file_count_per_bot:
         report["event_window"] = {
             "enabled": window_enabled,
             "since_ms": since_filter,
@@ -1790,6 +1828,19 @@ def build_event_report(
             "invalid_window_ts": window_invalid_ts,
             "files_skipped_before_window": files_skipped_before_window,
         }
+        if max_event_file_count_per_bot:
+            report["event_window"]["max_event_files_per_bot"] = (
+                max_event_file_count_per_bot
+            )
+            report["event_window"]["event_file_limit_scope"] = "per_bot"
+            report["event_window"]["event_file_limit_groups"] = event_file_limit_groups
+            report["event_window"]["event_files_before_limit"] = event_files_before_limit
+            report["event_window"]["event_files_skipped_by_limit"] = (
+                event_files_skipped_by_limit
+            )
+            report["event_window"]["event_file_limit_order"] = (
+                "current_then_recent_mtime"
+            )
         if max_event_tail_lines:
             report["event_window"]["event_tail_lines"] = max_event_tail_lines
             report["event_window"]["event_tail_limited_files"] = event_tail_limited_files

@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `ec9f47fe` after PR #926, `Bound performance report event file scans`.
+- `1ff596d1` after PR #927, `Add per-bot performance report file cap`.
 
 Current review gate:
 
@@ -49,6 +49,37 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #927 at `1ff596d1`.
+- PR #927 added `live-performance-report --max-event-files-per-bot`, an
+  opt-in fair event-segment scan bound for multi-bot monitor roots. It keeps
+  the existing global `--max-event-files` mode, makes the two modes mutually
+  exclusive, groups by event directory, prefers `current.ndjson` first and then
+  newest rotated segments by mtime per group, and reports
+  `event_file_limit_scope=per_bot`, group count, before/after file counts, and
+  skipped file count in `event_window`. The slice was read-only report tooling
+  and did not add event producers, exchange calls, cache mutation, readiness
+  gates, console routing, monitor writes, order/risk logic, or trading
+  behavior.
+- PR #927 passed Cursor + Hermes + CI. Claude did not comment after repeated
+  polling, so it was merged under the documented low-risk degraded gate, with
+  the rationale recorded on the PR. Local validation covered
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `ec9f47fe` to `1ff596d1` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A bounded all-rotated performance report at `1ff596d1` completed in about
+  12 seconds with `ok=true`, `include_rotated=true`,
+  `max_event_files_per_bot=2`, `event_file_limit_scope=per_bot`,
+  `event_file_limit_groups=6`, `event_files_before_limit=947`,
+  `event_files_skipped_by_limit=935`, and `files_scanned=12`. A bounded
+  5-minute smoke completed with `ok=true`, `hard_failures=0`, clean tracked
+  repository state, all five live bot processes running, and no failed
+  account-critical remote calls. Attention remained from existing non-hard
+  EMA-readiness and HSL-cooldown problem events plus one non-hard OKX candle
+  fetch timeout that later recovered. This verified fair per-bot performance
+  report bounding, but `live-event-query` still lacks the same per-bot file cap
+  for bounded rotated incident/debug queries.
 - Repository pulled through PR #926 at `ec9f47fe`.
 - PR #926 added `live-performance-report --max-event-files`, an opt-in global
   event-segment scan bound for smoke/debug reports. It prefers

@@ -14,7 +14,11 @@ from live.event_bus import (
     utc_ms,
 )
 from live.event_file_rows import event_file_rows
-from live.event_query import discover_event_files_with_metadata
+from live.event_query import (
+    _limit_recent_event_files_per_bot,
+    _recent_event_file_sort_key,
+    discover_event_files_with_metadata,
+)
 from live.smoke_report import _user_safe_display_path
 
 
@@ -226,45 +230,11 @@ def _open_text(path: Path):
     return open(path, "r", encoding="utf-8")
 
 
-def _event_file_mtime_ms(path: Path) -> int:
-    try:
-        return int(path.stat().st_mtime * 1000)
-    except OSError:
-        return -1
-
-
-def _recent_event_file_sort_key(path: Path) -> tuple[int, int, str, str]:
-    return (
-        0 if path.name == "current.ndjson" else 1,
-        -_event_file_mtime_ms(path),
-        str(path.parent),
-        path.name,
-    )
-
-
 def _limit_recent_event_files(files: list[Path], max_event_files: int) -> tuple[list[Path], int]:
     if max_event_files <= 0 or len(files) <= max_event_files:
         return files, 0
     ordered = sorted(files, key=_recent_event_file_sort_key)
     return ordered[:max_event_files], len(ordered) - max_event_files
-
-
-def _limit_recent_event_files_per_bot(
-    files: list[Path],
-    max_event_files_per_bot: int,
-) -> tuple[list[Path], int, int]:
-    if max_event_files_per_bot <= 0:
-        return files, 0, 0
-    grouped: dict[Path, list[Path]] = {}
-    for path in files:
-        grouped.setdefault(path.parent, []).append(path)
-    selected: list[Path] = []
-    skipped = 0
-    for _, group_files in sorted(grouped.items(), key=lambda item: str(item[0])):
-        ordered = sorted(group_files, key=_recent_event_file_sort_key)
-        selected.extend(ordered[:max_event_files_per_bot])
-        skipped += max(0, len(ordered) - max_event_files_per_bot)
-    return sorted(selected, key=_recent_event_file_sort_key), skipped, len(grouped)
 
 
 def _record_ts(row: dict[str, Any]) -> int | None:
