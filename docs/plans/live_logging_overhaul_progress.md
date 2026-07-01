@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `1ff596d1` after PR #927, `Add per-bot performance report file cap`.
+- `98e653ba` after PR #928, `Add per-bot event query file cap`.
 
 Current review gate:
 
@@ -49,6 +49,35 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #928 at `98e653ba`.
+- PR #928 added `live-event-query --max-event-files-per-bot` and the matching
+  `build_event_report()` option for fair, opt-in per-events-directory rotated
+  file caps. It shares the same current-first/newest-mtime helper used by
+  `live-performance-report`, reports `event_file_limit_scope=per_bot`,
+  group count, before/after file counts, skipped file count, and selection
+  order in `event_window`, and keeps default scans unchanged. The slice was
+  read-only event-query/performance-report tooling and did not add event
+  producers, exchange calls, cache mutation, readiness gates, console routing,
+  monitor writes, order/risk logic, or trading behavior.
+- PR #928 passed Hermes + Claude + Cursor + CI on the amended head after a
+  reviewer-requested de-duplication cleanup. Local validation covered
+  `tests/test_live_event_query.py`, `tests/test_live_performance_report.py`,
+  py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `1ff596d1` to `98e653ba` without bot restart because the
+  deployed change was read-only query/report tooling. The five configured bots
+  were left running.
+- A bounded all-rotated event-query probe at `98e653ba` completed with
+  `ok=true`, `include_rotated=true`, `max_event_files_per_bot=2`,
+  `event_file_limit_scope=per_bot`, `event_file_limit_groups=6`,
+  `event_files_before_limit=942`, `event_files_skipped_by_limit=930`, and
+  `files_scanned=12`. A bounded 5-minute smoke completed with `ok=true`,
+  `hard_failures=0`, clean tracked repository state, all five live bot
+  processes running, and no failed account-critical remote calls. Attention
+  remained from existing non-hard EMA-readiness and HSL-cooldown problem
+  events. This verified fair per-bot event-query bounding, but
+  `live-incident-bundle` still needs to expose the same cap for its embedded
+  event-query reports.
 - Repository pulled through PR #927 at `1ff596d1`.
 - PR #927 added `live-performance-report --max-event-files-per-bot`, an
   opt-in fair event-segment scan bound for multi-bot monitor roots. It keeps

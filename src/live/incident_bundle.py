@@ -18,6 +18,7 @@ from urllib.parse import urlsplit, urlunsplit
 from live.event_bus import LIVE_EVENT_ID_KEYS, LIVE_EVENT_MONITOR_PAYLOAD_KEY
 from live.event_file_rows import event_file_rows
 from live.event_query import (
+    _limit_recent_event_files_per_bot,
     build_event_report,
     build_event_query_filters,
     discover_event_files_with_metadata,
@@ -178,6 +179,7 @@ def _build_time_window_report(
     include_rotated: bool,
     include_data: bool,
     event_tail_lines: int = 0,
+    max_event_files_per_bot: int = 0,
     limit: int,
 ) -> dict[str, Any]:
     if since_ms is None and until_ms is None:
@@ -220,12 +222,16 @@ def _build_time_window_report(
     matched_events = 0
     max_events = max(0, int(limit))
     max_event_tail_lines = max(0, int(event_tail_lines))
+    max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
     event_tail_limited_files = 0
     event_tail_skipped_lines = 0
     event_tail_skipped_lines_exact = True
     event_tail_skipped_bytes = 0
     event_tail_line_numbers_exact = True
     event_tail_methods: Counter[str] = Counter()
+    event_files_before_limit = 0
+    event_files_skipped_by_limit = 0
+    event_file_limit_groups = 0
     file_discovery: dict[str, Any] = {
         "candidate_files": 0,
         "event_segments": 0,
@@ -254,6 +260,11 @@ def _build_time_window_report(
                 "code": "path_not_found",
                 "message": str(exc),
             }
+        )
+    if max_event_file_count_per_bot and files:
+        event_files_before_limit = len(files)
+        files, event_files_skipped_by_limit, event_file_limit_groups = (
+            _limit_recent_event_files_per_bot(files, max_event_file_count_per_bot)
         )
 
     for path in files:
@@ -350,6 +361,13 @@ def _build_time_window_report(
         report["event_tail_skipped_bytes"] = event_tail_skipped_bytes
         report["event_tail_line_numbers_exact"] = event_tail_line_numbers_exact
         report["event_tail_methods"] = dict(sorted(event_tail_methods.items()))
+    if max_event_file_count_per_bot:
+        report["max_event_files_per_bot"] = max_event_file_count_per_bot
+        report["event_file_limit_scope"] = "per_bot"
+        report["event_file_limit_groups"] = event_file_limit_groups
+        report["event_files_before_limit"] = event_files_before_limit or len(files)
+        report["event_files_skipped_by_limit"] = event_files_skipped_by_limit
+        report["event_file_limit_order"] = "current_then_recent_mtime"
     return report
 
 
@@ -759,6 +777,7 @@ def build_live_incident_bundle(
     max_log_matches: int = 100,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     event_tail_lines: int = 0,
+    max_event_files_per_bot: int = 0,
     max_snapshot_files: int = 20,
     max_snapshot_file_bytes: int = 1_000_000,
     max_event_segment_bytes: int = 10_000_000,
@@ -799,6 +818,7 @@ def build_live_incident_bundle(
         limit=max_events,
         include_data=include_data,
         include_rotated=include_rotated,
+        max_event_files_per_bot=max_event_files_per_bot,
         timeline=True,
         trace_summary=include_trace_report,
         order_trace=include_trace_report,
@@ -832,6 +852,7 @@ def build_live_incident_bundle(
             limit=max_problem_events,
             include_data=include_data,
             include_rotated=include_rotated,
+            max_event_files_per_bot=max_event_files_per_bot,
             timeline=True,
             trace_summary=True,
         )
@@ -864,6 +885,7 @@ def build_live_incident_bundle(
         include_rotated=include_rotated,
         include_data=include_data,
         event_tail_lines=event_tail_lines,
+        max_event_files_per_bot=max_event_files_per_bot,
         limit=max_events,
     )
     smoke_report = build_live_smoke_report(
@@ -931,6 +953,9 @@ def build_live_incident_bundle(
                     "since_ms": since_ms,
                     "until_ms": until_ms,
                     "event_tail_lines": event_tail_lines if event_tail_lines else None,
+                    "max_event_files_per_bot": max_event_files_per_bot
+                    if max_event_files_per_bot
+                    else None,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -1006,6 +1031,14 @@ def build_live_incident_bundle(
                 "event_tail_line_numbers_exact"
             ),
             "event_tail_methods": window_report.get("event_tail_methods"),
+            "max_event_files_per_bot": window_report.get("max_event_files_per_bot"),
+            "event_file_limit_scope": window_report.get("event_file_limit_scope"),
+            "event_file_limit_groups": window_report.get("event_file_limit_groups"),
+            "event_files_before_limit": window_report.get("event_files_before_limit"),
+            "event_files_skipped_by_limit": window_report.get(
+                "event_files_skipped_by_limit"
+            ),
+            "event_file_limit_order": window_report.get("event_file_limit_order"),
         },
         "smoke_report": {
             "ok": smoke_report.get("ok"),
