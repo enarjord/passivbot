@@ -11,6 +11,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from live.restart_smoke_plan import (  # noqa: E402
     DEFAULT_INCIDENT_BUNDLE_OUTPUT_HELP,
+    DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     DEFAULT_SMOKE_EVENT_TAIL_LINES,
     DEFAULT_SMOKE_LOG_TAIL_LINES,
     DEFAULT_SMOKE_MAX_LOG_FILES,
@@ -21,6 +22,7 @@ from live.restart_smoke_plan import (  # noqa: E402
     DEFAULT_SHUTDOWN_TIMEOUT_S,
     DEFAULT_SMOKE_WINDOW_MINUTES,
     DEFAULT_STARTUP_WAIT_S,
+    LOG_WINDOW_UNPARSED_POLICIES,
     build_live_restart_smoke_plan,
     summarize_live_restart_smoke_plan,
 )
@@ -113,6 +115,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--log-window-unparsed-policy",
+        choices=sorted(LOG_WINDOW_UNPARSED_POLICIES),
+        default=DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+        help=(
+            "Policy for unparseable text log lines when the planned smoke and "
+            "incident-bundle commands use a recent log window."
+        ),
+    )
+    parser.add_argument(
         "--incident-bundle-output",
         default=None,
         help=(
@@ -190,6 +201,7 @@ def main(argv: list[str] | None = None) -> int:
             smoke_max_log_files=int(args.max_log_files),
             smoke_log_tail_lines=int(args.log_tail_lines),
             smoke_max_log_matches=int(args.max_log_matches),
+            log_window_unparsed_policy=str(args.log_window_unparsed_policy),
             incident_bundle_output=args.incident_bundle_output,
             compact_smoke_report=not bool(args.pretty_smoke_report),
             brief_smoke_report=not (

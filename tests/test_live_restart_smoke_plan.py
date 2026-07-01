@@ -69,6 +69,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--max-log-files 8" in report["smoke_report"]["command"]
     assert "--log-tail-lines 1200" in report["smoke_report"]["command"]
     assert "--max-log-matches 20" in report["smoke_report"]["command"]
+    assert "--log-window-unparsed-policy keep" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
     assert "--summary" not in report["smoke_report"]["command"]
     assert report["incident_bundle"]["execute"] is False
@@ -89,6 +90,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--max-log-files 8" in incident_command
     assert "--log-tail-lines 1200" in incident_command
     assert "--max-log-matches 20" in incident_command
+    assert "--log-window-unparsed-policy keep" in incident_command
     assert "--compact" in incident_command
     assert report["phases"][-1]["name"] == "post_failure_incident_bundle"
     assert report["phases"][-1]["planned_commands"][0]["command"] == incident_command
@@ -136,6 +138,32 @@ def test_live_restart_smoke_plan_can_focus_smoke_sections(tmp_path):
     assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
     assert "--smoke-section risk_events" in report["incident_bundle"]["command"]
     assert report["smoke_report"]["execute"] is False
+
+
+def test_live_restart_smoke_plan_can_set_log_window_unparsed_policy(tmp_path):
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    report = build_live_restart_smoke_plan(
+        supervisor_config,
+        log_window_unparsed_policy="drop",
+    )
+
+    assert report["inputs"]["log_window_unparsed_policy"] == "drop"
+    assert "--log-window-unparsed-policy drop" in report["smoke_report"]["command"]
+    assert (
+        "--log-window-unparsed-policy drop"
+        in report["incident_bundle"]["command"]
+    )
 
 
 def test_live_restart_smoke_plan_redacts_and_bounds_configured_commands(tmp_path):
@@ -259,8 +287,13 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     assert "--max-log-files 8" in report["smoke_report"]["command"]
     assert "--log-tail-lines 1200" in report["smoke_report"]["command"]
     assert "--max-log-matches 20" in report["smoke_report"]["command"]
+    assert "--log-window-unparsed-policy keep" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
     assert "--no-event-segments" in report["incident_bundle"]["command"]
+    assert (
+        "--log-window-unparsed-policy keep"
+        in report["incident_bundle"]["command"]
+    )
     assert "--compact" in report["incident_bundle"]["command"]
 
 
@@ -513,6 +546,42 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
     assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
     assert "--smoke-section hsl_replay" in report["incident_bundle"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
+
+
+def test_live_restart_smoke_plan_cli_can_plan_log_window_unparsed_policy(
+    tmp_path, capsys
+):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [
+                str(supervisor_config),
+                "--log-window-unparsed-policy",
+                "drop",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["log_window_unparsed_policy"] == "drop"
+    assert "--log-window-unparsed-policy drop" in report["smoke_report"]["command"]
+    assert (
+        "--log-window-unparsed-policy drop"
+        in report["incident_bundle"]["command"]
+    )
 
 
 def test_live_restart_smoke_plan_cli_rejects_execute(capsys):
