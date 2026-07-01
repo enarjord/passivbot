@@ -54,6 +54,8 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "passivbot tool live-smoke-report" in report["smoke_report"]["command"]
     assert "--supervisor-config" in report["smoke_report"]["command"]
     assert "--recent-minutes 15" in report["smoke_report"]["command"]
+    assert "--event-tail-lines 2000" in report["smoke_report"]["command"]
+    assert "--max-event-files-per-bot 2" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
     assert "--summary" not in report["smoke_report"]["command"]
     assert report["process_signal_safety"]["strategy"] == (
@@ -183,7 +185,47 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     report = json.loads(capsys.readouterr().out)
     assert report["ok"] is True
     assert report["inputs"]["shutdown_timeout_s"] == 30
+    assert report["inputs"]["smoke_event_tail_lines"] == 2000
+    assert report["inputs"]["smoke_max_event_files_per_bot"] == 2
+    assert "--event-tail-lines 2000" in report["smoke_report"]["command"]
+    assert "--max-event-files-per-bot 2" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
+
+
+def test_live_restart_smoke_plan_can_disable_planned_event_scan_bounds(
+    tmp_path, capsys
+):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [
+                str(supervisor_config),
+                "--event-tail-lines",
+                "0",
+                "--max-event-files-per-bot",
+                "0",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["smoke_event_tail_lines"] == 0
+    assert report["inputs"]["smoke_max_event_files_per_bot"] == 0
+    assert "--event-tail-lines" not in report["smoke_report"]["command"]
+    assert "--max-event-files-per-bot" not in report["smoke_report"]["command"]
 
 
 def test_live_restart_smoke_plan_can_plan_summary_or_full_smoke_projection(
@@ -228,6 +270,23 @@ def test_live_restart_smoke_plan_cli_rejects_execute(capsys):
 
     assert exc_info.value.code == 2
     assert "--execute is not implemented" in capsys.readouterr().err
+
+
+def test_live_restart_smoke_plan_cli_rejects_negative_event_scan_bounds(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_restart_smoke_plan.main(["bots.yaml", "--event-tail-lines", "-1"])
+
+    assert exc_info.value.code == 2
+    assert "smoke_event_tail_lines must be non-negative" in capsys.readouterr().err
+
+    with pytest.raises(SystemExit) as exc_info:
+        live_restart_smoke_plan.main(["bots.yaml", "--max-event-files-per-bot", "-1"])
+
+    assert exc_info.value.code == 2
+    assert (
+        "smoke_max_event_files_per_bot must be non-negative"
+        in capsys.readouterr().err
+    )
 
 
 def test_live_restart_smoke_plan_tool_dispatch_forwards_module_and_prog(monkeypatch):

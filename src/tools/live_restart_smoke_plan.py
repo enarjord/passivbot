@@ -10,6 +10,8 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.restart_smoke_plan import (  # noqa: E402
+    DEFAULT_SMOKE_EVENT_TAIL_LINES,
+    DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
     DEFAULT_LOGS_ROOT,
     DEFAULT_MONITOR_ROOT,
     DEFAULT_SHUTDOWN_TIMEOUT_S,
@@ -59,6 +61,24 @@ def build_parser() -> argparse.ArgumentParser:
         type=int,
         default=DEFAULT_SMOKE_WINDOW_MINUTES,
         help="Recent time window for the planned smoke-report command.",
+    )
+    parser.add_argument(
+        "--event-tail-lines",
+        type=int,
+        default=DEFAULT_SMOKE_EVENT_TAIL_LINES,
+        help=(
+            "Rows per monitor event file for the planned smoke-report command. "
+            "Use 0 for full event-file validation."
+        ),
+    )
+    parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
+        help=(
+            "Recent event files per bot for the planned smoke-report command. "
+            "Use 0 to disable the per-bot file cap."
+        ),
     )
     smoke_projection = parser.add_mutually_exclusive_group()
     smoke_projection.add_argument(
@@ -110,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
             shutdown_timeout_s=int(args.shutdown_timeout_s),
             startup_wait_s=int(args.startup_wait_s),
             smoke_window_minutes=int(args.smoke_window_minutes),
+            smoke_event_tail_lines=int(args.event_tail_lines),
+            smoke_max_event_files_per_bot=int(args.max_event_files_per_bot),
             compact_smoke_report=not bool(args.pretty_smoke_report),
             brief_smoke_report=not (
                 bool(args.full_smoke_report) or bool(args.summary_smoke_report)
