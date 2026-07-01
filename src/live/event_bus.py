@@ -816,6 +816,19 @@ def _data_float(data: Mapping[str, Any], key: str) -> str | None:
     return f"{number:.10g}"
 
 
+def _data_number(data: Mapping[str, Any], key: str) -> float | None:
+    try:
+        value = data.get(key)
+        if value is None:
+            return None
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number != number:
+        return None
+    return number
+
+
 def _compact_csv(values: Any, *, limit: int = 4) -> str | None:
     if not isinstance(values, (list, tuple, set)):
         return None
@@ -970,7 +983,7 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
             parts.append(f"{label}={value}")
     cooldown = _data_str(data, "cooldown_remaining")
     if not cooldown:
-        seconds = _data_float(data, "cooldown_remaining_seconds")
+        seconds = _data_number(data, "cooldown_remaining_seconds")
         if seconds is not None:
             cooldown = f"{seconds:.0f}s"
     if cooldown:

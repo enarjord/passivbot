@@ -17,7 +17,11 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 Last updated: 2026-07-01.
 
-Current `origin/v8` logging-overhaul head:
+Current `origin/v8` head:
+
+- `a989a3f2` after PR #958, `Refresh v8 long bot defaults`.
+
+Current logging-overhaul head:
 
 - `d038c405` after PR #957, `Add opt-in live event console sink`.
 

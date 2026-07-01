@@ -873,6 +873,22 @@ def test_console_format_summarizes_hsl_status_distance_to_red():
     )
 
 
+def test_console_format_summarizes_hsl_cooldown_seconds():
+    event = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="degraded",
+        symbol="NEAR/USDT:USDT",
+        pside="long",
+        reason_code="cooldown_active",
+        data={"tier": "red", "cooldown_remaining_seconds": 300.0},
+    )
+
+    assert format_console_event(event) == (
+        "[risk] degraded tier=red cooldown=300s symbol=NEAR/USDT:USDT "
+        "pside=long reason=cooldown_active"
+    )
+
+
 def test_operator_console_filters_flat_green_coin_hsl_status():
     console = ListEventSink()
     text = ListEventSink()
