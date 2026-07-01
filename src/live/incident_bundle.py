@@ -404,7 +404,7 @@ def _git_metadata(cwd: str | Path | None = None) -> dict[str, Any]:
         "cwd": str(root),
         "head": run_git(["rev-parse", "HEAD"]),
         "branch": run_git(["branch", "--show-current"]),
-        "status_short": run_git(["status", "--short"]),
+        "status_short": run_git(["status", "--short", "--untracked-files=no"]),
         "remote_url": _redact_url_userinfo(run_git(["remote", "get-url", "origin"])),
     }
 

@@ -1604,6 +1604,9 @@ def test_live_incident_bundle_infers_git_metadata_from_monitor_root(tmp_path):
             ),
         ],
     )
+    untracked_config = repo / "configs" / "secret_local_config.json"
+    untracked_config.parent.mkdir()
+    untracked_config.write_text('{"api_key": "do-not-list"}\n', encoding="utf-8")
     output = tmp_path / "incident.tar.gz"
 
     report = build_live_incident_bundle(
@@ -1624,6 +1627,7 @@ def test_live_incident_bundle_infers_git_metadata_from_monitor_root(tmp_path):
         == "https://[redacted]@example.com/org/repo.git"
     )
     assert manifest["git"]["status_short"] is not None
+    assert "secret_local_config.json" not in manifest["git"]["status_short"]
 
 
 def test_live_incident_bundle_redacts_git_remote_url_userinfo():

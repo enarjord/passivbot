@@ -203,7 +203,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   smoke execution summary with only aggregate create/cancel/confirmation
   counters. When invoked from outside the repository with an absolute monitor
   path, the manifest infers git metadata from the monitor tree when possible.
-  It is read-only and does not contact exchanges. Use
+  Manifest git status is limited to tracked changes so local untracked configs
+  and monitor artifacts do not dominate the bundle metadata. It is read-only
+  and does not contact exchanges. Use
   `--smoke-section SECTION` one or more times to keep only selected top-level
   sections from the embedded full `smoke_report.json` plus common smoke
   metadata, for example `--smoke-section fill_refresh_health`. Use
