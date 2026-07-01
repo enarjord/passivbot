@@ -128,8 +128,14 @@ def selected_mode_from_order_type(order_type: str, *, has_order: bool) -> str:
     normalized = str(order_type or "").lower()
     if "trailing" in normalized:
         return "trailing"
-    if has_order:
+    if "auto_reduce" in normalized:
+        return "auto_reduce"
+    if "unstuck" in normalized:
+        return "unstuck"
+    if "grid" in normalized:
         return "grid"
+    if has_order:
+        return "other"
     return "none"
 
 
