@@ -705,8 +705,8 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.FILL_INGESTED: EventRoute(console=True, text=True),
     EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
     EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
-    EventTypes.RISK_MODE_CHANGED: EventRoute(console=False, text=False),
-    EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
+    EventTypes.RISK_MODE_CHANGED: EventRoute(console=True, text=True),
+    EventTypes.HSL_TRANSITION: EventRoute(console=True, text=True),
     EventTypes.HSL_STATUS: EventRoute(console=True, text=True),
     EventTypes.HSL_RAW_RED_PENDING: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
@@ -788,6 +788,8 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.FILL_INGESTED: "fill",
     EventTypes.POSITION_CHANGED: "pos",
     EventTypes.BALANCE_CHANGED: "balance",
+    EventTypes.RISK_MODE_CHANGED: "risk",
+    EventTypes.HSL_TRANSITION: "risk",
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",
     EventTypes.UNSTUCK_STATUS: "unstuck",
@@ -1059,6 +1061,71 @@ def _console_balance_changed_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_risk_mode_changed_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    source = _data_str(data, "source")
+    if source:
+        parts.append(f"source={source}")
+    action = _data_str(data, "action")
+    if action:
+        parts.append(f"action={action}")
+    previous = _data_str(data, "previous_mode")
+    mode = _data_str(data, "mode")
+    if previous and mode:
+        parts.append(f"mode={previous}->{mode}")
+    elif mode:
+        parts.append(f"mode={mode}")
+    symbols = data.get("symbols")
+    if isinstance(symbols, Mapping):
+        count = _data_int(symbols, "count")
+        sample = _compact_csv(symbols.get("sample"), limit=4)
+        if count is not None:
+            bit = f"symbols={count}"
+            if sample:
+                bit += f":{sample}"
+            parts.append(bit)
+    prev_counts = data.get("previous_mode_counts")
+    if isinstance(prev_counts, Mapping) and prev_counts:
+        parts.append(
+            "previous_counts="
+            + ",".join(f"{key}:{prev_counts[key]}" for key in sorted(prev_counts))
+        )
+    mode_counts = data.get("mode_counts")
+    if isinstance(mode_counts, Mapping) and mode_counts:
+        parts.append(
+            "mode_counts="
+            + ",".join(f"{key}:{mode_counts[key]}" for key in sorted(mode_counts))
+        )
+    return parts
+
+
+def _console_hsl_transition_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    signal_mode = _data_str(data, "signal_mode")
+    if signal_mode:
+        parts.append(f"mode={signal_mode}")
+    previous = _data_str(data, "previous_tier")
+    tier = _data_str(data, "tier")
+    if previous and tier:
+        parts.append(f"tier={previous}->{tier}")
+    elif tier:
+        parts.append(f"tier={tier}")
+    for label, key in (
+        ("dist_to_red", "dist_to_red"),
+        ("drawdown_score", "drawdown_score"),
+        ("red_threshold", "red_threshold"),
+    ):
+        value = _format_console_ratio(_data_float(data, key))
+        if value is not None:
+            parts.append(f"{label}={value}")
+    timestamp_ms = _data_int(data, "timestamp_ms")
+    if timestamp_ms is not None:
+        parts.append(f"ts={timestamp_ms}")
+    return parts
+
+
 def _console_forager_selection_summary(event: LiveEvent) -> list[str]:
     data = event.data if isinstance(event.data, Mapping) else {}
     parts: list[str] = []
@@ -1271,6 +1338,10 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_position_changed_summary(event)
     if event.event_type == EventTypes.BALANCE_CHANGED:
         return _console_balance_changed_summary(event)
+    if event.event_type == EventTypes.RISK_MODE_CHANGED:
+        return _console_risk_mode_changed_summary(event)
+    if event.event_type == EventTypes.HSL_TRANSITION:
+        return _console_hsl_transition_summary(event)
     if event.event_type == EventTypes.HSL_STATUS:
         return _console_hsl_status_summary(event)
     if event.event_type == EventTypes.TRAILING_STATUS:

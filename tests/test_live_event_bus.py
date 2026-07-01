@@ -238,8 +238,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.HEALTH_SUMMARY,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
-        EventTypes.RISK_MODE_CHANGED,
-        EventTypes.HSL_TRANSITION,
         EventTypes.HSL_RAW_RED_PENDING,
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
@@ -264,6 +262,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].text is True
     assert DEFAULT_ROUTES[EventTypes.BALANCE_CHANGED].console is True
     assert DEFAULT_ROUTES[EventTypes.BALANCE_CHANGED].text is True
+    assert DEFAULT_ROUTES[EventTypes.RISK_MODE_CHANGED].console is True
+    assert DEFAULT_ROUTES[EventTypes.RISK_MODE_CHANGED].text is True
+    assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].console is True
+    assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
@@ -1106,6 +1108,63 @@ def test_console_format_summarizes_balance_changed():
         "[balance] succeeded cycle=cy_balance balance=1005.25 delta=5.25 "
         "snapped=1004 snapped_delta=4 equity=1010.75 source=REST "
         "reason=balance_changed"
+    )
+
+
+def test_console_format_summarizes_risk_mode_changed():
+    event = LiveEvent(
+        EventTypes.RISK_MODE_CHANGED,
+        status="succeeded",
+        cycle_id="cy_risk_mode",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code="hsl_red_runtime_forced_modes",
+        data={
+            "source": "hsl",
+            "action": "replace",
+            "symbols": {
+                "count": 3,
+                "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            },
+            "previous_mode_counts": {"normal": 3},
+            "mode_counts": {"panic": 2, "manual": 1},
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[risk] succeeded cycle=cy_risk_mode source=hsl action=replace "
+        "symbols=3:BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
+        "previous_counts=normal:3 mode_counts=manual:1,panic:2 "
+        "symbol=BTC/USDT:USDT pside=long reason=hsl_red_runtime_forced_modes"
+    )
+
+
+def test_console_format_summarizes_hsl_transition():
+    event = LiveEvent(
+        EventTypes.HSL_TRANSITION,
+        status="succeeded",
+        cycle_id="cy_hsl_transition",
+        symbol="NEAR/USDT:USDT",
+        pside="long",
+        reason_code="yellow_to_orange",
+        data={
+            "signal_mode": "coin",
+            "previous_tier": "yellow",
+            "tier": "orange",
+            "dist_to_red": 0.012345678,
+            "drawdown_score": 0.1875,
+            "red_threshold": 0.2,
+            "balance": 1_000.0,
+            "strategy_equity": 950.0,
+            "metrics": {"balance": 1_000.0},
+            "timestamp_ms": 1_782_946_000_000,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[risk] succeeded cycle=cy_hsl_transition mode=coin tier=yellow->orange "
+        "dist_to_red=0.012346 drawdown_score=0.187500 red_threshold=0.200000 "
+        "ts=1782946000000 symbol=NEAR/USDT:USDT pside=long reason=yellow_to_orange"
     )
 
 

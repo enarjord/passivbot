@@ -19,20 +19,19 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `191af58ab` after PR #965, `Enrich trailing and unstuck console status`.
+- `47f84d8c5` after PR #966, `Project account state events to console`.
 
 Current logging-overhaul head:
 
-- `191af58ab` after PR #965, `Enrich trailing and unstuck console status`.
+- `47f84d8c5` after PR #966, `Project account state events to console`.
 
 Current work:
 
-- Branch `codex/v8-position-balance-console` projects existing `fill.ingested`,
-  `position.changed`, and `balance.changed` events into the opt-in live event
-  console/text sinks with compact operator summaries. This continues the
-  migration of user-facing account state logs into the structured event stream
-  without changing fill ingestion, account state, order generation, or risk
-  logic.
+- Branch `codex/v8-risk-hsl-console` projects existing `risk.mode_changed` and
+  `hsl.transition` events into the opt-in live event console/text sinks with
+  compact operator summaries. This continues the migration of user-facing
+  risk-state logs into the structured event stream without changing HSL mode
+  logic, risk decisions, order generation, or HSL replay behavior.
 
 Current review gate:
 
@@ -62,6 +61,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #966 at `47f84d8c5`.
+- PR #966 projected existing `fill.ingested`, `position.changed`, and
+  `balance.changed` events into the opt-in live event console/text sinks with
+  compact operator summaries. It merged after Hermes approved, Claude approved
+  with the docs sensitivity note addressed, and CI was green; Cursor did not
+  post during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, GateIO, and OKX exited within the longer
+  graceful window; Kucoin still required SIGTERM after the full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=47f84d8c`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `logs.hard_matches=0`.
+  Remaining attention was non-hard startup state: active HSL replay workers,
+  Hyperliquid EMA-unavailable diagnostics for cache-only stock symbols, staged
+  refresh progress, and shutdown-slow history from the restart.
 - Repository pulled through PR #965 at `191af58ab`.
 - PR #965 enriched existing trailing and unstuck console summaries with
   distance-to-threshold, distance-to-retracement, unstuck target distance, and
