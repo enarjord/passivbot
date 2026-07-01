@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -14,7 +15,12 @@ DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT = 2
 DEFAULT_SMOKE_MAX_LOG_FILES = 8
 DEFAULT_SMOKE_LOG_TAIL_LINES = 1200
 DEFAULT_SMOKE_MAX_LOG_MATCHES = 20
-DEFAULT_INCIDENT_BUNDLE_OUTPUT = "/tmp/passivbot_incident_bundle_restart_smoke.tar.gz"
+DEFAULT_INCIDENT_BUNDLE_OUTPUT_DIR = "/tmp"
+DEFAULT_INCIDENT_BUNDLE_OUTPUT_PREFIX = "passivbot_incident_bundle_restart_smoke"
+DEFAULT_INCIDENT_BUNDLE_OUTPUT_HELP = (
+    f"{DEFAULT_INCIDENT_BUNDLE_OUTPUT_DIR}/"
+    f"{DEFAULT_INCIDENT_BUNDLE_OUTPUT_PREFIX}_<utc>.tar.gz"
+)
 DEFAULT_MONITOR_ROOT = "monitor"
 DEFAULT_LOGS_ROOT = "logs"
 UNSAFE_PROCESS_SIGNAL_PATTERNS = (
@@ -36,6 +42,14 @@ def _non_negative_int(value: int, *, field: str) -> int:
     if parsed < 0:
         raise ValueError(f"{field} must be non-negative")
     return parsed
+
+
+def _default_incident_bundle_output() -> str:
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
+    return (
+        f"{DEFAULT_INCIDENT_BUNDLE_OUTPUT_DIR}/"
+        f"{DEFAULT_INCIDENT_BUNDLE_OUTPUT_PREFIX}_{stamp}.tar.gz"
+    )
 
 
 def _display_path(value: str | Path | None) -> str | None:
@@ -265,7 +279,7 @@ def build_live_restart_smoke_plan(
     smoke_max_log_files: int = DEFAULT_SMOKE_MAX_LOG_FILES,
     smoke_log_tail_lines: int = DEFAULT_SMOKE_LOG_TAIL_LINES,
     smoke_max_log_matches: int = DEFAULT_SMOKE_MAX_LOG_MATCHES,
-    incident_bundle_output: str | Path = DEFAULT_INCIDENT_BUNDLE_OUTPUT,
+    incident_bundle_output: str | Path | None = None,
     compact_smoke_report: bool = True,
     brief_smoke_report: bool = True,
     summary_smoke_report: bool = False,
@@ -291,6 +305,8 @@ def build_live_restart_smoke_plan(
     smoke_max_log_matches = _non_negative_int(
         smoke_max_log_matches, field="smoke_max_log_matches"
     )
+    if incident_bundle_output is None or not str(incident_bundle_output).strip():
+        incident_bundle_output = _default_incident_bundle_output()
 
     supervisor = parse_tmuxp_live_commands(supervisor_config)
     bots = list(supervisor.get("expected") or [])

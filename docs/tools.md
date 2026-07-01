@@ -200,9 +200,11 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   credentials. The plan also includes a bounded `live-incident-bundle` command
   for failure evidence, reusing the same event/log scan limits and disabling
   event-segment copying by default; use `--incident-bundle-output PATH` to
-  choose the planned bundle path. Use planner `--summary` when you only need
-  the bot count, phase names, smoke command, and incident-bundle command without
-  every per-bot phase detail.
+  choose the planned bundle path. The default planned bundle path is a
+  timestamped `/tmp/passivbot_incident_bundle_restart_smoke_<utc>.tar.gz`
+  path to avoid overwriting prior evidence. Use planner `--summary` when you
+  only need the bot count, phase names, smoke command, and incident-bundle
+  command without every per-bot phase detail.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

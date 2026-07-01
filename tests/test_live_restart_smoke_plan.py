@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 
 import pytest
@@ -13,6 +14,11 @@ from live.restart_smoke_plan import (
 )
 from passivbot_cli import main as cli_main
 from tools import live_restart_smoke_plan
+
+
+INCIDENT_BUNDLE_OUTPUT_PATTERN = (
+    r"/passivbot_incident_bundle_restart_smoke_\d{8}_\d{6}_\d{6}\.tar\.gz$"
+)
 
 
 def _write_supervisor(path, lines):
@@ -66,12 +72,14 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--brief" in report["smoke_report"]["command"]
     assert "--summary" not in report["smoke_report"]["command"]
     assert report["incident_bundle"]["execute"] is False
-    assert report["incident_bundle"]["output_path"].endswith(
-        "/passivbot_incident_bundle_restart_smoke.tar.gz"
+    assert re.search(
+        INCIDENT_BUNDLE_OUTPUT_PATTERN,
+        report["incident_bundle"]["output_path"],
     )
     incident_command = report["incident_bundle"]["command"]
     assert "passivbot tool live-incident-bundle" in incident_command
-    assert "--output /tmp/passivbot_incident_bundle_restart_smoke.tar.gz" in incident_command
+    assert "--output /tmp/passivbot_incident_bundle_restart_smoke_" in incident_command
+    assert ".tar.gz" in incident_command
     assert "--supervisor-config" in incident_command
     assert "--processes" in incident_command
     assert "--recent-minutes 15" in incident_command
@@ -216,8 +224,9 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     assert report["inputs"]["smoke_max_log_files"] == 8
     assert report["inputs"]["smoke_log_tail_lines"] == 1200
     assert report["inputs"]["smoke_max_log_matches"] == 20
-    assert report["inputs"]["incident_bundle_output"].endswith(
-        "/passivbot_incident_bundle_restart_smoke.tar.gz"
+    assert re.search(
+        INCIDENT_BUNDLE_OUTPUT_PATTERN,
+        report["inputs"]["incident_bundle_output"],
     )
     assert "--event-tail-lines 2000" in report["smoke_report"]["command"]
     assert "--max-event-files-per-bot 2" in report["smoke_report"]["command"]

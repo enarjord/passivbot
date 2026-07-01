@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `8ffb9a73` after PR #938, `Plan bounded incident bundle evidence command`.
+- `e3c616d4` after PR #939, `Summarize restart smoke plans`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #939 at `e3c616d4`.
+- PR #939 added a read-only `live-restart-smoke-plan --summary` projection for
+  repeated operator loops. The projection keeps bot count/names, phase names,
+  planned smoke and incident-bundle commands, execution policy, signal-safety
+  strategy, escalation command counts, and warning/issue counts without dumping
+  every per-bot phase. The slice did not alter full restart plan generation,
+  planned commands, smoke/incident-bundle behavior, execution policy, process
+  signaling, tmux/SSH/git behavior, event producers, exchange calls, cache
+  mutation, readiness gates, console routing, order logic, risk logic, or
+  trading behavior.
+- PR #939 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and a diff-only silent-handling scan.
+- VPS5 pulled from `8ffb9a73` to `e3c616d4` without bot restart because the
+  deployed change was read-only planner projection tooling. The five
+  configured bots were left running.
+- A VPS5 `live-restart-smoke-plan --summary` run against
+  `/root/bots_vps5.yaml` completed with `ok=true`, five configured bots, six
+  phase names, `execute=false` for both planned commands, zero issues, and
+  bounded smoke/incident-bundle commands carrying `--event-tail-lines 2000`,
+  `--max-event-files-per-bot 2`, `--max-log-files 8`,
+  `--log-tail-lines 1200`, `--max-log-matches 20`, and `--compact`.
+- A bounded 5-minute VPS5 smoke after the pull reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `e3c616d4`, five
+  matched expected live processes, no missing/extra/duplicate live processes,
+  no failed account-critical remote calls, `logs.max_files=8`,
+  `logs.tail_lines=1200`, and `logs.max_matches=20`. Remaining attention came
+  from known non-hard EMA readiness and HSL status/cooldown diagnostics.
 - Repository pulled through PR #938 at `8ffb9a73`.
 - PR #938 made the read-only `live-restart-smoke-plan` output include a
   bounded `live-incident-bundle` evidence command for non-clean restart/smoke
