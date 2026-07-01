@@ -249,6 +249,24 @@ def _limit_recent_event_files(files: list[Path], max_event_files: int) -> tuple[
     return ordered[:max_event_files], len(ordered) - max_event_files
 
 
+def _limit_recent_event_files_per_bot(
+    files: list[Path],
+    max_event_files_per_bot: int,
+) -> tuple[list[Path], int, int]:
+    if max_event_files_per_bot <= 0:
+        return files, 0, 0
+    grouped: dict[Path, list[Path]] = {}
+    for path in files:
+        grouped.setdefault(path.parent, []).append(path)
+    selected: list[Path] = []
+    skipped = 0
+    for _, group_files in sorted(grouped.items(), key=lambda item: str(item[0])):
+        ordered = sorted(group_files, key=_recent_event_file_sort_key)
+        selected.extend(ordered[:max_event_files_per_bot])
+        skipped += max(0, len(ordered) - max_event_files_per_bot)
+    return sorted(selected, key=_recent_event_file_sort_key), skipped, len(grouped)
+
+
 def _record_ts(row: dict[str, Any]) -> int | None:
     try:
         return int(row.get("ts"))
@@ -3205,6 +3223,7 @@ def build_live_performance_report(
     include_rotated: bool = False,
     event_tail_lines: int = 0,
     max_event_files: int = 0,
+    max_event_files_per_bot: int = 0,
     group_limit: int = GROUP_LIMIT,
     bot_filters: list[str] | tuple[str, ...] | set[str] | None = None,
     exchange_filters: list[str] | tuple[str, ...] | set[str] | None = None,
@@ -3221,6 +3240,9 @@ def build_live_performance_report(
     window_enabled = since_filter is not None or until_filter is not None
     max_event_tail_lines = max(0, int(event_tail_lines))
     max_event_file_count = max(0, int(max_event_files))
+    max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
+    if max_event_file_count and max_event_file_count_per_bot:
+        raise ValueError("max_event_files and max_event_files_per_bot are mutually exclusive")
     event_window = {
         "enabled": bool(window_enabled),
         "since_ms": since_filter,
@@ -3247,6 +3269,17 @@ def build_live_performance_report(
             {
                 "max_event_files": int(max_event_file_count),
                 "event_file_limit_scope": "global",
+                "event_files_before_limit": 0,
+                "event_files_skipped_by_limit": 0,
+                "event_file_limit_order": "current_then_recent_mtime",
+            }
+        )
+    if max_event_file_count_per_bot:
+        event_window.update(
+            {
+                "max_event_files_per_bot": int(max_event_file_count_per_bot),
+                "event_file_limit_scope": "per_bot",
+                "event_file_limit_groups": 0,
                 "event_files_before_limit": 0,
                 "event_files_skipped_by_limit": 0,
                 "event_file_limit_order": "current_then_recent_mtime",
@@ -3284,6 +3317,14 @@ def build_live_performance_report(
                 max_event_file_count,
             )
             event_window["event_files_skipped_by_limit"] = int(skipped_by_file_limit)
+        elif max_event_file_count_per_bot:
+            event_window["event_files_before_limit"] = len(files)
+            files, skipped_by_file_limit, limit_groups = _limit_recent_event_files_per_bot(
+                files,
+                max_event_file_count_per_bot,
+            )
+            event_window["event_files_skipped_by_limit"] = int(skipped_by_file_limit)
+            event_window["event_file_limit_groups"] = int(limit_groups)
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -3516,7 +3557,12 @@ def build_live_performance_report(
             group_limit=group_limit,
         ),
     }
-    if window_enabled or max_event_tail_lines or max_event_file_count:
+    if (
+        window_enabled
+        or max_event_tail_lines
+        or max_event_file_count
+        or max_event_file_count_per_bot
+    ):
         report["event_window"] = event_window
     if filters["enabled"]:
         report["filters"] = filters

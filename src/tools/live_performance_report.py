@@ -76,6 +76,17 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in fair bound for monitor event file scans. When set, scan at "
+            "most N discovered event segments per events directory, preferring "
+            "current.ndjson first and then the newest rotated files by mtime. "
+            "Mutually exclusive with --max-event-files."
+        ),
+    )
+    parser.add_argument(
         "--group-limit",
         type=int,
         default=80,
@@ -130,6 +141,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--event-tail-lines must be >= 0")
     if args.max_event_files < 0:
         parser.error("--max-event-files must be >= 0")
+    if args.max_event_files_per_bot < 0:
+        parser.error("--max-event-files-per-bot must be >= 0")
+    if args.max_event_files and args.max_event_files_per_bot:
+        parser.error("--max-event-files and --max-event-files-per-bot are mutually exclusive")
     report = build_live_performance_report(
         args.path,
         since_ms=since_ms,
@@ -137,6 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         include_rotated=bool(args.include_rotated),
         event_tail_lines=int(args.event_tail_lines),
         max_event_files=int(args.max_event_files),
+        max_event_files_per_bot=int(args.max_event_files_per_bot),
         group_limit=int(args.group_limit),
         bot_filters=args.bot,
         exchange_filters=args.exchange,
