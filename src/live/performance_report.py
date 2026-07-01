@@ -13,6 +13,7 @@ from live.event_bus import (
     LIVE_EVENT_MONITOR_PAYLOAD_KEY,
     utc_ms,
 )
+from live.event_file_rows import event_file_rows
 from live.event_query import discover_event_files_with_metadata
 from live.smoke_report import _user_safe_display_path
 
@@ -3179,6 +3180,7 @@ def build_live_performance_report(
     since_ms: int | None = None,
     until_ms: int | None = None,
     include_rotated: bool = False,
+    event_tail_lines: int = 0,
     group_limit: int = GROUP_LIMIT,
     bot_filters: list[str] | tuple[str, ...] | set[str] | None = None,
     exchange_filters: list[str] | tuple[str, ...] | set[str] | None = None,
@@ -3193,6 +3195,7 @@ def build_live_performance_report(
     ):
         raise ValueError("since_ms must be <= until_ms")
     window_enabled = since_filter is not None or until_filter is not None
+    max_event_tail_lines = max(0, int(event_tail_lines))
     event_window = {
         "enabled": bool(window_enabled),
         "since_ms": since_filter,
@@ -3202,6 +3205,18 @@ def build_live_performance_report(
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
+    if max_event_tail_lines:
+        event_window.update(
+            {
+                "event_tail_lines": int(max_event_tail_lines),
+                "event_tail_limited_files": 0,
+                "event_tail_skipped_lines": 0,
+                "event_tail_skipped_lines_exact": True,
+                "event_tail_skipped_bytes": 0,
+                "event_tail_line_numbers_exact": True,
+                "event_tail_methods": {},
+            }
+        )
     bot_filter_set = _string_filter(bot_filters)
     exchange_filter_set = _string_filter(exchange_filters)
     user_filter_set = _string_filter(user_filters)
@@ -3268,96 +3283,125 @@ def build_live_performance_report(
     legacy_events = 0
     event_types: Counter[str] = Counter()
     bots: Counter[str] = Counter()
+    event_tail_methods: Counter[str] = Counter()
+
+    def process_event_row(path: Path, line_no: int, raw_line: str) -> None:
+        nonlocal records_total, live_events, legacy_events
+        line = raw_line.strip()
+        if not line:
+            return
+        records_total += 1
+        try:
+            row = json.loads(line)
+        except json.JSONDecodeError as exc:
+            issues.append(
+                {
+                    "path": _user_safe_display_path(path),
+                    "line": int(line_no),
+                    "severity": "error",
+                    "code": "invalid_json",
+                    "message": str(exc),
+                }
+            )
+            return
+        if not isinstance(row, dict):
+            issues.append(
+                {
+                    "path": _user_safe_display_path(path),
+                    "line": int(line_no),
+                    "severity": "error",
+                    "code": "invalid_record",
+                    "message": "event row is not a JSON object",
+                }
+            )
+            return
+        live_event = _live_event_payload(row)
+        if live_event is None:
+            legacy_events += 1
+            return
+        if not _matches_filters(
+            row,
+            live_event,
+            bot_filters=bot_filter_set,
+            exchange_filters=exchange_filter_set,
+            user_filters=user_filter_set,
+        ):
+            filters["events_skipped"] += 1
+            return
+        live_events += 1
+        if window_enabled:
+            record_ts = _record_ts(row)
+            if record_ts is None:
+                event_window["invalid_window_ts"] += 1
+                return
+            if since_filter is not None and record_ts < since_filter:
+                event_window["events_skipped_before"] += 1
+                return
+            if until_filter is not None and record_ts > until_filter:
+                event_window["events_skipped_after"] += 1
+                return
+            event_window["events_considered"] += 1
+        event_type = str(live_event.get("event_type") or row.get("kind") or "unknown")
+        cycle_scope = cycle_scope_tracker.observe(row=row, live_event=live_event)
+        event_types[event_type] += 1
+        bots[_bot_key(row, live_event)] += 1
+        _add_event_timings(
+            accumulator,
+            row=row,
+            live_event=live_event,
+        )
+        decision_boundary.add(
+            row=row,
+            live_event=live_event,
+            cycle_scope=cycle_scope,
+        )
+        input_staleness.add(
+            row=row,
+            live_event=live_event,
+            cycle_scope=cycle_scope,
+        )
+        startup_readiness.add(row=row, live_event=live_event)
+        hsl_replay_profile.add(row=row, live_event=live_event)
+        cache_warmup.add(row=row, live_event=live_event)
+        forager_ema_readiness.add(row=row, live_event=live_event)
+        resource_pressure.add(row=row, live_event=live_event)
+        shutdown_latency.add(row=row, live_event=live_event)
+        execution_timing.add(
+            row=row,
+            live_event=live_event,
+            cycle_scope=cycle_scope,
+        )
+        account_state_changes.add(row=row, live_event=live_event)
+        risk_activity.add(row=row, live_event=live_event)
+
     for path in files:
         try:
-            with _open_text(path) as stream:
-                for line_no, raw_line in enumerate(stream, start=1):
-                    line = raw_line.strip()
-                    if not line:
-                        continue
-                    records_total += 1
-                    try:
-                        row = json.loads(line)
-                    except json.JSONDecodeError as exc:
-                        issues.append(
-                            {
-                                "path": _user_safe_display_path(path),
-                                "line": int(line_no),
-                                "severity": "error",
-                                "code": "invalid_json",
-                                "message": str(exc),
-                            }
+            if max_event_tail_lines:
+                with event_file_rows(
+                    path, max_tail_lines=max_event_tail_lines
+                ) as (row_iter, row_window):
+                    if row_window.limited:
+                        event_window["event_tail_limited_files"] += 1
+                        if row_window.skipped_lines is None:
+                            event_window["event_tail_skipped_lines_exact"] = False
+                        else:
+                            event_window["event_tail_skipped_lines"] += int(
+                                row_window.skipped_lines
+                            )
+                        event_window["event_tail_skipped_bytes"] += int(
+                            row_window.skipped_bytes
                         )
-                        continue
-                    if not isinstance(row, dict):
-                        issues.append(
-                            {
-                                "path": _user_safe_display_path(path),
-                                "line": int(line_no),
-                                "severity": "error",
-                                "code": "invalid_record",
-                                "message": "event row is not a JSON object",
-                            }
+                        event_window["event_tail_line_numbers_exact"] = bool(
+                            event_window["event_tail_line_numbers_exact"]
+                            and row_window.line_numbers_exact
                         )
-                        continue
-                    live_event = _live_event_payload(row)
-                    if live_event is None:
-                        legacy_events += 1
-                        continue
-                    if not _matches_filters(
-                        row,
-                        live_event,
-                        bot_filters=bot_filter_set,
-                        exchange_filters=exchange_filter_set,
-                        user_filters=user_filter_set,
-                    ):
-                        filters["events_skipped"] += 1
-                        continue
-                    live_events += 1
-                    if window_enabled:
-                        record_ts = _record_ts(row)
-                        if record_ts is None:
-                            event_window["invalid_window_ts"] += 1
-                            continue
-                        if since_filter is not None and record_ts < since_filter:
-                            event_window["events_skipped_before"] += 1
-                            continue
-                        if until_filter is not None and record_ts > until_filter:
-                            event_window["events_skipped_after"] += 1
-                            continue
-                        event_window["events_considered"] += 1
-                    event_type = str(live_event.get("event_type") or row.get("kind") or "unknown")
-                    cycle_scope = cycle_scope_tracker.observe(row=row, live_event=live_event)
-                    event_types[event_type] += 1
-                    bots[_bot_key(row, live_event)] += 1
-                    _add_event_timings(
-                        accumulator,
-                        row=row,
-                        live_event=live_event,
-                    )
-                    decision_boundary.add(
-                        row=row,
-                        live_event=live_event,
-                        cycle_scope=cycle_scope,
-                    )
-                    input_staleness.add(
-                        row=row,
-                        live_event=live_event,
-                        cycle_scope=cycle_scope,
-                    )
-                    startup_readiness.add(row=row, live_event=live_event)
-                    hsl_replay_profile.add(row=row, live_event=live_event)
-                    cache_warmup.add(row=row, live_event=live_event)
-                    forager_ema_readiness.add(row=row, live_event=live_event)
-                    resource_pressure.add(row=row, live_event=live_event)
-                    shutdown_latency.add(row=row, live_event=live_event)
-                    execution_timing.add(
-                        row=row,
-                        live_event=live_event,
-                        cycle_scope=cycle_scope,
-                    )
-                    account_state_changes.add(row=row, live_event=live_event)
-                    risk_activity.add(row=row, live_event=live_event)
+                        event_tail_methods[str(row_window.method)] += 1
+                    for line_no, raw_line in row_iter:
+                        process_event_row(path, int(line_no), raw_line)
+            else:
+                with _open_text(path) as stream:
+                    for line_no, raw_line in enumerate(stream, start=1):
+                        process_event_row(path, int(line_no), raw_line)
         except OSError as exc:
             issues.append(
                 {
@@ -3371,6 +3415,8 @@ def build_live_performance_report(
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
+    if max_event_tail_lines:
+        event_window["event_tail_methods"] = dict(sorted(event_tail_methods.items()))
     performance_groups = accumulator.groups_list()
     decision_boundary_groups = decision_boundary.groups_list()
     input_staleness_groups = input_staleness.groups_list()
@@ -3428,7 +3474,7 @@ def build_live_performance_report(
             group_limit=group_limit,
         ),
     }
-    if window_enabled:
+    if window_enabled or max_event_tail_lines:
         report["event_window"] = event_window
     if filters["enabled"]:
         report["filters"] = filters

@@ -628,8 +628,8 @@ Trading-impact labels:
     for structured timing metrics.
   - It should not contact exchanges, mutate caches, or depend on live bot
     availability.
-  - It should support `--recent-minutes`, `--include-rotated`, `--summary`,
-    `--compact`, and bot/user filters.
+  - It should support `--recent-minutes`, `--include-rotated`,
+    `--event-tail-lines`, `--summary`, `--compact`, and bot/user filters.
 
 - [ ] Aggregate min/mean/max/p50/p95/count by bot and operation.
   - Required groups: startup stages, full cycle elapsed, cycle phase timings,
@@ -752,7 +752,8 @@ Trading-impact labels:
 - [ ] Add offline synthetic benchmarks for known hot paths.
   - HSL coin replay over 30 days and 30 pairs.
   - EMA readiness over a high-cardinality forager universe.
-  - Monitor event ingestion and smoke-report scan over large NDJSON segments.
+  - Monitor event ingestion plus smoke/performance-report scans over large
+    NDJSON segments.
 
 ### P2: Shutdown Latency
 
