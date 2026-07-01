@@ -3293,7 +3293,123 @@ def _unstuck_status_side_summary(
                 symbol: allowance for symbol, allowance in clean_items[:override_limit]
             }
             out["override_allowances_truncated"] = max(0, len(clean_items) - override_limit)
+    for key in (
+        "next_symbol",
+        "next_target_price",
+        "next_target_distance_ratio",
+        "next_unstuck_trigger_distance_ratio",
+    ):
+        value = info.get(key)
+        if value is None:
+            continue
+        if key == "next_symbol":
+            out[key] = str(value)
+            continue
+        number = _safe_float(value)
+        if number is not None:
+            out[key] = number
     return out
+
+
+def _trailing_threshold_projection(
+    *,
+    kind: str,
+    pside: str,
+    threshold_price: float | None,
+    retracement_pct: float | None,
+) -> float | None:
+    if threshold_price is None or retracement_pct is None:
+        return None
+    if threshold_price <= 0.0 or retracement_pct < 0.0:
+        return None
+    if (kind == "entry" and pside == "long") or (kind == "close" and pside == "short"):
+        return threshold_price * (1.0 + retracement_pct)
+    if (kind == "entry" and pside == "short") or (kind == "close" and pside == "long"):
+        return threshold_price * (1.0 - retracement_pct)
+    return None
+
+
+def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
+    kind = str(payload.get("kind") or "unknown")
+    pside = str(payload.get("pside") or "unknown")
+    threshold_price = _safe_float(payload.get("threshold_price"))
+    retracement_pct = _safe_float(payload.get("retracement_pct"))
+    out: dict[str, Any] = {
+        "kind": kind,
+        "diagnostics_supported": bool(payload.get("diagnostics_supported", True)),
+        "strategy_kind": str(payload.get("strategy_kind") or "") or None,
+        "trailing_status": str(payload.get("status") or payload.get("trailing_status") or "unknown"),
+        "order_type": str(payload.get("order_type") or "") or None,
+        "triggered": bool(payload.get("triggered", False)),
+        "threshold_met": bool(payload.get("threshold_met", False))
+        if "threshold_met" in payload
+        else None,
+        "retracement_met": bool(payload.get("retracement_met", False))
+        if "retracement_met" in payload
+        else None,
+        "threshold_pct": _safe_float(payload.get("threshold_pct")),
+        "threshold_price": threshold_price,
+        "retracement_pct": retracement_pct,
+        "retracement_price": _safe_float(payload.get("retracement_price")),
+        "threshold_projection_retracement_price": _trailing_threshold_projection(
+            kind=kind,
+            pside=pside,
+            threshold_price=threshold_price,
+            retracement_pct=retracement_pct,
+        ),
+        "current_price": _safe_float(payload.get("current_price")),
+        "position_price": _safe_float(payload.get("position_price")),
+        "position_size": _safe_float(payload.get("position_size")),
+        "current_vs_threshold_ratio": _safe_float(
+            payload.get("current_vs_threshold_ratio")
+        ),
+        "current_vs_retracement_ratio": _safe_float(
+            payload.get("current_vs_retracement_ratio")
+        ),
+        "unsupported_reason": str(payload.get("unsupported_reason") or "") or None,
+        "changed": bool(payload.get("changed", False)),
+    }
+    return {key: value for key, value in out.items() if value is not None}
+
+
+def emit_trailing_status_event(
+    bot: Any,
+    *,
+    symbol: str,
+    pside: str,
+    kind: str,
+    payload: dict[str, Any],
+    changed: bool,
+) -> None:
+    try:
+        data = _trailing_status_summary(
+            {
+                **dict(payload or {}),
+                "kind": str(kind),
+                "pside": str(pside),
+                "changed": bool(changed),
+            }
+        )
+        bot._emit_live_event(
+            EventTypes.TRAILING_STATUS,
+            level="info",
+            component="risk.trailing.status",
+            tags=(EventTags.RISK, EventTags.TRAILING, EventTags.POSITION),
+            cycle_id=bot._current_live_event_cycle_id(),
+            symbol=str(symbol),
+            pside=str(pside),
+            status="succeeded",
+            reason_code=ReasonCodes.TRAILING_STATUS,
+            data=data,
+        )
+    except Exception as exc:
+        logging.debug(
+            "[event] failed to emit trailing status event symbol=%s pside=%s kind=%s: %s",
+            symbol,
+            pside,
+            kind,
+            exc,
+        )
 
 
 def emit_unstuck_status_event(
