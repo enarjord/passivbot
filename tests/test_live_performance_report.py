@@ -2063,6 +2063,189 @@ def test_live_performance_report_cache_warmup_summary_is_bounded(tmp_path):
     assert summary["cache_warmup"]["groups_truncated"] is True
 
 
+def test_live_performance_report_fill_refresh_from_existing_events(tmp_path):
+    hyperliquid_dir = (
+        tmp_path / "monitor" / "hyperliquid" / "hyperliquid_tradfi" / "events"
+    )
+    binance_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        hyperliquid_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                exchange="hyperliquid",
+                user="hyperliquid_tradfi",
+                component="fills.refresh",
+                status="failed",
+                level="error",
+                reason_code="fill_refresh_failed",
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 12244,
+                    "history_scope": "window",
+                    "event_count_after": 2704,
+                    "coverage_ready_after": False,
+                    "coverage_reason_after": "window_uncovered",
+                    "retry_count": 1,
+                    "next_retry_in_ms": 5000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=2000,
+                exchange="hyperliquid",
+                user="hyperliquid_tradfi",
+                component="fills.refresh",
+                status="succeeded",
+                level="debug",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 420,
+                    "history_scope": "all",
+                    "event_count_after": 2705,
+                    "new_count": 1,
+                    "enriched_count": 1,
+                    "pending_pnl_count": 0,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        binance_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=3000,
+                exchange="binance",
+                user="binance_01",
+                component="fills.refresh",
+                status="succeeded",
+                level="debug",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "elapsed_ms": 40,
+                    "history_scope": "all",
+                    "event_count_after": 100,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    summary = summarize_live_performance_report(report, group_limit=1)
+    refresh = report["fill_refresh"]
+    operations = _groups_by_operation(report)
+    operation_durations = _operation_duration_groups_by_operation(report)
+
+    assert refresh["total_events"] == 3
+    assert refresh["bot_count"] == 2
+    assert refresh["event_types"] == {"fills.refresh_summary": 3}
+    assert refresh["statuses"] == {"succeeded": 2, "failed": 1}
+    assert refresh["reason_codes"] == {
+        "fill_cache_ready": 2,
+        "fill_refresh_failed": 1,
+    }
+    assert refresh["error_types"] == {"RequestTimeout": 1}
+    assert refresh["failed_groups"] == 1
+    assert refresh["latest_failed_groups"] == 0
+    assert refresh["recovered_groups"] == 1
+    recovered = refresh["groups"][0]
+    assert recovered["bot"] == "hyperliquid/hyperliquid_tradfi"
+    assert recovered["source"] == "exchange"
+    assert recovered["refresh_mode"] == "periodic"
+    assert recovered["total_events"] == 2
+    assert recovered["failed"] == 1
+    assert recovered["failure_pct"] == 50
+    assert recovered["recovered"] is True
+    assert recovered["latest"]["status"] == "succeeded"
+    assert recovered["latest"]["data"]["history_scope"] == "all"
+    assert recovered["history_scopes"] == {"window": 1, "all": 1}
+    assert recovered["coverage_ready_after_true"] == 1
+    assert recovered["coverage_ready_after_false"] == 1
+    assert recovered["coverage_reasons_after"] == {"window_uncovered": 1}
+    assert recovered["elapsed_ms"]["max"] == 12244
+    assert recovered["elapsed_ms"]["min"] == 420
+    assert recovered["event_count_after"]["max"] == 2705
+    assert recovered["new_count"]["max"] == 1
+    assert recovered["error_types"] == {"RequestTimeout": 1}
+    assert operations["fills_refresh.elapsed"]["trading_impact"] == (
+        "blocks_or_delays_hsl_readiness"
+    )
+    assert operation_durations["fills_refresh.elapsed"]["operation_category"] == (
+        "fill_refresh"
+    )
+    assert summary["fill_refresh"]["groups_truncated"] is True
+    assert len(summary["fill_refresh"]["groups"]) == 1
+
+
+def test_live_performance_report_fill_refresh_whitelists_values(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                component="fills.refresh",
+                status="failed",
+                reason_code="fill_refresh_failed",
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 1200,
+                    "error_type": "RequestTimeout",
+                    "error": "GET https://example.test?api_key=secret leak_marker",
+                    "coverage_after": {
+                        "raw": "not copied",
+                        "path": "/root/passivbot/private",
+                    },
+                    "debug": {"raw_payload": "not copied"},
+                    "path": "/home/operator/private/cache.json",
+                    "api_key": "secret",
+                    "balance": 1000,
+                    "equity": 999,
+                    "fill_id": "raw_fill_id",
+                    "client_order_id": "raw_client_order_id",
+                },
+            )
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    rendered = json.dumps(report["fill_refresh"], sort_keys=True)
+
+    assert report["fill_refresh"]["groups"][0]["latest"]["data"] == {
+        "elapsed_ms": 1200,
+        "error_type": "RequestTimeout",
+        "refresh_mode": "periodic",
+        "source": "exchange",
+    }
+    assert "leak_marker" not in rendered
+    assert "raw_payload" not in rendered
+    assert "not copied" not in rendered
+    assert "/home/operator" not in rendered
+    assert "/root/passivbot" not in rendered
+    assert "api_key" not in rendered
+    assert "secret" not in rendered
+    assert "balance" not in rendered
+    assert "equity" not in rendered
+    assert "raw_fill_id" not in rendered
+    assert "raw_client_order_id" not in rendered
+
+
 def test_live_performance_report_execution_timing_pairs_order_events(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(
