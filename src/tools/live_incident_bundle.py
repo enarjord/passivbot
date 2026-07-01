@@ -224,6 +224,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=0,
+        help=(
+            "With --include-rotated, scan at most N event segments per bot/events "
+            "directory for embedded event reports, preferring current.ndjson and "
+            "then newest rotated files. Default 0 scans all discovered segments."
+        ),
+    )
+    parser.add_argument(
         "--no-event-segments",
         action="store_true",
         help="Do not copy bounded event segment files into the bundle.",
@@ -285,6 +295,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms and --recent-minutes are mutually exclusive")
     if int(args.event_tail_lines) < 0:
         parser.error("--event-tail-lines must be >= 0")
+    if int(args.max_event_files_per_bot) < 0:
+        parser.error("--max-event-files-per-bot must be >= 0")
     since_ms = args.since_ms
     if args.recent_minutes is not None:
         if args.recent_minutes <= 0:
@@ -326,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
             include_problem_report=not bool(args.no_problem_report),
             include_rotated=bool(args.include_rotated),
             event_tail_lines=int(args.event_tail_lines),
+            max_event_files_per_bot=int(args.max_event_files_per_bot),
             include_event_segments=not bool(args.no_event_segments),
             max_events=int(args.limit),
             max_log_files=int(args.max_log_files),

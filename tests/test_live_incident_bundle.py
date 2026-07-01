@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tarfile
 
 import pytest
@@ -64,6 +65,10 @@ def _write_ndjson(path, rows):
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _set_mtime(path, seconds: int):
+    os.utime(path, (seconds, seconds))
 
 
 def _read_tar_json(tar, name: str):
@@ -812,6 +817,136 @@ def test_live_incident_bundle_cli_event_tail_lines_bounds_event_scans(tmp_path, 
     assert smoke_report["event_window"]["event_tail_skipped_lines"] == 2
 
 
+def test_live_incident_bundle_cli_max_event_files_per_bot_is_fair(tmp_path, capsys):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    files = [
+        (
+            binance_events / "current.ndjson",
+            10,
+            "binance",
+            "binance_01",
+            "binance_current",
+        ),
+        (
+            binance_events / "new.ndjson",
+            11,
+            "binance",
+            "binance_01",
+            "binance_new",
+        ),
+        (
+            binance_events / "old.ndjson",
+            12,
+            "binance",
+            "binance_01",
+            "binance_old",
+        ),
+        (okx_events / "current.ndjson", 20, "okx", "okx_01", "okx_current"),
+        (okx_events / "new.ndjson", 21, "okx", "okx_01", "okx_new"),
+        (okx_events / "old.ndjson", 22, "okx", "okx_01", "okx_old"),
+    ]
+    for path, seq, exchange, user, label in files:
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="remote_call.failed",
+                    seq=seq,
+                    ts=seq * 100,
+                    status="failed",
+                    level="warning",
+                    reason_code="request_timeout",
+                    exchange=exchange,
+                    user=user,
+                    data={"label": label},
+                )
+            ],
+        )
+    for path in (binance_events / "old.ndjson", okx_events / "old.ndjson"):
+        _set_mtime(path, 100)
+    for path in (binance_events / "new.ndjson", okx_events / "new.ndjson"):
+        _set_mtime(path, 200)
+    for path in (binance_events / "current.ndjson", okx_events / "current.ndjson"):
+        _set_mtime(path, 50)
+
+    output = tmp_path / "incident.tar.gz"
+
+    assert (
+        live_incident_bundle.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--event-type",
+                "remote_call.failed",
+                "--since-ms",
+                "0",
+                "--include-rotated",
+                "--include-data",
+                "--max-event-files-per-bot",
+                "2",
+                "--no-event-segments",
+                "--output",
+                str(output),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["ok"] is True
+    assert report["event_report"]["query_matched_events"] == 4
+    assert report["event_report"]["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 4,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "files_skipped_before_window": 0,
+        "max_event_files_per_bot": 2,
+        "event_file_limit_scope": "per_bot",
+        "event_file_limit_groups": 2,
+        "event_files_before_limit": 6,
+        "event_files_skipped_by_limit": 2,
+        "event_file_limit_order": "current_then_recent_mtime",
+    }
+    assert report["problem_event_report"]["matched_events"] == 4
+    assert (
+        report["problem_event_report"]["event_window"]["event_file_limit_scope"]
+        == "per_bot"
+    )
+    assert report["time_window"]["matched_events"] == 4
+    assert report["time_window"]["max_event_files_per_bot"] == 2
+    assert report["time_window"]["event_file_limit_groups"] == 2
+    assert report["time_window"]["event_files_before_limit"] == 6
+    assert report["time_window"]["event_files_skipped_by_limit"] == 2
+
+    with tarfile.open(output, "r:gz") as tar:
+        manifest = _read_tar_json(tar, "manifest.json")
+        event_report = _read_tar_json(tar, "event_report.json")
+        problem_event_report = _read_tar_json(tar, "problem_event_report.json")
+        window_report = _read_tar_json(tar, "time_window_report.json")
+
+    assert manifest["filters"]["max_event_files_per_bot"] == 2
+    kept_labels = {event["data"]["label"] for event in event_report["query"]["events"]}
+    assert kept_labels == {
+        "binance_current",
+        "binance_new",
+        "okx_current",
+        "okx_new",
+    }
+    assert {
+        event["data"]["label"]
+        for event in problem_event_report["query"]["events"]
+    } == kept_labels
+    assert {event["data"]["label"] for event in window_report["events"]} == kept_labels
+    assert window_report["event_file_limit_order"] == "current_then_recent_mtime"
+
+
 def test_live_incident_bundle_cli_rejects_invalid_window_timestamp(capsys):
     with pytest.raises(SystemExit) as exc_info:
         live_incident_bundle.main(["monitor", "--since-ms", "not-an-int"])
@@ -844,6 +979,14 @@ def test_live_incident_bundle_cli_rejects_negative_event_tail_lines(capsys):
 
     assert exc_info.value.code == 2
     assert "--event-tail-lines must be >= 0" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_cli_rejects_negative_max_event_files_per_bot(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_incident_bundle.main(["monitor", "--max-event-files-per-bot", "-1"])
+
+    assert exc_info.value.code == 2
+    assert "--max-event-files-per-bot must be >= 0" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_cli_rejects_recent_window_after_until(capsys, monkeypatch):
