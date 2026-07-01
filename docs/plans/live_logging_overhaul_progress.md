@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `570875ab` after PR #920, `Summarize incident time-window discovery`.
+- `5808f679` after PR #921, `Summarize incident problem report discovery`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #921 at `5808f679`.
+- PR #921 projected `problem_event_report.file_discovery` and
+  `problem_event_report.event_window` into compact incident-bundle output so
+  scoped problem-event discovery/window metadata can be verified without
+  opening the tarball. The slice was read-only incident-bundle tooling and did
+  not add event producers, exchange calls, live execution, report verdict
+  changes, console routing, order/risk logic, or trading behavior.
+- PR #921 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  py_compile for touched files, `git diff --check`, and a touched-file
+  silent-handling scan.
+- VPS5 pulled from `570875ab` to `5808f679` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A 5-minute smoke at `5808f679` completed with `ok=true`, `hard_failures=0`,
+  all five configured bots matched, clean tracked repository state, no failed
+  remote calls, and no failed account-critical remote calls. A focused OKX
+  incident-bundle smoke verified compact output with
+  `problem_event_report.file_discovery.bot_path_pruning_applied=true`,
+  `problem_event_report.files_scanned=1`, `scope_pruned=5`, and
+  `problem_event_report.event_window` populated from the recent-window query.
 - Repository pulled through PR #920 at `570875ab`.
 - PR #920 projected `time_window.files_scanned` and
   `time_window.file_discovery` into compact incident-bundle output so focused
@@ -1908,20 +1929,39 @@ VPS5 deployment status:
 
 ## Current Work
 
-### Pending PR: Incident Bundle Problem Report Discovery Summary
+### Pending PR: HSL Replay Profile Stage Summary
+
+- Branch: `codex/v8-hsl-replay-profile-stage-summary`.
+- Scope: read-only live performance report tooling and tests.
+- Result: adds aggregate HSL replay stage/status counters to
+  `hsl_replay_profile`, so operators can see active/completed/failed replay
+  bots and current active replay stages without manually scanning per-bot
+  groups.
+- Expected validation: focused live-performance-report tests plus py_compile
+  and `git diff --check`. No event producers, exchange calls, cache mutation,
+  readiness gates, console routing, monitor writes, order/risk logic, or
+  trading behavior should change.
+
+## Merged Slices
+
+### PR #921: Incident Bundle Problem Report Discovery Summary
 
 - Branch: `codex/v8-incident-problem-discovery-summary`.
 - Scope: read-only incident bundle tooling and tests.
-- Result: projects problem-event report file-discovery and event-window
-  metadata into the compact incident-bundle result, so scoped problem-event
-  queries can be verified without opening `problem_event_report.json` from the
-  archive.
-- Expected validation: focused incident-bundle and event-query tests plus
+- Result: `passivbot tool live-incident-bundle` now projects
+  `problem_event_report.file_discovery` and
+  `problem_event_report.event_window` into the compact incident-bundle result
+  so scoped problem-event queries can be verified without opening the archive.
+- Review evidence: Cursor, Hermes, Claude, and CI approved the final head.
+  Local validation covered focused incident-bundle and event-query tests plus
   py_compile and `git diff --check`. No event producers, exchange calls, cache
   mutation, readiness gates, console routing, monitor writes, order/risk logic,
-  or trading behavior should change.
-
-## Merged Slices
+  or trading behavior changed.
+- VPS5 evidence: deployed to `v8` at `5808f679` without bot restart because
+  the change is read-only tooling. Smoke stayed hard-green with all five
+  configured bots running, clean tracked repository state, and focused OKX
+  incident-bundle output showing `problem_event_report.files_scanned=1` plus
+  path-pruned discovery/window metadata.
 
 ### PR #920: Incident Bundle Time-Window Discovery Summary
 

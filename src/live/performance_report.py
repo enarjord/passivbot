@@ -1315,6 +1315,17 @@ def _hsl_replay_active(latest: dict[str, Any] | None) -> bool:
     }
 
 
+def _hsl_replay_latest_status(latest: dict[str, Any] | None) -> str | None:
+    if not isinstance(latest, dict):
+        return None
+    event_type = latest.get("event_type")
+    if event_type == "hsl.replay.failed":
+        return "failed"
+    if event_type == "hsl.replay.completed":
+        return "completed"
+    return "active"
+
+
 def _with_hsl_replay_active_age(
     group: dict[str, Any],
     *,
@@ -1341,6 +1352,7 @@ class _HslReplayProfileAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
         self.event_types: Counter[str] = Counter()
+        self.stage_counts: Counter[str] = Counter()
         self.total_events = 0
 
     def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
@@ -1362,6 +1374,9 @@ class _HslReplayProfileAccumulator:
             self.bots[bot] = state
         self.total_events += 1
         self.event_types[event_type] += 1
+        stage = str(data.get("stage") or "")
+        if stage:
+            self.stage_counts[stage] += 1
         state["total_events"] = int(state["total_events"]) + 1
         state["event_types"][event_type] += 1
         ts = _record_ts(row)
@@ -1382,7 +1397,6 @@ class _HslReplayProfileAccumulator:
             }.items()
             if value not in (None, {}, [])
         }
-        stage = str(data.get("stage") or "")
         if event_type == "hsl.replay.progress" and stage == "loaded":
             state["loaded"] = record
         elif event_type == "hsl.replay.completed":
@@ -1407,6 +1421,9 @@ class _HslReplayProfileAccumulator:
         if report_ts_ms is None:
             report_ts_ms = utc_ms()
         groups = []
+        latest_status_counts: Counter[str] = Counter()
+        latest_stage_counts: Counter[str] = Counter()
+        active_stage_counts: Counter[str] = Counter()
         for bot, state in self.bots.items():
             group = {
                 "bot": bot,
@@ -1425,6 +1442,20 @@ class _HslReplayProfileAccumulator:
             group = {
                 key: value for key, value in group.items() if value not in (None, {}, [])
             }
+            latest = group.get("latest")
+            latest_status = _hsl_replay_latest_status(latest)
+            if latest_status is not None:
+                latest_status_counts[latest_status] += 1
+                latest_data = latest.get("data") if isinstance(latest, dict) else {}
+                latest_stage = (
+                    str(latest_data.get("stage") or "")
+                    if isinstance(latest_data, dict)
+                    else ""
+                )
+                if latest_stage:
+                    latest_stage_counts[latest_stage] += 1
+                    if latest_status == "active":
+                        active_stage_counts[latest_stage] += 1
             groups.append(
                 _with_hsl_replay_active_age(group, report_ts_ms=int(report_ts_ms))
             )
@@ -1456,6 +1487,13 @@ class _HslReplayProfileAccumulator:
             "total_events": int(self.total_events),
             "bot_count": len(groups),
             "event_types": dict(self.event_types.most_common()),
+            "stage_counts": dict(self.stage_counts.most_common()),
+            "latest_status_counts": dict(latest_status_counts.most_common()),
+            "latest_stage_counts": dict(latest_stage_counts.most_common()),
+            "active_stage_counts": dict(active_stage_counts.most_common()),
+            "active_bot_count": int(latest_status_counts.get("active", 0)),
+            "completed_bot_count": int(latest_status_counts.get("completed", 0)),
+            "failed_bot_count": int(latest_status_counts.get("failed", 0)),
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],
         }
