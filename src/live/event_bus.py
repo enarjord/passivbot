@@ -702,9 +702,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: EventRoute(console=True, text=True),
     EventTypes.FILLS_REFRESH_SUMMARY: EventRoute(console=False, text=False),
-    EventTypes.FILL_INGESTED: EventRoute(console=False, text=False),
-    EventTypes.POSITION_CHANGED: EventRoute(console=False, text=False),
-    EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
+    EventTypes.FILL_INGESTED: EventRoute(console=True, text=True),
+    EventTypes.POSITION_CHANGED: EventRoute(console=True, text=True),
+    EventTypes.BALANCE_CHANGED: EventRoute(console=True, text=True),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
     EventTypes.HSL_STATUS: EventRoute(console=True, text=True),
@@ -785,6 +785,9 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_AMBIGUOUS: "order",
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: "execute",
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: "execute",
+    EventTypes.FILL_INGESTED: "fill",
+    EventTypes.POSITION_CHANGED: "pos",
+    EventTypes.BALANCE_CHANGED: "balance",
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",
     EventTypes.UNSTUCK_STATUS: "unstuck",
@@ -965,6 +968,94 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     error_type = _data_str(data, "error_type")
     if error_type:
         parts.append(f"error_type={error_type}")
+    return parts
+
+
+def _console_fill_ingested_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.side:
+        parts.append(f"side={event.side}")
+    order_type = _data_str(data, "pb_order_type")
+    if order_type:
+        parts.append(f"type={order_type}")
+    qty = _data_float(data, "qty")
+    price = _data_float(data, "price")
+    if qty:
+        parts.append(f"qty={qty}")
+    if price:
+        parts.append(f"price={price}")
+    pnl = _data_float(data, "pnl")
+    if pnl:
+        parts.append(f"pnl={pnl}")
+    fee = _data_float(data, "fee")
+    if fee:
+        parts.append(f"fee={fee}")
+    client_id = _data_str(data, "client_order_id_short")
+    if client_id:
+        parts.append(f"client_id={client_id}")
+    return parts
+
+
+def _console_position_changed_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    action = _data_str(data, "action")
+    if action:
+        parts.append(f"action={action}")
+    old_size = _data_float(data, "old_size")
+    new_size = _data_float(data, "new_size")
+    if old_size is not None and new_size is not None:
+        parts.append(f"size={old_size}->{new_size}")
+    else:
+        if old_size is not None:
+            parts.append(f"old_size={old_size}")
+        if new_size is not None:
+            parts.append(f"new_size={new_size}")
+    size_delta = _data_float(data, "size_delta")
+    if size_delta:
+        parts.append(f"delta={size_delta}")
+    new_price = _data_float(data, "new_price")
+    if new_price:
+        parts.append(f"price={new_price}")
+    last_price = _data_float(data, "last_price")
+    if last_price:
+        parts.append(f"last={last_price}")
+    for label, key in (
+        ("we", "wallet_exposure"),
+        ("wel", "wel_ratio"),
+        ("twel", "twel_ratio"),
+    ):
+        value = _data_number(data, key)
+        if value is not None:
+            parts.append(f"{label}={value * 100.0:.4f}%")
+    upnl = _data_float(data, "upnl")
+    if upnl:
+        parts.append(f"upnl={upnl}")
+    return parts
+
+
+def _console_balance_changed_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    balance = _data_float(data, "balance_raw")
+    if balance:
+        parts.append(f"balance={balance}")
+    delta = _data_float(data, "balance_raw_delta")
+    if delta:
+        parts.append(f"delta={delta}")
+    snapped = _data_float(data, "balance_snapped")
+    if snapped:
+        parts.append(f"snapped={snapped}")
+    snapped_delta = _data_float(data, "balance_snapped_delta")
+    if snapped_delta:
+        parts.append(f"snapped_delta={snapped_delta}")
+    equity = _data_float(data, "equity")
+    if equity:
+        parts.append(f"equity={equity}")
+    source = _data_str(data, "source")
+    if source:
+        parts.append(f"source={source}")
     return parts
 
 
@@ -1174,6 +1265,12 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_rust_summary(event)
     if event.event_type == EventTypes.FORAGER_SELECTION:
         return _console_forager_selection_summary(event)
+    if event.event_type == EventTypes.FILL_INGESTED:
+        return _console_fill_ingested_summary(event)
+    if event.event_type == EventTypes.POSITION_CHANGED:
+        return _console_position_changed_summary(event)
+    if event.event_type == EventTypes.BALANCE_CHANGED:
+        return _console_balance_changed_summary(event)
     if event.event_type == EventTypes.HSL_STATUS:
         return _console_hsl_status_summary(event)
     if event.event_type == EventTypes.TRAILING_STATUS:

@@ -82,17 +82,22 @@ an opt-in console sink fed by the structured live event pipeline. It is disabled
 by default while legacy stdlib console logs still exist, because enabling it can
 duplicate some order/execution lifecycle messages. Use it for controlled smoke
 tests of event-stream console formatting before migrating default console output.
-The console projection is operator-facing: it should prefer trading-relevant
-summaries over internal data plumbing. HSL status events are console-visible
+The console projection is operator-facing and local: it should prefer
+trading-relevant summaries over internal data plumbing. Do not ship opt-in
+console/text output containing account-state magnitudes such as balance, equity,
+PnL, fees, or position size to shared or centralized log aggregation without a
+deliberate redaction policy. HSL status events are console-visible
 only when they are pside-level, red/cooldown, or tied to a held coin; routine
 flat coin-universe status remains in the structured event stream but is kept off
-the console. Position-level `trailing.status` and `unstuck.status` events are
-console-visible because they explain why an existing position is waiting, armed,
-triggered, over budget, or blocked by the unstuck EMA gate. Unsupported strategy
-diagnostics must say so explicitly instead of fabricating threshold/retracement
-prices. Supported trailing diagnostics should include the selected mode, such as
-`trailing`, `grid`, `auto_reduce`, `unstuck`, `none`, or `other`, when the
-next-order state is known. `forager.selection` events are also console-visible
+the console. Fill, position, and balance change events are console-visible
+because they are the primary operator-facing account state changes.
+Position-level `trailing.status` and `unstuck.status` events are console-visible
+because they explain why an existing position is waiting, armed, triggered, over
+budget, or blocked by the unstuck EMA gate. Unsupported strategy diagnostics
+must say so explicitly instead of fabricating threshold/retracement prices.
+Supported trailing diagnostics should include the selected mode, such as
+`trailing`, `grid`, `auto_reduce`, `unstuck`, `none`, or `other`, when the next
+order state is known. `forager.selection` events are also console-visible
 through a throttled compact summary because they explain which coins are being
 selected, retained, or skipped when forager entries are possible.
 
