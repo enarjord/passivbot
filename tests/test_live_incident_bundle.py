@@ -119,6 +119,28 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                 symbol="BTC/USDT:USDT",
                 ids={"cycle_id": "cy_2", "remote_call_id": "rc_1"},
             ),
+            _monitor_row(
+                event_type="execution.create_succeeded",
+                seq=5,
+                ts=2100,
+                status="succeeded",
+                level="info",
+                reason_code="exchange_acknowledged",
+                component="execution.order_write",
+                symbol="ETH/USDT:USDT",
+                ids={
+                    "cycle_id": "cy_3",
+                    "order_wave_id": "wave_2",
+                    "action_id": "wave_2:create:0",
+                },
+                data={
+                    "price": 123.45,
+                    "qty": 0.678,
+                    "order_id_short": "raw_order_id_should_not_summarize",
+                    "client_order_id_short": "raw_client_id_should_not_summarize",
+                    "result_status": "open",
+                },
+            ),
         ],
     )
     (events_dir / "20260629.ndjson.gz").write_bytes(b"")
@@ -189,12 +211,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
-    assert report["time_window"]["matched_events"] == 1
+    assert report["time_window"]["matched_events"] == 2
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
         "until_ms": 2500,
-        "events_considered": 1,
+        "events_considered": 2,
         "events_skipped_before": 3,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
@@ -225,6 +247,17 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "dropped_unparsed_attention_matches": 0,
             "dropped_unparsed_hard_matches": 0,
         },
+    }
+    assert report["smoke_report"]["execution"] == {
+        "total": 1,
+        "bots": 1,
+        "failed": 0,
+        "rejected": 0,
+        "ambiguous": 0,
+        "confirmation_timeout": 0,
+        "event_types": {"execution.create_succeeded": 1},
+        "statuses": {"succeeded": 1},
+        "outcomes": {"create_succeeded": 1},
     }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
@@ -267,6 +300,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["smoke_report"]["execution"] == report["smoke_report"]["execution"]
+    manifest_dump = json.dumps(manifest, sort_keys=True)
+    assert "raw_order_id_should_not_summarize" not in manifest_dump
+    assert "raw_client_id_should_not_summarize" not in manifest_dump
+    assert '"price"' not in manifest_dump
+    assert '"qty"' not in manifest_dump
     assert manifest["filters"]["max_log_files"] == 8
     assert manifest["filters"]["log_tail_lines"] == 500
     assert manifest["filters"]["max_log_matches"] == 100
@@ -321,6 +360,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     ]
     assert smoke_report["logs"]["window"] == report["smoke_report"]["logs"]["window"]
     assert smoke_report["remote_call_failures"]["total"] == 1
+    assert smoke_report["execution_health"]["total"] == 1
+    smoke_dump = json.dumps(smoke_report, sort_keys=True)
+    assert "raw_order_id_should_not_summarize" not in smoke_dump
+    assert "raw_client_id_should_not_summarize" not in smoke_dump
+    assert '"price"' not in smoke_dump
+    assert '"qty"' not in smoke_dump
 
 
 def test_live_incident_bundle_embeds_problem_event_report(tmp_path):
