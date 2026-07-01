@@ -57,6 +57,8 @@ REMOTE_CALL_FAILURE_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_GROUP_LIMIT = 20
 REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
+FILL_REFRESH_HEALTH_GROUP_LIMIT = 20
+FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT = 5
 ACCOUNT_CRITICAL_REMOTE_CALL_KIND = "authoritative_state_fetch"
@@ -704,6 +706,264 @@ def _summarize_remote_call_health(
         "failure_pct": _usage_pct(total_failed_count, total),
         "throttled_pct": _usage_pct(total_throttled_count, total),
         "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _fill_refresh_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    ids = _event_ids(live_event)
+    elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
+    status = live_event.get("status")
+    status_value = str(status).lower() if status not in (None, "") else None
+    reason_code = live_event.get("reason_code")
+    error_type = payload.get("error_type")
+    return {
+        "bot": bot_key,
+        "source": payload.get("source"),
+        "refresh_mode": payload.get("refresh_mode"),
+        "history_scope": payload.get("history_scope"),
+        "count": 1,
+        "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
+        "statuses": Counter([status_value]) if status_value else Counter(),
+        "reason_codes": Counter([str(reason_code)])
+        if reason_code not in (None, "")
+        else Counter(),
+        "error_types": Counter([str(error_type)])
+        if error_type not in (None, "")
+        else Counter(),
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_status": status_value,
+        "latest_reason_code": reason_code,
+        "latest_elapsed_ms": elapsed_ms,
+        "latest_history_scope": payload.get("history_scope"),
+        "latest_event_count_after": _non_negative_int(payload.get("event_count_after")),
+        "latest_new_count": _non_negative_int(payload.get("new_count")),
+        "latest_enriched_count": _non_negative_int(payload.get("enriched_count")),
+        "latest_pending_pnl_count": _non_negative_int(payload.get("pending_pnl_count")),
+        "latest_coverage_ready_after": payload.get("coverage_ready_after"),
+        "latest_coverage_reason_after": payload.get("coverage_reason_after"),
+        "latest_retry_count": _non_negative_int(payload.get("retry_count")),
+        "latest_next_retry_in_ms": _non_negative_int(payload.get("next_retry_in_ms")),
+        "latest_error_type": error_type,
+        "latest_degraded_events_after": _non_negative_int(
+            payload.get("degraded_events_after")
+        ),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id",)
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_fill_refresh_health_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("source"),
+        group.get("refresh_mode"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count") or 0) + 1
+    existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
+    for field in ("statuses", "reason_codes", "error_types"):
+        counter = existing.setdefault(field, Counter())
+        counter.update(group.get(field) or Counter())
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "history_scope",
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_status",
+            "latest_reason_code",
+            "latest_elapsed_ms",
+            "latest_history_scope",
+            "latest_event_count_after",
+            "latest_new_count",
+            "latest_enriched_count",
+            "latest_pending_pnl_count",
+            "latest_coverage_ready_after",
+            "latest_coverage_reason_after",
+            "latest_retry_count",
+            "latest_next_retry_in_ms",
+            "latest_error_type",
+            "latest_degraded_events_after",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _fill_refresh_health_sort_key(
+    group: dict[str, Any],
+) -> tuple[int, int, int, int, int, str, str]:
+    statuses = (
+        group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+    )
+    elapsed = _ms_summary(
+        [
+            int(value)
+            for value in (group.get("elapsed_values") or [])
+            if _non_negative_int(value) is not None
+        ]
+    )
+    latest_failed = 1 if group.get("latest_status") == "failed" else 0
+    return (
+        -latest_failed,
+        -int(statuses.get("failed") or 0),
+        -int(elapsed.get("p95_ms") or 0),
+        -int(elapsed.get("max_ms") or 0),
+        -int(group.get("count") or 0),
+        str(group.get("bot") or ""),
+        str(group.get("source") or ""),
+    )
+
+
+def _summarize_fill_refresh_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(groups.values(), key=_fill_refresh_health_sort_key)
+    status_totals: Counter[str] = Counter()
+    bots: set[str] = set()
+    failed_bots: set[str] = set()
+    latest_failed_bots: set[str] = set()
+    recovered_groups = 0
+    for group in groups.values():
+        bot = group.get("bot")
+        if bot not in (None, ""):
+            bots.add(str(bot))
+        statuses = (
+            group.get("statuses")
+            if isinstance(group.get("statuses"), Counter)
+            else Counter()
+        )
+        status_totals.update(statuses)
+        if int(statuses.get("failed") or 0):
+            if bot not in (None, ""):
+                failed_bots.add(str(bot))
+            if group.get("latest_status") != "failed":
+                recovered_groups += 1
+        if group.get("latest_status") == "failed" and bot not in (None, ""):
+            latest_failed_bots.add(str(bot))
+    total = sum(int(group.get("count") or 0) for group in groups.values())
+    total_failed_count = int(status_totals.get("failed") or 0)
+    compact_groups = []
+    for group in ordered[:FILL_REFRESH_HEALTH_GROUP_LIMIT]:
+        statuses = (
+            group.get("statuses")
+            if isinstance(group.get("statuses"), Counter)
+            else Counter()
+        )
+        reason_codes = (
+            group.get("reason_codes")
+            if isinstance(group.get("reason_codes"), Counter)
+            else Counter()
+        )
+        error_types = (
+            group.get("error_types")
+            if isinstance(group.get("error_types"), Counter)
+            else Counter()
+        )
+        count = int(group.get("count") or 0)
+        failed_count = int(statuses.get("failed") or 0)
+        compact = {
+            "bot": group.get("bot"),
+            "source": group.get("source"),
+            "refresh_mode": group.get("refresh_mode"),
+            "history_scope": group.get("history_scope"),
+            "count": count,
+            "failed": failed_count,
+            "failure_pct": _usage_pct(failed_count, count),
+            "statuses": _top_counter_values(
+                statuses,
+                limit=FILL_REFRESH_HEALTH_VALUE_LIMIT,
+            ),
+            "reason_codes": _top_counter_values(
+                reason_codes,
+                limit=FILL_REFRESH_HEALTH_VALUE_LIMIT,
+            ),
+            "error_types": _top_counter_values(
+                error_types,
+                limit=FILL_REFRESH_HEALTH_VALUE_LIMIT,
+            ),
+            "elapsed_ms": _ms_summary(
+                [
+                    int(value)
+                    for value in (group.get("elapsed_values") or [])
+                    if _non_negative_int(value) is not None
+                ]
+            ),
+            "latest_ts": group.get("latest_ts"),
+            "latest_status": group.get("latest_status"),
+            "latest_reason_code": group.get("latest_reason_code"),
+            "latest_elapsed_ms": group.get("latest_elapsed_ms"),
+            "latest_history_scope": group.get("latest_history_scope"),
+            "latest_event_count_after": group.get("latest_event_count_after"),
+            "latest_new_count": group.get("latest_new_count"),
+            "latest_enriched_count": group.get("latest_enriched_count"),
+            "latest_pending_pnl_count": group.get("latest_pending_pnl_count"),
+            "latest_coverage_ready_after": group.get("latest_coverage_ready_after"),
+            "latest_coverage_reason_after": group.get("latest_coverage_reason_after"),
+            "latest_retry_count": group.get("latest_retry_count"),
+            "latest_next_retry_in_ms": group.get("latest_next_retry_in_ms"),
+            "latest_error_type": group.get("latest_error_type"),
+            "latest_degraded_events_after": group.get(
+                "latest_degraded_events_after"
+            ),
+            "recovered": bool(failed_count and group.get("latest_status") != "failed"),
+            "latest_ids": group.get("latest_ids"),
+        }
+        compact_groups.append(
+            {
+                key: value
+                for key, value in compact.items()
+                if key not in {"latest_path", "latest_line", "latest_seq"}
+                and value not in (None, {}, [])
+            }
+        )
+    return {
+        "total": total,
+        "bots": len(bots),
+        "failed": total_failed_count,
+        "failure_pct": _usage_pct(total_failed_count, total),
+        "failed_bots": len(failed_bots),
+        "latest_failed_bots": len(latest_failed_bots),
+        "recovered_groups": recovered_groups,
+        "statuses": _top_counter_values(
+            status_totals,
+            limit=FILL_REFRESH_HEALTH_VALUE_LIMIT,
+        ),
+        "groups_truncated": len(ordered) > FILL_REFRESH_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -3543,6 +3803,7 @@ def _scan_events(
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    fill_refresh_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_event_type_counts: Counter[str] = Counter()
     exchange_config_refresh_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
@@ -3717,6 +3978,17 @@ def _scan_events(
                                 remote_call_timing_groups,
                                 remote_call_timing_group,
                             )
+                    if event_type == EventTypes.FILLS_REFRESH_SUMMARY:
+                        _merge_fill_refresh_health_group(
+                            fill_refresh_health_groups,
+                            _fill_refresh_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if event_type == EventTypes.EMA_UNAVAILABLE:
                         ema_readiness_event_type_counts[str(event_type)] += 1
                         _merge_ema_readiness_group(
@@ -3898,6 +4170,9 @@ def _scan_events(
             _account_critical_remote_call_health_groups(remote_call_health_groups)
         ),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
+        "fill_refresh_health": _summarize_fill_refresh_health(
+            fill_refresh_health_groups
+        ),
         "ema_readiness_health": _summarize_ema_readiness_health(
             ema_readiness_groups,
             ema_readiness_event_type_counts,
@@ -4307,6 +4582,7 @@ def build_live_smoke_report(
             "account_critical_remote_call_health"
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
+        "fill_refresh_health": event_scan["fill_refresh_health"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
         "exchange_config_refresh_health": event_scan[
             "exchange_config_refresh_health"
@@ -4358,7 +4634,9 @@ def _summary_limited_groups(
             "active_bots": summary.get("active_bots"),
             "completed_bots": summary.get("completed_bots"),
             "failed_bots": summary.get("failed_bots"),
+            "latest_failed_bots": summary.get("latest_failed_bots"),
             "failed_attention_bots": summary.get("failed_attention_bots"),
+            "recovered_groups": summary.get("recovered_groups"),
             "latest_candidate_unavailable_total": summary.get(
                 "latest_candidate_unavailable_total"
             ),
@@ -4528,6 +4806,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("ema_readiness_health"), dict)
         else {}
     )
+    fill_refresh_health = (
+        report.get("fill_refresh_health")
+        if isinstance(report.get("fill_refresh_health"), dict)
+        else {}
+    )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
         if isinstance(report.get("exchange_config_refresh_health"), dict)
@@ -4679,6 +4962,10 @@ def summarize_live_smoke_report(
             report.get("startup_timings"),
             limit=max_groups,
         ),
+        "fill_refresh_health": _summary_limited_groups(
+            fill_refresh_health,
+            limit=max_groups,
+        ),
         "ema_readiness_health": _summary_limited_groups(
             ema_readiness_health,
             limit=max_groups,
@@ -4730,6 +5017,25 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
             "throttled": _count_value(summary.get("throttled")),
             "failure_pct": summary.get("failure_pct"),
             "throttled_pct": summary.get("throttled_pct"),
+        }.items()
+        if value is not None
+    }
+
+
+def _brief_fill_refresh_health(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    return {
+        key: value
+        for key, value in {
+            "total": _count_value(summary.get("total")),
+            "bots": _count_value(summary.get("bots")),
+            "failed": _count_value(summary.get("failed")),
+            "failure_pct": summary.get("failure_pct"),
+            "failed_bots": _count_value(summary.get("failed_bots")),
+            "latest_failed_bots": _count_value(summary.get("latest_failed_bots")),
+            "recovered_groups": _count_value(summary.get("recovered_groups")),
+            "statuses": summary.get("statuses") or {},
         }.items()
         if value is not None
     }
@@ -4920,6 +5226,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("ema_readiness_health"), dict)
         else {}
     )
+    fill_refresh_health = (
+        report.get("fill_refresh_health")
+        if isinstance(report.get("fill_refresh_health"), dict)
+        else {}
+    )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
         if isinstance(report.get("exchange_config_refresh_health"), dict)
@@ -5079,6 +5390,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             report.get("account_critical_remote_call_health")
         ),
         "startup_timings": _brief_startup_timings(report.get("startup_timings")),
+        "fill_refresh": _brief_fill_refresh_health(fill_refresh_health),
         "ema_readiness": {
             "total": _count_value(ema_readiness_health.get("total")),
             "bots": _count_value(ema_readiness_health.get("bots")),
