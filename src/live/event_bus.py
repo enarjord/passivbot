@@ -701,7 +701,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BALANCE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.RISK_MODE_CHANGED: EventRoute(console=False, text=False),
     EventTypes.HSL_TRANSITION: EventRoute(console=False, text=False),
-    EventTypes.HSL_STATUS: EventRoute(console=False, text=False),
+    EventTypes.HSL_STATUS: EventRoute(console=True, text=True),
     EventTypes.HSL_RAW_RED_PENDING: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_REPLAY_PROGRESS: EventRoute(console=False, text=False),
@@ -777,6 +777,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_AMBIGUOUS: "order",
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: "execute",
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: "execute",
+    EventTypes.HSL_STATUS: "risk",
     EventTypes.SINK_DEGRADED: "logging",
 }
 
@@ -944,6 +945,45 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _format_console_ratio(value: Any) -> str | None:
+    if value is None:
+        return None
+    return f"{float(value):.6f}"
+
+
+def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    signal_mode = _data_str(data, "signal_mode")
+    if signal_mode:
+        parts.append(f"mode={signal_mode}")
+    tier = _data_str(data, "tier")
+    if tier:
+        parts.append(f"tier={tier}")
+    for label, key in (
+        ("dist_to_red", "dist_to_red"),
+        ("drawdown_score", "drawdown_score"),
+        ("red_threshold", "red_threshold"),
+    ):
+        value = _format_console_ratio(_data_float(data, key))
+        if value is not None:
+            parts.append(f"{label}={value}")
+    cooldown = _data_str(data, "cooldown_remaining")
+    if not cooldown:
+        seconds = _data_float(data, "cooldown_remaining_seconds")
+        if seconds is not None:
+            cooldown = f"{seconds:.0f}s"
+    if cooldown:
+        parts.append(f"cooldown={cooldown}")
+    last_red_ts = _data_int(data, "last_red_ts")
+    if last_red_ts is not None:
+        parts.append(f"last_red_ts={last_red_ts}")
+    pending_red_since_ms = _data_int(data, "pending_red_since_ms")
+    if pending_red_since_ms is not None:
+        parts.append(f"pending_red_since_ms={pending_red_since_ms}")
+    return parts
+
+
 def _console_data_summary(event: LiveEvent) -> list[str]:
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
         return _console_order_wave_summary(event)
@@ -969,7 +1009,26 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_confirmation_summary(event)
     if event.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED:
         return _console_rust_summary(event)
+    if event.event_type == EventTypes.HSL_STATUS:
+        return _console_hsl_status_summary(event)
     return []
+
+
+def _hsl_status_operator_visible(event: LiveEvent) -> bool:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    if event.symbol is None:
+        return True
+    if data.get("has_open_position") is True:
+        return True
+    if str(event.reason_code or "") == "cooldown_active":
+        return True
+    return str(data.get("tier") or "").lower() == "red"
+
+
+def _operator_sink_event_visible(event: LiveEvent) -> bool:
+    if event.event_type == EventTypes.HSL_STATUS:
+        return _hsl_status_operator_visible(event)
+    return True
 
 
 def format_console_event(event: LiveEvent) -> str:
@@ -1120,12 +1179,14 @@ class LiveEventPipeline:
         if (
             route.console
             and self.console_sink is not None
+            and _operator_sink_event_visible(live_event)
             and self._should_emit_throttled_sink("console", live_event, route)
         ):
             self._write_sink("console", self.console_sink, live_event)
         if (
             route.text
             and self.text_sink is not None
+            and _operator_sink_event_visible(live_event)
             and self._should_emit_throttled_sink("text", live_event, route)
         ):
             self._write_sink("text", self.text_sink, live_event)

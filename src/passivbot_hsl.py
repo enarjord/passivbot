@@ -3495,7 +3495,8 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
             last_red_ts = state["last_stop_event"].get("stop_event_timestamp_ms")
         if last_red_ts is None:
             last_red_ts = state["pending_red_since_ms"]
-        if self._equity_hard_stop_has_open_position_symbol(pside, symbol):
+        has_open_position = self._equity_hard_stop_has_open_position_symbol(pside, symbol)
+        if has_open_position:
             try:
                 logging.info(
                     "[risk] HSL[%s:%s] status | tier=%s dist_to_red=%.6f drawdown_raw=%.6f "
@@ -3540,6 +3541,7 @@ def _equity_hard_stop_emit_coin_status(self, pside: str, symbol: str, metrics: d
                     "cooldown_remaining": cooldown_remaining,
                     "last_red_ts": last_red_ts,
                     "pending_red_since_ms": state["pending_red_since_ms"],
+                    "has_open_position": bool(has_open_position),
                 },
             ),
             pside=pside,
