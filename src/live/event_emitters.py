@@ -1955,7 +1955,7 @@ def _emit_forager_selection_event_unchecked(
     _safe_emit(
         bot,
         EventTypes.FORAGER_SELECTION,
-        level="debug",
+        level="info",
         component="forager.selection",
         tags=(EventTags.FORAGER, EventTags.SELECTION),
         cycle_id=current_live_event_cycle_id(bot),

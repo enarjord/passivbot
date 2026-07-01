@@ -654,7 +654,9 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     ),
     EventTypes.PLANNING_DEFER_SUMMARY: EventRoute(console=False, text=False),
     EventTypes.PLANNING_SYMBOL_STATE: EventRoute(console=False, text=False),
-    EventTypes.FORAGER_SELECTION: EventRoute(console=False, text=False),
+    EventTypes.FORAGER_SELECTION: EventRoute(
+        console=True, text=True, throttle_interval_ms=5 * 60 * 1000
+    ),
     EventTypes.FORAGER_FEATURE_UNAVAILABLE: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_STARTED: EventRoute(console=False, text=False),
     EventTypes.EMA_BUNDLE_COMPLETED: EventRoute(console=False, text=False),
@@ -769,6 +771,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.CYCLE_COMPLETED: "cycle",
     EventTypes.CYCLE_DEGRADED: "cycle",
     EventTypes.PLANNING_UNAVAILABLE: "gate",
+    EventTypes.FORAGER_SELECTION: "forager",
     EventTypes.RUST_ORCHESTRATOR_RETURNED: "rust",
     EventTypes.ORDER_WAVE_COMPLETED: "execute",
     EventTypes.EXECUTION_CREATE_SUCCEEDED: "order",
@@ -965,6 +968,53 @@ def _console_rust_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_forager_selection_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    selected = _data_int(data, "selected_count")
+    candidate = _data_int(data, "candidate_count")
+    eligible = _data_int(data, "eligible_count")
+    if selected is not None and candidate is not None:
+        if eligible is not None and eligible != candidate:
+            parts.append(f"selected={selected}/{eligible}/{candidate}")
+        else:
+            parts.append(f"selected={selected}/{candidate}")
+    elif selected is not None:
+        parts.append(f"selected={selected}")
+    slots_to_fill = _data_int(data, "slots_to_fill")
+    max_positions = _data_int(data, "max_n_positions")
+    if slots_to_fill is not None:
+        if max_positions is not None:
+            parts.append(f"slots={slots_to_fill}/{max_positions}")
+        else:
+            parts.append(f"slots={slots_to_fill}")
+    unavailable = _data_int(data, "feature_unavailable_count")
+    if unavailable:
+        parts.append(f"unavailable={unavailable}")
+    dropped = _data_int(data, "volatility_dropped_count")
+    if dropped:
+        parts.append(f"volatility_dropped={dropped}")
+    selected_symbols = _compact_csv(data.get("selected_symbols"), limit=4)
+    if selected_symbols:
+        parts.append(f"symbols={selected_symbols}")
+    incumbent_symbols = _compact_csv(data.get("incumbent_symbols"), limit=4)
+    if incumbent_symbols:
+        parts.append(f"incumbents={incumbent_symbols}")
+    max_age_ms = _data_int(data, "max_age_ms")
+    if max_age_ms is not None:
+        parts.append(f"max_age={max_age_ms / 1000.0:.0f}s")
+    fetch_budget = _data_int(data, "fetch_budget")
+    if fetch_budget is not None:
+        parts.append(f"fetch_budget={fetch_budget}")
+    hysteresis_events = _data_int(data, "hysteresis_event_count")
+    if hysteresis_events:
+        parts.append(f"hysteresis_events={hysteresis_events}")
+    source = _data_str(data, "source")
+    if source:
+        parts.append(f"source={source}")
+    return parts
+
+
 def _format_console_ratio(value: Any) -> str | None:
     if value is None:
         return None
@@ -1113,6 +1163,8 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_confirmation_summary(event)
     if event.event_type == EventTypes.RUST_ORCHESTRATOR_RETURNED:
         return _console_rust_summary(event)
+    if event.event_type == EventTypes.FORAGER_SELECTION:
+        return _console_forager_selection_summary(event)
     if event.event_type == EventTypes.HSL_STATUS:
         return _console_hsl_status_summary(event)
     if event.event_type == EventTypes.TRAILING_STATUS:

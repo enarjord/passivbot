@@ -92,7 +92,9 @@ triggered, over budget, or blocked by the unstuck EMA gate. Unsupported strategy
 diagnostics must say so explicitly instead of fabricating threshold/retracement
 prices. Supported trailing diagnostics should include the selected mode, such as
 `trailing`, `grid`, `auto_reduce`, `unstuck`, `none`, or `other`, when the
-next-order state is known.
+next-order state is known. `forager.selection` events are also console-visible
+through a throttled compact summary because they explain which coins are being
+selected, retained, or skipped when forager entries are possible.
 
 ## Review Heuristic
 

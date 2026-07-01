@@ -2558,6 +2558,7 @@ def test_forager_selection_diagnostics_log_scores_and_hysteresis(caplog):
     ]
     assert len(events) == 2
     assert events[0].cycle_id == "cy_forager"
+    assert events[0].level == "info"
     assert events[0].data["source"] == "rust_orchestrator"
     assert events[0].data["selected_symbols"] == ["DOGE/USDT:USDT"]
     assert events[0].data["incumbent_symbols"] == ["DOGE/USDT:USDT"]
