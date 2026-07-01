@@ -4072,6 +4072,9 @@ def _scan_logs(
     if root is None:
         return {
             "root": None,
+            "max_files": max(0, int(max_files)),
+            "tail_lines": max(0, int(tail_lines)),
+            "max_matches": max(0, int(max_matches)),
             "files_scanned": 0,
             "hard_matches": 0,
             "attention_matches": 0,
@@ -4161,6 +4164,9 @@ def _scan_logs(
                 matches.append(match)
     return {
         "root": str(Path(root).expanduser()),
+        "max_files": max(0, int(max_files)),
+        "tail_lines": max(0, int(tail_lines)),
+        "max_matches": max(0, int(max_matches)),
         "files_scanned": len(files),
         "hard_matches": hard_matches,
         "attention_matches": attention_matches,
@@ -4632,6 +4638,9 @@ def summarize_live_smoke_report(
         },
         "logs": {
             "root": logs.get("root"),
+            "max_files": int(logs.get("max_files") or 0),
+            "tail_lines": int(logs.get("tail_lines") or 0),
+            "max_matches": int(logs.get("max_matches") or 0),
             "files_scanned": int(logs.get("files_scanned") or 0),
             "hard_matches": int(logs.get("hard_matches") or 0),
             "attention_matches": int(logs.get("attention_matches") or 0),
@@ -5036,6 +5045,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             },
         },
         "logs": {
+            "max_files": _count_value(logs.get("max_files")),
+            "tail_lines": _count_value(logs.get("tail_lines")),
+            "max_matches": _count_value(logs.get("max_matches")),
             "files_scanned": _count_value(logs.get("files_scanned")),
             "hard_matches": _count_value(logs.get("hard_matches")),
             "attention_matches": _count_value(logs.get("attention_matches")),
