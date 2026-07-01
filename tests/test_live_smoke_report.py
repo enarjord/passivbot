@@ -1071,6 +1071,9 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert brief["monitor"]["live_events"] == 2
     assert brief["event_window"]["enabled"] is False
     assert brief["logs"] == {
+        "max_files": 8,
+        "tail_lines": 10,
+        "max_matches": 50,
         "files_scanned": 1,
         "hard_matches": 0,
         "attention_matches": 1,
@@ -3220,6 +3223,9 @@ def test_live_smoke_report_log_scan_deduplicates_aliases_and_matches_levels(
     )
 
     assert report["ok"] is True
+    assert report["logs"]["max_files"] == 10
+    assert report["logs"]["tail_lines"] == 10
+    assert report["logs"]["max_matches"] == 50
     assert report["logs"]["files_scanned"] == 1
     assert report["logs"]["attention_matches"] == 4
     assert report["logs"]["hard_matches"] == 0
@@ -3233,6 +3239,15 @@ def test_live_smoke_report_log_scan_deduplicates_aliases_and_matches_levels(
     assert "AKIA123" not in emitted
     assert "hunter2" not in emitted
     assert "TOKEN123" not in emitted
+
+    summary = summarize_live_smoke_report(report)
+    assert summary["logs"]["max_files"] == 10
+    assert summary["logs"]["tail_lines"] == 10
+    assert summary["logs"]["max_matches"] == 50
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["logs"]["max_files"] == 10
+    assert brief["logs"]["tail_lines"] == 10
+    assert brief["logs"]["max_matches"] == 50
 
 
 def test_live_smoke_report_log_scan_classifies_risk_matches(tmp_path):
@@ -3683,6 +3698,9 @@ def test_live_smoke_report_cli_outputs_json_and_can_skip_logs(tmp_path, capsys):
     }
     assert report["bots"] == []
     assert report["logs"]["files_scanned"] == 0
+    assert report["logs"]["max_files"] == 8
+    assert report["logs"]["tail_lines"] == 300
+    assert report["logs"]["max_matches"] == 50
     assert report["logs"]["root"] is None
     assert report["monitor"]["live_events"] == 1
 
