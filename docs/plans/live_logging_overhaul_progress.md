@@ -19,26 +19,20 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `c763d84d` after PR #959, `Project HSL status into event console`.
+- `c4a23aa9` after PR #960, `Add position trailing status events`.
 
 Current logging-overhaul head:
 
-- `c763d84d` after PR #959, `Project HSL status into event console`.
+- `c4a23aa9` after PR #960, `Add position trailing status events`.
 
 Current work:
 
-- Branch `codex/v8-position-status-console` adds structured
-  `trailing.status` events for active trailing positions and projects
-  `trailing.status` plus existing `unstuck.status` into the opt-in event-console.
-  The trailing producer uses already-prepared monitor/trailing diagnostic data,
-  emits on state-signature change plus hourly heartbeat with a five-minute check
-  interval, and reports unsupported strategy diagnostics explicitly rather than
-  reimplementing Rust strategy logic in Python. The slice is observability-only:
-  no exchange calls, cache mutation, readiness gates, smoke verdict changes,
-  process signaling, order construction, risk thresholds, or trading behavior
-  changes. Expected validation is focused event-bus/monitor/balance-split tests,
-  py_compile for touched files, `git diff --check`, and an added-line
-  silent-handling scan.
+- Branch `codex/v8-trailing-grid-v7-diagnostics` adds Rust-aligned
+  `trailing_grid_v7` monitor diagnostics so the same position-status stream can
+  explain v7 compatibility positions instead of reporting that v7 trailing
+  diagnostics are unsupported. The helper calls existing Rust v7 order
+  functions and reports selected mode, WEL ratio, threshold/retracement status,
+  and projected retracement price without changing order generation.
 
 Current review gate:
 
@@ -68,6 +62,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #960 at `c4a23aa9`.
+- PR #960 added structured `trailing.status` events for active trailing
+  positions, projected `trailing.status` plus existing `unstuck.status` into the
+  opt-in event console, and kept unsupported strategy diagnostics explicit until
+  strategy-specific Rust diagnostics exist. It was merged after Claude and
+  Hermes approved with CI green. Cursor had not posted a review after repeated
+  polling, so this was treated as a reviewer-availability exception for an
+  observability-only live-path slice; no reviewer findings were outstanding.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Graceful
+  Ctrl-C shutdown improved for Binance but Kucoin, GateIO, OKX, and
+  Hyperliquid still needed SIGTERM after the full Ctrl-C wait window; this
+  remains evidence for the existing shutdown/backlog work.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=c4a23aa9`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  `logs.attention_matches=0`. Attention was limited to four active HSL replay
+  workers during startup, with no failed HSL replay bots.
+- The deployed monitor event stream emitted a `trailing.status` event for the
+  Hyperliquid `XYZ-MU/USDC:USDC` long position. It was correctly marked
+  `active_unsupported` because the Rust-aligned `trailing_grid_v7` diagnostics
+  follow-up had not merged yet.
 - Repository pulled through PR #958 at `a989a3f2`.
 - PR #958 refreshed v8 long-side default values in Rust metadata, Python schema,
   and the default example config. It was not a logging-overhaul slice, but it

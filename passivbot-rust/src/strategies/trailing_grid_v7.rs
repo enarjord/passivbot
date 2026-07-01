@@ -16,6 +16,7 @@ use crate::utils::{
     calc_ema_price_ask, calc_ema_price_bid, calc_new_psize_pprice, calc_wallet_exposure,
     cost_to_qty, quantize_price, quantize_qty, round_, round_dn, round_up, RoundingMode,
 };
+use serde::Serialize;
 
 fn push_if_nonzero(out: &mut Vec<Order>, order: Order) {
     if order.qty != 0.0 {
@@ -1412,6 +1413,467 @@ fn calc_next_close_short(
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct Selection {
+    mode: &'static str,
+    reason: &'static str,
+    cap: f64,
+}
+
+#[derive(Debug, Serialize)]
+struct OrderDiagnostic {
+    qty: f64,
+    price: f64,
+    order_type: String,
+}
+
+#[derive(Debug, Serialize)]
+struct TrailingDiagnostic {
+    kind: &'static str,
+    pside: &'static str,
+    selected_mode: &'static str,
+    selection_reason: &'static str,
+    status: &'static str,
+    wallet_exposure: f64,
+    wallet_exposure_ratio: f64,
+    effective_wallet_exposure_limit: f64,
+    trailing_grid_ratio: f64,
+    order: OrderDiagnostic,
+    threshold_pct: Option<f64>,
+    threshold_price: Option<f64>,
+    threshold_met: Option<bool>,
+    retracement_pct: Option<f64>,
+    retracement_price: Option<f64>,
+    projected_retracement_price: Option<f64>,
+    retracement_met: Option<bool>,
+    current_vs_threshold_ratio: Option<f64>,
+    current_vs_retracement_ratio: Option<f64>,
+}
+
+#[inline]
+fn order_diagnostic(order: Order) -> OrderDiagnostic {
+    OrderDiagnostic {
+        qty: order.qty,
+        price: order.price,
+        order_type: order.order_type.to_string(),
+    }
+}
+
+#[inline]
+fn order_triggered(order: &Order) -> bool {
+    order.qty != 0.0 && order.price > 0.0
+}
+
+#[inline]
+fn ratio(value: f64, reference: Option<f64>) -> Option<f64> {
+    reference.and_then(|reference| {
+        if reference > 0.0 {
+            Some(value / reference - 1.0)
+        } else {
+            None
+        }
+    })
+}
+
+#[inline]
+fn status_for<'a>(
+    selected_mode: &'a str,
+    order: &Order,
+    threshold_met: bool,
+    retracement_met: bool,
+) -> &'a str {
+    if selected_mode != "trailing" {
+        selected_mode
+    } else if order_triggered(order) {
+        "triggered"
+    } else if !threshold_met {
+        "waiting_threshold"
+    } else if !retracement_met {
+        "waiting_retracement"
+    } else {
+        "armed"
+    }
+}
+
+#[inline]
+fn wallet_exposure_ratio(
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    position: &Position,
+    allowed_limit: f64,
+) -> (f64, f64) {
+    let wallet_exposure = calc_wallet_exposure(
+        exchange.c_mult,
+        state.balance,
+        position.size.abs(),
+        position.price,
+    );
+    let ratio = if allowed_limit > 0.0 {
+        wallet_exposure / allowed_limit
+    } else {
+        10.0
+    };
+    (wallet_exposure, ratio)
+}
+
+fn select_entry(
+    entry: &TrailingGridV7EntryParams,
+    base_limit: f64,
+    wallet_exposure: f64,
+) -> Selection {
+    if entry.trailing_grid_ratio >= 1.0 || entry.trailing_grid_ratio <= -1.0 {
+        return Selection {
+            mode: "trailing",
+            reason: "all_trailing",
+            cap: base_limit,
+        };
+    }
+    if entry.trailing_grid_ratio == 0.0 {
+        return Selection {
+            mode: "grid",
+            reason: "grid_ratio_zero",
+            cap: base_limit,
+        };
+    }
+    let wallet_exposure_ratio = if base_limit > 0.0 {
+        wallet_exposure / base_limit
+    } else {
+        10.0
+    };
+    if entry.trailing_grid_ratio > 0.0 {
+        if wallet_exposure_ratio < entry.trailing_grid_ratio {
+            let cap = if wallet_exposure == 0.0 {
+                base_limit
+            } else {
+                (base_limit * entry.trailing_grid_ratio * 1.01).min(base_limit)
+            };
+            Selection {
+                mode: "trailing",
+                reason: "below_positive_trailing_ratio",
+                cap,
+            }
+        } else {
+            Selection {
+                mode: "grid",
+                reason: "above_positive_trailing_ratio",
+                cap: base_limit,
+            }
+        }
+    } else if wallet_exposure_ratio < 1.0 + entry.trailing_grid_ratio {
+        let cap = if wallet_exposure == 0.0 {
+            base_limit
+        } else {
+            (base_limit * (1.0 + entry.trailing_grid_ratio) * 1.01).min(base_limit)
+        };
+        Selection {
+            mode: "grid",
+            reason: "below_negative_grid_ratio",
+            cap,
+        }
+    } else {
+        Selection {
+            mode: "trailing",
+            reason: "above_negative_grid_ratio",
+            cap: base_limit,
+        }
+    }
+}
+
+fn select_close(close: &TrailingGridV7CloseParams, wallet_exposure_ratio: f64) -> Selection {
+    if close.trailing_grid_ratio >= 1.0 || close.trailing_grid_ratio <= -1.0 {
+        return Selection {
+            mode: "trailing",
+            reason: "all_trailing",
+            cap: 0.0,
+        };
+    }
+    if close.trailing_grid_ratio == 0.0 {
+        return Selection {
+            mode: "grid",
+            reason: "grid_ratio_zero",
+            cap: 0.0,
+        };
+    }
+    if close.trailing_grid_ratio > 0.0 {
+        if wallet_exposure_ratio < close.trailing_grid_ratio {
+            Selection {
+                mode: "trailing",
+                reason: "below_positive_trailing_ratio",
+                cap: 0.0,
+            }
+        } else {
+            Selection {
+                mode: "grid",
+                reason: "above_positive_trailing_ratio",
+                cap: 0.0,
+            }
+        }
+    } else if wallet_exposure_ratio < 1.0 + close.trailing_grid_ratio {
+        Selection {
+            mode: "grid",
+            reason: "below_negative_grid_ratio",
+            cap: 0.0,
+        }
+    } else {
+        Selection {
+            mode: "trailing",
+            reason: "above_negative_grid_ratio",
+            cap: 0.0,
+        }
+    }
+}
+
+fn entry_thresholds(
+    entry: &TrailingGridV7EntryParams,
+    state: &StateParams,
+    wallet_exposure: f64,
+    effective_limit: f64,
+) -> (f64, f64) {
+    let threshold_multiplier = if effective_limit > 0.0 {
+        (wallet_exposure / effective_limit) * entry.trailing_threshold_we_weight
+    } else {
+        0.0
+    };
+    let threshold_log_multiplier =
+        state.volatility_ema_1h * entry.trailing_threshold_volatility_weight;
+    let threshold_pct = entry.trailing_threshold_pct
+        * (1.0 + threshold_multiplier + threshold_log_multiplier).max(0.0);
+    let retracement_multiplier = if effective_limit > 0.0 {
+        (wallet_exposure / effective_limit) * entry.trailing_retracement_we_weight
+    } else {
+        0.0
+    };
+    let retracement_log_multiplier =
+        state.volatility_ema_1h * entry.trailing_retracement_volatility_weight;
+    let retracement_pct = entry.trailing_retracement_pct
+        * (1.0 + retracement_multiplier + retracement_log_multiplier).max(0.0);
+    (threshold_pct, retracement_pct)
+}
+
+fn entry_diagnostic(
+    side: StrategySide,
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    entry: &TrailingGridV7EntryParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> TrailingDiagnostic {
+    let allowed_limit = wallet_exposure_limit_with_allowance(bot, runtime);
+    let (wallet_exposure, wallet_exposure_ratio) =
+        wallet_exposure_ratio(exchange, state, position, allowed_limit);
+    let selection = select_entry(entry, allowed_limit, wallet_exposure);
+    let order = match side {
+        StrategySide::Long => {
+            calc_next_entry_long(exchange, state, bot, runtime, entry, position, trailing)
+        }
+        StrategySide::Short => {
+            calc_next_entry_short(exchange, state, bot, runtime, entry, position, trailing)
+        }
+    };
+    let (threshold_pct, retracement_pct) =
+        entry_thresholds(entry, state, wallet_exposure, selection.cap);
+    let is_long = side == StrategySide::Long;
+    let threshold_price = if threshold_pct > 0.0 {
+        Some(if is_long {
+            position.price * (1.0 - threshold_pct)
+        } else {
+            position.price * (1.0 + threshold_pct)
+        })
+    } else {
+        None
+    };
+    let threshold_met = if threshold_pct <= 0.0 {
+        true
+    } else if is_long {
+        trailing.min_since_open < threshold_price.unwrap_or(0.0)
+    } else {
+        trailing.max_since_open > threshold_price.unwrap_or(0.0)
+    };
+    let retracement_price = if retracement_pct > 0.0 {
+        Some(if is_long {
+            trailing.min_since_open * (1.0 + retracement_pct)
+        } else {
+            trailing.max_since_open * (1.0 - retracement_pct)
+        })
+    } else {
+        None
+    };
+    let projected_retracement_price = threshold_price.map(|price| {
+        if is_long {
+            price * (1.0 + retracement_pct)
+        } else {
+            price * (1.0 - retracement_pct)
+        }
+    });
+    let retracement_met = if retracement_pct <= 0.0 {
+        true
+    } else if is_long {
+        trailing.max_since_min > retracement_price.unwrap_or(0.0)
+    } else {
+        trailing.min_since_max < retracement_price.unwrap_or(0.0)
+    };
+    TrailingDiagnostic {
+        kind: "entry",
+        pside: if is_long { "long" } else { "short" },
+        selected_mode: selection.mode,
+        selection_reason: selection.reason,
+        status: status_for(selection.mode, &order, threshold_met, retracement_met),
+        wallet_exposure,
+        wallet_exposure_ratio,
+        effective_wallet_exposure_limit: selection.cap,
+        trailing_grid_ratio: entry.trailing_grid_ratio,
+        order: order_diagnostic(order),
+        threshold_pct: Some(threshold_pct),
+        threshold_price,
+        threshold_met: Some(threshold_met),
+        retracement_pct: Some(retracement_pct),
+        retracement_price,
+        projected_retracement_price,
+        retracement_met: Some(retracement_met),
+        current_vs_threshold_ratio: ratio(
+            if is_long {
+                state.order_book.bid
+            } else {
+                state.order_book.ask
+            },
+            threshold_price,
+        ),
+        current_vs_retracement_ratio: ratio(
+            if is_long {
+                state.order_book.bid
+            } else {
+                state.order_book.ask
+            },
+            retracement_price,
+        ),
+    }
+}
+
+fn close_diagnostic(
+    side: StrategySide,
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    close: &TrailingGridV7CloseParams,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> TrailingDiagnostic {
+    let allowed_limit = wallet_exposure_limit_with_allowance(bot, runtime);
+    let (wallet_exposure, wallet_exposure_ratio) =
+        wallet_exposure_ratio(exchange, state, position, allowed_limit);
+    let selection = select_close(close, wallet_exposure_ratio);
+    let order = match side {
+        StrategySide::Long => {
+            calc_next_close_long(exchange, state, bot, runtime, close, position, trailing)
+        }
+        StrategySide::Short => {
+            calc_next_close_short(exchange, state, bot, runtime, close, position, trailing)
+        }
+    };
+    let order_type = order.order_type.to_string();
+    let selected_mode = if order_type.contains("auto_reduce") {
+        "auto_reduce"
+    } else {
+        selection.mode
+    };
+    let is_long = side == StrategySide::Long;
+    let threshold_pct = close.trailing_threshold_pct;
+    let retracement_pct = close.trailing_retracement_pct;
+    let threshold_price = if threshold_pct > 0.0 {
+        Some(if is_long {
+            position.price * (1.0 + threshold_pct)
+        } else {
+            position.price * (1.0 - threshold_pct)
+        })
+    } else {
+        None
+    };
+    let threshold_met = if threshold_pct <= 0.0 {
+        true
+    } else if is_long {
+        trailing.max_since_open > threshold_price.unwrap_or(0.0)
+    } else {
+        trailing.min_since_open < threshold_price.unwrap_or(0.0)
+    };
+    let retracement_price = if retracement_pct > 0.0 {
+        Some(if is_long {
+            trailing.max_since_open * (1.0 - retracement_pct)
+        } else {
+            trailing.min_since_open * (1.0 + retracement_pct)
+        })
+    } else {
+        None
+    };
+    let projected_retracement_price = threshold_price.map(|price| {
+        if is_long {
+            price * (1.0 - retracement_pct)
+        } else {
+            price * (1.0 + retracement_pct)
+        }
+    });
+    let retracement_met = if retracement_pct <= 0.0 {
+        true
+    } else if is_long {
+        trailing.min_since_max < retracement_price.unwrap_or(0.0)
+    } else {
+        trailing.max_since_min > retracement_price.unwrap_or(0.0)
+    };
+    TrailingDiagnostic {
+        kind: "close",
+        pside: if is_long { "long" } else { "short" },
+        selected_mode,
+        selection_reason: selection.reason,
+        status: status_for(selected_mode, &order, threshold_met, retracement_met),
+        wallet_exposure,
+        wallet_exposure_ratio,
+        effective_wallet_exposure_limit: allowed_limit,
+        trailing_grid_ratio: close.trailing_grid_ratio,
+        order: order_diagnostic(order),
+        threshold_pct: Some(threshold_pct),
+        threshold_price,
+        threshold_met: Some(threshold_met),
+        retracement_pct: Some(retracement_pct),
+        retracement_price,
+        projected_retracement_price,
+        retracement_met: Some(retracement_met),
+        current_vs_threshold_ratio: ratio(
+            if is_long {
+                state.order_book.ask
+            } else {
+                state.order_book.bid
+            },
+            threshold_price,
+        ),
+        current_vs_retracement_ratio: ratio(
+            if is_long {
+                state.order_book.ask
+            } else {
+                state.order_book.bid
+            },
+            retracement_price,
+        ),
+    }
+}
+
+pub fn calc_trailing_grid_v7_diagnostics(
+    side: StrategySide,
+    exchange: &ExchangeParams,
+    state: &StateParams,
+    bot: &BotParams,
+    runtime: &RuntimeOrderContext,
+    params: &TrailingGridV7Params,
+    position: &Position,
+    trailing: &TrailingPriceBundle,
+) -> serde_json::Value {
+    serde_json::json!({
+        "entry": entry_diagnostic(side, exchange, state, bot, runtime, &params.entry, position, trailing),
+        "close": close_diagnostic(side, exchange, state, bot, runtime, &params.close, position, trailing),
+    })
+}
+
 fn calc_entries_long(
     exchange: &ExchangeParams,
     state: &StateParams,
@@ -2032,6 +2494,187 @@ mod tests {
             trailing_retracement_pct: 0.01,
             trailing_threshold_pct: 0.01,
             ..Default::default()
+        }
+    }
+
+    fn expected_mode_from_order_type(order_type: OrderType) -> &'static str {
+        match order_type {
+            OrderType::EntryTrailingNormalLong
+            | OrderType::EntryTrailingCroppedLong
+            | OrderType::EntryTrailingNormalShort
+            | OrderType::EntryTrailingCroppedShort
+            | OrderType::CloseTrailingLong
+            | OrderType::CloseTrailingShort => "trailing",
+            OrderType::EntryGridNormalLong
+            | OrderType::EntryGridCroppedLong
+            | OrderType::EntryGridInflatedLong
+            | OrderType::EntryGridNormalShort
+            | OrderType::EntryGridCroppedShort
+            | OrderType::EntryGridInflatedShort
+            | OrderType::CloseGridLong
+            | OrderType::CloseGridShort => "grid",
+            OrderType::CloseAutoReduceWelLong | OrderType::CloseAutoReduceWelShort => "auto_reduce",
+            other => panic!("unexpected order type for v7 diagnostic parity: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn diagnostic_reports_trailing_grid_v7_threshold_and_projection() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let params = TrailingGridV7Params {
+            ema_span_0: 10.0,
+            ema_span_1: 20.0,
+            entry: TrailingGridV7EntryParams {
+                trailing_grid_ratio: 1.0,
+                trailing_retracement_pct: 0.005,
+                trailing_threshold_pct: 0.01,
+                ..entry_params()
+            },
+            close: TrailingGridV7CloseParams {
+                trailing_grid_ratio: 1.0,
+                trailing_qty_pct: 0.1,
+                trailing_retracement_pct: 0.01,
+                trailing_threshold_pct: 0.02,
+                ..Default::default()
+            },
+        };
+        let position = Position {
+            size: 40.0,
+            price: 100.0,
+        };
+        let trailing = TrailingPriceBundle {
+            min_since_open: 98.5,
+            max_since_min: 98.7,
+            max_since_open: 101.0,
+            min_since_max: 100.0,
+        };
+
+        let diagnostic = calc_trailing_grid_v7_diagnostics(
+            StrategySide::Long,
+            &exchange,
+            &state,
+            &bot,
+            &runtime,
+            &params,
+            &position,
+            &trailing,
+        );
+
+        let entry = &diagnostic["entry"];
+        assert_eq!(entry["selected_mode"].as_str(), Some("trailing"));
+        assert_eq!(entry["status"].as_str(), Some("waiting_retracement"));
+        assert_eq!(entry["threshold_met"].as_bool(), Some(true));
+        assert_eq!(entry["retracement_met"].as_bool(), Some(false));
+        assert_eq!(entry["threshold_price"].as_f64().unwrap(), 99.0);
+        assert!((entry["projected_retracement_price"].as_f64().unwrap() - 99.495).abs() < 1e-12);
+
+        let close = &diagnostic["close"];
+        assert_eq!(close["selected_mode"].as_str(), Some("trailing"));
+        assert_eq!(close["status"].as_str(), Some("waiting_threshold"));
+        assert_eq!(close["threshold_price"].as_f64().unwrap(), 102.0);
+        assert!((close["projected_retracement_price"].as_f64().unwrap() - 100.98).abs() < 1e-12);
+    }
+
+    #[test]
+    fn diagnostic_selected_modes_match_next_orders_for_split_branches() {
+        let exchange = exchange();
+        let state = state();
+        let bot = bot();
+        let runtime = runtime();
+        let trailing = TrailingPriceBundle {
+            min_since_open: 98.0,
+            max_since_min: 99.0,
+            max_since_open: 102.0,
+            min_since_max: 101.0,
+        };
+        let entry = entry_params();
+        let close = TrailingGridV7CloseParams {
+            grid_markup_start: 0.01,
+            grid_markup_end: 0.005,
+            grid_qty_pct: 0.2,
+            trailing_grid_ratio: 0.5,
+            trailing_qty_pct: 0.25,
+            trailing_retracement_pct: 0.005,
+            trailing_threshold_pct: 0.01,
+        };
+        let params = TrailingGridV7Params {
+            ema_span_0: 10.0,
+            ema_span_1: 20.0,
+            entry,
+            close,
+        };
+
+        let cases = [
+            (
+                StrategySide::Long,
+                Position {
+                    size: 40.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Long,
+                Position {
+                    size: 80.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Short,
+                Position {
+                    size: -40.0,
+                    price: 100.0,
+                },
+            ),
+            (
+                StrategySide::Short,
+                Position {
+                    size: -80.0,
+                    price: 100.0,
+                },
+            ),
+        ];
+
+        for (side, position) in cases {
+            let diagnostic = calc_trailing_grid_v7_diagnostics(
+                side, &exchange, &state, &bot, &runtime, &params, &position, &trailing,
+            );
+            let entry_order = match side {
+                StrategySide::Long => calc_next_entry_long(
+                    &exchange, &state, &bot, &runtime, &entry, &position, &trailing,
+                ),
+                StrategySide::Short => calc_next_entry_short(
+                    &exchange, &state, &bot, &runtime, &entry, &position, &trailing,
+                ),
+            };
+            let close_order = match side {
+                StrategySide::Long => calc_next_close_long(
+                    &exchange, &state, &bot, &runtime, &close, &position, &trailing,
+                ),
+                StrategySide::Short => calc_next_close_short(
+                    &exchange, &state, &bot, &runtime, &close, &position, &trailing,
+                ),
+            };
+
+            assert_eq!(
+                diagnostic["entry"]["selected_mode"].as_str(),
+                Some(expected_mode_from_order_type(entry_order.order_type))
+            );
+            assert_eq!(
+                diagnostic["close"]["selected_mode"].as_str(),
+                Some(expected_mode_from_order_type(close_order.order_type))
+            );
+            assert_eq!(
+                diagnostic["entry"]["order"]["order_type"].as_str(),
+                Some(entry_order.order_type.to_string().as_str())
+            );
+            assert_eq!(
+                diagnostic["close"]["order"]["order_type"].as_str(),
+                Some(close_order.order_type.to_string().as_str())
+            );
         }
     }
 
