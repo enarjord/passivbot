@@ -2821,6 +2821,7 @@ def test_trailing_status_event_emits_structured_summary():
             "strategy_kind": "trailing_martingale",
             "status": "waiting_retracement",
             "order_type": "close_trailing_long",
+            "selected_mode": "trailing",
             "triggered": False,
             "threshold_met": True,
             "retracement_met": False,
@@ -2846,6 +2847,7 @@ def test_trailing_status_event_emits_structured_summary():
     assert event.data["changed"] is True
     assert event.data["kind"] == "close"
     assert event.data["trailing_status"] == "waiting_retracement"
+    assert event.data["selected_mode"] == "trailing"
     assert event.data["threshold_met"] is True
     assert event.data["retracement_met"] is False
     assert event.data["threshold_pct"] == pytest.approx(0.01)

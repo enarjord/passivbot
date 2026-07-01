@@ -90,7 +90,8 @@ the console. Position-level `trailing.status` and `unstuck.status` events are
 console-visible because they explain why an existing position is waiting, armed,
 triggered, over budget, or blocked by the unstuck EMA gate. Unsupported strategy
 diagnostics must say so explicitly instead of fabricating threshold/retracement
-prices.
+prices. Supported trailing diagnostics should include the selected mode
+(`trailing`, `grid`, or `none`) when the next-order state is known.
 
 ## Review Heuristic
 

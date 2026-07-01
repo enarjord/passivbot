@@ -903,6 +903,7 @@ def test_console_format_summarizes_trailing_status():
         data={
             "kind": "entry",
             "trailing_status": "waiting_threshold",
+            "selected_mode": "grid",
             "threshold_met": False,
             "threshold_pct": 0.0125,
             "threshold_price": 98_750.0,
@@ -916,7 +917,7 @@ def test_console_format_summarizes_trailing_status():
 
     assert format_console_event(event) == (
         "[trailing] succeeded cycle=cy_trailing kind=entry "
-        "trailing_status=waiting_threshold threshold_met=False threshold=1.2500% "
+        "trailing_status=waiting_threshold mode=grid threshold_met=False threshold=1.2500% "
         "threshold_price=98750 retracement_met=False retracement=0.4000% "
         "retracement_price=99145 threshold_retrace_price=99145 current=101000 "
         "symbol=BTC/USDT:USDT pside=long reason=trailing_status"

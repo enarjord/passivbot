@@ -177,7 +177,30 @@ def test_build_trailing_diagnostic_matches_monitor_slice():
     assert diagnostic["entry"]["threshold_met"] is False
     assert diagnostic["entry"]["retracement_met"] is True
     assert diagnostic["close"]["order_type"] == "close_trailing_long"
+    assert diagnostic["close"]["selected_mode"] == "trailing"
     assert diagnostic["close"]["threshold_met"] is False
+
+
+def test_trailing_diagnostic_keeps_threshold_state_when_next_close_is_grid():
+    config = _sample_config()
+    config["bot"]["long"]["close_trailing_retracement_pct"] = 0.0
+    inputs = build_trailing_inputs_from_snapshot(
+        config,
+        _sample_snapshot(),
+        symbol="BTC/USDT:USDT",
+        pside="long",
+    )
+
+    diagnostic = build_trailing_diagnostic(inputs)
+
+    assert diagnostic["close"] is not None
+    assert diagnostic["close"]["order_type"] == "close_grid_long"
+    assert diagnostic["close"]["selected_mode"] == "grid"
+    assert diagnostic["close"]["triggered"] is False
+    assert diagnostic["close"]["status"] == "waiting_threshold"
+    assert diagnostic["close"]["threshold_met"] is False
+    assert diagnostic["close"]["threshold_price"] == pytest.approx(101000.0)
+    assert diagnostic["close"]["retracement_pct"] == pytest.approx(0.0)
 
 
 def test_trailing_diagnostics_tool_commands_render_and_set_values(tmp_path, monkeypatch):

@@ -1021,6 +1021,9 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     trailing_status = _data_str(data, "trailing_status")
     if trailing_status:
         parts.append(f"trailing_status={trailing_status}")
+    selected_mode = _data_str(data, "selected_mode")
+    if selected_mode:
+        parts.append(f"mode={selected_mode}")
     threshold_met = data.get("threshold_met")
     if threshold_met is not None:
         parts.append(f"threshold_met={bool(threshold_met)}")
