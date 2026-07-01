@@ -185,6 +185,13 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   escalation ladder as policy only: graceful Ctrl+C/request stop, bounded wait, a second
   graceful signal when warranted, SIGTERM, then SIGKILL. The smoke report never sends those
   signals.
+- `passivbot tool live-restart-smoke-plan` emits a read-only dry-run restart
+  plan from a tmuxp-style supervisor config. The planned smoke command defaults
+  to `live-smoke-report --brief --compact` for repeated operator loops; use
+  `--summary-smoke-report` for bounded groups or `--full-smoke-report` for the
+  full smoke report. The planner does not execute the restart, send signals,
+  invoke tmux, run SSH, pull git, start bots, contact exchanges, or load
+  credentials.
 - `passivbot tool live-performance-report` summarizes local live monitor event timings for
   operator performance analysis. It is read-only and does not contact exchanges. Use
   `--recent-minutes` for a time window, `--summary` for a bounded operator projection, and

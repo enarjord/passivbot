@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `103a4d11` after PR #930, `Add per-bot smoke report event file cap`.
+- `28b0687d` after PR #931, `Cap incident bundle segment fallback per bot`.
 
 Current review gate:
 
@@ -49,6 +49,31 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #931 at `28b0687d`.
+- PR #931 capped incident-bundle raw event-segment fallback copying with
+  `--max-event-files-per-bot`, while preserving exact matched report segment
+  paths. It exposes event-segment selection and limit metadata in compact
+  output and bundled manifests. The slice was read-only incident-bundle tooling
+  and did not add event producers, exchange calls, cache mutation, readiness
+  gates, console routing, monitor writes, order/risk logic, or trading
+  behavior.
+- PR #931 passed Hermes + Claude + Cursor + CI. A reviewer-requested regression
+  test now proves active file caps do not prune matched incident evidence.
+  Local validation covered `tests/test_live_incident_bundle.py`, py_compile for
+  touched files, `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `103a4d11` to `28b0687d` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A targeted all-rotated incident-bundle smoke forced the fallback segment-copy
+  path with `--event-type no.such.event`, `--max-event-files-per-bot=2`, and
+  `--event-tail-lines=200`. It completed with `ok=true`,
+  `hard_failures=0`, `event_segments.selection=fallback_discovered_paths`,
+  `event_segments.files=12`, `included=12`, `event_files_before_limit=941`,
+  and `event_files_skipped_by_limit=929`. A standard bounded 5-minute smoke at
+  `28b0687d` also completed with `ok=true`, `hard_failures=0`, clean tracked
+  repository state, all five live bot processes running, and no failed
+  account-critical remote calls. Remaining attention came from known non-hard
+  EMA readiness, HSL cooldown, and candle coverage diagnostics.
 - Repository pulled through PR #930 at `103a4d11`.
 - PR #930 added `live-smoke-report --max-event-files-per-bot` and the matching
   `build_live_smoke_report()` option for fair, opt-in per-events-directory caps
