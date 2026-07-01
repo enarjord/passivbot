@@ -241,7 +241,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.RISK_MODE_CHANGED,
         EventTypes.HSL_TRANSITION,
-        EventTypes.HSL_STATUS,
         EventTypes.HSL_RAW_RED_PENDING,
         EventTypes.HSL_RED_TRIGGERED,
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
@@ -263,6 +262,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
+    assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
+    assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].text is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
@@ -842,6 +843,118 @@ def test_console_format_summarizes_rust_return():
     )
 
     assert format_console_event(event) == "[rust] succeeded cycle=cy_6 orders=4 elapsed=17ms"
+
+
+def test_console_format_summarizes_hsl_status_distance_to_red():
+    event = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="succeeded",
+        cycle_id="cy_hsl",
+        symbol="ZEC/USDT:USDT",
+        pside="long",
+        reason_code="green",
+        data={
+            "signal_mode": "coin",
+            "tier": "green",
+            "dist_to_red": 0.02,
+            "drawdown_score": 0.03,
+            "red_threshold": 0.05,
+            "cooldown_remaining": "none",
+            "last_red_ts": 1_600_000,
+            "has_open_position": True,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[risk] succeeded cycle=cy_hsl mode=coin tier=green "
+        "dist_to_red=0.020000 drawdown_score=0.030000 red_threshold=0.050000 "
+        "cooldown=none last_red_ts=1600000 symbol=ZEC/USDT:USDT "
+        "pside=long reason=green"
+    )
+
+
+def test_console_format_summarizes_hsl_cooldown_seconds():
+    event = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="degraded",
+        symbol="NEAR/USDT:USDT",
+        pside="long",
+        reason_code="cooldown_active",
+        data={"tier": "red", "cooldown_remaining_seconds": 300.0},
+    )
+
+    assert format_console_event(event) == (
+        "[risk] degraded tier=red cooldown=300s symbol=NEAR/USDT:USDT "
+        "pside=long reason=cooldown_active"
+    )
+
+
+def test_operator_console_filters_flat_green_coin_hsl_status():
+    console = ListEventSink()
+    text = ListEventSink()
+    pipeline = LiveEventPipeline(
+        structured_sinks=[],
+        monitor_sinks=[],
+        console_sink=console,
+        text_sink=text,
+    )
+
+    flat_green = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="succeeded",
+        symbol="ARB/USDT:USDT",
+        pside="long",
+        reason_code="green",
+        data={
+            "signal_mode": "coin",
+            "tier": "green",
+            "dist_to_red": 0.02,
+            "has_open_position": False,
+        },
+    )
+    held_green = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="succeeded",
+        symbol="ZEC/USDT:USDT",
+        pside="long",
+        reason_code="green",
+        data={
+            "signal_mode": "coin",
+            "tier": "green",
+            "dist_to_red": 0.02,
+            "has_open_position": True,
+        },
+    )
+    flat_orange = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="succeeded",
+        symbol="MORPHO/USDT:USDT",
+        pside="long",
+        reason_code="orange",
+        data={
+            "signal_mode": "coin",
+            "tier": "orange",
+            "dist_to_red": 0.01,
+            "has_open_position": False,
+        },
+    )
+    cooldown = LiveEvent(
+        EventTypes.HSL_STATUS,
+        status="degraded",
+        symbol="NEAR/USDT:USDT",
+        pside="long",
+        reason_code="cooldown_active",
+        data={"tier": "red", "cooldown_remaining_seconds": 300.0},
+    )
+
+    pipeline.emit(flat_green)
+    pipeline.emit(held_green)
+    pipeline.emit(flat_orange)
+    pipeline.emit(cooldown)
+
+    assert console.events == [held_green, cooldown]
+    assert text.events == [held_green, cooldown]
+    assert pipeline.close(timeout=2.0) is True
 
 
 def test_shutdown_stage_console_format_uses_shutdown_tag():

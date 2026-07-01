@@ -17,21 +17,28 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 Last updated: 2026-07-01.
 
-Current `origin/v8` logging-overhaul head:
+Current `origin/v8` head:
 
-- `df10b379` after PR #956, `Limit incident bundle git status to tracked changes`.
+- `a989a3f2` after PR #958, `Refresh v8 long bot defaults`.
+
+Current logging-overhaul head:
+
+- `d038c405` after PR #957, `Add opt-in live event console sink`.
 
 Current work:
 
-- Branch `codex/v8-live-event-console-sink-opt-in` adds an opt-in
-  `logging.live_event_console` / `PASSIVBOT_LIVE_EVENT_CONSOLE` path that wires
-  the existing structured-event `ConsoleSummarySink` into the live event
-  pipeline. The slice is disabled by default and only affects operator
-  observability when explicitly enabled: no new event producers, exchange
-  calls, cache mutation, readiness gates, smoke verdict changes, process
-  signaling, order logic, risk logic, or trading behavior. Expected validation
-  is focused event-bus/monitor tests, py_compile for touched files,
-  `git diff --check`, and an added-line silent-handling scan.
+- Branch `codex/v8-hsl-status-console-projection` improves the opt-in
+  structured-event console projection for HSL status. It formats existing
+  `hsl.status` distance-to-red fields for operator console use, adds a
+  coin-mode `has_open_position` event field, and filters flat green coin
+  universe status away from console/text sinks while preserving the full
+  structured event stream. The slice is observability-only and remains disabled
+  unless `logging.live_event_console` or `PASSIVBOT_LIVE_EVENT_CONSOLE` is
+  enabled: no exchange calls, cache mutation, readiness gates, smoke verdict
+  changes, process signaling, order construction, risk thresholds, or trading
+  behavior changes. Expected validation is focused event-bus tests, py_compile
+  for touched files, `git diff --check`, and an added-line silent-handling
+  scan.
 
 Current review gate:
 
@@ -61,6 +68,39 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #958 at `a989a3f2`.
+- PR #958 refreshed v8 long-side default values in Rust metadata, Python schema,
+  and the default example config. It was not a logging-overhaul slice, but it
+  advanced `origin/v8` after PR #957 and was therefore deployed before the next
+  logging branch was created. Running bots were not restarted because the
+  deployed change only affects defaults for newly generated/loaded configs and
+  the active VPS5 bots use explicit configs.
+- PR #958 passed Hermes + Claude + CI. A VPS5 2-minute bounded smoke after the
+  pull reported `ok=true`, `hard_failures=0`, clean tracked repository state at
+  `a989a3f2`, all five configured bots matched, config checks green, zero
+  failed remote calls, and zero failed account-critical remote calls. Remaining
+  attention came from known non-hard EMA readiness and HSL cooldown/status
+  groups.
+- Repository pulled through PR #957 at `d038c405`.
+- PR #957 added the disabled-by-default
+  `logging.live_event_console` / `PASSIVBOT_LIVE_EVENT_CONSOLE` opt-in path for
+  the existing structured-event `ConsoleSummarySink`, and then narrowed candle
+  remote-fetch callback installation so console-only mode does not create
+  unused remote-call event traffic. The slice was observability-only and did not
+  add exchange calls, cache mutation, readiness gates, smoke verdict changes,
+  process signaling, order logic, risk logic, or trading behavior.
+- PR #957 passed Claude + Hermes + CI. Cursor did not post during the bounded
+  wait, so the merge used a documented reviewer-availability exception rather
+  than claiming full three-reviewer coverage. Local validation covered
+  `tests/test_live_event_bus.py`, focused monitor pipeline tests, py_compile for
+  touched files, `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `df10b379` to `d038c405` without bot restart because the new
+  console sink is disabled by default. A VPS5 2-minute bounded smoke after
+  deploy reported `ok=true`, `hard_failures=0`, clean tracked repository state
+  at `d038c405`, all five configured bots matched, config checks green, zero
+  failed remote calls, and zero failed account-critical remote calls. Remaining
+  attention came from known non-hard EMA readiness and HSL cooldown/status
+  groups.
 - Repository pulled through PR #956 at `df10b379`.
 - PR #956 limited `live-incident-bundle` manifest git status to tracked changes
   via `git status --short --untracked-files=no`, preserving tracked dirty-tree

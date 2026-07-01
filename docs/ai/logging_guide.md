@@ -82,6 +82,11 @@ an opt-in console sink fed by the structured live event pipeline. It is disabled
 by default while legacy stdlib console logs still exist, because enabling it can
 duplicate some order/execution lifecycle messages. Use it for controlled smoke
 tests of event-stream console formatting before migrating default console output.
+The console projection is operator-facing: it should prefer trading-relevant
+summaries over internal data plumbing. HSL status events are console-visible
+only when they are pside-level, red/cooldown, or tied to a held coin; routine
+flat coin-universe status remains in the structured event stream but is kept off
+the console.
 
 ## Review Heuristic
 
