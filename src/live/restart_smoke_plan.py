@@ -198,6 +198,22 @@ def _repo_check_commands(repo_path: str | Path | None) -> list[str]:
     ]
 
 
+def _config_preflight_commands(bots: list[dict[str, Any]]) -> list[str]:
+    commands: list[str] = []
+    seen: set[str] = set()
+    for bot in bots:
+        config_path = str(bot.get("config_path") or "").strip()
+        if not config_path or config_path in seen:
+            continue
+        seen.add(config_path)
+        commands.append(
+            _shell_join(
+                ["passivbot", "tool", "live-config-preflight", config_path, "--compact"]
+            )
+        )
+    return commands
+
+
 def _process_signal_safety_contract() -> dict[str, Any]:
     return {
         "strategy": "exact_tmux_pane_or_exact_pid_only",
@@ -414,6 +430,7 @@ def build_live_restart_smoke_plan(
         log_window_unparsed_policy=log_window_unparsed_policy,
         smoke_sections=smoke_sections,
     )
+    config_preflight_commands = _config_preflight_commands(bots)
     planned_bots = []
     for index, bot in enumerate(bots, start=1):
         planned_bots.append(
@@ -473,6 +490,7 @@ def build_live_restart_smoke_plan(
                 "planned_commands": [
                     {"command": command, "execute": False}
                     for command in _repo_check_commands(repo_path)
+                    + config_preflight_commands
                 ],
             },
             {
@@ -545,6 +563,18 @@ def build_live_restart_smoke_plan(
                 "time-window event report",
                 "monitor snapshots",
                 "config hashes when configured explicitly",
+            ],
+        },
+        "config_preflight": {
+            "commands": config_preflight_commands,
+            "command_count": len(config_preflight_commands),
+            "execute": False,
+            "expected_fields": [
+                "identity hints",
+                "HSL signal mode and enabled sides",
+                "approved and ignored universe counts",
+                "forager slot and staleness settings",
+                "cache-related live settings and readiness attention",
             ],
         },
         "process_signal_safety": _process_signal_safety_contract(),
@@ -621,6 +651,7 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
     issue_rows = issues if isinstance(issues, list) else []
     smoke_report = report.get("smoke_report")
     incident_bundle = report.get("incident_bundle")
+    config_preflight = report.get("config_preflight")
     execution_policy = report.get("execution_policy")
     signal_safety = report.get("process_signal_safety")
     return {
@@ -666,6 +697,24 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
             "event_segments": (
                 incident_bundle.get("event_segments")
                 if isinstance(incident_bundle, dict)
+                else None
+            ),
+        },
+        "config_preflight": {
+            "command_count": (
+                config_preflight.get("command_count")
+                if isinstance(config_preflight, dict)
+                else 0
+            ),
+            "commands": (
+                (config_preflight.get("commands") or [])[:20]
+                if isinstance(config_preflight, dict)
+                and isinstance(config_preflight.get("commands"), list)
+                else []
+            ),
+            "execute": (
+                config_preflight.get("execute")
+                if isinstance(config_preflight, dict)
                 else None
             ),
         },
