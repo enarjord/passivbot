@@ -10,7 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.restart_smoke_plan import (  # noqa: E402
-    DEFAULT_INCIDENT_BUNDLE_OUTPUT,
+    DEFAULT_INCIDENT_BUNDLE_OUTPUT_HELP,
     DEFAULT_SMOKE_EVENT_TAIL_LINES,
     DEFAULT_SMOKE_LOG_TAIL_LINES,
     DEFAULT_SMOKE_MAX_LOG_FILES,
@@ -114,9 +114,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--incident-bundle-output",
-        default=DEFAULT_INCIDENT_BUNDLE_OUTPUT,
+        default=None,
         help=(
             "Output path for the planned live-incident-bundle evidence command. "
+            f"Defaults to {DEFAULT_INCIDENT_BUNDLE_OUTPUT_HELP}. "
             "The plan never creates the bundle."
         ),
     )
