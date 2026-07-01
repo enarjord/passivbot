@@ -224,6 +224,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in fair bound for monitor event file scans. When set, scan at "
+            "most N discovered event segments per events directory, preferring "
+            "current.ndjson first and then the newest rotated files by mtime."
+        ),
+    )
+    parser.add_argument(
         "--limit",
         type=int,
         default=200,
@@ -295,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
     if int(args.event_tail_lines) < 0:
         parser.error("--event-tail-lines must be non-negative")
+    if int(args.max_event_files_per_bot) < 0:
+        parser.error("--max-event-files-per-bot must be non-negative")
     try:
         report = build_event_report(
             args.path,
@@ -324,6 +336,7 @@ def main(argv: list[str] | None = None) -> int:
             since_ms=since_ms,
             until_ms=args.until_ms,
             event_tail_lines=int(args.event_tail_lines),
+            max_event_files_per_bot=int(args.max_event_files_per_bot),
             limit=args.limit,
             include_data=bool(args.include_data),
             include_rotated=bool(args.include_rotated),

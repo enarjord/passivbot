@@ -1449,6 +1449,107 @@ def test_event_query_event_tail_lines_bounds_window_scan(tmp_path):
     ]
 
 
+def test_event_query_max_event_files_per_bot_is_fair(tmp_path):
+    paths = {
+        "binance_old": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-06-25T00-00-00.ndjson",
+        "binance_new": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-06-26T00-00-00.ndjson",
+        "binance_current": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "current.ndjson",
+        "okx_old": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "2026-06-25T00-00-00.ndjson",
+        "okx_new": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "2026-06-26T00-00-00.ndjson",
+        "okx_current": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "current.ndjson",
+    }
+    for idx, (name, path) in enumerate(paths.items(), start=1):
+        exchange = "okx" if name.startswith("okx") else "binance"
+        user = "okx_01" if name.startswith("okx") else "binance_01"
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    cycle_id=f"cy_{name}",
+                    seq=idx,
+                    ts=idx * 1000,
+                    exchange=exchange,
+                    user=user,
+                )
+            ],
+        )
+    os.utime(paths["binance_old"], (1000, 1000))
+    os.utime(paths["binance_new"], (2000, 2000))
+    os.utime(paths["binance_current"], (1500, 1500))
+    os.utime(paths["okx_old"], (1100, 1100))
+    os.utime(paths["okx_new"], (2100, 2100))
+    os.utime(paths["okx_current"], (1600, 1600))
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+
+    assert report["ok"] is True
+    assert report["files"] == [
+        str(paths["okx_current"]),
+        str(paths["binance_current"]),
+        str(paths["okx_new"]),
+        str(paths["binance_new"]),
+    ]
+    assert report["files_scanned"] == 4
+    assert report["records_total"] == 4
+    assert report["cycle_ids_sample"] == [
+        {"cycle_id": "cy_okx_current", "events": 1},
+        {"cycle_id": "cy_binance_current", "events": 1},
+        {"cycle_id": "cy_okx_new", "events": 1},
+        {"cycle_id": "cy_binance_new", "events": 1},
+    ]
+    assert report["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 4,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "files_skipped_before_window": 0,
+        "max_event_files_per_bot": 2,
+        "event_file_limit_scope": "per_bot",
+        "event_file_limit_groups": 2,
+        "event_files_before_limit": 6,
+        "event_files_skipped_by_limit": 2,
+        "event_file_limit_order": "current_then_recent_mtime",
+    }
+
+
 def test_event_file_rows_seek_tail_skips_plain_ndjson_prefix(tmp_path):
     path = tmp_path / "current.ndjson"
     old_prefix = json.dumps({"seq": 1, "payload": "x" * 80_000})
@@ -2020,6 +2121,61 @@ def test_live_event_query_cli_rejects_negative_event_tail_lines(tmp_path, capsys
     assert exc_info.value.code == 2
     err = capsys.readouterr().err
     assert "--event-tail-lines must be non-negative" in err
+
+
+def test_live_event_query_cli_accepts_max_event_files_per_bot(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-06-25T00-00-00.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_old",
+                seq=1,
+                ts=1000,
+            )
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                cycle_id="cy_current",
+                seq=2,
+                ts=2000,
+            )
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--include-rotated",
+                "--max-event-files-per-bot",
+                "1",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["files"] == [str(events_dir / "current.ndjson")]
+    assert report["records_total"] == 1
+    assert report["event_window"]["max_event_files_per_bot"] == 1
+    assert report["event_window"]["event_file_limit_scope"] == "per_bot"
+    assert report["event_window"]["event_files_skipped_by_limit"] == 1
+    assert report["cycle_ids_sample"] == [{"cycle_id": "cy_current", "events": 1}]
+
+
+def test_live_event_query_cli_rejects_negative_max_event_files_per_bot(tmp_path, capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_event_query.main([str(tmp_path), "--max-event-files-per-bot", "-1"])
+    assert exc_info.value.code == 2
+    err = capsys.readouterr().err
+    assert "--max-event-files-per-bot must be non-negative" in err
 
 
 def test_live_event_query_cli_accepts_additional_id_scopes(tmp_path, capsys):
