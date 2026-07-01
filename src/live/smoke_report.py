@@ -60,6 +60,19 @@ REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
 FILL_REFRESH_HEALTH_GROUP_LIMIT = 20
 FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
+_SMOKE_REPORT_SECTION_BASE_KEYS = (
+    "ok",
+    "attention",
+    "hard_failures",
+    "attention_count",
+    "hard_failure_sources",
+    "attention_sources",
+    "repository",
+    "monitor",
+    "event_window",
+    "problem_event_count",
+    "hard_problem_event_count",
+)
 SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT = 5
 ACCOUNT_CRITICAL_REMOTE_CALL_KIND = "authoritative_state_fetch"
 ACCOUNT_CRITICAL_REMOTE_CALL_SURFACES = frozenset(
@@ -5470,3 +5483,37 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "event_types": shutdown_events.get("event_types") or {},
         },
     }
+
+
+def available_live_smoke_report_sections(report: dict[str, Any]) -> list[str]:
+    return sorted(key for key in report if key not in _SMOKE_REPORT_SECTION_BASE_KEYS)
+
+
+def project_live_smoke_report_sections(
+    report: dict[str, Any],
+    sections: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, Any]:
+    requested = []
+    for section in sections:
+        normalized = str(section).strip()
+        if normalized and normalized not in requested:
+            requested.append(normalized)
+    if not requested or "all" in requested:
+        return report
+
+    available = available_live_smoke_report_sections(report)
+    available_set = set(available)
+    unknown = [section for section in requested if section not in available_set]
+    if unknown:
+        raise ValueError(
+            "unknown --section value(s): "
+            + ", ".join(unknown)
+            + "; available sections: "
+            + ", ".join(available)
+            + "; use all for the full report"
+        )
+
+    projected = {key: report[key] for key in _SMOKE_REPORT_SECTION_BASE_KEYS if key in report}
+    for section in requested:
+        projected[section] = report[section]
+    return projected

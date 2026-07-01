@@ -157,7 +157,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   from each event file; the default `0` keeps full event validation.
 - `passivbot tool live-smoke-report` summarizes local live monitor events and text logs for
   operator smoke-test evidence. Use `--summary` for bounded event groups and log matches, or
-  `--brief` for top-level counters suitable for repeated VPS smoke loops.
+  `--brief` for top-level counters suitable for repeated VPS smoke loops. Use
+  `--section SECTION` one or more times to emit selected top-level smoke-report
+  sections plus common smoke metadata after the full/summary/brief projection is
+  selected, for example `--brief --section fill_refresh`.
   Full, summary, and brief output include text-log scan bounds and bounded
   text-log window counters so time-windowed smoke evidence shows the configured
   file/tail/match limits plus how many log lines were considered, skipped

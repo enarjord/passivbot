@@ -15,6 +15,7 @@ from live.smoke_report import (  # noqa: E402
     LOG_WINDOW_UNPARSED_POLICIES,
     build_live_smoke_report,
     default_logs_root_for_monitor,
+    project_live_smoke_report_sections,
     summarize_live_smoke_report,
     summarize_live_smoke_report_brief,
 )
@@ -170,6 +171,15 @@ def build_parser() -> argparse.ArgumentParser:
             "matches. Implies --summary."
         ),
     )
+    parser.add_argument(
+        "--section",
+        action="append",
+        default=[],
+        help=(
+            "Only emit one top-level smoke-report section plus common smoke "
+            "metadata. May be repeated; use all for the default selected output."
+        ),
+    )
     return parser
 
 
@@ -219,6 +229,10 @@ def main(argv: list[str] | None = None) -> int:
         output = summarize_live_smoke_report(report)
     else:
         output = report
+    try:
+        output = project_live_smoke_report_sections(output, args.section)
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(output, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 

@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `a85427bf` after PR #942, `Report fill refresh performance`.
+- `2dab5af0` after PR #943, `Filter live performance report sections`.
 
 Current review gate:
 
@@ -49,6 +49,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #943 at `2dab5af0`.
+- PR #943 added `live-performance-report --section`, allowing focused
+  top-level report sections plus common metadata after the full or summary
+  projection. The slice was read-only operator/report tooling and did not
+  change event producers, exchange calls, cache mutation, readiness gates,
+  console routing, order logic, risk logic, or trading behavior.
+- PR #943 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `a85427bf` to `2dab5af0` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A 2-minute smoke after deploy reported `ok=true`, `hard_failures=0`, clean
+  tracked repository state at `2dab5af0`, all five configured bots matched, no
+  failed account-critical remote calls, and `fill_refresh` populated with eight
+  succeeded and zero failed refreshes. A focused 10-minute performance report
+  using `--summary --section fill_refresh` then returned only common metadata
+  plus `fill_refresh`, with `fill_refresh.total_events=38`,
+  `failed_groups=0`, and `latest_failed_groups=0`.
 - Repository pulled through PR #942 at `a85427bf`.
 - PR #942 added a `fill_refresh` section to `live-performance-report`, derived
   only from existing `fills.refresh_summary` events. It also includes
