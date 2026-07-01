@@ -2789,6 +2789,75 @@ def test_unstuck_status_event_emits_structured_summary():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_trailing_status_event_emits_structured_summary():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_trailing_status_event = pb_mod.Passivbot._emit_trailing_status_event
+
+        def __init__(self):
+            self.exchange = "hyperliquid"
+            self.user = "hyperliquid_canon"
+            self.bot_id = "bot_1"
+            self._live_event_current_cycle_id = "cy_trailing_status"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_trailing_status_event(
+        symbol="BTC/USDC:USDC",
+        pside="long",
+        kind="close",
+        changed=True,
+        payload={
+            "kind": "close",
+            "strategy_kind": "trailing_martingale",
+            "status": "waiting_retracement",
+            "order_type": "close_trailing_long",
+            "triggered": False,
+            "threshold_met": True,
+            "retracement_met": False,
+            "threshold_pct": 0.01,
+            "threshold_price": 101_000.0,
+            "retracement_pct": 0.004,
+            "retracement_price": 100_596.0,
+            "current_price": 100_700.0,
+            "position_price": 100_000.0,
+            "position_size": 0.01,
+        },
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.TRAILING_STATUS
+    assert event.cycle_id == "cy_trailing_status"
+    assert event.symbol == "BTC/USDC:USDC"
+    assert event.pside == "long"
+    assert event.reason_code == "trailing_status"
+    assert event.component == "risk.trailing.status"
+    assert event.tags == ("risk", "trailing", "position")
+    assert event.data["changed"] is True
+    assert event.data["kind"] == "close"
+    assert event.data["trailing_status"] == "waiting_retracement"
+    assert event.data["threshold_met"] is True
+    assert event.data["retracement_met"] is False
+    assert event.data["threshold_pct"] == pytest.approx(0.01)
+    assert event.data["threshold_price"] == pytest.approx(101_000.0)
+    assert event.data["retracement_pct"] == pytest.approx(0.004)
+    assert event.data["retracement_price"] == pytest.approx(100_596.0)
+    assert event.data["threshold_projection_retracement_price"] == pytest.approx(
+        100_596.0
+    )
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_unstuck_selection_event_emits_structured_summary():
     import passivbot as pb_mod
 

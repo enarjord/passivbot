@@ -86,6 +86,7 @@ across time.
 - `snapshot.built`
 - `state.refresh_progress`
 - `state.refresh_timing`
+- `trailing.status`
 - `unstuck.selection`
 - `unstuck.status`
 
@@ -134,6 +135,7 @@ across time.
 - `tail`
 - `timeout`
 - `time_sync`
+- `trailing`
 - `unavailable`
 - `unstuck`
 - `warmup`
@@ -198,6 +200,7 @@ across time.
 - `staged_refresh_timing`
 - `state_change_detected`
 - `submitted_to_exchange`
+- `trailing_status`
 - `unstuck_selection`
 - `unstuck_status`
 - `warmup_cache_decision`

@@ -246,7 +246,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
         EventTypes.HSL_COOLDOWN_STARTED,
         EventTypes.HSL_COOLDOWN_ENDED,
-        EventTypes.UNSTUCK_STATUS,
         EventTypes.UNSTUCK_SELECTION,
         EventTypes.REALIZED_LOSS_GATE_BLOCKED,
     ):
@@ -264,6 +263,10 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].text is True
+    assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].console is True
+    assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].text is True
+    assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].console is True
+    assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].text is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
@@ -886,6 +889,88 @@ def test_console_format_summarizes_hsl_cooldown_seconds():
     assert format_console_event(event) == (
         "[risk] degraded tier=red cooldown=300s symbol=NEAR/USDT:USDT "
         "pside=long reason=cooldown_active"
+    )
+
+
+def test_console_format_summarizes_trailing_status():
+    event = LiveEvent(
+        EventTypes.TRAILING_STATUS,
+        status="succeeded",
+        cycle_id="cy_trailing",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code="trailing_status",
+        data={
+            "kind": "entry",
+            "trailing_status": "waiting_threshold",
+            "threshold_met": False,
+            "threshold_pct": 0.0125,
+            "threshold_price": 98_750.0,
+            "retracement_met": False,
+            "retracement_pct": 0.004,
+            "retracement_price": 99_145.0,
+            "threshold_projection_retracement_price": 99_145.0,
+            "current_price": 101_000.0,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[trailing] succeeded cycle=cy_trailing kind=entry "
+        "trailing_status=waiting_threshold threshold_met=False threshold=1.2500% "
+        "threshold_price=98750 retracement_met=False retracement=0.4000% "
+        "retracement_price=99145 threshold_retrace_price=99145 current=101000 "
+        "symbol=BTC/USDT:USDT pside=long reason=trailing_status"
+    )
+
+
+def test_console_format_summarizes_unsupported_trailing_status():
+    event = LiveEvent(
+        EventTypes.TRAILING_STATUS,
+        status="succeeded",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        reason_code="trailing_status",
+        data={
+            "kind": "position",
+            "diagnostics_supported": False,
+            "strategy_kind": "trailing_grid_v7",
+            "unsupported_reason": "monitor trailing diagnostics use trailing_martingale helper formulas",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[trailing] succeeded kind=position strategy=trailing_grid_v7 "
+        "unsupported=monitor trailing diagnostics use trailing_martingale helper "
+        "formulas symbol=BTC/USDT:USDT pside=long reason=trailing_status"
+    )
+
+
+def test_console_format_summarizes_unstuck_status():
+    event = LiveEvent(
+        EventTypes.UNSTUCK_STATUS,
+        status="succeeded",
+        reason_code="unstuck_status",
+        data={
+            "changed": True,
+            "over_budget_sides": ["long"],
+            "sides": {
+                "long": {
+                    "status": "ok",
+                    "allowance": -12.3,
+                    "over_budget": True,
+                    "next_symbol": "BTC/USDT:USDT",
+                    "next_target_price": 101_000.0,
+                    "next_unstuck_trigger_distance_ratio": 0.0125,
+                },
+                "short": {"status": "disabled"},
+            },
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[unstuck] succeeded long:ok:allowance=-12.3:over_budget:"
+        "next=BTC/USDT:USDT:target=101000:ema_gate=1.2500% "
+        "short:disabled over_budget=long changed=true reason=unstuck_status"
     )
 
 

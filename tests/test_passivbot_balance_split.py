@@ -2944,6 +2944,56 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
     assert captured_events[2]["symbol"] == "ADA/USDT:USDT"
 
 
+def test_trailing_status_emits_on_change_then_hourly(monkeypatch):
+    bot = Passivbot.__new__(Passivbot)
+    bot._trailing_last_status_check_ms = 0
+    bot._trailing_status_check_interval_ms = 5 * 60 * 1000
+    bot._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._trailing_last_status_signature = None
+    bot._trailing_last_status_info_ms = 0
+    captured_events = []
+    bot._emit_trailing_status_event = lambda **kwargs: captured_events.append(kwargs)
+    now = [5 * 60 * 1000]
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: now[0])
+
+    item = {
+        "symbol": "BTC/USDT:USDT",
+        "pside": "long",
+        "kind": "entry",
+        "payload": {
+            "kind": "entry",
+            "status": "waiting_threshold",
+            "threshold_met": False,
+            "retracement_met": False,
+            "threshold_pct": 0.01,
+            "retracement_pct": 0.004,
+            "threshold_price": 99_000.0,
+            "retracement_price": 99_396.0,
+        },
+    }
+    items = [deepcopy(item)]
+    bot._build_trailing_status_items = lambda: deepcopy(items)
+
+    bot._maybe_log_trailing_status()
+    now[0] += 5 * 60 * 1000
+    bot._maybe_log_trailing_status()
+    items[0]["payload"]["status"] = "waiting_retracement"
+    items[0]["payload"]["threshold_met"] = True
+    now[0] += 5 * 60 * 1000
+    bot._maybe_log_trailing_status()
+    now[0] += 5 * 60 * 1000
+    bot._maybe_log_trailing_status()
+    now[0] += 60 * 60 * 1000
+    bot._maybe_log_trailing_status()
+
+    assert len(captured_events) == 3
+    assert [event["changed"] for event in captured_events] == [True, True, False]
+    assert captured_events[0]["symbol"] == "BTC/USDT:USDT"
+    assert captured_events[0]["pside"] == "long"
+    assert captured_events[0]["kind"] == "entry"
+    assert captured_events[1]["payload"]["status"] == "waiting_retracement"
+
+
 @pytest.mark.asyncio
 async def test_update_pnls_all_lookback_backfills_when_cache_scope_is_narrower():
     bot = Passivbot.__new__(Passivbot)

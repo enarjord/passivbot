@@ -127,6 +127,7 @@ class EventTypes:
     HSL_RED_FINALIZED_WITHOUT_ORDER = "hsl.red_finalized_without_order"
     HSL_COOLDOWN_STARTED = "hsl.cooldown_started"
     HSL_COOLDOWN_ENDED = "hsl.cooldown_ended"
+    TRAILING_STATUS = "trailing.status"
     UNSTUCK_STATUS = "unstuck.status"
     UNSTUCK_SELECTION = "unstuck.selection"
     RISK_ENTRY_COOLDOWN_DELTA_ANCHORED = "risk.entry_cooldown_delta_anchored"
@@ -178,6 +179,7 @@ class EventTags:
     TAIL = "tail"
     TIMEOUT = "timeout"
     TIME_SYNC = "time_sync"
+    TRAILING = "trailing"
     UNAVAILABLE = "unavailable"
     UNSTUCK = "unstuck"
     WARMUP = "warmup"
@@ -250,6 +252,7 @@ class ReasonCodes:
     STATE_CHANGE_DETECTED = "state_change_detected"
     SUBMITTED_TO_EXCHANGE = "submitted_to_exchange"
     REALIZED_LOSS_GATE_BLOCKED = "realized_loss_gate_blocked"
+    TRAILING_STATUS = "trailing_status"
     UNSTUCK_SELECTION = "unstuck_selection"
     UNSTUCK_STATUS = "unstuck_status"
     WARMUP_CACHE_DECISION = "warmup_cache_decision"
@@ -402,6 +405,7 @@ PHASE1_EVENT_TYPES = {
     EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
     EventTypes.HSL_COOLDOWN_STARTED,
     EventTypes.HSL_COOLDOWN_ENDED,
+    EventTypes.TRAILING_STATUS,
     EventTypes.UNSTUCK_STATUS,
     EventTypes.UNSTUCK_SELECTION,
     EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED,
@@ -711,7 +715,8 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_STARTED: EventRoute(console=False, text=False),
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
-    EventTypes.UNSTUCK_STATUS: EventRoute(console=False, text=False),
+    EventTypes.TRAILING_STATUS: EventRoute(console=True, text=True),
+    EventTypes.UNSTUCK_STATUS: EventRoute(console=True, text=True),
     EventTypes.UNSTUCK_SELECTION: EventRoute(console=False, text=False),
     EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED: EventRoute(
         console=False, text=False
@@ -778,6 +783,8 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_CONFIRMATION_SATISFIED: "execute",
     EventTypes.EXECUTION_CONFIRMATION_TIMEOUT: "execute",
     EventTypes.HSL_STATUS: "risk",
+    EventTypes.TRAILING_STATUS: "trailing",
+    EventTypes.UNSTUCK_STATUS: "unstuck",
     EventTypes.SINK_DEGRADED: "logging",
 }
 
@@ -997,6 +1004,87 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    kind = _data_str(data, "kind")
+    if kind:
+        parts.append(f"kind={kind}")
+    if data.get("diagnostics_supported") is False:
+        strategy_kind = _data_str(data, "strategy_kind")
+        if strategy_kind:
+            parts.append(f"strategy={strategy_kind}")
+        reason = _data_str(data, "unsupported_reason")
+        if reason:
+            parts.append(f"unsupported={reason}")
+        return parts
+    trailing_status = _data_str(data, "trailing_status")
+    if trailing_status:
+        parts.append(f"trailing_status={trailing_status}")
+    threshold_met = data.get("threshold_met")
+    if threshold_met is not None:
+        parts.append(f"threshold_met={bool(threshold_met)}")
+    threshold_pct = _data_number(data, "threshold_pct")
+    if threshold_pct is not None:
+        parts.append(f"threshold={threshold_pct * 100.0:.4f}%")
+    threshold_price = _data_float(data, "threshold_price")
+    if threshold_price:
+        parts.append(f"threshold_price={threshold_price}")
+    retracement_met = data.get("retracement_met")
+    if retracement_met is not None:
+        parts.append(f"retracement_met={bool(retracement_met)}")
+    retracement_pct = _data_number(data, "retracement_pct")
+    if retracement_pct is not None:
+        parts.append(f"retracement={retracement_pct * 100.0:.4f}%")
+    retracement_price = _data_float(data, "retracement_price")
+    if retracement_price:
+        parts.append(f"retracement_price={retracement_price}")
+    projected = _data_float(data, "threshold_projection_retracement_price")
+    if projected:
+        parts.append(f"threshold_retrace_price={projected}")
+    current_price = _data_float(data, "current_price")
+    if current_price:
+        parts.append(f"current={current_price}")
+    return parts
+
+
+def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    sides = data.get("sides")
+    if isinstance(sides, Mapping):
+        side_parts = []
+        for pside in ("long", "short"):
+            info = sides.get(pside)
+            if not isinstance(info, Mapping):
+                continue
+            status = str(info.get("status") or "unknown")
+            bit = f"{pside}:{status}"
+            allowance = _data_float(info, "allowance")
+            if allowance:
+                bit += f":allowance={allowance}"
+            if info.get("over_budget") is True:
+                bit += ":over_budget"
+            next_symbol = _data_str(info, "next_symbol")
+            if next_symbol:
+                bit += f":next={next_symbol}"
+            target_price = _data_float(info, "next_target_price")
+            if target_price:
+                bit += f":target={target_price}"
+            trigger_dist = _data_number(info, "next_unstuck_trigger_distance_ratio")
+            if trigger_dist is not None:
+                bit += f":ema_gate={trigger_dist * 100.0:.4f}%"
+            side_parts.append(bit)
+        if side_parts:
+            parts.append(" ".join(side_parts))
+    over_budget = _compact_csv(data.get("over_budget_sides"), limit=2)
+    if over_budget:
+        parts.append(f"over_budget={over_budget}")
+    if data.get("changed") is True:
+        parts.append("changed=true")
+    return parts
+
+
 def _console_data_summary(event: LiveEvent) -> list[str]:
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
         return _console_order_wave_summary(event)
@@ -1024,6 +1112,10 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_rust_summary(event)
     if event.event_type == EventTypes.HSL_STATUS:
         return _console_hsl_status_summary(event)
+    if event.event_type == EventTypes.TRAILING_STATUS:
+        return _console_trailing_status_summary(event)
+    if event.event_type == EventTypes.UNSTUCK_STATUS:
+        return _console_unstuck_status_summary(event)
     return []
 
 

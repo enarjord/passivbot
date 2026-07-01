@@ -651,6 +651,7 @@ class Passivbot:
     _emit_entry_min_effective_cost_blocked_event = (
         live_event_emitters.emit_entry_min_effective_cost_blocked_event
     )
+    _emit_trailing_status_event = live_event_emitters.emit_trailing_status_event
     _emit_unstuck_status_event = live_event_emitters.emit_unstuck_status_event
     _emit_unstuck_selection_event = live_event_emitters.emit_unstuck_selection_event
     _emit_forager_feature_unavailable_event = (
@@ -1181,6 +1182,11 @@ class Passivbot:
         self._unstuck_last_selection_info_ms = 0
         self._unstuck_allowance_log_hyst_snap_pct = 0.002
         self._unstuck_allowance_log_snap_by_pside = {}
+        self._trailing_last_status_check_ms = 0
+        self._trailing_status_check_interval_ms = 5 * 60 * 1000
+        self._trailing_unchanged_info_log_interval_ms = 60 * 60 * 1000
+        self._trailing_last_status_signature = None
+        self._trailing_last_status_info_ms = 0
 
         # Realized-loss gate logging throttle
         self._loss_gate_last_log_ms = {}
@@ -3371,6 +3377,278 @@ class Passivbot:
         )
         self._unstuck_last_selection_signature = signature
         self._unstuck_last_selection_info_ms = now_ms
+
+    def _active_trailing_position_sides(self) -> list[tuple[str, str, dict]]:
+        out: list[tuple[str, str, dict]] = []
+        positions = getattr(self, "positions", {}) or {}
+        if not isinstance(positions, dict):
+            return out
+        for symbol, pos_entry in sorted(positions.items()):
+            if not isinstance(pos_entry, dict):
+                continue
+            for pside in ("long", "short"):
+                pos = pos_entry.get(pside, {})
+                if not isinstance(pos, dict):
+                    continue
+                try:
+                    size = float(pos.get("size", 0.0) or 0.0)
+                except (TypeError, ValueError):
+                    continue
+                if size == 0.0:
+                    continue
+                try:
+                    trailing_active = bool(self.is_trailing(symbol, pside))
+                except Exception:
+                    trailing_active = False
+                if trailing_active:
+                    out.append((str(symbol), pside, dict(pos)))
+        return out
+
+    @staticmethod
+    def _trailing_status_float(value, default: float = 0.0) -> float:
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return float(default)
+        return number if math.isfinite(number) else float(default)
+
+    @staticmethod
+    def _trailing_status_signature(items: list[dict]) -> tuple:
+        signature = []
+        for item in items:
+            payload = item.get("payload", {}) if isinstance(item, dict) else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            signature.append(
+                (
+                    item.get("symbol"),
+                    item.get("pside"),
+                    item.get("kind"),
+                    bool(payload.get("diagnostics_supported", True)),
+                    str(
+                        payload.get("status")
+                        or payload.get("trailing_status")
+                        or "unknown"
+                    ),
+                    bool(payload.get("threshold_met"))
+                    if "threshold_met" in payload
+                    else None,
+                    bool(payload.get("retracement_met"))
+                    if "retracement_met" in payload
+                    else None,
+                    round(
+                        Passivbot._trailing_status_float(payload.get("threshold_pct")),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(
+                            payload.get("retracement_pct")
+                        ),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(payload.get("threshold_price")),
+                        8,
+                    ),
+                    round(
+                        Passivbot._trailing_status_float(
+                            payload.get("retracement_price")
+                        ),
+                        8,
+                    ),
+                    str(payload.get("unsupported_reason") or ""),
+                )
+            )
+        return tuple(sorted(signature))
+
+    def _unsupported_trailing_status_item(
+        self,
+        *,
+        symbol: str,
+        pside: str,
+        pos: dict,
+        strategy_kind: str,
+        reason: str,
+    ) -> dict:
+        return {
+            "symbol": symbol,
+            "pside": pside,
+            "kind": "position",
+            "payload": {
+                "kind": "position",
+                "diagnostics_supported": False,
+                "strategy_kind": strategy_kind,
+                "unsupported_reason": reason,
+                "status": "active_unsupported",
+                "position_size": self._trailing_status_float(pos.get("size")),
+                "position_price": self._trailing_status_float(pos.get("price")),
+            },
+        }
+
+    def _build_trailing_status_items(self) -> list[dict]:
+        active_sides = self._active_trailing_position_sides()
+        if not active_sides:
+            return []
+        strategy_kind = normalize_strategy_kind(
+            self.config.get("live", {}).get("strategy_kind")
+            if isinstance(getattr(self, "config", None), dict)
+            else None
+        )
+        try:
+            market = self._build_monitor_market_section()
+        except Exception as exc:
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=strategy_kind,
+                    reason=f"market_snapshot_unavailable:{type(exc).__name__}",
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        try:
+            balance_raw = float(self.get_raw_balance())
+        except Exception:
+            balance_raw = float(getattr(self, "balance_raw", 0.0) or 0.0)
+        try:
+            trailing_section = self._build_monitor_trailing_section(
+                balance_raw=balance_raw,
+                market=market,
+            )
+        except Exception as exc:
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=strategy_kind,
+                    reason=f"diagnostic_build_failed:{type(exc).__name__}",
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        meta = (
+            trailing_section.get("_meta", {})
+            if isinstance(trailing_section, dict)
+            else {}
+        )
+        if isinstance(meta, dict) and meta.get("diagnostics_supported") is False:
+            reason = str(meta.get("reason") or "diagnostics_unsupported")
+            return [
+                self._unsupported_trailing_status_item(
+                    symbol=symbol,
+                    pside=pside,
+                    pos=pos,
+                    strategy_kind=str(meta.get("strategy_kind") or strategy_kind),
+                    reason=reason,
+                )
+                for symbol, pside, pos in active_sides
+            ]
+        out: list[dict] = []
+        for symbol, pside, pos in active_sides:
+            symbol_section = (
+                trailing_section.get(symbol, {})
+                if isinstance(trailing_section, dict)
+                else {}
+            )
+            side_section = (
+                symbol_section.get(pside, {})
+                if isinstance(symbol_section, dict)
+                else {}
+            )
+            if not isinstance(side_section, dict):
+                out.append(
+                    self._unsupported_trailing_status_item(
+                        symbol=symbol,
+                        pside=pside,
+                        pos=pos,
+                        strategy_kind=strategy_kind,
+                        reason="diagnostic_unavailable",
+                    )
+                )
+                continue
+            emitted = False
+            for kind in ("entry", "close"):
+                payload = side_section.get(kind)
+                if not isinstance(payload, dict):
+                    continue
+                item_payload = dict(payload)
+                item_payload["strategy_kind"] = strategy_kind
+                item_payload["position_size"] = self._trailing_status_float(
+                    pos.get("size")
+                )
+                item_payload["position_price"] = self._trailing_status_float(
+                    pos.get("price")
+                )
+                item_payload["diagnostics_supported"] = True
+                out.append(
+                    {
+                        "symbol": symbol,
+                        "pside": pside,
+                        "kind": kind,
+                        "payload": item_payload,
+                    }
+                )
+                emitted = True
+            if not emitted:
+                out.append(
+                    self._unsupported_trailing_status_item(
+                        symbol=symbol,
+                        pside=pside,
+                        pos=pos,
+                        strategy_kind=strategy_kind,
+                        reason="no_trailing_diagnostic",
+                    )
+                )
+        return out
+
+    def _maybe_log_trailing_status(self) -> None:
+        now_ms = utc_ms()
+        last_check = int(getattr(self, "_trailing_last_status_check_ms", 0) or 0)
+        check_interval = int(
+            getattr(self, "_trailing_status_check_interval_ms", 5 * 60 * 1000)
+            or 0
+        )
+        if check_interval > 0 and (now_ms - last_check) < check_interval:
+            return
+        self._trailing_last_status_check_ms = now_ms
+        try:
+            items = self._build_trailing_status_items()
+        except Exception as exc:
+            logging.debug("[trailing] failed building status event items: %s", exc)
+            return
+        if not items:
+            return
+        signature = self._trailing_status_signature(items)
+        status_changed = signature != getattr(
+            self, "_trailing_last_status_signature", None
+        )
+        last_info_ms = int(getattr(self, "_trailing_last_status_info_ms", 0) or 0)
+        unchanged_interval = int(
+            getattr(
+                self,
+                "_trailing_unchanged_info_log_interval_ms",
+                60 * 60 * 1000,
+            )
+            or 0
+        )
+        if (
+            not status_changed
+            and unchanged_interval > 0
+            and (now_ms - last_info_ms) < unchanged_interval
+        ):
+            return
+        for item in items:
+            payload = dict(item.get("payload", {}) or {})
+            self._emit_trailing_status_event(
+                symbol=str(item.get("symbol") or ""),
+                pside=str(item.get("pside") or ""),
+                kind=str(item.get("kind") or "position"),
+                payload=payload,
+                changed=status_changed,
+            )
+        self._trailing_last_status_signature = signature
+        self._trailing_last_status_info_ms = now_ms
 
     async def start_bot(self):
         """Initialise state, warm cached data, and launch background loops."""
@@ -5965,6 +6243,7 @@ class Passivbot:
                     self._last_loop_duration_ms = utc_ms() - loop_start_ms
                     self._last_loop_timing_ms = dict(loop_timings_ms)
                     self._maybe_log_health_summary()
+                    self._maybe_log_trailing_status()
                     self._maybe_log_unstuck_status()
                     self._set_log_silence_watchdog_context(
                         phase="runtime", stage="flush_snapshot"
@@ -6114,6 +6393,7 @@ class Passivbot:
                 self._last_loop_timing_ms = dict(loop_timings_ms)
                 # Periodic health summary
                 self._maybe_log_health_summary()
+                self._maybe_log_trailing_status()
                 self._maybe_log_unstuck_status()
                 self._set_log_silence_watchdog_context(
                     phase="runtime", stage="flush_snapshot"

@@ -19,26 +19,26 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `a989a3f2` after PR #958, `Refresh v8 long bot defaults`.
+- `c763d84d` after PR #959, `Project HSL status into event console`.
 
 Current logging-overhaul head:
 
-- `d038c405` after PR #957, `Add opt-in live event console sink`.
+- `c763d84d` after PR #959, `Project HSL status into event console`.
 
 Current work:
 
-- Branch `codex/v8-hsl-status-console-projection` improves the opt-in
-  structured-event console projection for HSL status. It formats existing
-  `hsl.status` distance-to-red fields for operator console use, adds a
-  coin-mode `has_open_position` event field, and filters flat green coin
-  universe status away from console/text sinks while preserving the full
-  structured event stream. The slice is observability-only and remains disabled
-  unless `logging.live_event_console` or `PASSIVBOT_LIVE_EVENT_CONSOLE` is
-  enabled: no exchange calls, cache mutation, readiness gates, smoke verdict
-  changes, process signaling, order construction, risk thresholds, or trading
-  behavior changes. Expected validation is focused event-bus tests, py_compile
-  for touched files, `git diff --check`, and an added-line silent-handling
-  scan.
+- Branch `codex/v8-position-status-console` adds structured
+  `trailing.status` events for active trailing positions and projects
+  `trailing.status` plus existing `unstuck.status` into the opt-in event-console.
+  The trailing producer uses already-prepared monitor/trailing diagnostic data,
+  emits on state-signature change plus hourly heartbeat with a five-minute check
+  interval, and reports unsupported strategy diagnostics explicitly rather than
+  reimplementing Rust strategy logic in Python. The slice is observability-only:
+  no exchange calls, cache mutation, readiness gates, smoke verdict changes,
+  process signaling, order construction, risk thresholds, or trading behavior
+  changes. Expected validation is focused event-bus/monitor/balance-split tests,
+  py_compile for touched files, `git diff --check`, and an added-line
+  silent-handling scan.
 
 Current review gate:
 
