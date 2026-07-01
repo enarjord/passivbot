@@ -3872,6 +3872,26 @@ def test_live_event_pipeline_install_can_enable_console_projection_without_monit
     assert bot._live_event_pipeline is None
 
 
+def test_live_event_pipeline_records_candle_remote_fetch_only_with_monitor_sink():
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _live_event_pipeline_records_candle_remote_fetch = (
+            pb_mod.Passivbot._live_event_pipeline_records_candle_remote_fetch
+        )
+
+    bot = FakeBot()
+    bot._live_event_pipeline = object()
+    bot.monitor_publisher = None
+    assert bot._live_event_pipeline_records_candle_remote_fetch() is False
+
+    bot.monitor_publisher = object()
+    assert bot._live_event_pipeline_records_candle_remote_fetch() is True
+
+    bot._live_event_pipeline = None
+    assert bot._live_event_pipeline_records_candle_remote_fetch() is False
+
+
 def test_close_live_event_pipeline_is_best_effort_and_clears_reference():
     import passivbot as pb_mod
 

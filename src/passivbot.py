@@ -944,7 +944,7 @@ class Passivbot:
             "exchange_name": self.exchange,
             "debug": self.logging_level,
         }
-        if self._live_event_pipeline is not None:
+        if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
@@ -6621,6 +6621,12 @@ class Passivbot:
         )
         self._live_event_pipeline = pipeline
         return pipeline
+
+    def _live_event_pipeline_records_candle_remote_fetch(self) -> bool:
+        return (
+            getattr(self, "_live_event_pipeline", None) is not None
+            and getattr(self, "monitor_publisher", None) is not None
+        )
 
     def _close_live_event_pipeline(self, *, timeout: float = 2.0) -> bool:
         pipeline = getattr(self, "_live_event_pipeline", None)
