@@ -52,7 +52,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "ema_span_0",
         path: &["ema_span_0"],
-        long_default: 270.0,
+        long_default: 200.0,
         short_default: 60.0,
         long_bounds: &[100.0, 2880.0, 10.0],
         short_bounds: &[100.0, 2880.0, 10.0],
@@ -60,7 +60,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "ema_span_1",
         path: &["ema_span_1"],
-        long_default: 360.0,
+        long_default: 150.0,
         short_default: 60.0,
         long_bounds: &[100.0, 2880.0, 10.0],
         short_bounds: &[100.0, 2880.0, 10.0],
@@ -68,7 +68,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "volatility_ema_span_1h",
         path: &["volatility_ema_span_1h"],
-        long_default: 881.0,
+        long_default: 672.0,
         short_default: 672.0,
         long_bounds: &[168.0, 2016.0, 1.0],
         short_bounds: &[168.0, 2016.0, 1.0],
@@ -76,7 +76,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "volatility_ema_span_1m",
         path: &["volatility_ema_span_1m"],
-        long_default: 1377.0,
+        long_default: 1049.0,
         short_default: 5.0,
         long_bounds: &[5.0, 1440.0, 1.0],
         short_bounds: &[5.0, 1440.0, 1.0],
@@ -84,7 +84,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_double_down_factor",
         path: &["entry", "double_down_factor"],
-        long_default: 0.78,
+        long_default: 0.39,
         short_default: 0.2,
         long_bounds: &[0.2, 1.0, 0.01],
         short_bounds: &[0.2, 1.0, 0.01],
@@ -92,7 +92,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_initial_qty_pct",
         path: &["entry", "initial_qty_pct"],
-        long_default: 0.0179,
+        long_default: 0.0703,
         short_default: 0.005,
         long_bounds: &[0.005, 0.1, 0.0001],
         short_bounds: &[0.005, 0.1, 0.0001],
@@ -100,7 +100,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_initial_ema_dist",
         path: &["entry", "initial_ema_dist"],
-        long_default: 0.0175,
+        long_default: 0.0193,
         short_default: -0.1,
         long_bounds: &[-0.1, 0.02, 0.0001],
         short_bounds: &[-0.1, 0.02, 0.0001],
@@ -108,7 +108,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_threshold_base_pct",
         path: &["entry", "threshold_base_pct"],
-        long_default: 0.0321,
+        long_default: 0.032,
         short_default: 0.001,
         long_bounds: &[0.001, 0.035, 0.0001],
         short_bounds: &[0.001, 0.035, 0.0001],
@@ -116,7 +116,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_threshold_we_weight",
         path: &["entry", "threshold_we_weight"],
-        long_default: 1.973,
+        long_default: 4.821,
         short_default: 0.0,
         long_bounds: &[0.0, 5.0, 0.001],
         short_bounds: &[0.0, 5.0, 0.001],
@@ -124,7 +124,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_threshold_volatility_1h_weight",
         path: &["entry", "threshold_volatility_1h_weight"],
-        long_default: 12.07,
+        long_default: 1.71,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -132,7 +132,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_threshold_volatility_1m_weight",
         path: &["entry", "threshold_volatility_1m_weight"],
-        long_default: 34.58,
+        long_default: 35.44,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -140,7 +140,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_retracement_base_pct",
         path: &["entry", "retracement_base_pct"],
-        long_default: 0.0043,
+        long_default: 0.0006,
         short_default: -0.01,
         long_bounds: &[0.0001, 0.01, 0.0001],
         short_bounds: &[0.0001, 0.01, 0.0001],
@@ -148,7 +148,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_retracement_we_weight",
         path: &["entry", "retracement_we_weight"],
-        long_default: 2.913,
+        long_default: 2.984,
         short_default: 0.0,
         long_bounds: &[0.0, 5.0, 0.001],
         short_bounds: &[0.0, 5.0, 0.001],
@@ -156,7 +156,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_retracement_volatility_1h_weight",
         path: &["entry", "retracement_volatility_1h_weight"],
-        long_default: 27.22,
+        long_default: 6.24,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -164,7 +164,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "entry_retracement_volatility_1m_weight",
         path: &["entry", "retracement_volatility_1m_weight"],
-        long_default: 8.57,
+        long_default: 24.21,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -172,7 +172,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_qty_pct",
         path: &["close", "qty_pct"],
-        long_default: 0.55,
+        long_default: 0.4,
         short_default: 0.05,
         long_bounds: &[0.05, 1.0, 0.01],
         short_bounds: &[0.05, 1.0, 0.01],
@@ -180,7 +180,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_threshold_base_pct",
         path: &["close", "threshold_base_pct"],
-        long_default: -0.0175,
+        long_default: -0.0138,
         short_default: -0.02,
         long_bounds: &[-0.02, 0.02, 0.0001],
         short_bounds: &[-0.02, 0.02, 0.0001],
@@ -188,7 +188,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_threshold_we_weight",
         path: &["close", "threshold_we_weight"],
-        long_default: 0.0158,
+        long_default: 0.0142,
         short_default: -0.1,
         long_bounds: &[-0.1, 0.1, 0.0001],
         short_bounds: &[-0.1, 0.1, 0.0001],
@@ -196,7 +196,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_threshold_volatility_1h_weight",
         path: &["close", "threshold_volatility_1h_weight"],
-        long_default: 0.12,
+        long_default: 0.02,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -204,7 +204,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_threshold_volatility_1m_weight",
         path: &["close", "threshold_volatility_1m_weight"],
-        long_default: 9.89,
+        long_default: 7.58,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -212,7 +212,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_retracement_base_pct",
         path: &["close", "retracement_base_pct"],
-        long_default: 0.0055,
+        long_default: 0.0001,
         short_default: 0.0,
         long_bounds: &[0.0001, 0.01, 0.0001],
         short_bounds: &[0.0001, 0.01, 0.0001],
@@ -220,7 +220,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_retracement_volatility_1h_weight",
         path: &["close", "retracement_volatility_1h_weight"],
-        long_default: 30.15,
+        long_default: 0.93,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],
@@ -228,7 +228,7 @@ const TRAILING_MARTINGALE_PARAM_SEEDS: &[NestedParamSeed] = &[
     NestedParamSeed {
         name: "close_retracement_volatility_1m_weight",
         path: &["close", "retracement_volatility_1m_weight"],
-        long_default: 6.19,
+        long_default: 1.33,
         short_default: 0.01,
         long_bounds: &[0.01, 40.0, 0.01],
         short_bounds: &[0.01, 40.0, 0.01],

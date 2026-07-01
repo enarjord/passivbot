@@ -13,47 +13,47 @@ def _get_shared_bot_defaults():
         "long": {
             "forager": {
                 "score_weights": {
-                    "ema_readiness": 0.23,
-                    "volatility": 0.41,
-                    "volume": 0.36
+                    "ema_readiness": 0.08,
+                    "volatility": 0.48,
+                    "volume": 0.44
                 },
-                "volatility_ema_span_1m": 907.0,
-                "volume_drop_pct": 0.09,
-                "volume_ema_span_1m": 2855.0
+                "volatility_ema_span_1m": 661.0,
+                "volume_drop_pct": 0.06,
+                "volume_ema_span_1m": 2369.0
             },
             "hsl": {
-                "cooldown_minutes_after_red": 4051.0,
-                "ema_span_minutes": 647.0,
+                "cooldown_minutes_after_red": 3981.0,
+                "ema_span_minutes": 644.0,
                 "enabled": False,
                 "no_restart_drawdown_threshold": 1,
                 "orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "panic_close_order_type": "limit",
-                "red_threshold": 0.082,
+                "red_threshold": 0.025,
                 "tier_ratios": {
                     "orange": 0.75,
                     "yellow": 0.5
                 }
             },
             "risk": {
-                "entry_cooldown_minutes": 7.0,
+                "entry_cooldown_minutes": 7.1,
                 "n_positions": 5.0,
                 "position_exposure_enforcer_enabled": False,
                 "position_exposure_enforcer_threshold": 1.0,
                 "total_exposure_enforcer_enabled": True,
                 "total_exposure_enforcer_policy": "reduce_overweight",
-                "total_exposure_enforcer_threshold": 0.909,
+                "total_exposure_enforcer_threshold": 1.004,
                 "total_exposure_entry_gate_enabled": True,
                 "total_wallet_exposure_limit": 1.5,
                 "we_excess_allowance_mode": "bounded",
-                "we_excess_allowance_pct": 1.04
+                "we_excess_allowance_pct": 0.5
             },
             "unstuck": {
-                "close_pct": 0.017,
-                "ema_dist": -0.1845,
+                "close_pct": 0.028,
+                "ema_dist": -0.086,
                 "ema_gating_enabled": True,
                 "enabled": True,
-                "loss_allowance_pct": 0.0279,
-                "threshold": 0.444
+                "loss_allowance_pct": 0.0065,
+                "threshold": 0.46
             }
         },
         "short": {
