@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `dc0ad4dd` after PR #925, `Bound performance report event scans`.
+- `ec9f47fe` after PR #926, `Bound performance report event file scans`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #926 at `ec9f47fe`.
+- PR #926 added `live-performance-report --max-event-files`, an opt-in global
+  event-segment scan bound for smoke/debug reports. It prefers
+  `current.ndjson` files first, then newest rotated segments by mtime, and
+  reports `event_file_limit_scope=global`, before/after file counts, skipped
+  file count, and selection order in `event_window`. The slice was read-only
+  report tooling and did not add event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior.
+- PR #926 passed Cursor + Hermes + CI on the amended head. Claude did not
+  comment after repeated polling, so it was merged under the documented
+  low-risk degraded gate, with the rationale recorded on the PR. Local
+  validation covered `tests/test_live_performance_report.py`, py_compile for
+  touched files, `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `dc0ad4dd` to `ec9f47fe` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A bounded 5-minute smoke at `ec9f47fe` completed with `ok=true`,
+  `hard_failures=0`, clean tracked repository state, all five live bot
+  processes running, no failed remote calls, and no failed account-critical
+  remote calls. Attention remained from existing EMA-readiness and HSL-cooldown
+  problem events. A bounded all-rotated performance report completed in about
+  13 seconds with `ok=true`, `include_rotated=true`, `max_event_files=12`,
+  `event_files_before_limit=944`, `event_files_skipped_by_limit=932`,
+  `files_scanned=12`, and `event_tail_methods` showing both `seek_tail` and
+  `sequential_gzip_tail`. This verified the file-count bound works, but the
+  global cap can still drop whole bots if the cap is too low; the next slice
+  should add a per-bot fair file cap for fleet-wide smoke/debug reports.
 - Repository pulled through PR #925 at `dc0ad4dd`.
 - PR #925 added `live-performance-report --event-tail-lines`, an opt-in
   per-segment row bound for smoke/debug reports. Plain current segments can seek

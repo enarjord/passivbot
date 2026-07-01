@@ -3138,6 +3138,142 @@ def test_live_performance_report_cli_rejects_negative_max_event_files(capsys):
     assert "--max-event-files must be >= 0" in capsys.readouterr().err
 
 
+def test_live_performance_report_max_event_files_per_bot_is_fair(tmp_path):
+    paths = {
+        "binance_old": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-06-25T00-00-00.ndjson",
+        "binance_new": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "2026-06-26T00-00-00.ndjson",
+        "binance_current": tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "current.ndjson",
+        "okx_old": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "2026-06-25T00-00-00.ndjson",
+        "okx_new": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "2026-06-26T00-00-00.ndjson",
+        "okx_current": tmp_path
+        / "monitor"
+        / "okx"
+        / "okx_01"
+        / "events"
+        / "current.ndjson",
+    }
+    for idx, (name, path) in enumerate(paths.items(), start=1):
+        exchange = "okx" if name.startswith("okx") else "binance"
+        user = "okx_01" if name.startswith("okx") else "binance_01"
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=idx,
+                    ts=idx * 1000,
+                    exchange=exchange,
+                    user=user,
+                    ids={"cycle_id": f"cy_{name}"},
+                    data={"elapsed_ms": idx * 1000},
+                )
+            ],
+        )
+    os.utime(paths["binance_old"], (1000, 1000))
+    os.utime(paths["binance_new"], (2000, 2000))
+    os.utime(paths["binance_current"], (1500, 1500))
+    os.utime(paths["okx_old"], (1100, 1100))
+    os.utime(paths["okx_new"], (2100, 2100))
+    os.utime(paths["okx_current"], (1600, 1600))
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+
+    assert report["ok"] is True
+    assert report["files"] == [
+        str(paths["okx_current"]),
+        str(paths["binance_current"]),
+        str(paths["okx_new"]),
+        str(paths["binance_new"]),
+    ]
+    assert report["files_scanned"] == 4
+    assert report["records_total"] == 4
+    assert report["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 0,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "max_event_files_per_bot": 2,
+        "event_file_limit_scope": "per_bot",
+        "event_file_limit_groups": 2,
+        "event_files_before_limit": 6,
+        "event_files_skipped_by_limit": 2,
+        "event_file_limit_order": "current_then_recent_mtime",
+    }
+    assert report["bots"] == [
+        {"bot": "binance/binance_01", "events": 2},
+        {"bot": "okx/okx_01", "events": 2},
+    ]
+
+
+def test_live_performance_report_rejects_ambiguous_event_file_limits():
+    try:
+        build_live_performance_report(
+            "monitor",
+            max_event_files=1,
+            max_event_files_per_bot=1,
+        )
+    except ValueError as exc:
+        assert "mutually exclusive" in str(exc)
+    else:
+        raise AssertionError("ambiguous event file limits must be rejected")
+
+
+def test_live_performance_report_cli_rejects_negative_max_event_files_per_bot(capsys):
+    try:
+        live_performance_report.main(["monitor", "--max-event-files-per-bot", "-1"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("negative --max-event-files-per-bot must be rejected")
+
+    assert "--max-event-files-per-bot must be >= 0" in capsys.readouterr().err
+
+
+def test_live_performance_report_cli_rejects_ambiguous_event_file_limits(capsys):
+    try:
+        live_performance_report.main(
+            ["monitor", "--max-event-files", "1", "--max-event-files-per-bot", "1"]
+        )
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("ambiguous event file limits must be rejected")
+
+    assert "mutually exclusive" in capsys.readouterr().err
+
+
 def test_live_performance_report_redacts_missing_root_paths():
     report = build_live_performance_report("/Users/operator/passivbot/missing-monitor")
 
