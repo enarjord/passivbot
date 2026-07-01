@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from copy import deepcopy
 from typing import Any, Mapping, Optional
 
@@ -464,6 +465,71 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
         ),
         "extrema": deepcopy(trailing_bundle),
     }
+
+
+def build_trailing_grid_v7_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[str, Any]]:
+    strategy_params = inputs.get("strategy_params")
+    if not isinstance(strategy_params, Mapping):
+        return None
+    pside = str(inputs.get("pside", "long"))
+    if pside not in {"long", "short"}:
+        return None
+    position_size = _float(inputs.get("position_size"))
+    if pside == "long":
+        position_size = abs(position_size)
+    else:
+        position_size = -abs(position_size)
+    position_price = _float(inputs.get("position_price"))
+    current_price = _float(inputs.get("current_price"))
+    if position_size == 0.0 or position_price <= 0.0 or current_price <= 0.0:
+        return None
+    trailing_bundle = normalize_trailing_extrema(inputs)
+    payload = {
+        "pside": pside,
+        "exchange": {
+            "qty_step": _float(inputs.get("qty_step")),
+            "price_step": _float(inputs.get("price_step")),
+            "min_qty": _float(inputs.get("min_qty")),
+            "min_cost": _float(inputs.get("min_cost")),
+            "c_mult": _float(inputs.get("c_mult")),
+            "maker_fee": _float(inputs.get("maker_fee"), default=0.0002),
+            "taker_fee": _float(inputs.get("taker_fee"), default=0.00055),
+        },
+        "state": {
+            "balance": _float(inputs.get("balance_raw")),
+            "order_book": {"bid": current_price, "ask": current_price},
+            "ema_bands": {
+                "lower": _float(inputs.get("ema_lower")),
+                "upper": _float(inputs.get("ema_upper")),
+            },
+            "volatility_ema_1m": 0.0,
+            "volatility_ema_1h": _float(inputs.get("h1_log_range_ema")),
+        },
+        "bot_params": {
+            "n_positions": int(round(_float(inputs.get("n_positions"), default=1.0))) or 1,
+            "wallet_exposure_limit": _float(inputs.get("wallet_exposure_limit")),
+            "total_wallet_exposure_limit": _float(inputs.get("total_wallet_exposure_limit")),
+            "risk_we_excess_allowance_pct": _float(inputs.get("risk_we_excess_allowance_pct")),
+            "risk_we_excess_allowance_mode": inputs.get("risk_we_excess_allowance_mode") or "bounded",
+            "risk_wel_enforcer_threshold": _float(inputs.get("risk_wel_enforcer_threshold")),
+        },
+        "runtime": {
+            "effective_wallet_exposure_limit": _float(
+                inputs.get("effective_wallet_exposure_limit"),
+                default=_float(inputs.get("wallet_exposure_limit")),
+            )
+        },
+        "strategy_params": deepcopy(dict(strategy_params)),
+        "position": {"size": position_size, "price": position_price},
+        "trailing": trailing_bundle,
+    }
+    raw = pbr.calc_trailing_grid_v7_diagnostic_py(json.dumps(payload, separators=(",", ":")))
+    diagnostic = json.loads(raw)
+    if not isinstance(diagnostic, dict):
+        return None
+    diagnostic["symbol"] = str(inputs.get("symbol", ""))
+    diagnostic["pside"] = pside
+    return diagnostic
 
 
 def build_trailing_diagnostic(inputs: Mapping[str, Any]) -> dict[str, Any]:

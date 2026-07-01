@@ -17,9 +17,10 @@ use crate::risk::{
 };
 use crate::strategies::ema_anchor::calc_quote_prices as calc_ema_anchor_quote_prices;
 use crate::strategies::registry::{strategy_kind_from_name, strategy_kind_names, strategy_spec};
+use crate::strategies::trailing_grid_v7::calc_trailing_grid_v7_diagnostics;
 use crate::strategies::{
-    EmaAnchorParams, EmaGateMode, StrategySide, TrailingMartingaleCloseParams,
-    TrailingMartingaleEntryParams,
+    EmaAnchorParams, EmaGateMode, StrategySide, TrailingGridV7Params,
+    TrailingMartingaleCloseParams, TrailingMartingaleEntryParams,
 };
 use crate::trailing::{
     trailing_bundle_to_tuple, tuple_to_trailing_bundle, update_trailing_bundle_sequence,
@@ -2537,6 +2538,108 @@ fn make_runtime_order_context(wallet_exposure_limit: f64) -> RuntimeOrderContext
     RuntimeOrderContext {
         effective_wallet_exposure_limit: wallet_exposure_limit,
     }
+}
+
+fn json_f64(value: &Value, key: &str, default: f64) -> f64 {
+    value.get(key).and_then(Value::as_f64).unwrap_or(default)
+}
+
+fn json_usize(value: &Value, key: &str, default: usize) -> usize {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(default)
+}
+
+fn bot_params_from_trailing_grid_v7_diagnostic_json(value: &Value) -> PyResult<BotParams> {
+    let mut bot = BotParams::default();
+    bot.wallet_exposure_limit = json_f64(value, "wallet_exposure_limit", 0.0);
+    bot.total_wallet_exposure_limit = json_f64(value, "total_wallet_exposure_limit", 0.0);
+    bot.n_positions = json_usize(value, "n_positions", 1);
+    bot.risk_we_excess_allowance_pct = json_f64(value, "risk_we_excess_allowance_pct", 0.0);
+    bot.risk_wel_enforcer_threshold = json_f64(value, "risk_wel_enforcer_threshold", 0.0);
+    if let Some(raw) = value
+        .get("risk_we_excess_allowance_mode")
+        .and_then(Value::as_str)
+    {
+        bot.risk_we_excess_allowance_mode =
+            WeExcessAllowanceMode::from_str(raw.trim()).map_err(|_| {
+                PyValueError::new_err(format!(
+                    "risk_we_excess_allowance_mode must be one of: bounded, legacy_raw; got {:?}",
+                    raw
+                ))
+            })?;
+    }
+    Ok(bot)
+}
+
+#[pyfunction]
+pub fn calc_trailing_grid_v7_diagnostic_py(input_json: &str) -> PyResult<String> {
+    let input: Value = serde_json::from_str(input_json).map_err(|err| {
+        PyValueError::new_err(format!("invalid trailing_grid_v7 diagnostic json: {err}"))
+    })?;
+    let side = match input.get("pside").and_then(Value::as_str).unwrap_or("long") {
+        "long" => StrategySide::Long,
+        "short" => StrategySide::Short,
+        other => {
+            return Err(PyValueError::new_err(format!(
+                "pside must be long or short; got {other:?}"
+            )))
+        }
+    };
+    let exchange: ExchangeParams = serde_json::from_value(
+        input
+            .get("exchange")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing exchange"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid exchange: {err}")))?;
+    let state: StateParams = serde_json::from_value(
+        input
+            .get("state")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing state"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid state: {err}")))?;
+    let position: Position = serde_json::from_value(
+        input
+            .get("position")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing position"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid position: {err}")))?;
+    let trailing: TrailingPriceBundle = serde_json::from_value(
+        input
+            .get("trailing")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing trailing"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid trailing: {err}")))?;
+    let params: TrailingGridV7Params = serde_json::from_value(
+        input
+            .get("strategy_params")
+            .cloned()
+            .ok_or_else(|| PyValueError::new_err("missing strategy_params"))?,
+    )
+    .map_err(|err| PyValueError::new_err(format!("invalid strategy_params: {err}")))?;
+    let bot = bot_params_from_trailing_grid_v7_diagnostic_json(
+        input
+            .get("bot_params")
+            .ok_or_else(|| PyValueError::new_err("missing bot_params"))?,
+    )?;
+    let runtime = RuntimeOrderContext {
+        effective_wallet_exposure_limit: input
+            .get("runtime")
+            .and_then(|runtime| runtime.get("effective_wallet_exposure_limit"))
+            .and_then(Value::as_f64)
+            .unwrap_or(bot.wallet_exposure_limit),
+    };
+    let out = calc_trailing_grid_v7_diagnostics(
+        side, &exchange, &state, &bot, &runtime, &params, &position, &trailing,
+    );
+    serde_json::to_string(&out)
+        .map_err(|err| PyValueError::new_err(format!("failed to serialize diagnostic: {err}")))
 }
 
 #[pyfunction]
