@@ -697,6 +697,29 @@ def _smoke_log_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _smoke_counter_summary(value: Any) -> dict[str, Any]:
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _smoke_execution_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
+    execution = (
+        smoke_report.get("execution_health")
+        if isinstance(smoke_report.get("execution_health"), dict)
+        else {}
+    )
+    return {
+        "total": _safe_int(execution.get("total")) or 0,
+        "bots": _safe_int(execution.get("bots")) or 0,
+        "failed": _safe_int(execution.get("failed")) or 0,
+        "rejected": _safe_int(execution.get("rejected")) or 0,
+        "ambiguous": _safe_int(execution.get("ambiguous")) or 0,
+        "confirmation_timeout": _safe_int(execution.get("confirmation_timeout")) or 0,
+        "event_types": _smoke_counter_summary(execution.get("event_types")),
+        "statuses": _smoke_counter_summary(execution.get("statuses")),
+        "outcomes": _smoke_counter_summary(execution.get("outcomes")),
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -1028,6 +1051,7 @@ def build_live_incident_bundle(
         smoke_report,
         smoke_sections,
     )
+    smoke_execution_summary = _smoke_execution_result_summary(smoke_report)
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1125,6 +1149,9 @@ def build_live_incident_bundle(
             "config_hashes": config_hashes,
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
+            "smoke_report": {
+                "execution": smoke_execution_summary,
+            },
         }
         if restart_smoke_plan_summary is not None:
             metadata["restart_smoke_plan"] = _restart_smoke_plan_result_summary(
@@ -1206,6 +1233,7 @@ def build_live_incident_bundle(
             "attention_count": smoke_report.get("attention_count"),
             "event_window": smoke_report.get("event_window"),
             "logs": _smoke_log_result_summary(smoke_report),
+            "execution": smoke_execution_summary,
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),

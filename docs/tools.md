@@ -199,7 +199,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
 - `passivbot tool live-incident-bundle` writes a local `.tar.gz` evidence
   bundle with monitor event reports, problem-event reports, smoke evidence,
   redacted log excerpts, monitor snapshots, runtime metadata, and optional
-  bounded event segments. It is read-only and does not contact exchanges. Use
+  bounded event segments. The returned report and manifest include a compact
+  smoke execution summary with only aggregate create/cancel/confirmation
+  counters. It is read-only and does not contact exchanges. Use
   `--smoke-section SECTION` one or more times to keep only selected top-level
   sections from the embedded full `smoke_report.json` plus common smoke
   metadata, for example `--smoke-section fill_refresh_health`. Use

@@ -19,7 +19,18 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `07ee5860` after PR #952, `Make restart failure bundles self-contained`.
+- `8981464a` after PR #953, `Report execution health in live smoke`.
+
+Current work:
+
+- Branch `codex/v8-incident-execution-summary` summarizes existing
+  `execution_health` smoke-report counters in `live-incident-bundle` report and
+  manifest output. The slice is read-only incident-response tooling: no new
+  event producers, exchange calls, cache mutation, readiness gates, smoke
+  verdict changes, process signaling, console routing, order logic, risk logic,
+  or trading behavior. Expected validation is focused incident-bundle tests,
+  py_compile for touched files, `git diff --check`, and an added-line
+  silent-handling scan.
 
 Current review gate:
 
@@ -49,6 +60,26 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #953 at `8981464a`.
+- PR #953 added an `execution_health` section to `live-smoke-report` full and
+  summary output and an `execution` line to brief output, deriving aggregate
+  execution-write health from existing `order_wave.*` and `execution.*`
+  structured events. The slice was read-only smoke-report tooling and did not
+  add event producers, exchange calls, cache mutation, readiness gates, smoke
+  verdict changes, process signaling, console routing, order logic, risk logic,
+  or trading behavior.
+- PR #953 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_smoke_report.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `07ee5860` to `8981464a` without bot restart because the
+  deployed change was read-only smoke-report tooling. The five configured bots
+  were left running.
+- A VPS5 1-minute bounded smoke after deploy reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `8981464a`, all five
+  configured bots matched, config checks green, zero failed remote calls, zero
+  failed account-critical remote calls, and the new brief `execution` section
+  present with zero recent execution events. Remaining attention came from known
+  non-hard EMA/HSL cooldown groups.
 - Repository pulled through PR #952 at `07ee5860`.
 - PR #952 made `live-restart-smoke-plan` planned failure-bundle commands
   self-contained by adding `live-incident-bundle --restart-smoke-plan` and the
