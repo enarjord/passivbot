@@ -1258,6 +1258,131 @@ def test_live_smoke_report_remote_call_health_counts_throttled_events(tmp_path):
     }
 
 
+def test_live_smoke_report_summarizes_fill_refresh_health(tmp_path):
+    hyperliquid_dir = (
+        tmp_path / "monitor" / "hyperliquid" / "hyperliquid_tradfi" / "events"
+    )
+    binance_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        hyperliquid_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                exchange="hyperliquid",
+                user="hyperliquid_tradfi",
+                status="failed",
+                level="error",
+                reason_code="fill_refresh_failed",
+                ids={"cycle_id": "cy_fill_1"},
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 12244,
+                    "history_scope": "window",
+                    "event_count_after": 2704,
+                    "coverage_ready_after": False,
+                    "coverage_reason_after": "window_uncovered",
+                    "retry_count": 1,
+                    "next_retry_in_ms": 5000,
+                    "error_type": "RequestTimeout",
+                },
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=2000,
+                exchange="hyperliquid",
+                user="hyperliquid_tradfi",
+                status="ready",
+                level="debug",
+                reason_code="fill_cache_ready",
+                ids={"cycle_id": "cy_fill_2"},
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 420,
+                    "history_scope": "all",
+                    "event_count_after": 2705,
+                    "new_count": 1,
+                    "enriched_count": 1,
+                    "pending_pnl_count": 0,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+    _write_ndjson(
+        binance_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=3,
+                ts=3000,
+                exchange="binance",
+                user="binance_01",
+                status="ready",
+                level="debug",
+                reason_code="fill_cache_ready",
+                ids={"cycle_id": "cy_fill_3"},
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "elapsed_ms": 40,
+                    "history_scope": "all",
+                    "event_count_after": 100,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report, max_groups=1)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is False
+    assert report["hard_failure_sources"]["hard_problem_events"] == 1
+    health = report["fill_refresh_health"]
+    assert health["total"] == 3
+    assert health["bots"] == 2
+    assert health["failed"] == 1
+    assert health["failure_pct"] == 33
+    assert health["failed_bots"] == 1
+    assert health["latest_failed_bots"] == 0
+    assert health["recovered_groups"] == 1
+    assert health["statuses"] == {"ready": 2, "failed": 1}
+    assert health["groups_truncated"] is False
+    recovered = health["groups"][0]
+    assert recovered["bot"] == "hyperliquid/hyperliquid_tradfi"
+    assert recovered["source"] == "exchange"
+    assert recovered["refresh_mode"] == "periodic"
+    assert recovered["count"] == 2
+    assert recovered["failed"] == 1
+    assert recovered["recovered"] is True
+    assert recovered["latest_status"] == "ready"
+    assert recovered["latest_history_scope"] == "all"
+    assert recovered["latest_event_count_after"] == 2705
+    assert recovered["latest_new_count"] == 1
+    assert recovered["latest_coverage_ready_after"] is True
+    assert recovered["error_types"] == {"RequestTimeout": 1}
+    assert recovered["latest_ids"] == {"cycle_id": "cy_fill_2"}
+    assert summary["fill_refresh_health"]["total"] == 3
+    assert summary["fill_refresh_health"]["groups_truncated"] is True
+    assert summary["fill_refresh_health"]["groups"][0]["recovered"] is True
+    assert brief["fill_refresh"] == {
+        "total": 3,
+        "bots": 2,
+        "failed": 1,
+        "failure_pct": 33,
+        "failed_bots": 1,
+        "latest_failed_bots": 0,
+        "recovered_groups": 1,
+        "statuses": {"ready": 2, "failed": 1},
+    }
+
+
 def test_live_smoke_report_problem_events_include_allowlisted_ema_data(tmp_path):
     events_dir = tmp_path / "monitor" / "okx" / "okx_faisal" / "events"
     _write_ndjson(

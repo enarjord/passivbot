@@ -170,6 +170,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Startup timing summaries include report-only budget projections from prior local p95
   phase baselines when enough monitor evidence exists, and the summary/brief projections
   surface bounded startup timing counters for repeated smoke loops.
+  Existing structured fill-refresh summaries are summarized as
+  `fill_refresh_health` in full/summary output and `fill_refresh` in brief output,
+  including status/error counts and whether a bot had failed refreshes that later
+  recovered inside the report window.
   Existing structured EMA readiness degradation events are summarized as
   `ema_readiness_health` in full/summary output and `ema_readiness` in brief output,
   including latest candidate/unavailable counts and bounded reason/error group evidence.
