@@ -14,6 +14,7 @@ DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT = 2
 DEFAULT_SMOKE_MAX_LOG_FILES = 8
 DEFAULT_SMOKE_LOG_TAIL_LINES = 1200
 DEFAULT_SMOKE_MAX_LOG_MATCHES = 20
+DEFAULT_INCIDENT_BUNDLE_OUTPUT = "/tmp/passivbot_incident_bundle_restart_smoke.tar.gz"
 DEFAULT_MONITOR_ROOT = "monitor"
 DEFAULT_LOGS_ROOT = "logs"
 UNSAFE_PROCESS_SIGNAL_PATTERNS = (
@@ -93,6 +94,49 @@ def _smoke_report_command(
         args.append("--brief")
     if compact:
         args.append("--compact")
+    return _shell_join(args)
+
+
+def _incident_bundle_command(
+    *,
+    monitor_root: str | Path,
+    logs_root: str | Path | None,
+    supervisor_config: str | Path,
+    output_path: str | Path,
+    smoke_window_minutes: int,
+    event_tail_lines: int,
+    max_event_files_per_bot: int,
+    max_log_files: int,
+    log_tail_lines: int,
+    max_log_matches: int,
+) -> str:
+    args = [
+        "passivbot",
+        "tool",
+        "live-incident-bundle",
+        str(monitor_root),
+        "--output",
+        str(output_path),
+        "--supervisor-config",
+        str(supervisor_config),
+        "--processes",
+        "--recent-minutes",
+        str(smoke_window_minutes),
+        "--no-event-segments",
+    ]
+    if logs_root is not None:
+        args.extend(["--logs-root", str(logs_root)])
+    if int(event_tail_lines) > 0:
+        args.extend(["--event-tail-lines", str(event_tail_lines)])
+    if int(max_event_files_per_bot) > 0:
+        args.extend(["--max-event-files-per-bot", str(max_event_files_per_bot)])
+    if int(max_log_files) > 0:
+        args.extend(["--max-log-files", str(max_log_files)])
+    if int(log_tail_lines) > 0:
+        args.extend(["--log-tail-lines", str(log_tail_lines)])
+    if int(max_log_matches) > 0:
+        args.extend(["--max-log-matches", str(max_log_matches)])
+    args.append("--compact")
     return _shell_join(args)
 
 
@@ -221,6 +265,7 @@ def build_live_restart_smoke_plan(
     smoke_max_log_files: int = DEFAULT_SMOKE_MAX_LOG_FILES,
     smoke_log_tail_lines: int = DEFAULT_SMOKE_LOG_TAIL_LINES,
     smoke_max_log_matches: int = DEFAULT_SMOKE_MAX_LOG_MATCHES,
+    incident_bundle_output: str | Path = DEFAULT_INCIDENT_BUNDLE_OUTPUT,
     compact_smoke_report: bool = True,
     brief_smoke_report: bool = True,
     summary_smoke_report: bool = False,
@@ -300,6 +345,18 @@ def build_live_restart_smoke_plan(
         brief=brief_smoke_report,
         summary=summary_smoke_report,
     )
+    incident_bundle_command = _incident_bundle_command(
+        monitor_root=monitor_root,
+        logs_root=logs_root,
+        supervisor_config=supervisor_config,
+        output_path=incident_bundle_output,
+        smoke_window_minutes=smoke_window_minutes,
+        event_tail_lines=smoke_event_tail_lines,
+        max_event_files_per_bot=smoke_max_event_files_per_bot,
+        max_log_files=smoke_max_log_files,
+        log_tail_lines=smoke_log_tail_lines,
+        max_log_matches=smoke_max_log_matches,
+    )
     planned_bots = []
     for index, bot in enumerate(bots, start=1):
         planned_bots.append(
@@ -338,6 +395,7 @@ def build_live_restart_smoke_plan(
             "smoke_max_log_files": smoke_max_log_files,
             "smoke_log_tail_lines": smoke_log_tail_lines,
             "smoke_max_log_matches": smoke_max_log_matches,
+            "incident_bundle_output": _display_path(incident_bundle_output),
         },
         "supervisor_config": {
             "path": _display_path(supervisor.get("path")),
@@ -386,6 +444,16 @@ def build_live_restart_smoke_plan(
                 "description": "Collect bounded read-only startup smoke evidence.",
                 "planned_commands": [{"command": smoke_command, "execute": False}],
             },
+            {
+                "name": "post_failure_incident_bundle",
+                "description": (
+                    "If smoke or shutdown evidence is not clean, collect a bounded "
+                    "local incident bundle for review."
+                ),
+                "planned_commands": [
+                    {"command": incident_bundle_command, "execute": False}
+                ],
+            },
         ],
         "smoke_report": {
             "command": smoke_command,
@@ -405,6 +473,21 @@ def build_live_restart_smoke_plan(
                 "risk/HSL events",
             ],
         },
+        "incident_bundle": {
+            "command": incident_bundle_command,
+            "execute": False,
+            "output_path": _display_path(incident_bundle_output),
+            "event_segments": "disabled_by_default_for_fast_restart_smoke_bundle",
+            "expected_fields": [
+                "manifest filters and runtime metadata",
+                "bounded smoke report with process and log scan metadata",
+                "problem-event report",
+                "trace summary/order trace reports",
+                "time-window event report",
+                "monitor snapshots",
+                "config hashes when configured explicitly",
+            ],
+        },
         "process_signal_safety": _process_signal_safety_contract(),
         "timeout_escalation_ladder": [
             {
@@ -420,6 +503,10 @@ def build_live_restart_smoke_plan(
                     "collect smoke report and inspect shutdown events/logs before "
                     "escalation"
                 ),
+                "planned_commands": [
+                    {"command": smoke_command, "execute": False},
+                    {"command": incident_bundle_command, "execute": False},
+                ],
                 "execute": False,
             },
             {
