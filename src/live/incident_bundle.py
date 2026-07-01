@@ -976,7 +976,10 @@ def build_live_incident_bundle(
         max_log_matches=max_log_matches,
         log_window_unparsed_policy=log_window_unparsed_policy,
     )
-    smoke_report = project_live_smoke_report_sections(smoke_report, smoke_sections)
+    embedded_smoke_report = project_live_smoke_report_sections(
+        smoke_report,
+        smoke_sections,
+    )
 
     with tempfile.TemporaryDirectory(prefix="passivbot_incident_bundle_") as tmp_name:
         bundle_root = Path(tmp_name)
@@ -1058,7 +1061,7 @@ def build_live_incident_bundle(
         if include_problem_report:
             _write_json(bundle_root / "problem_event_report.json", problem_report)
         _write_json(bundle_root / "time_window_report.json", window_report)
-        _write_json(bundle_root / "smoke_report.json", smoke_report)
+        _write_json(bundle_root / "smoke_report.json", embedded_smoke_report)
         timeline_lines: list[str] = []
         for section in ("cycle", "query"):
             value = event_report.get(section)
