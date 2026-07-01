@@ -19,20 +19,20 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `b9a3110e8` after PR #964, `Project forager selection to event console`.
+- `191af58ab` after PR #965, `Enrich trailing and unstuck console status`.
 
 Current logging-overhaul head:
 
-- `b9a3110e8` after PR #964, `Project forager selection to event console`.
+- `191af58ab` after PR #965, `Enrich trailing and unstuck console status`.
 
 Current work:
 
-- Branch `codex/v8-trailing-unstuck-console` enriches existing trailing and
-  unstuck structured-event console summaries with distance-to-threshold,
-  distance-to-retracement, unstuck target distance, and the already-computed
-  monitor runtime hint for the next unstuck candidate. This continues the
-  migration of user-facing status logs into the event stream without changing
-  order generation, risk logic, or cadence.
+- Branch `codex/v8-position-balance-console` projects existing `fill.ingested`,
+  `position.changed`, and `balance.changed` events into the opt-in live event
+  console/text sinks with compact operator summaries. This continues the
+  migration of user-facing account state logs into the structured event stream
+  without changing fill ingestion, account state, order generation, or risk
+  logic.
 
 Current review gate:
 
@@ -62,6 +62,26 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #965 at `191af58ab`.
+- PR #965 enriched existing trailing and unstuck console summaries with
+  distance-to-threshold, distance-to-retracement, unstuck target distance, and
+  the already-computed monitor runtime hint for the next unstuck candidate. It
+  merged after Hermes approved, Claude approved with no findings, and CI was
+  green; Cursor did not post during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, GateIO, and OKX exited within the longer
+  graceful window; Kucoin still required SIGTERM after the full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=191af58a`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `logs.hard_matches=0`.
+  Remaining attention was non-hard startup state: active HSL replay workers,
+  Hyperliquid EMA-unavailable diagnostics for cache-only stock symbols, staged
+  refresh progress, and shutdown-slow history from the restart.
+- A focused monitor-event check confirmed deployed `trailing.status` events for
+  Hyperliquid include the new distance ratio fields. The observed
+  `unstuck.status` event had no next-candidate hint because no close-unstuck
+  candidate was active in that window; that path is covered by focused tests.
 - Repository pulled through PR #964 at `b9a3110e8`.
 - PR #964 projected existing `forager.selection` events into the opt-in live
   event console/text sinks with a compact 5-minute-throttled operator summary.

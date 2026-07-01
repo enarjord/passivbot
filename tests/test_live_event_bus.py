@@ -258,6 +258,12 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].console is False
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
+    assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].console is True
+    assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].text is True
+    assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].console is True
+    assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].text is True
+    assert DEFAULT_ROUTES[EventTypes.BALANCE_CHANGED].console is True
+    assert DEFAULT_ROUTES[EventTypes.BALANCE_CHANGED].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
@@ -1020,6 +1026,86 @@ def test_console_format_summarizes_unstuck_status():
         "[unstuck] succeeded long:ok:allowance=-12.3:over_budget:"
         "next=BTC/USDT:USDT:target=101000:target_dist=0.5000%:ema_gate=1.2500% "
         "short:disabled over_budget=long changed=true reason=unstuck_status"
+    )
+
+
+def test_console_format_summarizes_fill_ingested():
+    event = LiveEvent(
+        EventTypes.FILL_INGESTED,
+        status="succeeded",
+        cycle_id="cy_fill",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        side="buy",
+        reason_code="new_fill",
+        data={
+            "pb_order_type": "entry_grid_normal_long",
+            "qty": 0.001,
+            "price": 101_234.5,
+            "pnl": -1.25,
+            "fee": -0.04,
+            "client_order_id_short": "abc123",
+            "fill_id_hash": "9f54f33d005de125ca93371eeda0374f039e520574633e8335066351e275c6a2",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[fill] succeeded cycle=cy_fill side=buy type=entry_grid_normal_long "
+        "qty=0.001 price=101234.5 pnl=-1.25 fee=-0.04 client_id=abc123 "
+        "symbol=BTC/USDT:USDT pside=long reason=new_fill"
+    )
+
+
+def test_console_format_summarizes_position_changed():
+    event = LiveEvent(
+        EventTypes.POSITION_CHANGED,
+        status="succeeded",
+        cycle_id="cy_pos",
+        symbol="ETH/USDT:USDT",
+        pside="short",
+        reason_code="short_increased",
+        data={
+            "action": "short_increased",
+            "old_size": -0.2,
+            "new_size": -0.35,
+            "size_delta": -0.15,
+            "new_price": 2_500.0,
+            "last_price": 2_480.0,
+            "wallet_exposure": 0.12,
+            "wel_ratio": 0.6,
+            "twel_ratio": 0.24,
+            "upnl": 7.5,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[pos] succeeded cycle=cy_pos action=short_increased size=-0.2->-0.35 "
+        "delta=-0.15 price=2500 last=2480 we=12.0000% wel=60.0000% "
+        "twel=24.0000% upnl=7.5 symbol=ETH/USDT:USDT pside=short "
+        "reason=short_increased"
+    )
+
+
+def test_console_format_summarizes_balance_changed():
+    event = LiveEvent(
+        EventTypes.BALANCE_CHANGED,
+        status="succeeded",
+        cycle_id="cy_balance",
+        reason_code="balance_changed",
+        data={
+            "balance_raw": 1_005.25,
+            "balance_raw_delta": 5.25,
+            "balance_snapped": 1_004.0,
+            "balance_snapped_delta": 4.0,
+            "equity": 1_010.75,
+            "source": "REST",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[balance] succeeded cycle=cy_balance balance=1005.25 delta=5.25 "
+        "snapped=1004 snapped_delta=4 equity=1010.75 source=REST "
+        "reason=balance_changed"
     )
 
 
