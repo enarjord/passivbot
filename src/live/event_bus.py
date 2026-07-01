@@ -687,12 +687,12 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
     EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=False, text=False),
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: EventRoute(
-        console=False, text=False
+        console=True, text=True
     ),
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED: EventRoute(
-        console=False, text=False
+        console=True, text=True
     ),
-    EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=False, text=False),
+    EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_SENT: EventRoute(console=False),
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CANCEL_FAILED: EventRoute(console=True, text=True),
@@ -723,7 +723,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED: EventRoute(
         console=False, text=False
     ),
-    EventTypes.REALIZED_LOSS_GATE_BLOCKED: EventRoute(console=False, text=False),
+    EventTypes.REALIZED_LOSS_GATE_BLOCKED: EventRoute(console=True, text=True),
     EventTypes.SINK_DEGRADED: EventRoute(console=True, text=True),
 }
 
@@ -779,6 +779,9 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.EXECUTION_CREATE_REJECTED: "order",
     EventTypes.EXECUTION_CREATE_DEFERRED: "gate",
     EventTypes.EXECUTION_CREATE_SKIPPED: "gate",
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: "entry",
+    EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED: "entry",
+    EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED: "entry",
     EventTypes.EXECUTION_CANCEL_SUCCEEDED: "order",
     EventTypes.EXECUTION_CANCEL_FAILED: "order",
     EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL: "order",
@@ -793,6 +796,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",
     EventTypes.UNSTUCK_STATUS: "unstuck",
+    EventTypes.REALIZED_LOSS_GATE_BLOCKED: "risk",
     EventTypes.SINK_DEGRADED: "logging",
 }
 
@@ -935,6 +939,86 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     symbols = _compact_csv(data.get("symbols"), limit=4)
     if symbols:
         parts.append(f"symbols={symbols}")
+    return parts
+
+
+def _console_entry_gate_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    action = _data_str(data, "action")
+    if action:
+        parts.append(f"action={action}")
+    order_type = _data_str(data, "order_type")
+    if order_type:
+        parts.append(f"type={order_type}")
+    qty = _data_float(data, "qty")
+    price = _data_float(data, "price")
+    market = _data_float(data, "market_price")
+    if qty:
+        parts.append(f"qty={qty}")
+    if price:
+        parts.append(f"price={price}")
+    if market:
+        parts.append(f"market={market}")
+    for label, key in (
+        ("dist", "distance_pct"),
+        ("threshold", "threshold_pct"),
+        ("tolerance", "tolerance_pct"),
+    ):
+        value = _data_number(data, key)
+        if value is not None:
+            parts.append(f"{label}={value:.4f}%")
+    return parts
+
+
+def _console_min_effective_cost_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    action = _data_str(data, "action")
+    if action:
+        parts.append(f"action={action}")
+    wanted = _data_float(data, "projected_initial_cost")
+    required = _data_float(data, "effective_min_cost")
+    if wanted and required:
+        parts.append(f"notional={wanted}/{required}")
+    else:
+        if wanted:
+            parts.append(f"wanted={wanted}")
+        if required:
+            parts.append(f"required={required}")
+    effective_limit = _data_number(data, "effective_limit")
+    if effective_limit is not None:
+        parts.append(f"effective_limit={effective_limit * 100.0:.4f}%")
+    entry_qty_pct = _data_number(data, "entry_initial_qty_pct")
+    if entry_qty_pct is not None:
+        parts.append(f"initial_qty={entry_qty_pct * 100.0:.4f}%")
+    return parts
+
+
+def _console_realized_loss_gate_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    order_type = _data_str(data, "order_type")
+    if order_type:
+        parts.append(f"type={order_type}")
+    qty = _data_float(data, "qty")
+    price = _data_float(data, "price")
+    if qty:
+        parts.append(f"qty={qty}")
+    if price:
+        parts.append(f"price={price}")
+    projected_pnl = _data_float(data, "projected_pnl")
+    if projected_pnl:
+        parts.append(f"projected_pnl={projected_pnl}")
+    projected_balance = _data_float(data, "projected_balance_after")
+    if projected_balance:
+        parts.append(f"projected_balance={projected_balance}")
+    balance_floor = _data_float(data, "balance_floor")
+    if balance_floor:
+        parts.append(f"floor={balance_floor}")
+    max_loss = _data_number(data, "max_realized_loss_pct")
+    if max_loss is not None:
+        parts.append(f"max_loss={max_loss * 100.0:.4f}%")
     return parts
 
 
@@ -1314,6 +1398,13 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
     }:
         return _console_create_filter_summary(event)
     if event.event_type in {
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
+    }:
+        return _console_entry_gate_summary(event)
+    if event.event_type == EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED:
+        return _console_min_effective_cost_summary(event)
+    if event.event_type in {
         EventTypes.EXECUTION_CREATE_SUCCEEDED,
         EventTypes.EXECUTION_CREATE_FAILED,
         EventTypes.EXECUTION_CREATE_REJECTED,
@@ -1348,6 +1439,8 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_trailing_status_summary(event)
     if event.event_type == EventTypes.UNSTUCK_STATUS:
         return _console_unstuck_status_summary(event)
+    if event.event_type == EventTypes.REALIZED_LOSS_GATE_BLOCKED:
+        return _console_realized_loss_gate_summary(event)
     return []
 
 

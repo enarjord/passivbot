@@ -220,9 +220,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
     for event_type in (
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
         EventTypes.ACTION_PLANNED,
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
-        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED,
-        EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
         EventTypes.EMA_BUNDLE_STARTED,
         EventTypes.EMA_BUNDLE_COMPLETED,
         EventTypes.EMA_FALLBACK_USED,
@@ -244,7 +241,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.HSL_COOLDOWN_STARTED,
         EventTypes.HSL_COOLDOWN_ENDED,
         EventTypes.UNSTUCK_SELECTION,
-        EventTypes.REALIZED_LOSS_GATE_BLOCKED,
     ):
         assert DEFAULT_ROUTES[event_type].structured is True
         assert DEFAULT_ROUTES[event_type].monitor is True
@@ -256,6 +252,12 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].console is False
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED].console is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED].text is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED].console is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_CLEARED].text is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED].console is True
+    assert DEFAULT_ROUTES[EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED].text is True
     assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].console is True
     assert DEFAULT_ROUTES[EventTypes.FILL_INGESTED].text is True
     assert DEFAULT_ROUTES[EventTypes.POSITION_CHANGED].console is True
@@ -274,6 +276,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].text is True
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].text is True
+    assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].console is True
+    assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].text is True
 
 
 def test_redact_payload_recurses_and_payload_hash_is_stable():
@@ -942,6 +946,85 @@ def test_console_format_summarizes_hsl_cooldown_seconds():
     assert format_console_event(event) == (
         "[risk] degraded tier=red cooldown=300s symbol=NEAR/USDT:USDT "
         "pside=long reason=cooldown_active"
+    )
+
+
+def test_console_format_summarizes_initial_entry_distance_gate_block():
+    event = LiveEvent(
+        EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED,
+        status="skipped",
+        cycle_id="cy_entry_gate",
+        symbol="BTC/USDT:USDT",
+        pside="long",
+        side="buy",
+        reason_code="initial_entry_distance_gate",
+        data={
+            "action": "skip_create",
+            "order_type": "entry_initial_normal_long",
+            "qty": 0.001,
+            "price": 98_750.0,
+            "market_price": 101_000.0,
+            "distance_pct": 2.278481012658,
+            "threshold_pct": 1.25,
+            "tolerance_pct": 0.1,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[entry] skipped cycle=cy_entry_gate action=skip_create "
+        "type=entry_initial_normal_long qty=0.001 price=98750 market=101000 "
+        "dist=2.2785% threshold=1.2500% tolerance=0.1000% "
+        "symbol=BTC/USDT:USDT pside=long reason=initial_entry_distance_gate"
+    )
+
+
+def test_console_format_summarizes_min_effective_cost_block():
+    event = LiveEvent(
+        EventTypes.ENTRY_MIN_EFFECTIVE_COST_BLOCKED,
+        status="skipped",
+        symbol="SOL/USDT:USDT",
+        pside="long",
+        reason_code="min_effective_cost_blocked",
+        data={
+            "action": "skip_create",
+            "projected_initial_cost": 3.25,
+            "effective_min_cost": 10.0,
+            "balance": 250.0,
+            "effective_limit": 0.12,
+            "entry_initial_qty_pct": 0.05,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[entry] skipped action=skip_create notional=3.25/10 "
+        "effective_limit=12.0000% initial_qty=5.0000% "
+        "symbol=SOL/USDT:USDT pside=long reason=min_effective_cost_blocked"
+    )
+
+
+def test_console_format_summarizes_realized_loss_gate_block():
+    event = LiveEvent(
+        EventTypes.REALIZED_LOSS_GATE_BLOCKED,
+        status="deferred",
+        symbol="ETH/USDT:USDT",
+        pside="short",
+        reason_code="realized_loss_gate_blocked",
+        data={
+            "order_type": "close_grid_short",
+            "qty": 0.25,
+            "price": 3_100.0,
+            "projected_pnl": -12.5,
+            "projected_balance_after": 987.5,
+            "balance_floor": 990.0,
+            "max_realized_loss_pct": 0.01,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[risk] deferred type=close_grid_short qty=0.25 price=3100 "
+        "projected_pnl=-12.5 projected_balance=987.5 floor=990 "
+        "max_loss=1.0000% symbol=ETH/USDT:USDT pside=short "
+        "reason=realized_loss_gate_blocked"
     )
 
 

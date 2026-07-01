@@ -19,19 +19,19 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `47f84d8c5` after PR #966, `Project account state events to console`.
+- `ca686cf5a` after PR #967, `Project risk state events to console`.
 
 Current logging-overhaul head:
 
-- `47f84d8c5` after PR #966, `Project account state events to console`.
+- `ca686cf5a` after PR #967, `Project risk state events to console`.
 
 Current work:
 
-- Branch `codex/v8-risk-hsl-console` projects existing `risk.mode_changed` and
-  `hsl.transition` events into the opt-in live event console/text sinks with
-  compact operator summaries. This continues the migration of user-facing
-  risk-state logs into the structured event stream without changing HSL mode
-  logic, risk decisions, order generation, or HSL replay behavior.
+- Branch `codex/v8-next-logging-console-slice` projects existing entry/risk
+  gate-block events into the opt-in live event console/text sinks with compact
+  operator summaries. This covers initial-entry distance gate blocked/cleared,
+  min-effective-cost entry skips, and realized-loss gate deferrals without
+  changing producer throttling, gate policy, order generation, or exchange I/O.
 
 Current review gate:
 
@@ -61,6 +61,24 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #967 at `ca686cf5a`.
+- PR #967 projected existing `risk.mode_changed` and `hsl.transition` events
+  into the opt-in live event console/text sinks with compact operator
+  summaries. It merged after Hermes and Claude approved and CI was green; Cursor
+  did not post during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, Kucoin, GateIO, and OKX were still
+  present after the first 25-second grace window, then all exited within the
+  longer graceful wait without SIGTERM.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=ca686cf5`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `logs.hard_matches=0`.
+  A second smoke after another five minutes stayed hard-green with the same
+  core signals. Remaining attention was non-hard startup state: active HSL
+  replay workers on four bots, Hyperliquid EMA-unavailable diagnostics for
+  cache-only stock symbols, staged refresh progress, and shutdown-slow history
+  from the restart.
 - Repository pulled through PR #966 at `47f84d8c5`.
 - PR #966 projected existing `fill.ingested`, `position.changed`, and
   `balance.changed` events into the opt-in live event console/text sinks with

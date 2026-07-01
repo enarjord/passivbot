@@ -94,6 +94,11 @@ because they are the primary operator-facing account state changes.
 `risk.mode_changed` and `hsl.transition` events are console-visible because
 mode changes and HSL tier transitions explain risk-state changes that affect
 trading.
+Initial-entry distance-gate, min-effective-cost, and realized-loss gate block
+events are console-visible because they explain operator-relevant order
+omissions: staged entries waiting for an acceptable market distance, entries
+skipped because the configured slot size is below exchange-effective minimums,
+and loss-realizing closes deferred by the realized-loss gate.
 Position-level `trailing.status` and `unstuck.status` events are console-visible
 because they explain why an existing position is waiting, armed, triggered, over
 budget, or blocked by the unstuck EMA gate. Unsupported strategy diagnostics
