@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `2dab5af0` after PR #943, `Filter live performance report sections`.
+- `42999f19` after PR #944, `Filter live smoke report sections`.
 
 Current review gate:
 
@@ -49,6 +49,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #944 at `42999f19`.
+- PR #944 added `live-smoke-report --section`, allowing focused top-level
+  smoke-report sections plus common smoke metadata after the full, summary, or
+  brief projection is selected. The slice was read-only operator/report tooling
+  and did not change event producers, exchange calls, cache mutation, readiness
+  gates, smoke verdict policy, console routing, order logic, risk logic, or
+  trading behavior.
+- PR #944 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_smoke_report.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `2dab5af0` to `42999f19` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A 2-minute smoke after deploy reported `ok=true`, `hard_failures=0`, clean
+  tracked repository state at `42999f19`, all five configured bots matched, no
+  failed account-critical remote calls, and `fill_refresh` populated with nine
+  succeeded and zero failed refreshes. A focused smoke report using
+  `--brief --section fill_refresh` then returned only common smoke metadata plus
+  `fill_refresh`, with `fill_refresh.total=9` and `failed=0`.
 - Repository pulled through PR #943 at `2dab5af0`.
 - PR #943 added `live-performance-report --section`, allowing focused
   top-level report sections plus common metadata after the full or summary

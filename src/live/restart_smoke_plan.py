@@ -78,6 +78,7 @@ def _smoke_report_command(
     compact: bool,
     brief: bool,
     summary: bool,
+    sections: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     args = [
         "passivbot",
@@ -106,6 +107,10 @@ def _smoke_report_command(
         args.append("--summary")
     elif brief:
         args.append("--brief")
+    for section in sections or ():
+        normalized = str(section).strip()
+        if normalized:
+            args.extend(["--section", normalized])
     if compact:
         args.append("--compact")
     return _shell_join(args)
@@ -283,6 +288,7 @@ def build_live_restart_smoke_plan(
     compact_smoke_report: bool = True,
     brief_smoke_report: bool = True,
     summary_smoke_report: bool = False,
+    smoke_sections: list[str] | tuple[str, ...] | None = None,
     execute: bool = False,
 ) -> dict[str, Any]:
     if execute:
@@ -307,6 +313,11 @@ def build_live_restart_smoke_plan(
     )
     if incident_bundle_output is None or not str(incident_bundle_output).strip():
         incident_bundle_output = _default_incident_bundle_output()
+    smoke_sections = [
+        str(section).strip()
+        for section in (smoke_sections or ())
+        if str(section).strip()
+    ]
 
     supervisor = parse_tmuxp_live_commands(supervisor_config)
     bots = list(supervisor.get("expected") or [])
@@ -360,6 +371,7 @@ def build_live_restart_smoke_plan(
         compact=compact_smoke_report,
         brief=brief_smoke_report,
         summary=summary_smoke_report,
+        sections=smoke_sections,
     )
     incident_bundle_command = _incident_bundle_command(
         monitor_root=monitor_root,
@@ -411,6 +423,7 @@ def build_live_restart_smoke_plan(
             "smoke_max_log_files": smoke_max_log_files,
             "smoke_log_tail_lines": smoke_log_tail_lines,
             "smoke_max_log_matches": smoke_max_log_matches,
+            "smoke_sections": list(smoke_sections),
             "incident_bundle_output": _display_path(incident_bundle_output),
         },
         "supervisor_config": {
