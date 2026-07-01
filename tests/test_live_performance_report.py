@@ -6,8 +6,13 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import live.performance_report as performance_report_module
-from live.performance_report import build_live_performance_report, summarize_live_performance_report
+from live.performance_report import (
+    build_live_performance_report,
+    project_live_performance_report_sections,
+    summarize_live_performance_report,
+)
 from tools import live_performance_report
 
 
@@ -3103,6 +3108,108 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
     assert out["filters"]["events_skipped"] == 1
     assert len(out["performance"]["groups"]) == 1
     assert "files" not in out
+
+
+def test_live_performance_report_section_projection_keeps_common_metadata(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=2000,
+                component="fills.refresh",
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "elapsed_ms": 40,
+                    "history_scope": "all",
+                    "event_count_after": 100,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+
+    report = summarize_live_performance_report(
+        build_live_performance_report(tmp_path / "monitor"),
+        group_limit=1,
+    )
+
+    projected = project_live_performance_report_sections(report, ["fill_refresh"])
+
+    assert projected["ok"] is True
+    assert projected["records_total"] == 2
+    assert projected["live_events"] == 2
+    assert "fill_refresh" in projected
+    assert projected["fill_refresh"]["total_events"] == 1
+    assert "performance" not in projected
+    assert "operation_durations" not in projected
+    assert "files" not in projected
+
+
+def test_live_performance_report_cli_section_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                data={"elapsed_ms": 1000},
+            ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=2,
+                ts=2000,
+                component="fills.refresh",
+                status="succeeded",
+                reason_code="fill_cache_ready",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "elapsed_ms": 40,
+                    "history_scope": "all",
+                    "event_count_after": 100,
+                    "coverage_ready_after": True,
+                },
+            ),
+        ],
+    )
+
+    rc = live_performance_report.main(
+        [
+            str(tmp_path / "monitor"),
+            "--summary",
+            "--section",
+            "fill_refresh",
+            "--compact",
+        ]
+    )
+
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["ok"] is True
+    assert out["fill_refresh"]["total_events"] == 1
+    assert "performance" not in out
+    assert "operation_durations" not in out
+
+
+def test_live_performance_report_cli_rejects_unknown_section(capsys):
+    with pytest.raises(SystemExit):
+        live_performance_report.main(["monitor", "--section", "not_a_section"])
+
+    assert "unknown --section value" in capsys.readouterr().err
 
 
 def test_live_performance_report_event_tail_lines_bounds_monitor_scan(tmp_path):

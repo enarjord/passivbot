@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `462afac7` after PR #941, `Summarize fill refresh health in smoke reports`.
+- `a85427bf` after PR #942, `Report fill refresh performance`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #942 at `a85427bf`.
+- PR #942 added a `fill_refresh` section to `live-performance-report`, derived
+  only from existing `fills.refresh_summary` events. It also includes
+  `fills_refresh.elapsed` in the report's performance and operation-duration
+  tables with `blocks_or_delays_hsl_readiness` impact classification. The slice
+  did not change event producers, exchange calls, cache mutation, readiness
+  gates, console routing, order logic, risk logic, or trading behavior.
+- PR #942 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `462afac7` to `a85427bf` without bot restart because the
+  deployed change was read-only performance-report tooling. The five configured
+  bots were left running.
+- A 2-minute smoke after deploy reported `ok=true`, `hard_failures=0`, clean
+  tracked repository state at `a85427bf`, all five configured bots matched, no
+  failed account-critical remote calls, and the new brief `fill_refresh`
+  projection populated with seven succeeded and zero failed refreshes. A focused
+  10-minute performance report then reported `ok=true`,
+  `fill_refresh.total_events=38`, `failed_groups=0`,
+  `latest_failed_groups=0`, and
+  `operation_durations.operation_category_counts.fill_refresh=4`.
 - Repository pulled through PR #941 at `462afac7`.
 - PR #941 added bounded `fill_refresh_health` projections to
   `live-smoke-report` full/summary output and concise `fill_refresh` counters

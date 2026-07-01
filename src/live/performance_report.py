@@ -24,6 +24,23 @@ from live.smoke_report import _user_safe_display_path
 
 GROUP_LIMIT = 80
 SUMMARY_GROUP_LIMIT = 12
+_PERFORMANCE_REPORT_SECTION_BASE_KEYS = (
+    "ok",
+    "root",
+    "include_rotated",
+    "files_scanned",
+    "file_discovery",
+    "records_total",
+    "live_events",
+    "legacy_events",
+    "error_count",
+    "warning_count",
+    "bots",
+    "event_window",
+    "filters",
+    "issues",
+)
+_PERFORMANCE_REPORT_SECTION_EXCLUDED_KEYS = {"files"}
 
 _NON_BLOCKING_IMPACTS = {"diagnostics_only", "observability"}
 _BLOCKING_SCOPE_BY_IMPACT = {
@@ -4075,3 +4092,44 @@ def summarize_live_performance_report(
     if report.get("issues"):
         summary["issues"] = report.get("issues")
     return summary
+
+
+def available_live_performance_report_sections(report: dict[str, Any]) -> list[str]:
+    return sorted(
+        key
+        for key in report
+        if key not in _PERFORMANCE_REPORT_SECTION_BASE_KEYS
+        and key not in _PERFORMANCE_REPORT_SECTION_EXCLUDED_KEYS
+    )
+
+
+def project_live_performance_report_sections(
+    report: dict[str, Any],
+    sections: list[str] | tuple[str, ...] | set[str],
+) -> dict[str, Any]:
+    requested = []
+    for section in sections:
+        normalized = str(section).strip()
+        if normalized and normalized not in requested:
+            requested.append(normalized)
+    if not requested or "all" in requested:
+        return report
+
+    available = available_live_performance_report_sections(report)
+    available_set = set(available)
+    unknown = [section for section in requested if section not in available_set]
+    if unknown:
+        raise ValueError(
+            "unknown --section value(s): "
+            + ", ".join(unknown)
+            + "; available sections: "
+            + ", ".join(available)
+            + "; use all for the full report"
+        )
+
+    projected = {
+        key: report[key] for key in _PERFORMANCE_REPORT_SECTION_BASE_KEYS if key in report
+    }
+    for section in requested:
+        projected[section] = report[section]
+    return projected

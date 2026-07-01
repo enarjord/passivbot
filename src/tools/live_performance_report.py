@@ -12,6 +12,7 @@ if str(SRC_ROOT) not in sys.path:
 
 from live.performance_report import (  # noqa: E402
     build_live_performance_report,
+    project_live_performance_report_sections,
     summarize_live_performance_report,
 )
 
@@ -116,6 +117,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Emit a bounded operator summary instead of the full report.",
     )
     parser.add_argument(
+        "--section",
+        action="append",
+        default=[],
+        help=(
+            "Only emit one top-level report section plus common report metadata. "
+            "May be repeated; use all for the default full output."
+        ),
+    )
+    parser.add_argument(
         "--compact",
         action="store_true",
         help="Emit compact single-line JSON.",
@@ -160,6 +170,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     if args.summary:
         report = summarize_live_performance_report(report, group_limit=int(args.group_limit))
+    try:
+        report = project_live_performance_report_sections(report, args.section)
+    except ValueError as exc:
+        parser.error(str(exc))
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report.get("ok") else 1
 
