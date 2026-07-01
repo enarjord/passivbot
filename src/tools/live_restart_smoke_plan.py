@@ -10,6 +10,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.restart_smoke_plan import (  # noqa: E402
+    DEFAULT_INCIDENT_BUNDLE_OUTPUT,
     DEFAULT_SMOKE_EVENT_TAIL_LINES,
     DEFAULT_SMOKE_LOG_TAIL_LINES,
     DEFAULT_SMOKE_MAX_LOG_FILES,
@@ -110,6 +111,14 @@ def build_parser() -> argparse.ArgumentParser:
             "Use 0 to omit the explicit smoke-report override."
         ),
     )
+    parser.add_argument(
+        "--incident-bundle-output",
+        default=DEFAULT_INCIDENT_BUNDLE_OUTPUT,
+        help=(
+            "Output path for the planned live-incident-bundle evidence command. "
+            "The plan never creates the bundle."
+        ),
+    )
     smoke_projection = parser.add_mutually_exclusive_group()
     smoke_projection.add_argument(
         "--brief-smoke-report",
@@ -165,6 +174,7 @@ def main(argv: list[str] | None = None) -> int:
             smoke_max_log_files=int(args.max_log_files),
             smoke_log_tail_lines=int(args.log_tail_lines),
             smoke_max_log_matches=int(args.max_log_matches),
+            incident_bundle_output=args.incident_bundle_output,
             compact_smoke_report=not bool(args.pretty_smoke_report),
             brief_smoke_report=not (
                 bool(args.full_smoke_report) or bool(args.summary_smoke_report)

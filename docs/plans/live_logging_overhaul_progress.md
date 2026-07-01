@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `0da21e9c` after PR #936, `Make planned smoke log file cap explicit`.
+- `6b38c7dd` after PR #937, `Expose incident bundle log scan summary`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #937 at `6b38c7dd`.
+- PR #937 made the read-only `live-incident-bundle` compact result expose the
+  embedded smoke report's bounded text-log scan summary under
+  `smoke_report.logs`, and added the log scan bounds/policy to the incident
+  bundle manifest filters. The slice projected existing smoke metadata only;
+  it did not change log/event scan behavior, smoke verdict policy, bundle
+  file selection beyond manifest/result metadata, event producers, exchange
+  calls, cache mutation, readiness gates, console routing, order logic, risk
+  logic, or trading behavior.
+- PR #937 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, py_compile for touched files,
+  `git diff --check`, and a diff-only silent-handling scan.
+- VPS5 pulled from `0da21e9c` to `6b38c7dd` without bot restart because the
+  deployed change was read-only incident-bundle reporting. The five configured
+  bots were left running.
+- A bounded 5-minute VPS5 smoke after the pull reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `6b38c7dd`, five
+  matched expected live processes, no missing/extra/duplicate live processes,
+  no failed account-critical remote calls, `logs.max_files=8`,
+  `logs.tail_lines=1200`, and `logs.max_matches=20`. Remaining attention came
+  from known non-hard EMA readiness and HSL status/cooldown diagnostics.
+- A focused VPS5 incident-bundle smoke wrote
+  `/tmp/passivbot_incident_bundle_smoke_937.tar.gz` with `--no-event-segments`
+  and the same bounded event/log scan arguments; its compact output reported
+  `ok=true`, `hard_failures=0`, five expected live processes, and the new
+  `smoke_report.logs` projection with `max_files=8`, `tail_lines=1200`,
+  `max_matches=20`, `files_scanned=8`, and no hard or attention text-log
+  matches.
 - Repository pulled through PR #936 at `0da21e9c`.
 - PR #936 made the read-only `live-restart-smoke-plan` generated smoke command
   include `--max-log-files 8` by default, with `0` as an escape hatch to omit

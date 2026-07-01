@@ -61,6 +61,25 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--max-log-matches 20" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
     assert "--summary" not in report["smoke_report"]["command"]
+    assert report["incident_bundle"]["execute"] is False
+    assert report["incident_bundle"]["output_path"].endswith(
+        "/passivbot_incident_bundle_restart_smoke.tar.gz"
+    )
+    incident_command = report["incident_bundle"]["command"]
+    assert "passivbot tool live-incident-bundle" in incident_command
+    assert "--output /tmp/passivbot_incident_bundle_restart_smoke.tar.gz" in incident_command
+    assert "--supervisor-config" in incident_command
+    assert "--processes" in incident_command
+    assert "--recent-minutes 15" in incident_command
+    assert "--no-event-segments" in incident_command
+    assert "--event-tail-lines 2000" in incident_command
+    assert "--max-event-files-per-bot 2" in incident_command
+    assert "--max-log-files 8" in incident_command
+    assert "--log-tail-lines 1200" in incident_command
+    assert "--max-log-matches 20" in incident_command
+    assert "--compact" in incident_command
+    assert report["phases"][-1]["name"] == "post_failure_incident_bundle"
+    assert report["phases"][-1]["planned_commands"][0]["command"] == incident_command
     assert report["process_signal_safety"]["strategy"] == (
         "exact_tmux_pane_or_exact_pid_only"
     )
@@ -193,12 +212,17 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     assert report["inputs"]["smoke_max_log_files"] == 8
     assert report["inputs"]["smoke_log_tail_lines"] == 1200
     assert report["inputs"]["smoke_max_log_matches"] == 20
+    assert report["inputs"]["incident_bundle_output"].endswith(
+        "/passivbot_incident_bundle_restart_smoke.tar.gz"
+    )
     assert "--event-tail-lines 2000" in report["smoke_report"]["command"]
     assert "--max-event-files-per-bot 2" in report["smoke_report"]["command"]
     assert "--max-log-files 8" in report["smoke_report"]["command"]
     assert "--log-tail-lines 1200" in report["smoke_report"]["command"]
     assert "--max-log-matches 20" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
+    assert "--no-event-segments" in report["incident_bundle"]["command"]
+    assert "--compact" in report["incident_bundle"]["command"]
 
 
 def test_live_restart_smoke_plan_can_disable_planned_event_scan_bounds(
@@ -235,6 +259,8 @@ def test_live_restart_smoke_plan_can_disable_planned_event_scan_bounds(
     assert report["inputs"]["smoke_max_event_files_per_bot"] == 0
     assert "--event-tail-lines" not in report["smoke_report"]["command"]
     assert "--max-event-files-per-bot" not in report["smoke_report"]["command"]
+    assert "--event-tail-lines" not in report["incident_bundle"]["command"]
+    assert "--max-event-files-per-bot" not in report["incident_bundle"]["command"]
 
 
 def test_live_restart_smoke_plan_can_disable_planned_log_scan_bounds(tmp_path, capsys):
@@ -273,6 +299,41 @@ def test_live_restart_smoke_plan_can_disable_planned_log_scan_bounds(tmp_path, c
     assert "--max-log-files" not in report["smoke_report"]["command"]
     assert "--log-tail-lines" not in report["smoke_report"]["command"]
     assert "--max-log-matches" not in report["smoke_report"]["command"]
+    assert "--max-log-files" not in report["incident_bundle"]["command"]
+    assert "--log-tail-lines" not in report["incident_bundle"]["command"]
+    assert "--max-log-matches" not in report["incident_bundle"]["command"]
+
+
+def test_live_restart_smoke_plan_can_override_incident_bundle_output(tmp_path, capsys):
+    supervisor_config = tmp_path / "bots.yaml"
+    output_path = tmp_path / "incident.tar.gz"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [
+                str(supervisor_config),
+                "--incident-bundle-output",
+                str(output_path),
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["incident_bundle_output"] == str(output_path)
+    assert report["incident_bundle"]["output_path"] == str(output_path)
+    assert f"--output {output_path}" in report["incident_bundle"]["command"]
 
 
 def test_live_restart_smoke_plan_can_plan_summary_or_full_smoke_projection(
