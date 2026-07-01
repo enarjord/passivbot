@@ -210,7 +210,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   planner to omit those explicit bounds from the generated smoke command. Use
   `--summary-smoke-report` for bounded groups or `--full-smoke-report` for the
   full smoke report. Use `--smoke-section SECTION` one or more times to add
-  focused `live-smoke-report --section` values to the planned smoke command.
+  focused `live-smoke-report --section` values to the planned smoke command and
+  matching `live-incident-bundle --smoke-section` values to the planned failure
+  evidence bundle.
   The planner does not execute the restart, send signals,
   invoke tmux, run SSH, pull git, start bots, contact exchanges, or load
   credentials. The plan also includes a bounded `live-incident-bundle` command

@@ -128,6 +128,7 @@ def _incident_bundle_command(
     max_log_files: int,
     log_tail_lines: int,
     max_log_matches: int,
+    smoke_sections: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     args = [
         "passivbot",
@@ -155,6 +156,10 @@ def _incident_bundle_command(
         args.extend(["--log-tail-lines", str(log_tail_lines)])
     if int(max_log_matches) > 0:
         args.extend(["--max-log-matches", str(max_log_matches)])
+    for section in smoke_sections or ():
+        normalized = str(section).strip()
+        if normalized:
+            args.extend(["--smoke-section", normalized])
     args.append("--compact")
     return _shell_join(args)
 
@@ -384,6 +389,7 @@ def build_live_restart_smoke_plan(
         max_log_files=smoke_max_log_files,
         log_tail_lines=smoke_log_tail_lines,
         max_log_matches=smoke_max_log_matches,
+        smoke_sections=smoke_sections,
     )
     planned_bots = []
     for index, bot in enumerate(bots, start=1):

@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `1a7c83ee` after PR #945, `Plan focused restart smoke sections`.
+- `fddd5491` after PR #946, `Focus incident bundle smoke reports`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #946 at `fddd5491`.
+- PR #946 added `live-incident-bundle --smoke-section`, allowing the embedded
+  full `smoke_report.json` inside an incident bundle to keep selected
+  top-level smoke-report sections plus common metadata while preserving the
+  compact incident-bundle summary from the unfiltered smoke report. The slice
+  was read-only incident-response tooling and did not change event producers,
+  exchange calls, cache mutation, readiness gates, smoke verdict policy,
+  console routing, order logic, risk logic, or trading behavior.
+- PR #946 passed CI plus fresh Cursor and Claude approval at amended head
+  `5106af2c`. Hermes approved the original larger head and did not post a
+  second-pass review after the narrow amendment; the amendment only kept the
+  bundle summary unprojected while projecting the archived `smoke_report.json`.
+  Local validation covered `tests/test_live_incident_bundle.py`, py_compile for
+  touched files, `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `1a7c83ee` to `fddd5491` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A VPS5 focused incident-bundle smoke using `--smoke-section
+  fill_refresh_health` reported `ok=true`, `hard_failures=0`, and preserved
+  compact `logs`/`processes` summary fields. Archive inspection confirmed the
+  embedded `smoke_report.json` recorded
+  `filters.smoke_sections=["fill_refresh_health"]`, included
+  `fill_refresh_health`, and omitted `logs` as intended. A follow-up 1-minute
+  smoke reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `fddd5491`, all five
+  configured bots matched, zero failed remote calls, zero failed
+  account-critical remote calls, and only known non-hard `ema.unavailable`
+  attention groups.
 - Repository pulled through PR #945 at `1a7c83ee`.
 - PR #945 added `live-restart-smoke-plan --smoke-section`, allowing the
   plan-only restart smoke command to include focused `live-smoke-report
