@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `48919ea1` after PR #950, `Report restart preflight skips`.
+- `a5a3a83f` after PR #951, `Embed restart smoke plans in incident bundles`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #951 at `a5a3a83f`.
+- PR #951 added opt-in `live-incident-bundle --restart-smoke-plan`, requiring
+  `--supervisor-config`, to embed a non-executing `restart_smoke_plan.json`
+  artifact and value-safe restart-plan summary in incident bundles. The
+  embedded plan uses the restart planner's bounded smoke defaults instead of
+  inheriting the incident bundle's event/log scan settings. The slice was
+  read-only incident-response tooling and did not add restart execution,
+  process signaling, tmux calls, SSH/git operations, exchange calls, event
+  producers, smoke verdict changes, console routing, order logic, risk logic,
+  or trading behavior.
+- PR #951 passed Hermes + Claude + CI after an amendment fixed the embedded
+  plan scan defaults and removed raw config-preflight command strings from the
+  bundle result/manifest summary. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_restart_smoke_plan.py`,
+  py_compile for touched files, `git diff --check`, and an added-line
+  silent-handling scan.
+- VPS5 pulled from `48919ea1` to `a5a3a83f` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A VPS5 1-minute bounded smoke after deploy reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `a5a3a83f`, all five
+  configured bots matched, config checks green, zero failed remote calls, zero
+  failed account-critical remote calls, and only known non-hard EMA/HSL
+  cooldown attention groups. A focused incident-bundle run with
+  `--restart-smoke-plan --restart-smoke-window-minutes 1 --no-event-segments`
+  reported `ok=true`, five bots in the embedded restart plan, two config
+  preflight commands counted, zero skipped config paths, and archive inspection
+  confirmed `restart_smoke_plan.json` was present.
 - Repository pulled through PR #950 at `48919ea1`.
 - PR #950 added `skipped_without_config_path_count` to the full and summary
   `live-restart-smoke-plan` `config_preflight` output, keeping planned restart
@@ -2645,19 +2673,18 @@ VPS5 deployment status:
 
 ## Current Work
 
-### Pending PR: Incident Bundle Restart Smoke Plan
+### Pending PR: Restart Plan Self-Contained Failure Bundle
 
-- Branch: `codex/v8-incident-bundle-restart-plan`.
-- Scope: read-only incident bundle tooling and tests.
-- Result: adds opt-in `live-incident-bundle --restart-smoke-plan`, requiring
-  `--supervisor-config`, to embed a non-executing `restart_smoke_plan.json`
-  artifact and concise summary in incident bundles. This lets a shared bundle
-  carry both recent incident evidence and the planned restart/smoke/config
-  preflight routine needed for follow-up review.
-- Expected validation: focused live-incident-bundle tests plus py_compile and
-  `git diff --check`. No event producers, exchange calls, cache mutation,
-  readiness gates, console routing, monitor writes, order/risk logic, or
-  trading behavior should change.
+- Branch: `codex/v8-restart-plan-self-contained-bundle`.
+- Scope: read-only restart-smoke planner tooling and tests.
+- Result: planned post-failure `live-incident-bundle` commands emitted by
+  `live-restart-smoke-plan` now include `--restart-smoke-plan` and the same
+  restart-smoke window, so a failure bundle collected from the plan carries the
+  non-executing restart/smoke/config-preflight plan that produced it.
+- Expected validation: focused live-restart-smoke-plan tests plus py_compile
+  and `git diff --check`. No event producers, exchange calls, cache mutation,
+  readiness gates, console routing, monitor writes, process signaling,
+  order/risk logic, or trading behavior should change.
 
 ## Merged Slices
 
