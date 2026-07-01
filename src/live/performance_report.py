@@ -140,6 +140,9 @@ _FORAGER_EMA_READINESS_EVENT_TYPES = {
     "ema.unavailable",
     "ema.fallback_used",
 }
+_FILL_REFRESH_EVENT_TYPES = {
+    "fills.refresh_summary",
+}
 _ACCOUNT_STATE_CHANGE_EVENT_TYPES = {
     "fill.ingested",
     "position.changed",
@@ -221,6 +224,37 @@ _EMA_FALLBACK_NUMERIC_FIELDS = (
     "close_recovered_count",
     "close_fallback_count",
     "forager_cached_fallback_count",
+)
+_FILL_REFRESH_STRING_FIELDS = (
+    "source",
+    "refresh_mode",
+    "history_scope",
+    "coverage_reason_before",
+    "coverage_reason_after",
+    "doctor_mode",
+    "doctor_action",
+    "error_type",
+)
+_FILL_REFRESH_BOOL_FIELDS = (
+    "coverage_ready_before",
+    "coverage_ready_after",
+    "auto_repair",
+    "repaired",
+    "quarantine_created",
+)
+_FILL_REFRESH_NUMERIC_FIELDS = (
+    "elapsed_ms",
+    "event_count_before",
+    "event_count_after",
+    "new_count",
+    "enriched_count",
+    "pending_pnl_count",
+    "overlap_minutes",
+    "retry_count",
+    "next_retry_in_ms",
+    "anomaly_events",
+    "degraded_events_after",
+    "legacy_files_quarantined",
 )
 
 
@@ -1350,6 +1384,24 @@ def _bounded_forager_ema_readiness_data(event_type: str, data: Any) -> dict[str,
     return {}
 
 
+def _bounded_fill_refresh_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in _FILL_REFRESH_STRING_FIELDS:
+        value = data.get(key)
+        if value not in (None, ""):
+            out[key] = str(value)
+    for key in _FILL_REFRESH_BOOL_FIELDS:
+        if key in data:
+            out[key] = bool(data.get(key))
+    for key in _FILL_REFRESH_NUMERIC_FIELDS:
+        value = _non_negative_number(data.get(key))
+        if value is not None:
+            out[key] = value
+    return out
+
+
 def _number_summary(values: list[int]) -> dict[str, Any]:
     sorted_values = sorted(int(value) for value in values)
     if not sorted_values:
@@ -1363,6 +1415,12 @@ def _number_summary(values: list[int]) -> dict[str, Any]:
         "median": int(round(statistics.median(sorted_values))),
         "p95": _percentile(sorted_values, 0.95),
     }
+
+
+def _usage_pct(value: int | None, budget: int | None) -> int | None:
+    if value is None or budget is None or budget <= 0:
+        return None
+    return int(round(float(value) * 100.0 / float(budget)))
 
 
 def _hsl_replay_observed_rows(data: dict[str, Any]) -> int | None:
@@ -1834,6 +1892,226 @@ class _CacheWarmupAccumulator:
             "total_events": int(self.total_events),
             "bot_count": len(groups),
             "event_types": dict(self.event_types.most_common()),
+            "groups_truncated": len(groups) > limit,
+            "groups": groups[:limit],
+        }
+
+
+class _FillRefreshAccumulator:
+    def __init__(self) -> None:
+        self.groups: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self.event_types: Counter[str] = Counter()
+        self.statuses: Counter[str] = Counter()
+        self.reason_codes: Counter[str] = Counter()
+        self.error_types: Counter[str] = Counter()
+        self.total_events = 0
+
+    @staticmethod
+    def _latest_changed(state: dict[str, Any], ts: int | None) -> bool:
+        if ts is None or state.get("latest_ts") is None:
+            return True
+        return int(ts) >= int(state["latest_ts"])
+
+    @staticmethod
+    def _add_number(state: dict[str, Any], field: str, value: Any) -> None:
+        number = _non_negative_number(value)
+        if number is not None:
+            state.setdefault(field, []).append(int(round(float(number))))
+
+    @staticmethod
+    def _increment_counter(counter: Counter[str], value: Any) -> None:
+        if value not in (None, ""):
+            counter[str(value)] += 1
+
+    def add(self, *, row: dict[str, Any], live_event: dict[str, Any]) -> None:
+        event_type = str(live_event.get("event_type") or row.get("kind") or "")
+        if event_type not in _FILL_REFRESH_EVENT_TYPES:
+            return
+        data = _bounded_fill_refresh_data(live_event.get("data"))
+        if not data:
+            return
+        bot = _bot_key(row, live_event)
+        source = str(data.get("source") or "-")
+        refresh_mode = str(data.get("refresh_mode") or "-")
+        key = (bot, source, refresh_mode)
+        state = self.groups.get(key)
+        if state is None:
+            state = {
+                "bot": bot,
+                "source": source,
+                "refresh_mode": refresh_mode,
+                "event_types": Counter(),
+                "statuses": Counter(),
+                "reason_codes": Counter(),
+                "error_types": Counter(),
+                "history_scopes": Counter(),
+                "coverage_reasons_after": Counter(),
+                "total_events": 0,
+                "latest_ts": None,
+                "elapsed_ms": [],
+                "event_count_after": [],
+                "new_count": [],
+                "enriched_count": [],
+                "pending_pnl_count": [],
+                "retry_count": [],
+                "next_retry_in_ms": [],
+                "degraded_events_after": [],
+                "coverage_ready_after_true": 0,
+                "coverage_ready_after_false": 0,
+            }
+            self.groups[key] = state
+
+        self.total_events += 1
+        self.event_types[event_type] += 1
+        state["total_events"] = int(state["total_events"]) + 1
+        state["event_types"][event_type] += 1
+
+        status = live_event.get("status")
+        reason_code = live_event.get("reason_code")
+        error_type = data.get("error_type")
+        self._increment_counter(state["statuses"], status)
+        self._increment_counter(self.statuses, status)
+        self._increment_counter(state["reason_codes"], reason_code)
+        self._increment_counter(self.reason_codes, reason_code)
+        self._increment_counter(state["error_types"], error_type)
+        self._increment_counter(self.error_types, error_type)
+        self._increment_counter(state["history_scopes"], data.get("history_scope"))
+        self._increment_counter(
+            state["coverage_reasons_after"],
+            data.get("coverage_reason_after"),
+        )
+        if data.get("coverage_ready_after") is True:
+            state["coverage_ready_after_true"] = int(
+                state["coverage_ready_after_true"]
+            ) + 1
+        elif data.get("coverage_ready_after") is False:
+            state["coverage_ready_after_false"] = int(
+                state["coverage_ready_after_false"]
+            ) + 1
+
+        for field in (
+            "elapsed_ms",
+            "event_count_after",
+            "new_count",
+            "enriched_count",
+            "pending_pnl_count",
+            "retry_count",
+            "next_retry_in_ms",
+            "degraded_events_after",
+        ):
+            self._add_number(state, field, data.get(field))
+
+        ts = _record_ts(row)
+        record = {
+            key: value
+            for key, value in {
+                "event_type": event_type,
+                "status": status,
+                "reason_code": reason_code,
+                "ts": int(ts) if ts is not None else None,
+                "data": data,
+            }.items()
+            if value not in (None, {}, [])
+        }
+        if self._latest_changed(state, ts):
+            if ts is not None:
+                state["latest_ts"] = int(ts)
+            state["latest"] = record
+
+    def to_dict(self, *, group_limit: int = GROUP_LIMIT) -> dict[str, Any]:
+        groups = []
+        failed_groups = 0
+        latest_failed_groups = 0
+        recovered_groups = 0
+        bots: set[str] = set()
+        for state in self.groups.values():
+            bot = str(state.get("bot") or "")
+            if bot:
+                bots.add(bot)
+            statuses = (
+                state["statuses"]
+                if isinstance(state.get("statuses"), Counter)
+                else Counter()
+            )
+            failed_count = int(statuses.get("failed") or 0)
+            latest = state.get("latest") if isinstance(state.get("latest"), dict) else {}
+            latest_status = latest.get("status") if isinstance(latest, dict) else None
+            if failed_count:
+                failed_groups += 1
+                if latest_status != "failed":
+                    recovered_groups += 1
+            if latest_status == "failed":
+                latest_failed_groups += 1
+            count = int(state.get("total_events") or 0)
+            group = {
+                "bot": state.get("bot"),
+                "source": state.get("source"),
+                "refresh_mode": state.get("refresh_mode"),
+                "total_events": count,
+                "failed": failed_count,
+                "failure_pct": _usage_pct(failed_count, count),
+                "latest_ts": state.get("latest_ts"),
+                "event_types": dict(state["event_types"].most_common()),
+                "statuses": dict(statuses.most_common()),
+                "reason_codes": dict(state["reason_codes"].most_common()),
+                "error_types": dict(state["error_types"].most_common()),
+                "history_scopes": dict(state["history_scopes"].most_common()),
+                "coverage_reasons_after": dict(
+                    state["coverage_reasons_after"].most_common()
+                ),
+                "coverage_ready_after_true": int(
+                    state.get("coverage_ready_after_true") or 0
+                ),
+                "coverage_ready_after_false": int(
+                    state.get("coverage_ready_after_false") or 0
+                ),
+                "elapsed_ms": _number_summary(state.get("elapsed_ms") or []),
+                "event_count_after": _number_summary(
+                    state.get("event_count_after") or []
+                ),
+                "new_count": _number_summary(state.get("new_count") or []),
+                "enriched_count": _number_summary(state.get("enriched_count") or []),
+                "pending_pnl_count": _number_summary(
+                    state.get("pending_pnl_count") or []
+                ),
+                "retry_count": _number_summary(state.get("retry_count") or []),
+                "next_retry_in_ms": _number_summary(
+                    state.get("next_retry_in_ms") or []
+                ),
+                "degraded_events_after": _number_summary(
+                    state.get("degraded_events_after") or []
+                ),
+                "recovered": bool(failed_count and latest_status != "failed"),
+                "latest": state.get("latest"),
+            }
+            groups.append(
+                {
+                    key: value
+                    for key, value in group.items()
+                    if value not in (None, {}, [])
+                }
+            )
+        groups = sorted(
+            groups,
+            key=lambda item: (
+                -int(item.get("failed") or 0),
+                -int((item.get("elapsed_ms") or {}).get("p95") or 0),
+                -int((item.get("elapsed_ms") or {}).get("max") or 0),
+                -int(item.get("latest_ts") or 0),
+                str(item.get("bot") or ""),
+            ),
+        )
+        limit = max(0, int(group_limit))
+        return {
+            "total_events": int(self.total_events),
+            "bot_count": len(bots),
+            "event_types": dict(self.event_types.most_common()),
+            "statuses": dict(self.statuses.most_common()),
+            "reason_codes": dict(self.reason_codes.most_common()),
+            "error_types": dict(self.error_types.most_common()),
+            "failed_groups": failed_groups,
+            "latest_failed_groups": latest_failed_groups,
+            "recovered_groups": recovered_groups,
             "groups_truncated": len(groups) > limit,
             "groups": groups[:limit],
         }
@@ -2904,6 +3182,7 @@ def _operation_category(operation: Any) -> str:
         ("remote_call.", "remote_call"),
         ("hsl_replay.", "hsl_replay"),
         ("cache_", "cache"),
+        ("fills_refresh.", "fill_refresh"),
         ("forager_", "forager"),
         ("decision_boundary.", "decision_boundary"),
         ("input_staleness.", "input_staleness"),
@@ -3067,6 +3346,8 @@ def _trading_impact_for_event(event_type: str, operation: str) -> str:
         return "blocks_indicator_readiness"
     if event_type == "cache.flush.completed":
         return "diagnostics_only"
+    if event_type == "fills.refresh_summary":
+        return "blocks_or_delays_hsl_readiness"
     if event_type == "bot.startup_timing":
         return "blocks_startup_readiness"
     return "observability"
@@ -3167,6 +3448,19 @@ def _add_event_timings(
             operation=operation,
             value_ms=_non_negative_ms(data.get("elapsed_ms")),
             trading_impact=_trading_impact_for_event(event_type, operation),
+        )
+        return
+
+    if event_type in _FILL_REFRESH_EVENT_TYPES:
+        accumulator.add(
+            row=row,
+            live_event=live_event,
+            operation="fills_refresh.elapsed",
+            value_ms=_non_negative_ms(data.get("elapsed_ms")),
+            trading_impact=_trading_impact_for_event(
+                event_type,
+                "fills_refresh.elapsed",
+            ),
         )
         return
 
@@ -3324,6 +3618,7 @@ def build_live_performance_report(
     report_ts_ms = utc_ms()
     hsl_replay_profile = _HslReplayProfileAccumulator()
     cache_warmup = _CacheWarmupAccumulator()
+    fill_refresh = _FillRefreshAccumulator()
     forager_ema_readiness = _ForagerEmaReadinessAccumulator()
     resource_pressure = _ResourcePressureAccumulator()
     shutdown_latency = _ShutdownLatencyAccumulator()
@@ -3416,6 +3711,7 @@ def build_live_performance_report(
         startup_readiness.add(row=row, live_event=live_event)
         hsl_replay_profile.add(row=row, live_event=live_event)
         cache_warmup.add(row=row, live_event=live_event)
+        fill_refresh.add(row=row, live_event=live_event)
         forager_ema_readiness.add(row=row, live_event=live_event)
         resource_pressure.add(row=row, live_event=live_event)
         shutdown_latency.add(row=row, live_event=live_event)
@@ -3505,6 +3801,7 @@ def build_live_performance_report(
             report_ts_ms=report_ts_ms,
         ),
         "cache_warmup": cache_warmup.to_dict(group_limit=group_limit),
+        "fill_refresh": fill_refresh.to_dict(group_limit=group_limit),
         "forager_ema_readiness": forager_ema_readiness.to_dict(group_limit=group_limit),
         "resource_pressure": resource_pressure.to_dict(group_limit=group_limit),
         "shutdown_latency": shutdown_latency.to_dict(group_limit=group_limit),
@@ -3647,6 +3944,17 @@ def summarize_live_performance_report(
         if len(cache_groups) > max(0, int(group_limit)):
             cache_warmup["groups_truncated"] = True
         summary["cache_warmup"] = cache_warmup
+    if isinstance(report.get("fill_refresh"), dict):
+        fill_refresh = dict(report["fill_refresh"])
+        fill_refresh_groups = (
+            fill_refresh.get("groups")
+            if isinstance(fill_refresh.get("groups"), list)
+            else []
+        )
+        fill_refresh["groups"] = fill_refresh_groups[: max(0, int(group_limit))]
+        if len(fill_refresh_groups) > max(0, int(group_limit)):
+            fill_refresh["groups_truncated"] = True
+        summary["fill_refresh"] = fill_refresh
     if isinstance(report.get("forager_ema_readiness"), dict):
         forager_ema_readiness = dict(report["forager_ema_readiness"])
         readiness_groups = (

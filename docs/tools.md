@@ -230,7 +230,7 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   non-diagnostic timing and staleness groups by observed duration so the largest trading-impact
   delays are visible without scanning every timing group. The `operation_durations` section
   collates startup, cycle, state-refresh, remote-call, HSL replay, cache, decision-boundary,
-  input-staleness, execution, and shutdown timing groups into one bounded table with operation
+  input-staleness, fill-refresh, execution, and shutdown timing groups into one bounded table with operation
   category, trading-impact, blocking-scope, and timing-kind counters. The `resource_pressure` section
   summarizes whitelisted process and event-pipeline health fields from existing
   `health.summary` events, including RSS, memory percent, file descriptors, load average,
@@ -246,7 +246,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   dense pair-row work, observed progress percentage, and startup-blocking elapsed time where
   available. The `cache_warmup` section derives bounded warm-cache reuse, cold-path,
   candle cache load, and candle cache flush summaries from existing cache events without
-  exposing raw cache paths or payloads. The `forager_ema_readiness` section derives bounded
+  exposing raw cache paths or payloads. The `fill_refresh` section derives bounded
+  fill-cache refresh status, coverage, retry, count, and elapsed summaries from existing
+  `fills.refresh_summary` events without exposing raw error text, debug payloads, fill ids,
+  order ids, account values, or coverage payloads. The `forager_ema_readiness` section derives bounded
   forager selection, forager feature-unavailable, EMA unavailable, and EMA fallback summaries
   from existing events without exposing raw EMA error text, top-score payloads, account values,
   or cache paths.
