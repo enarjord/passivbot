@@ -289,6 +289,12 @@ the time go?" for a live bot. Every row below should expose `count`, `min`,
 classification when enough source events exist.
 
 - [ ] Startup: process start to account-critical ready.
+- Status: partial. Existing `bot.startup_timing` events are summarized by
+  `live-performance-report` as `startup_readiness`, including per-bot startup
+  phases and aggregate bounded phase elapsed/since-previous timing. Remaining
+  work: explicit account-critical ready, held-position protective HSL ready,
+  fresh-entry ready, first cycle/Rust call, and first exchange-write readiness
+  events.
 - [ ] Startup: process start to held-position protective HSL ready.
 - [ ] Startup: process start to fresh-entry ready.
 - [ ] Startup: process start to first planning cycle started/completed.
@@ -658,6 +664,9 @@ Trading-impact labels:
     exchange write eligibility, and full background replay complete.
   - Group by exchange/user/bot so VPS-class regressions are visible before a
     panic incident.
+  - Status: partial. Startup phase timing aggregation is available from
+    existing phase events, but true order-class readiness SLA events are still
+    missing.
 
 - [ ] Add a full live-operation duration table.
   - Include startup, account refresh, fill refresh, cache proof, HSL replay,

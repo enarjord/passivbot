@@ -947,6 +947,14 @@ def _startup_elapsed_ms(data: dict[str, Any]) -> int | None:
 
 
 _LIVE_EVENT_DEBUG_PROFILE_SET = set(LIVE_EVENT_DEBUG_PROFILES)
+_STARTUP_PHASE_LABELS = {
+    "account",
+    "active-candle",
+    "full-warmup",
+    "hsl",
+    "market",
+    "startup",
+}
 
 
 def _known_debug_profiles(value: Any) -> list[str]:
@@ -966,9 +974,19 @@ def _known_debug_profiles(value: Any) -> list[str]:
     return sorted(profiles)
 
 
+def _startup_phase_label(value: Any) -> str:
+    label = str(value or "startup").strip()
+    if label in _STARTUP_PHASE_LABELS:
+        return label
+    return "other"
+
+
 class _StartupReadinessAccumulator:
     def __init__(self) -> None:
         self.bots: dict[str, dict[str, Any]] = {}
+        self.startup_phase_counts: Counter[str] = Counter()
+        self.startup_phase_elapsed_values: dict[str, list[int]] = {}
+        self.startup_phase_since_previous_values: dict[str, list[int]] = {}
 
     @staticmethod
     def _update_debug_profiles(state: dict[str, Any], data: dict[str, Any]) -> None:
@@ -1027,10 +1045,19 @@ class _StartupReadinessAccumulator:
             return
         if event_type == "bot.startup_timing":
             state = self._bot_state(row=row, live_event=live_event)
-            stage = data.get("stage") or data.get("phase") or "startup"
+            stage = _startup_phase_label(data.get("stage") or data.get("phase"))
             elapsed_ms = _startup_elapsed_ms(data)
             if elapsed_ms is not None:
-                state["startup_phases_ms"][str(stage)] = int(elapsed_ms)
+                state["startup_phases_ms"][stage] = int(elapsed_ms)
+                self.startup_phase_counts[stage] += 1
+                self.startup_phase_elapsed_values.setdefault(stage, []).append(
+                    int(elapsed_ms)
+                )
+            since_previous_ms = _non_negative_ms(data.get("since_previous_ms"))
+            if since_previous_ms is not None:
+                self.startup_phase_since_previous_values.setdefault(stage, []).append(
+                    int(since_previous_ms)
+                )
             return
         if event_type.startswith("hsl.replay."):
             state = self._bot_state(row=row, live_event=live_event)
@@ -1075,6 +1102,12 @@ class _StartupReadinessAccumulator:
         hsl_active_count = 0
         debug_profile_counts: Counter[str] = Counter()
         limit = max(0, int(group_limit))
+        phase_labels = [
+            phase
+            for phase, _count in self.startup_phase_counts.most_common(
+                SUMMARY_GROUP_LIMIT
+            )
+        ]
         for bot, state in sorted(self.bots.items()):
             phases = dict(sorted(state.get("startup_phases_ms", {}).items()))
             item = {
@@ -1115,6 +1148,20 @@ class _StartupReadinessAccumulator:
             "ready_count": int(ready_count),
             "hsl_replay_active_count": int(hsl_active_count),
             "debug_profile_counts": dict(sorted(debug_profile_counts.items())),
+            "startup_phase_counts": {
+                phase: int(self.startup_phase_counts[phase]) for phase in phase_labels
+            },
+            "startup_phase_elapsed_ms": {
+                phase: _number_summary(self.startup_phase_elapsed_values.get(phase, []))
+                for phase in phase_labels
+            },
+            "startup_phase_since_previous_ms": {
+                phase: _number_summary(
+                    self.startup_phase_since_previous_values.get(phase, [])
+                )
+                for phase in phase_labels
+                if self.startup_phase_since_previous_values.get(phase)
+            },
             "bots_truncated": len(bot_items) > limit,
             "bots": bot_items[:limit],
         }
@@ -3112,7 +3159,7 @@ def _add_event_timings(
         return
 
     if event_type == "bot.startup_timing":
-        stage = data.get("stage") or data.get("phase") or "startup"
+        stage = _startup_phase_label(data.get("stage") or data.get("phase"))
         operation = f"startup.{stage}"
         value_ms = _non_negative_ms(data.get("elapsed_ms"))
         if value_ms is None:
