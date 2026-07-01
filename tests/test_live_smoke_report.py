@@ -10,6 +10,7 @@ import live.smoke_report as smoke_report_module
 from live.smoke_report import (
     build_live_smoke_report,
     default_logs_root_for_monitor,
+    project_live_smoke_report_sections,
     summarize_live_smoke_report,
     summarize_live_smoke_report_brief,
 )
@@ -3945,6 +3946,94 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert "matches" not in summary["logs"]
     assert "groups" not in summary["remote_calls"]
     assert "groups" not in summary["account_critical_remote_calls"]
+
+
+def test_live_smoke_report_section_projection_keeps_common_metadata(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                reason_code="fills_refresh_succeeded",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "history_scope": "all",
+                    "coverage_ready_after": True,
+                    "elapsed_ms": 25,
+                },
+            )
+        ],
+    )
+    report = summarize_live_smoke_report_brief(
+        build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    )
+
+    projected = project_live_smoke_report_sections(report, ["fill_refresh"])
+
+    assert projected["ok"] is True
+    assert projected["attention"] is False
+    assert projected["monitor"]["live_events"] == 1
+    assert projected["fill_refresh"]["total"] == 1
+    assert "logs" not in projected
+    assert "remote_calls" not in projected
+    assert "processes" not in projected
+
+
+def test_live_smoke_report_cli_brief_section_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                reason_code="fills_refresh_succeeded",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "history_scope": "all",
+                    "coverage_ready_after": True,
+                    "elapsed_ms": 25,
+                },
+            )
+        ],
+    )
+
+    assert (
+        live_smoke_report.main(
+            [
+                str(tmp_path / "monitor"),
+                "--logs-root",
+                "",
+                "--brief",
+                "--section",
+                "fill_refresh",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    summary = json.loads(capsys.readouterr().out)
+    assert summary["ok"] is True
+    assert summary["fill_refresh"]["total"] == 1
+    assert "logs" not in summary
+    assert "remote_calls" not in summary
+    assert "processes" not in summary
+
+
+def test_live_smoke_report_cli_rejects_unknown_section(capsys):
+    with pytest.raises(SystemExit):
+        live_smoke_report.main(["monitor", "--brief", "--section", "not_a_section"])
+
+    assert "unknown --section value" in capsys.readouterr().err
 
 
 def test_live_smoke_report_cli_brief_projects_event_tail_metadata(tmp_path, capsys):
