@@ -59,6 +59,8 @@ REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
 FILL_REFRESH_HEALTH_GROUP_LIMIT = 20
 FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
+EXECUTION_HEALTH_GROUP_LIMIT = 20
+EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
@@ -122,6 +124,24 @@ REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
     EventTypes.REMOTE_CALL_FAILED,
     EventTypes.REMOTE_CALL_THROTTLED,
+}
+EXECUTION_HEALTH_EVENT_TYPES = {
+    EventTypes.ORDER_WAVE_STARTED,
+    EventTypes.ORDER_WAVE_COMPLETED,
+    EventTypes.EXECUTION_CREATE_SENT,
+    EventTypes.EXECUTION_CREATE_SUCCEEDED,
+    EventTypes.EXECUTION_CREATE_FAILED,
+    EventTypes.EXECUTION_CREATE_REJECTED,
+    EventTypes.EXECUTION_CREATE_DEFERRED,
+    EventTypes.EXECUTION_CREATE_SKIPPED,
+    EventTypes.EXECUTION_CANCEL_SENT,
+    EventTypes.EXECUTION_CANCEL_SUCCEEDED,
+    EventTypes.EXECUTION_CANCEL_FAILED,
+    EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL,
+    EventTypes.EXECUTION_AMBIGUOUS,
+    EventTypes.EXECUTION_CONFIRMATION_REQUESTED,
+    EventTypes.EXECUTION_CONFIRMATION_SATISFIED,
+    EventTypes.EXECUTION_CONFIRMATION_TIMEOUT,
 }
 PROBLEM_EVENT_DATA_KEYS: dict[str, tuple[str, ...]] = {
     EventTypes.CYCLE_DEGRADED: ("details", "authoritative_epoch"),
@@ -410,7 +430,7 @@ def _merge_remote_call_failure_group(
     if existing is None:
         groups[key] = group
         return
-    existing["count"] = int(existing.get("count", 0)) + 1
+    existing["count"] = _count_value(existing.get("count")) + 1
     current_key = _sort_event_position_key(
         ts=group.get("latest_ts"),
         seq=group.get("latest_seq"),
@@ -549,7 +569,7 @@ def _merge_remote_call_health_group(
     if existing is None:
         groups[key] = group
         return
-    existing["count"] = int(existing.get("count", 0)) + 1
+    existing["count"] = _count_value(existing.get("count")) + 1
     existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
     for field in ("statuses", "raw_statuses", "reason_codes", "error_types", "symbols"):
         counter = existing.setdefault(field, Counter())
@@ -719,6 +739,381 @@ def _summarize_remote_call_health(
         "failure_pct": _usage_pct(total_failed_count, total),
         "throttled_pct": _usage_pct(total_throttled_count, total),
         "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _execution_health_outcome(event_type: str, status: str | None) -> str:
+    if event_type == EventTypes.ORDER_WAVE_STARTED:
+        return "wave_started"
+    if event_type == EventTypes.ORDER_WAVE_COMPLETED:
+        return "wave_completed"
+    if event_type == EventTypes.EXECUTION_CREATE_SENT:
+        return "create_sent"
+    if event_type == EventTypes.EXECUTION_CREATE_SUCCEEDED:
+        return "create_succeeded"
+    if event_type == EventTypes.EXECUTION_CREATE_FAILED:
+        return "create_failed"
+    if event_type == EventTypes.EXECUTION_CREATE_REJECTED:
+        return "create_rejected"
+    if event_type == EventTypes.EXECUTION_CREATE_DEFERRED:
+        return "create_deferred"
+    if event_type == EventTypes.EXECUTION_CREATE_SKIPPED:
+        return "create_skipped"
+    if event_type == EventTypes.EXECUTION_CANCEL_SENT:
+        return "cancel_sent"
+    if event_type == EventTypes.EXECUTION_CANCEL_SUCCEEDED:
+        return "cancel_succeeded"
+    if event_type == EventTypes.EXECUTION_CANCEL_FAILED:
+        return "cancel_failed"
+    if event_type == EventTypes.EXECUTION_CANCEL_AMBIGUOUS_TERMINAL:
+        return "cancel_ambiguous_terminal"
+    if event_type == EventTypes.EXECUTION_AMBIGUOUS:
+        return "ambiguous"
+    if event_type == EventTypes.EXECUTION_CONFIRMATION_REQUESTED:
+        return "confirmation_requested"
+    if event_type == EventTypes.EXECUTION_CONFIRMATION_SATISFIED:
+        return "confirmation_satisfied"
+    if event_type == EventTypes.EXECUTION_CONFIRMATION_TIMEOUT:
+        return "confirmation_timeout"
+    if status not in (None, ""):
+        return str(status).lower()
+    return "unknown"
+
+
+def _execution_health_elapsed_values(payload: dict[str, Any]) -> list[int]:
+    values: list[int] = []
+    for key in ("elapsed_ms", "confirm_ms", "cancel_ms", "create_ms"):
+        value = _non_negative_int(payload.get(key))
+        if value is not None:
+            values.append(int(value))
+    return values
+
+
+def _safe_string_sample(values: Any, *, limit: int) -> dict[str, Any]:
+    if not isinstance(values, (list, tuple, set)):
+        return {}
+    safe_values = sorted(
+        {
+            _redact_log_text(str(value), max_len=80)
+            for value in values
+            if value not in (None, "")
+        }
+    )
+    return {
+        "count": len(safe_values),
+        "sample": safe_values[:limit],
+        "truncated": max(0, len(safe_values) - limit),
+    }
+
+
+def _execution_health_latest_data(payload: dict[str, Any]) -> dict[str, Any]:
+    safe_keys = (
+        "index",
+        "order_type",
+        "pb_order_type",
+        "context",
+        "reason",
+        "reduce_only",
+        "elapsed_ms",
+        "confirm_ms",
+        "timeout_ms",
+        "planned_cancel",
+        "planned_create",
+        "cancel_posted",
+        "create_posted",
+        "skipped_cancel",
+        "deferred_create",
+        "skipped_create",
+        "order_count",
+        "symbols_count",
+        "symbols_truncated",
+        "pending_surfaces",
+        "fresh_surfaces",
+        "changed_surfaces",
+        "error_type",
+        "result_status",
+    )
+    latest: dict[str, Any] = {}
+    for key in safe_keys:
+        value = payload.get(key)
+        if value in (None, "", {}, []):
+            continue
+        latest[key] = _compact_problem_event_data_value(value)
+    symbol_sample = _safe_string_sample(
+        payload.get("symbols"),
+        limit=EXECUTION_HEALTH_VALUE_LIMIT,
+    )
+    if symbol_sample:
+        latest["symbols"] = symbol_sample
+    return latest
+
+
+def _execution_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    event_type = str(live_event.get("event_type") or row.get("kind") or "")
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    status = (
+        str(live_event.get("status")).lower()
+        if live_event.get("status") not in (None, "")
+        else None
+    )
+    reason_code = live_event.get("reason_code")
+    error_type = payload.get("error_type")
+    symbol = live_event.get("symbol")
+    pside = live_event.get("pside")
+    side = live_event.get("side")
+    outcome = _execution_health_outcome(event_type, status)
+    ids = _event_ids(live_event)
+    return {
+        "bot": bot_key,
+        "event_type": event_type,
+        "component": live_event.get("component"),
+        "status": status,
+        "outcome": outcome,
+        "reason_code": reason_code,
+        "symbol": symbol,
+        "pside": pside,
+        "side": side,
+        "count": 1,
+        "event_types": Counter([event_type]) if event_type else Counter(),
+        "statuses": Counter([status]) if status else Counter(),
+        "outcomes": Counter([outcome]) if outcome else Counter(),
+        "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
+        "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
+        "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
+        "psides": Counter([str(pside)]) if pside not in (None, "") else Counter(),
+        "sides": Counter([str(side)]) if side not in (None, "") else Counter(),
+        "elapsed_values": _execution_health_elapsed_values(payload),
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_level": live_event.get("level"),
+        "latest_error_type": error_type,
+        "latest_data": _execution_health_latest_data(payload),
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id", "order_wave_id", "action_id")
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_execution_health_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (
+        group.get("bot"),
+        group.get("event_type"),
+        group.get("component"),
+        group.get("status"),
+        group.get("reason_code"),
+        group.get("symbol"),
+        group.get("pside"),
+        group.get("side"),
+    )
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = _count_value(existing.get("count")) + 1
+    existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
+    for field in (
+        "event_types",
+        "statuses",
+        "outcomes",
+        "reason_codes",
+        "error_types",
+        "symbols",
+        "psides",
+        "sides",
+    ):
+        counter = existing.setdefault(field, Counter())
+        counter.update(group.get(field) or Counter())
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_level",
+            "latest_error_type",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _execution_health_sort_key(
+    group: dict[str, Any],
+) -> tuple[int, int, int, int, int, int, str, str]:
+    outcomes = group.get("outcomes") if isinstance(group.get("outcomes"), Counter) else Counter()
+    elapsed = _ms_summary(
+        [
+            int(value)
+            for value in (group.get("elapsed_values") or [])
+            if _non_negative_int(value) is not None
+        ]
+    )
+    return (
+        -_count_value(outcomes.get("ambiguous")),
+        -_count_value(outcomes.get("cancel_ambiguous_terminal")),
+        -_count_value(outcomes.get("confirmation_timeout")),
+        -(
+            _count_value(outcomes.get("create_failed"))
+            + _count_value(outcomes.get("cancel_failed"))
+        ),
+        -_count_value(outcomes.get("create_rejected")),
+        -int(elapsed.get("p95_ms") or 0),
+        str(group.get("bot") or ""),
+        str(group.get("event_type") or ""),
+    )
+
+
+def _summarize_execution_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(groups.values(), key=_execution_health_sort_key)
+    event_types: Counter[str] = Counter()
+    statuses: Counter[str] = Counter()
+    outcomes: Counter[str] = Counter()
+    bots: Counter[str] = Counter()
+    for group in groups.values():
+        event_types.update(group.get("event_types") or Counter())
+        statuses.update(group.get("statuses") or Counter())
+        outcomes.update(group.get("outcomes") or Counter())
+        if group.get("bot") not in (None, ""):
+            bots[str(group.get("bot"))] += int(group.get("count") or 0)
+    total = sum(_count_value(group.get("count")) for group in groups.values())
+    failed = _count_value(outcomes.get("create_failed")) + _count_value(
+        outcomes.get("cancel_failed")
+    )
+    rejected = _count_value(outcomes.get("create_rejected"))
+    ambiguous = int(
+        _count_value(outcomes.get("ambiguous"))
+        + _count_value(outcomes.get("cancel_ambiguous_terminal"))
+    )
+    confirmation_timeout = _count_value(outcomes.get("confirmation_timeout"))
+    compact_groups = []
+    for group in ordered[:EXECUTION_HEALTH_GROUP_LIMIT]:
+        statuses_counter = (
+            group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
+        )
+        outcomes_counter = (
+            group.get("outcomes") if isinstance(group.get("outcomes"), Counter) else Counter()
+        )
+        reason_codes = (
+            group.get("reason_codes")
+            if isinstance(group.get("reason_codes"), Counter)
+            else Counter()
+        )
+        error_types = (
+            group.get("error_types") if isinstance(group.get("error_types"), Counter) else Counter()
+        )
+        symbols = group.get("symbols") if isinstance(group.get("symbols"), Counter) else Counter()
+        psides = group.get("psides") if isinstance(group.get("psides"), Counter) else Counter()
+        sides = group.get("sides") if isinstance(group.get("sides"), Counter) else Counter()
+        compact = {
+            "bot": group.get("bot"),
+            "event_type": group.get("event_type"),
+            "component": group.get("component"),
+            "status": group.get("status"),
+            "outcome": group.get("outcome"),
+            "reason_code": group.get("reason_code"),
+            "symbol": group.get("symbol"),
+            "pside": group.get("pside"),
+            "side": group.get("side"),
+            "count": _count_value(group.get("count")),
+            "statuses": _top_counter_values(
+                statuses_counter,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "outcomes": _top_counter_values(
+                outcomes_counter,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "reason_codes": _top_counter_values(
+                reason_codes,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "error_types": _top_counter_values(
+                error_types,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "symbols": _symbol_sample(
+                symbols,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "psides": _symbol_sample(
+                psides,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "sides": _symbol_sample(
+                sides,
+                limit=EXECUTION_HEALTH_VALUE_LIMIT,
+            ),
+            "elapsed_ms": _ms_summary(
+                [
+                    int(value)
+                    for value in (group.get("elapsed_values") or [])
+                    if _non_negative_int(value) is not None
+                ]
+            ),
+            "latest_ts": group.get("latest_ts"),
+            "latest_level": group.get("latest_level"),
+            "latest_error_type": group.get("latest_error_type"),
+            "latest_data": group.get("latest_data"),
+            "latest_ids": group.get("latest_ids"),
+        }
+        compact_groups.append(
+            {
+                key: value
+                for key, value in compact.items()
+                if key not in {"latest_path", "latest_line", "latest_seq"}
+                and value not in (None, {}, [])
+            }
+        )
+    return {
+        "total": total,
+        "bots": len(bots),
+        "failed": failed,
+        "rejected": rejected,
+        "ambiguous": ambiguous,
+        "confirmation_timeout": confirmation_timeout,
+        "event_types": _top_counter_values(
+            event_types,
+            limit=EXECUTION_HEALTH_VALUE_LIMIT,
+        ),
+        "statuses": _top_counter_values(
+            statuses,
+            limit=EXECUTION_HEALTH_VALUE_LIMIT,
+        ),
+        "outcomes": _top_counter_values(
+            outcomes,
+            limit=EXECUTION_HEALTH_VALUE_LIMIT,
+        ),
+        "groups_truncated": len(ordered) > EXECUTION_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -3816,6 +4211,7 @@ def _scan_events(
     remote_call_failure_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    execution_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     fill_refresh_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_event_type_counts: Counter[str] = Counter()
@@ -3991,6 +4387,17 @@ def _scan_events(
                                 remote_call_timing_groups,
                                 remote_call_timing_group,
                             )
+                    if event_type in EXECUTION_HEALTH_EVENT_TYPES:
+                        _merge_execution_health_group(
+                            execution_health_groups,
+                            _execution_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
                     if event_type == EventTypes.FILLS_REFRESH_SUMMARY:
                         _merge_fill_refresh_health_group(
                             fill_refresh_health_groups,
@@ -4183,6 +4590,7 @@ def _scan_events(
             _account_critical_remote_call_health_groups(remote_call_health_groups)
         ),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
+        "execution_health": _summarize_execution_health(execution_health_groups),
         "fill_refresh_health": _summarize_fill_refresh_health(
             fill_refresh_health_groups
         ),
@@ -4595,6 +5003,7 @@ def build_live_smoke_report(
             "account_critical_remote_call_health"
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
+        "execution_health": event_scan["execution_health"],
         "fill_refresh_health": event_scan["fill_refresh_health"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
         "exchange_config_refresh_health": event_scan[
@@ -4639,10 +5048,14 @@ def _summary_limited_groups(
             "succeeded": summary.get("succeeded"),
             "failed": summary.get("failed"),
             "throttled": summary.get("throttled"),
+            "rejected": summary.get("rejected"),
+            "ambiguous": summary.get("ambiguous"),
+            "confirmation_timeout": summary.get("confirmation_timeout"),
             "failure_pct": summary.get("failure_pct"),
             "throttled_pct": summary.get("throttled_pct"),
             "event_types": summary.get("event_types"),
             "statuses": summary.get("statuses"),
+            "outcomes": summary.get("outcomes"),
             "bots": summary.get("bots"),
             "active_bots": summary.get("active_bots"),
             "completed_bots": summary.get("completed_bots"),
@@ -4824,6 +5237,11 @@ def summarize_live_smoke_report(
         if isinstance(report.get("fill_refresh_health"), dict)
         else {}
     )
+    execution_health = (
+        report.get("execution_health")
+        if isinstance(report.get("execution_health"), dict)
+        else {}
+    )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
         if isinstance(report.get("exchange_config_refresh_health"), dict)
@@ -4975,6 +5393,10 @@ def summarize_live_smoke_report(
             report.get("startup_timings"),
             limit=max_groups,
         ),
+        "execution_health": _summary_limited_groups(
+            execution_health,
+            limit=max_groups,
+        ),
         "fill_refresh_health": _summary_limited_groups(
             fill_refresh_health,
             limit=max_groups,
@@ -5049,6 +5471,28 @@ def _brief_fill_refresh_health(summary: Any) -> dict[str, Any]:
             "latest_failed_bots": _count_value(summary.get("latest_failed_bots")),
             "recovered_groups": _count_value(summary.get("recovered_groups")),
             "statuses": summary.get("statuses") or {},
+        }.items()
+        if value is not None
+    }
+
+
+def _brief_execution_health(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    return {
+        key: value
+        for key, value in {
+            "total": _count_value(summary.get("total")),
+            "bots": _count_value(summary.get("bots")),
+            "failed": _count_value(summary.get("failed")),
+            "rejected": _count_value(summary.get("rejected")),
+            "ambiguous": _count_value(summary.get("ambiguous")),
+            "confirmation_timeout": _count_value(
+                summary.get("confirmation_timeout")
+            ),
+            "event_types": summary.get("event_types") or {},
+            "statuses": summary.get("statuses") or {},
+            "outcomes": summary.get("outcomes") or {},
         }.items()
         if value is not None
     }
@@ -5244,6 +5688,11 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("fill_refresh_health"), dict)
         else {}
     )
+    execution_health = (
+        report.get("execution_health")
+        if isinstance(report.get("execution_health"), dict)
+        else {}
+    )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
         if isinstance(report.get("exchange_config_refresh_health"), dict)
@@ -5403,6 +5852,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             report.get("account_critical_remote_call_health")
         ),
         "startup_timings": _brief_startup_timings(report.get("startup_timings")),
+        "execution": _brief_execution_health(execution_health),
         "fill_refresh": _brief_fill_refresh_health(fill_refresh_health),
         "ema_readiness": {
             "total": _count_value(ema_readiness_health.get("total")),

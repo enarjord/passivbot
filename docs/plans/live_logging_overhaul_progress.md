@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `a5a3a83f` after PR #951, `Embed restart smoke plans in incident bundles`.
+- `07ee5860` after PR #952, `Make restart failure bundles self-contained`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #952 at `07ee5860`.
+- PR #952 made `live-restart-smoke-plan` planned failure-bundle commands
+  self-contained by adding `live-incident-bundle --restart-smoke-plan` and the
+  same `--restart-smoke-window-minutes` value. The slice was read-only restart
+  planner / incident-bundle tooling and did not add restart execution, process
+  signaling, tmux calls, SSH/git operations, exchange calls, event producers,
+  smoke verdict changes, console routing, order logic, risk logic, or trading
+  behavior.
+- PR #952 passed Hermes + Claude + CI. It was merged under the documented
+  degraded low-risk tooling gate after Cursor absence. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `a5a3a83f` to `07ee5860` without bot restart because the
+  deployed change was read-only restart planner / incident-bundle tooling. The
+  five configured bots were left running.
+- A VPS5 1-minute bounded smoke after deploy reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `07ee5860`, all five
+  configured bots matched, config checks green, zero failed remote calls, zero
+  failed account-critical remote calls, and only known non-hard EMA/HSL
+  cooldown attention groups. A focused restart-plan run confirmed planned
+  failure-bundle commands include both `--restart-smoke-plan` and
+  `--restart-smoke-window-minutes 30`, while staying `execute=false` /
+  `plan_only=true`.
 - Repository pulled through PR #951 at `a5a3a83f`.
 - PR #951 added opt-in `live-incident-bundle --restart-smoke-plan`, requiring
   `--supervisor-config`, to embed a non-executing `restart_smoke_plan.json`
@@ -2668,23 +2691,25 @@ VPS5 deployment status:
 | Phase 4: order lifecycle and risk transitions | Mostly done | Order wave lifecycle, create/cancel/confirmation events, HSL/risk mode events, HSL replay failure events | Expand WEL/TWEL/unstuck transition coverage as those paths are touched |
 | Phase 5: migrate meaningful text logs | Partially started | Some noisy EMA console output already reduced; PR #646 improves event-projected console summaries for already-routed execution events; PR #707 restores throttled coin-mode HSL position status console lines from existing `hsl.status` metrics; PR #709 mirrors fill-cache startup readiness into off-console `fills.refresh_summary` events; PR #711 mirrors CCXT timestamp/nonce recovery into off-console `exchange.time_sync` events; PR #846 mirrors pre-create market-distance guard skips into off-console `execution.create_skipped` events; PR #848 mirrors pre-create planning/market snapshot skips into off-console `execution.create_skipped` events; PR #850 mirrors fill-cache doctor startup report/quarantine/rebuild decisions into off-console `fills.refresh_summary` events | Migrate high-value stdlib logs to structured-event projections without increasing console noise |
 | Phase 6: gatekeeper integration | Pending | Gatekeeper remains a planned producer | Instrument gate decisions once gatekeeper work resumes |
-| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, startup phase timing summaries, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, bounded historical performance-report scans, active probe expansion beyond current endpoint/freshness summaries |
+| Operator tools | In progress | `live-event-query`, trace summaries, order trace reconstruction, cycle trace reconstruction, time-window filters, severity-level filters, problem-event filters, event-file discovery metadata, `live-smoke-report` startup baselines/process liveness/remote-call failures/remote-call timings/remote-call health groups and top-level totals/account-critical health/risk-events/execution-health/shutdown-events/time windows/unparseable-log policy/brief smoke counters/brief problem-event groups/supervisor duplicate-extra process diagnostics, incident bundle trace/process/time-window/problem-event reports and query-scope filters, ID filters, `ticker-endpoint-probe` account-critical/time-sync/candle-freshness/fill-history-sample/rate-limit health summaries and account-only mode, `live-config-preflight` offline config summaries, `live-performance-report` timing aggregation with summary/filter, decision-boundary, input-staleness including market snapshot staleness, startup phase timing summaries, HSL replay pair/rate/stage summaries, forager/EMA readiness, cache warmup, resource-pressure percentiles, and unified operation-duration support | Cross-bot incident workflow, safe restart orchestration, bounded historical performance-report scans, active probe expansion beyond current endpoint/freshness summaries |
 | Operational restart goals | Split to adjacent work | PR #619 shutdown progress; PR #622 warm-cache startup; PR #656/#668 cache integrity smoke doctor | Continue separate reviewed PRs for shutdown/warmup/cache proof improvements |
 
 ## Current Work
 
-### Pending PR: Restart Plan Self-Contained Failure Bundle
+### In Progress: Smoke Execution Health
 
-- Branch: `codex/v8-restart-plan-self-contained-bundle`.
-- Scope: read-only restart-smoke planner tooling and tests.
-- Result: planned post-failure `live-incident-bundle` commands emitted by
-  `live-restart-smoke-plan` now include `--restart-smoke-plan` and the same
-  restart-smoke window, so a failure bundle collected from the plan carries the
-  non-executing restart/smoke/config-preflight plan that produced it.
-- Expected validation: focused live-restart-smoke-plan tests plus py_compile
-  and `git diff --check`. No event producers, exchange calls, cache mutation,
-  readiness gates, console routing, monitor writes, process signaling,
-  order/risk logic, or trading behavior should change.
+- Branch: `codex/v8-smoke-execution-health`.
+- Scope: read-only smoke-report tooling and tests.
+- Result: `live-smoke-report` derives bounded `execution_health` from existing
+  `order_wave.*` and `execution.*` structured events, with concise `execution`
+  counters in brief output. The summary is intended to expose create/cancel
+  failures, rejections, ambiguous terminals, and confirmation timeouts without
+  opening full event streams.
+- Expected validation: focused live-smoke-report tests plus py_compile,
+  `git diff --check`, and an added-line silent-handling scan. No event
+  producers, exchange calls, cache mutation, readiness gates, console routing,
+  monitor writes, process signaling, smoke verdict policy, order/risk logic, or
+  trading behavior should change.
 
 ## Merged Slices
 

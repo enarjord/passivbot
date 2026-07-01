@@ -29,6 +29,7 @@ def _monitor_row(
     reason_code: str = "test",
     symbol: str | None = None,
     pside: str | None = None,
+    side: str | None = None,
     ids: dict | None = None,
     data: dict | None = None,
     message: str | None = None,
@@ -44,6 +45,7 @@ def _monitor_row(
         "user": user,
         "symbol": symbol,
         "pside": pside,
+        "side": side,
         "status": status,
         "reason_code": reason_code,
         "data": dict(data or {"seq": seq}),
@@ -895,6 +897,213 @@ def test_live_smoke_report_account_critical_remote_call_health_subset(tmp_path):
     assert account_health["throttled_pct"] == 0
     group_surfaces = {group.get("surface") for group in account_health["groups"]}
     assert group_surfaces == {"balance", "positions", "open_orders"}
+
+
+def test_live_smoke_report_summarizes_execution_health(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    rows = [
+        _monitor_row(
+            event_type="order_wave.started",
+            seq=1,
+            ts=1000,
+            status="started",
+            ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+            data={
+                "id": 1,
+                "planned_cancel": 1,
+                "planned_create": 2,
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            },
+        ),
+        _monitor_row(
+            event_type="execution.create_sent",
+            seq=2,
+            ts=1100,
+            status="started",
+            symbol="BTC/USDT:USDT",
+            pside="long",
+            ids={
+                "cycle_id": "cy_1",
+                "order_wave_id": "ow_1",
+                "action_id": "ow_1:create:0",
+            },
+            data={
+                "index": 0,
+                "order_type": "limit",
+                "context": "entry",
+                "qty": 1.0,
+                "price": 10.0,
+                "client_order_id_short": "pb_secret_create",
+            },
+        ),
+        _monitor_row(
+            event_type="execution.create_failed",
+            seq=3,
+            ts=1200,
+            status="failed",
+            level="warning",
+            reason_code="exchange_exception",
+            symbol="BTC/USDT:USDT",
+            pside="long",
+            ids={
+                "cycle_id": "cy_1",
+                "order_wave_id": "ow_1",
+                "action_id": "ow_1:create:0",
+            },
+            data={
+                "index": 0,
+                "order_type": "limit",
+                "error_type": "RequestTimeout",
+                "error": "raw exchange error should stay out",
+                "result_order_id_short": "exchange_order_secret",
+                "result_client_order_id_short": "client_secret",
+            },
+        ),
+        _monitor_row(
+            event_type="execution.cancel_ambiguous_terminal",
+            seq=4,
+            ts=1300,
+            status="degraded",
+            level="warning",
+            reason_code="exchange_exception",
+            symbol="ETH/USDT:USDT",
+            pside="short",
+            side="sell",
+            ids={
+                "cycle_id": "cy_1",
+                "order_wave_id": "ow_1",
+                "action_id": "ow_1:cancel:0",
+            },
+            data={
+                "index": 0,
+                "order_type": "limit",
+                "error_type": "NetworkError",
+                "order_id_short": "cancel_order_secret",
+            },
+        ),
+        _monitor_row(
+            event_type="execution.confirmation_timeout",
+            seq=5,
+            ts=1400,
+            status="degraded",
+            level="warning",
+            reason_code="authoritative_confirmation_timeout",
+            ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+            data={
+                "elapsed_ms": 5000,
+                "confirm_ms": 3000,
+                "timeout_ms": 2500,
+                "pending_surfaces": ["open_orders"],
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            },
+        ),
+        _monitor_row(
+            event_type="order_wave.completed",
+            seq=6,
+            ts=1500,
+            status="degraded",
+            reason_code="order_filtered",
+            ids={"cycle_id": "cy_1", "order_wave_id": "ow_1"},
+            data={
+                "id": 1,
+                "elapsed_ms": 6000,
+                "planned_cancel": 1,
+                "planned_create": 2,
+                "cancel_posted": 0,
+                "create_posted": 0,
+                "skipped_cancel": 0,
+                "deferred_create": 1,
+                "skipped_create": 1,
+                "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+            },
+        ),
+    ]
+    rows[2]["payload"]["_live_event"]["order_id"] = "raw_exchange_order_id"
+    rows[2]["payload"]["_live_event"]["client_order_id"] = "raw_client_order_id"
+    _write_ndjson(events_dir / "current.ndjson", rows)
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    execution = report["execution_health"]
+
+    assert execution["total"] == 6
+    assert execution["bots"] == 1
+    assert execution["failed"] == 1
+    assert execution["rejected"] == 0
+    assert execution["ambiguous"] == 1
+    assert execution["confirmation_timeout"] == 1
+    assert execution["event_types"] == {
+        "execution.cancel_ambiguous_terminal": 1,
+        "execution.confirmation_timeout": 1,
+        "execution.create_failed": 1,
+        "execution.create_sent": 1,
+        "order_wave.completed": 1,
+        "order_wave.started": 1,
+    }
+    assert execution["outcomes"]["create_failed"] == 1
+    assert execution["outcomes"]["cancel_ambiguous_terminal"] == 1
+    assert execution["outcomes"]["confirmation_timeout"] == 1
+    assert execution["statuses"] == {
+        "degraded": 3,
+        "failed": 1,
+        "started": 2,
+    }
+    assert execution["groups_truncated"] is False
+    rendered_execution = json.dumps(execution, sort_keys=True)
+    assert "raw_exchange_order_id" not in rendered_execution
+    assert "raw_client_order_id" not in rendered_execution
+    assert "exchange_order_secret" not in rendered_execution
+    assert "client_secret" not in rendered_execution
+    assert "cancel_order_secret" not in rendered_execution
+    assert "raw exchange error" not in rendered_execution
+    assert '"price"' not in rendered_execution
+    assert '"qty"' not in rendered_execution
+    assert "RequestTimeout" in rendered_execution
+    assert "ow_1:create:0" in rendered_execution
+
+    summary = summarize_live_smoke_report(report, max_groups=2)
+    assert summary["execution_health"]["total"] == 6
+    assert summary["execution_health"]["failed"] == 1
+    assert summary["execution_health"]["ambiguous"] == 1
+    assert summary["execution_health"]["confirmation_timeout"] == 1
+    assert summary["execution_health"]["groups_truncated"] is True
+
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["execution"] == {
+        "total": 6,
+        "bots": 1,
+        "failed": 1,
+        "rejected": 0,
+        "ambiguous": 1,
+        "confirmation_timeout": 1,
+        "event_types": {
+            "execution.cancel_ambiguous_terminal": 1,
+            "execution.confirmation_timeout": 1,
+            "execution.create_failed": 1,
+            "execution.create_sent": 1,
+            "order_wave.completed": 1,
+            "order_wave.started": 1,
+        },
+        "statuses": {
+            "degraded": 3,
+            "failed": 1,
+            "started": 2,
+        },
+        "outcomes": {
+            "cancel_ambiguous_terminal": 1,
+            "confirmation_timeout": 1,
+            "create_failed": 1,
+            "create_sent": 1,
+            "wave_completed": 1,
+            "wave_started": 1,
+        },
+    }
+
+    projected = project_live_smoke_report_sections(
+        summarize_live_smoke_report_brief(report),
+        ["execution"],
+    )
+    assert projected["execution"]["total"] == 6
+    assert "remote_calls" not in projected
 
 
 def test_live_smoke_report_summary_projects_high_signal_fields(tmp_path):
