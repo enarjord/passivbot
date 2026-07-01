@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `94f88dba` after PR #935, `Expose smoke log scan bounds`.
+- `0da21e9c` after PR #936, `Make planned smoke log file cap explicit`.
 
 Current review gate:
 
@@ -49,6 +49,34 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #936 at `0da21e9c`.
+- PR #936 made the read-only `live-restart-smoke-plan` generated smoke command
+  include `--max-log-files 8` by default, with `0` as an escape hatch to omit
+  that explicit smoke-report override. This completed the generated
+  smoke-command log bound set alongside `--log-tail-lines 1200` and
+  `--max-log-matches 20`. The slice was plan-only operator tooling and did not
+  execute restarts, send signals, invoke tmux, run SSH, pull git, start bots,
+  contact exchanges, load credentials, add event producers, mutate caches,
+  change readiness gates, write monitor events, route console output, or alter
+  order/risk/trading behavior.
+- PR #936 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and a diff-only silent-handling scan.
+- VPS5 pulled from `94f88dba` to `0da21e9c` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan` run against `/root/bots_vps5.yaml` completed
+  with `ok=true`, five configured bots, `execute=false`, and planned smoke
+  commands containing `--event-tail-lines 2000`,
+  `--max-event-files-per-bot 2`, `--max-log-files 8`,
+  `--log-tail-lines 1200`, `--max-log-matches 20`, `--brief`, and
+  `--compact`. The planned command was then run as a bounded 5-minute brief
+  smoke; it reported `ok=true`, `hard_failures=0`, clean tracked repository
+  state at `0da21e9c`, five matched expected live processes, no
+  missing/extra/duplicate live processes, no failed account-critical remote
+  calls, `logs.max_files=8`, `logs.tail_lines=1200`, and
+  `logs.max_matches=20`. Remaining attention came from known non-hard EMA
+  readiness and HSL status/cooldown diagnostics.
 - Repository pulled through PR #935 at `94f88dba`.
 - PR #935 made `live-smoke-report` full, summary, and brief `logs` output
   expose the configured text-log scan bounds: `max_files`, `tail_lines`, and

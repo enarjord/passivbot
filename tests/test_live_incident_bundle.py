@@ -144,7 +144,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     logs_dir = tmp_path / "logs"
     logs_dir.mkdir()
     (logs_dir / "bot.log").write_text(
-        "2026-06-25T00:00:00Z ERROR request timeout\n",
+        "1970-01-01T00:00:02Z ERROR request timeout\n",
         encoding="utf-8",
     )
     config_path = tmp_path / "config.json"
@@ -199,6 +199,33 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
+    assert report["smoke_report"]["logs"] == {
+        "max_files": 8,
+        "tail_lines": 500,
+        "max_matches": 100,
+        "files_scanned": 1,
+        "hard_matches": 0,
+        "attention_matches": 1,
+        "risk_attention_matches": 0,
+        "risk_hard_matches": 0,
+        "non_risk_attention_matches": 1,
+        "non_risk_hard_matches": 0,
+        "dropped_unparsed_attention_matches": 0,
+        "dropped_unparsed_hard_matches": 0,
+        "window": {
+            "enabled": True,
+            "since_ms": 1500,
+            "until_ms": 2500,
+            "lines_considered": 1,
+            "lines_skipped_before": 0,
+            "lines_skipped_after": 0,
+            "lines_skipped_unparsed": 0,
+            "unparsed_policy": "keep",
+            "unparsed_ts": 0,
+            "dropped_unparsed_attention_matches": 0,
+            "dropped_unparsed_hard_matches": 0,
+        },
+    }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -240,6 +267,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["filters"]["max_log_files"] == 8
+    assert manifest["filters"]["log_tail_lines"] == 500
+    assert manifest["filters"]["max_log_matches"] == 100
+    assert manifest["filters"]["log_window_unparsed_policy"] == "keep"
     assert manifest["event_segments"]["file_discovery"] == report["event_segments"][
         "file_discovery"
     ]
@@ -279,6 +310,16 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert window_report["events"][0]["seq"] == 2
     assert "remote_call.failed" in window_report["timeline"][0]
     assert smoke_report["event_window"] == report["smoke_report"]["event_window"]
+    assert smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"][
+        "max_files"
+    ]
+    assert smoke_report["logs"]["tail_lines"] == report["smoke_report"]["logs"][
+        "tail_lines"
+    ]
+    assert smoke_report["logs"]["max_matches"] == report["smoke_report"]["logs"][
+        "max_matches"
+    ]
+    assert smoke_report["logs"]["window"] == report["smoke_report"]["logs"]["window"]
     assert smoke_report["remote_call_failures"]["total"] == 1
 
 
@@ -598,6 +639,10 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
         "events_truncated": None,
         "trace_summary_matched_events": None,
     }
+    assert report["smoke_report"]["logs"]["max_files"] == 8
+    assert report["smoke_report"]["logs"]["tail_lines"] == 500
+    assert report["smoke_report"]["logs"]["max_matches"] == 100
+    assert report["smoke_report"]["logs"]["files_scanned"] == 0
     assert report["event_segments"]["included"] == 0
     assert output.exists()
     with tarfile.open(output, "r:gz") as tar:
@@ -619,6 +664,9 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert "trace_summary" not in event_report["query"]
     assert "order_trace" not in event_report["query"]
     assert smoke_report["logs"]["root"] is None
+    assert smoke_report["logs"]["max_files"] == report["smoke_report"]["logs"][
+        "max_files"
+    ]
     assert smoke_report["logs"]["hard_matches"] == 0
 
 
