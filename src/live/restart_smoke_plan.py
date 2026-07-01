@@ -11,6 +11,7 @@ DEFAULT_STARTUP_WAIT_S = 180
 DEFAULT_SMOKE_WINDOW_MINUTES = 30
 DEFAULT_SMOKE_EVENT_TAIL_LINES = 2000
 DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT = 2
+DEFAULT_SMOKE_MAX_LOG_FILES = 8
 DEFAULT_SMOKE_LOG_TAIL_LINES = 1200
 DEFAULT_SMOKE_MAX_LOG_MATCHES = 20
 DEFAULT_MONITOR_ROOT = "monitor"
@@ -56,6 +57,7 @@ def _smoke_report_command(
     smoke_window_minutes: int,
     event_tail_lines: int,
     max_event_files_per_bot: int,
+    max_log_files: int,
     log_tail_lines: int,
     max_log_matches: int,
     compact: bool,
@@ -79,6 +81,8 @@ def _smoke_report_command(
         args.extend(["--event-tail-lines", str(event_tail_lines)])
     if int(max_event_files_per_bot) > 0:
         args.extend(["--max-event-files-per-bot", str(max_event_files_per_bot)])
+    if int(max_log_files) > 0:
+        args.extend(["--max-log-files", str(max_log_files)])
     if int(log_tail_lines) > 0:
         args.extend(["--log-tail-lines", str(log_tail_lines)])
     if int(max_log_matches) > 0:
@@ -214,6 +218,7 @@ def build_live_restart_smoke_plan(
     smoke_window_minutes: int = DEFAULT_SMOKE_WINDOW_MINUTES,
     smoke_event_tail_lines: int = DEFAULT_SMOKE_EVENT_TAIL_LINES,
     smoke_max_event_files_per_bot: int = DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
+    smoke_max_log_files: int = DEFAULT_SMOKE_MAX_LOG_FILES,
     smoke_log_tail_lines: int = DEFAULT_SMOKE_LOG_TAIL_LINES,
     smoke_max_log_matches: int = DEFAULT_SMOKE_MAX_LOG_MATCHES,
     compact_smoke_report: bool = True,
@@ -231,6 +236,9 @@ def build_live_restart_smoke_plan(
     )
     smoke_max_event_files_per_bot = _non_negative_int(
         smoke_max_event_files_per_bot, field="smoke_max_event_files_per_bot"
+    )
+    smoke_max_log_files = _non_negative_int(
+        smoke_max_log_files, field="smoke_max_log_files"
     )
     smoke_log_tail_lines = _non_negative_int(
         smoke_log_tail_lines, field="smoke_log_tail_lines"
@@ -285,6 +293,7 @@ def build_live_restart_smoke_plan(
         smoke_window_minutes=smoke_window_minutes,
         event_tail_lines=smoke_event_tail_lines,
         max_event_files_per_bot=smoke_max_event_files_per_bot,
+        max_log_files=smoke_max_log_files,
         log_tail_lines=smoke_log_tail_lines,
         max_log_matches=smoke_max_log_matches,
         compact=compact_smoke_report,
@@ -326,6 +335,7 @@ def build_live_restart_smoke_plan(
             "smoke_window_minutes": smoke_window_minutes,
             "smoke_event_tail_lines": smoke_event_tail_lines,
             "smoke_max_event_files_per_bot": smoke_max_event_files_per_bot,
+            "smoke_max_log_files": smoke_max_log_files,
             "smoke_log_tail_lines": smoke_log_tail_lines,
             "smoke_max_log_matches": smoke_max_log_matches,
         },

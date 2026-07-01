@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `3e1335d` after PR #934, `Bound planned restart smoke log scans`.
+- `94f88dba` after PR #935, `Expose smoke log scan bounds`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #935 at `94f88dba`.
+- PR #935 made `live-smoke-report` full, summary, and brief `logs` output
+  expose the configured text-log scan bounds: `max_files`, `tail_lines`, and
+  `max_matches`. The slice was read-only smoke-report projection tooling and
+  did not change log file discovery, line scanning, match classification,
+  smoke verdict policy, event routing, exchange access, cache/state behavior,
+  or order/risk/trading behavior.
+- PR #935 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_smoke_report.py`, py_compile for touched files,
+  `git diff --check`, and a diff-only silent-handling scan. A broad
+  touched-file silent scan still reports pre-existing patterns in the large
+  smoke-report module, but the diff added no new forbidden default-get or
+  silent-exception patterns.
+- VPS5 pulled from `3e1335d` to `94f88dba` without bot restart because the
+  deployed change was read-only smoke-report tooling. The five configured bots
+  were left running.
+- A bounded 5-minute brief smoke at `94f88dba` completed with `ok=true`,
+  `hard_failures=0`, clean tracked repository state, five matched expected
+  live processes, no missing/extra/duplicate live processes, and no failed
+  account-critical remote calls. The new log-bound metadata was present in
+  brief output: `logs.max_files=8`, `logs.tail_lines=1200`, and
+  `logs.max_matches=20`. Remaining attention came from known non-hard EMA
+  readiness and HSL status/cooldown diagnostics.
 - Repository pulled through PR #934 at `3e1335d`.
 - PR #934 made the read-only `live-restart-smoke-plan` generated smoke command
   include `--log-tail-lines 1200` and `--max-log-matches 20` by default, with

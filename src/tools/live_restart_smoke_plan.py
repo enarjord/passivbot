@@ -12,6 +12,7 @@ if str(SRC_ROOT) not in sys.path:
 from live.restart_smoke_plan import (  # noqa: E402
     DEFAULT_SMOKE_EVENT_TAIL_LINES,
     DEFAULT_SMOKE_LOG_TAIL_LINES,
+    DEFAULT_SMOKE_MAX_LOG_FILES,
     DEFAULT_SMOKE_MAX_LOG_MATCHES,
     DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
     DEFAULT_LOGS_ROOT,
@@ -80,6 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Recent event files per bot for the planned smoke-report command. "
             "Use 0 to disable the per-bot file cap."
+        ),
+    )
+    parser.add_argument(
+        "--max-log-files",
+        type=int,
+        default=DEFAULT_SMOKE_MAX_LOG_FILES,
+        help=(
+            "Recent text log files for the planned smoke-report command. "
+            "Use 0 to omit the explicit smoke-report override."
         ),
     )
     parser.add_argument(
@@ -152,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
             smoke_window_minutes=int(args.smoke_window_minutes),
             smoke_event_tail_lines=int(args.event_tail_lines),
             smoke_max_event_files_per_bot=int(args.max_event_files_per_bot),
+            smoke_max_log_files=int(args.max_log_files),
             smoke_log_tail_lines=int(args.log_tail_lines),
             smoke_max_log_matches=int(args.max_log_matches),
             compact_smoke_report=not bool(args.pretty_smoke_report),
