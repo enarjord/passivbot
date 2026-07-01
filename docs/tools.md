@@ -225,8 +225,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   invoke tmux, run SSH, pull git, start bots, contact exchanges, or load
   credentials. The plan also includes a bounded `live-incident-bundle` command
   for failure evidence, reusing the same event/log scan limits and disabling
-  event-segment copying by default; use `--incident-bundle-output PATH` to
-  choose the planned bundle path. The default planned bundle path is a
+  event-segment copying by default. The planned failure bundle includes
+  `--restart-smoke-plan`, so the archive carries the non-executing restart plan
+  that produced it; use `--incident-bundle-output PATH` to choose the planned
+  bundle path. The default planned bundle path is a
   timestamped `/tmp/passivbot_incident_bundle_restart_smoke_<utc>.tar.gz`
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured

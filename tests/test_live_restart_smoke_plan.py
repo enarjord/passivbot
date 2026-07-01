@@ -103,6 +103,8 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--processes" in incident_command
     assert "--recent-minutes 15" in incident_command
     assert "--no-event-segments" in incident_command
+    assert "--restart-smoke-plan" in incident_command
+    assert "--restart-smoke-window-minutes 15" in incident_command
     assert "--event-tail-lines 2000" in incident_command
     assert "--max-event-files-per-bot 2" in incident_command
     assert "--max-log-files 8" in incident_command
@@ -623,6 +625,7 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
     assert "--section hsl_replay" in report["smoke_report"]["command"]
     assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
     assert "--smoke-section hsl_replay" in report["incident_bundle"]["command"]
+    assert "--restart-smoke-plan" in report["incident_bundle"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
 
 

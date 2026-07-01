@@ -159,6 +159,9 @@ def _incident_bundle_command(
         "--recent-minutes",
         str(smoke_window_minutes),
         "--no-event-segments",
+        "--restart-smoke-plan",
+        "--restart-smoke-window-minutes",
+        str(smoke_window_minutes),
     ]
     if logs_root is not None:
         args.extend(["--logs-root", str(logs_root)])
