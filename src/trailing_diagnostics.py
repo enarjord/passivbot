@@ -124,6 +124,15 @@ def trailing_status(
     return "armed"
 
 
+def selected_mode_from_order_type(order_type: str, *, has_order: bool) -> str:
+    normalized = str(order_type or "").lower()
+    if "trailing" in normalized:
+        return "trailing"
+    if has_order:
+        return "grid"
+    return "none"
+
+
 def calculate_wallet_exposure(
     *,
     balance_raw: float,
@@ -264,8 +273,8 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     else:
         qty, price, order_type = pbr.calc_next_entry_short_py(*common_args)
     order_type = str(order_type)
-    if "trailing" not in order_type:
-        return None
+    has_order = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    is_trailing_order = "trailing" in order_type.lower()
 
     entry_multiplier = max(
         1.0,
@@ -307,12 +316,13 @@ def build_trailing_entry_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
             if retracement_pct <= 0.0
             else trailing_bundle["min_since_max"] < float(retracement_price)
         )
-    triggered = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "entry",
         "symbol": symbol,
         "pside": pside,
         "mode": mode,
+        "selected_mode": selected_mode_from_order_type(order_type, has_order=has_order),
         "order_type": order_type,
         "wallet_exposure": wallet_exposure,
         "limit_cap": float(limit_cap),
@@ -395,8 +405,8 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
     else:
         qty, price, order_type = pbr.calc_next_close_short_py(*common_args)
     order_type = str(order_type)
-    if "trailing" not in order_type:
-        return None
+    has_order = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    is_trailing_order = "trailing" in order_type.lower()
 
     close_multiplier = max(
         1.0,
@@ -432,11 +442,12 @@ def build_trailing_close_diagnostic(inputs: Mapping[str, Any]) -> Optional[dict[
             if retracement_pct <= 0.0
             else trailing_bundle["max_since_min"] > float(retracement_price)
         )
-    triggered = bool(abs(_float(qty)) > 0.0 and _float(price) > 0.0)
+    triggered = bool(is_trailing_order and has_order)
     return {
         "kind": "close",
         "symbol": symbol,
         "pside": pside,
+        "selected_mode": selected_mode_from_order_type(order_type, has_order=has_order),
         "order_type": order_type,
         "triggered": triggered,
         "status": trailing_status(

@@ -3339,6 +3339,7 @@ def _trailing_status_summary(payload: dict[str, Any]) -> dict[str, Any]:
         "diagnostics_supported": bool(payload.get("diagnostics_supported", True)),
         "strategy_kind": str(payload.get("strategy_kind") or "") or None,
         "trailing_status": str(payload.get("status") or payload.get("trailing_status") or "unknown"),
+        "selected_mode": str(payload.get("selected_mode") or "") or None,
         "order_type": str(payload.get("order_type") or "") or None,
         "triggered": bool(payload.get("triggered", False)),
         "threshold_met": bool(payload.get("threshold_met", False))
