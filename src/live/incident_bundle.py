@@ -25,6 +25,16 @@ from live.event_query import (
     event_matches_query_filters,
     event_query_filter_report,
 )
+from live.restart_smoke_plan import (
+    DEFAULT_SMOKE_EVENT_TAIL_LINES as DEFAULT_RESTART_SMOKE_EVENT_TAIL_LINES,
+    DEFAULT_SMOKE_LOG_TAIL_LINES as DEFAULT_RESTART_SMOKE_LOG_TAIL_LINES,
+    DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
+    DEFAULT_SMOKE_MAX_LOG_FILES as DEFAULT_RESTART_SMOKE_MAX_LOG_FILES,
+    DEFAULT_SMOKE_MAX_LOG_MATCHES as DEFAULT_RESTART_SMOKE_MAX_LOG_MATCHES,
+    DEFAULT_SMOKE_WINDOW_MINUTES as DEFAULT_RESTART_SMOKE_WINDOW_MINUTES,
+    build_live_restart_smoke_plan,
+    summarize_live_restart_smoke_plan,
+)
 from live.smoke_report import (
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     _redact_log_text,
@@ -801,6 +811,37 @@ def _tar_directory(source_dir: Path, output_path: Path) -> None:
             tar.add(path, arcname=str(path.relative_to(source_dir)), recursive=False)
 
 
+def _restart_smoke_plan_result_summary(
+    summary: dict[str, Any] | None,
+) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        return {
+            "enabled": False,
+            "ok": None,
+            "bots": None,
+            "phases": None,
+            "config_preflight": None,
+        }
+    config_preflight = summary.get("config_preflight")
+    if isinstance(config_preflight, dict):
+        config_preflight_summary = {
+            "command_count": config_preflight.get("command_count"),
+            "skipped_without_config_path_count": config_preflight.get(
+                "skipped_without_config_path_count"
+            ),
+            "execute": config_preflight.get("execute"),
+        }
+    else:
+        config_preflight_summary = None
+    return {
+        "enabled": True,
+        "ok": summary.get("ok"),
+        "bots": summary.get("bots"),
+        "phases": summary.get("phases"),
+        "config_preflight": config_preflight_summary,
+    }
+
+
 def build_live_incident_bundle(
     monitor_root: str | Path = "monitor",
     *,
@@ -842,6 +883,8 @@ def build_live_incident_bundle(
     max_log_matches: int = 100,
     log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     smoke_sections: list[str] | tuple[str, ...] | None = None,
+    include_restart_smoke_plan: bool = False,
+    restart_smoke_window_minutes: int = DEFAULT_RESTART_SMOKE_WINDOW_MINUTES,
     event_tail_lines: int = 0,
     max_event_files_per_bot: int = 0,
     max_snapshot_files: int = 20,
@@ -864,6 +907,11 @@ def build_live_incident_bundle(
         for section in (smoke_sections or ())
         if str(section).strip()
     ]
+    if include_restart_smoke_plan and supervisor_config is None:
+        raise ValueError("restart smoke plan requires --supervisor-config")
+    restart_smoke_window_minutes = int(restart_smoke_window_minutes)
+    if restart_smoke_window_minutes <= 0:
+        raise ValueError("restart_smoke_window_minutes must be positive")
 
     event_report = build_event_report(
         monitor_path,
@@ -980,6 +1028,25 @@ def build_live_incident_bundle(
         smoke_report,
         smoke_sections,
     )
+    restart_smoke_plan: dict[str, Any] | None = None
+    restart_smoke_plan_summary: dict[str, Any] | None = None
+    if include_restart_smoke_plan:
+        restart_smoke_plan = build_live_restart_smoke_plan(
+            supervisor_config=supervisor_config,
+            monitor_root=monitor_path,
+            logs_root=logs_path,
+            smoke_window_minutes=restart_smoke_window_minutes,
+            smoke_event_tail_lines=DEFAULT_RESTART_SMOKE_EVENT_TAIL_LINES,
+            smoke_max_event_files_per_bot=DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
+            smoke_max_log_files=DEFAULT_RESTART_SMOKE_MAX_LOG_FILES,
+            smoke_log_tail_lines=DEFAULT_RESTART_SMOKE_LOG_TAIL_LINES,
+            smoke_max_log_matches=DEFAULT_RESTART_SMOKE_MAX_LOG_MATCHES,
+            log_window_unparsed_policy=log_window_unparsed_policy,
+            smoke_sections=smoke_sections,
+        )
+        restart_smoke_plan_summary = summarize_live_restart_smoke_plan(
+            restart_smoke_plan
+        )
 
     with tempfile.TemporaryDirectory(prefix="passivbot_incident_bundle_") as tmp_name:
         bundle_root = Path(tmp_name)
@@ -1038,6 +1105,10 @@ def build_live_incident_bundle(
                     "max_log_matches": max_log_matches if max_log_matches else None,
                     "log_window_unparsed_policy": log_window_unparsed_policy,
                     "smoke_sections": list(smoke_sections),
+                    "include_restart_smoke_plan": include_restart_smoke_plan,
+                    "restart_smoke_window_minutes": restart_smoke_window_minutes
+                    if include_restart_smoke_plan
+                    else None,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -1055,6 +1126,10 @@ def build_live_incident_bundle(
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
         }
+        if restart_smoke_plan_summary is not None:
+            metadata["restart_smoke_plan"] = _restart_smoke_plan_result_summary(
+                restart_smoke_plan_summary
+            )
 
         _write_json(bundle_root / "manifest.json", metadata)
         _write_json(bundle_root / "event_report.json", event_report)
@@ -1062,6 +1137,8 @@ def build_live_incident_bundle(
             _write_json(bundle_root / "problem_event_report.json", problem_report)
         _write_json(bundle_root / "time_window_report.json", window_report)
         _write_json(bundle_root / "smoke_report.json", embedded_smoke_report)
+        if restart_smoke_plan is not None:
+            _write_json(bundle_root / "restart_smoke_plan.json", restart_smoke_plan)
         timeline_lines: list[str] = []
         for section in ("cycle", "query"):
             value = event_report.get(section)
@@ -1143,6 +1220,9 @@ def build_live_incident_bundle(
                 ),
             },
         },
+        "restart_smoke_plan": _restart_smoke_plan_result_summary(
+            restart_smoke_plan_summary
+        ),
         "config_hashes": len(config_hashes),
         "monitor_snapshots": len(metadata["monitor_snapshots"]),
         "event_segments": {

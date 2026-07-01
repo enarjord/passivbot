@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `c7b09bf8` after PR #949, `Plan restart config preflights`.
+- `48919ea1` after PR #950, `Report restart preflight skips`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #950 at `48919ea1`.
+- PR #950 added `skipped_without_config_path_count` to the full and summary
+  `live-restart-smoke-plan` `config_preflight` output, keeping planned restart
+  readiness evidence explicit when a configured live command has no derivable
+  config path. The slice was read-only planner tooling and did not add restart
+  execution, process signaling, tmux calls, SSH/git operations, exchange calls,
+  event producers, smoke verdict changes, console routing, order logic, risk
+  logic, or trading behavior.
+- PR #950 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `c7b09bf8` to `48919ea1` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan /root/bots_vps5.yaml --smoke-section
+  fill_refresh_health --log-window-unparsed-policy drop --summary --compact`
+  run reported `ok=true`, five configured bots, six planned phases,
+  `execute=false`, zero issues, two deduplicated config-preflight commands, and
+  `skipped_without_config_path_count=0`. A follow-up 1-minute smoke reported
+  `ok=true`, `hard_failures=0`, clean tracked repository state at `48919ea1`,
+  all five configured bots matched, config checks green, zero failed remote
+  calls, zero failed account-critical remote calls, and only known non-hard
+  EMA/HSL cooldown attention groups.
 - Repository pulled through PR #949 at `c7b09bf8`.
 - PR #949 added deduplicated planned `live-config-preflight ... --compact`
   commands to `live-restart-smoke-plan` pre-restart readiness and summary
@@ -2622,16 +2645,17 @@ VPS5 deployment status:
 
 ## Current Work
 
-### Pending PR: Performance Report Tail Window
+### Pending PR: Incident Bundle Restart Smoke Plan
 
-- Branch: `codex/v8-performance-report-tail-window`.
-- Scope: read-only live performance report tooling and tests.
-- Result: adds an opt-in `--event-tail-lines` scan bound to
-  `live-performance-report`, reusing the shared monitor-event tail reader so
-  smoke/debug runs can inspect recent rows from large monitor histories without
-  full rotated scans.
-- Expected validation: focused live-performance-report tests plus py_compile
-  and `git diff --check`. No event producers, exchange calls, cache mutation,
+- Branch: `codex/v8-incident-bundle-restart-plan`.
+- Scope: read-only incident bundle tooling and tests.
+- Result: adds opt-in `live-incident-bundle --restart-smoke-plan`, requiring
+  `--supervisor-config`, to embed a non-executing `restart_smoke_plan.json`
+  artifact and concise summary in incident bundles. This lets a shared bundle
+  carry both recent incident evidence and the planned restart/smoke/config
+  preflight routine needed for follow-up review.
+- Expected validation: focused live-incident-bundle tests plus py_compile and
+  `git diff --check`. No event producers, exchange calls, cache mutation,
   readiness gates, console routing, monitor writes, order/risk logic, or
   trading behavior should change.
 

@@ -11,6 +11,9 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from live.incident_bundle import build_live_incident_bundle  # noqa: E402
+from live.restart_smoke_plan import (  # noqa: E402
+    DEFAULT_SMOKE_WINDOW_MINUTES as DEFAULT_RESTART_SMOKE_WINDOW_MINUTES,
+)
 from live.smoke_report import (  # noqa: E402
     DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     LOG_WINDOW_UNPARSED_POLICIES,
@@ -294,6 +297,23 @@ def build_parser() -> argparse.ArgumentParser:
             "section names are validated by live-smoke-report."
         ),
     )
+    parser.add_argument(
+        "--restart-smoke-plan",
+        action="store_true",
+        help=(
+            "Embed a read-only live-restart-smoke-plan JSON artifact in the "
+            "bundle. Requires --supervisor-config and does not execute the plan."
+        ),
+    )
+    parser.add_argument(
+        "--restart-smoke-window-minutes",
+        type=int,
+        default=DEFAULT_RESTART_SMOKE_WINDOW_MINUTES,
+        help=(
+            "Recent-window minutes for the embedded restart smoke plan's planned "
+            "smoke command."
+        ),
+    )
     parser.add_argument("--compact", action="store_true", help="Emit compact single-line JSON.")
     return parser
 
@@ -314,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
         since_ms = int(time.time() * 1000) - int(args.recent_minutes * 60_000)
     if since_ms is not None and args.until_ms is not None and since_ms > args.until_ms:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
+    if args.restart_smoke_plan and not args.supervisor_config:
+        parser.error("--restart-smoke-plan requires --supervisor-config")
+    if int(args.restart_smoke_window_minutes) <= 0:
+        parser.error("--restart-smoke-window-minutes must be > 0")
     try:
         report = build_live_incident_bundle(
             args.monitor_root,
@@ -356,6 +380,8 @@ def main(argv: list[str] | None = None) -> int:
             max_log_matches=int(args.max_log_matches),
             log_window_unparsed_policy=str(args.log_window_unparsed_policy),
             smoke_sections=args.smoke_section,
+            include_restart_smoke_plan=bool(args.restart_smoke_plan),
+            restart_smoke_window_minutes=int(args.restart_smoke_window_minutes),
             max_snapshot_files=int(args.max_snapshot_files),
             max_snapshot_file_bytes=int(args.max_snapshot_file_bytes),
             max_event_segment_bytes=int(args.max_event_segment_bytes),
