@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import tarfile
 from pathlib import Path
 
@@ -1573,6 +1574,56 @@ def test_live_incident_bundle_cli_requires_supervisor_for_restart_plan(capsys):
         live_incident_bundle.main(["monitor", "--restart-smoke-plan"])
 
     assert "--restart-smoke-plan requires --supervisor-config" in capsys.readouterr().err
+
+
+def test_live_incident_bundle_infers_git_metadata_from_monitor_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init"], cwd=repo, check=True, capture_output=True)
+    subprocess.run(
+        [
+            "git",
+            "remote",
+            "add",
+            "origin",
+            "https://token:secret@example.com/org/repo.git",
+        ],
+        cwd=repo,
+        check=True,
+        capture_output=True,
+    )
+    events_dir = repo / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            ),
+        ],
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    report = build_live_incident_bundle(
+        repo / "monitor",
+        output_path=output,
+        logs_root="",
+        include_processes=False,
+        include_event_segments=False,
+    )
+
+    assert report["ok"] is True
+    with tarfile.open(output, "r:gz") as tar:
+        manifest = _read_tar_json(tar, "manifest.json")
+
+    assert manifest["git"]["cwd"] == str(repo)
+    assert (
+        manifest["git"]["remote_url"]
+        == "https://[redacted]@example.com/org/repo.git"
+    )
+    assert manifest["git"]["status_short"] is not None
 
 
 def test_live_incident_bundle_redacts_git_remote_url_userinfo():
