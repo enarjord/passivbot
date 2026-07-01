@@ -6,7 +6,11 @@ import sys
 
 import pytest
 
-from live.restart_smoke_plan import _display_path, build_live_restart_smoke_plan
+from live.restart_smoke_plan import (
+    _display_path,
+    build_live_restart_smoke_plan,
+    summarize_live_restart_smoke_plan,
+)
 from passivbot_cli import main as cli_main
 from tools import live_restart_smoke_plan
 
@@ -334,6 +338,74 @@ def test_live_restart_smoke_plan_can_override_incident_bundle_output(tmp_path, c
     assert report["inputs"]["incident_bundle_output"] == str(output_path)
     assert report["incident_bundle"]["output_path"] == str(output_path)
     assert f"--output {output_path}" in report["incident_bundle"]["command"]
+
+
+def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, capsys):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+            "  - window_name: gateio_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u gateio_01",
+        ],
+    )
+
+    full_report = build_live_restart_smoke_plan(
+        supervisor_config,
+        repo_path="/srv/passivbot",
+        smoke_window_minutes=7,
+    )
+    summary = summarize_live_restart_smoke_plan(full_report)
+
+    assert summary["ok"] is True
+    assert "bots" not in summary["bots"]
+    assert summary["bots"] == {
+        "count": 2,
+        "names": ["binance_01", "gateio_01"],
+        "truncated": 0,
+    }
+    assert summary["phases"]["names"] == [
+        "pre_restart_readiness",
+        "graceful_stop_all",
+        "orphan_duplicate_check",
+        "supervisor_reload_start",
+        "post_start_smoke_report",
+        "post_failure_incident_bundle",
+    ]
+    assert "passivbot tool live-smoke-report" in summary["smoke_report"]["command"]
+    assert "--recent-minutes 7" in summary["smoke_report"]["command"]
+    assert "passivbot tool live-incident-bundle" in summary["incident_bundle"][
+        "command"
+    ]
+    assert summary["incident_bundle"]["execute"] is False
+    assert summary["incident_bundle"]["event_segments"] == (
+        "disabled_by_default_for_fast_restart_smoke_bundle"
+    )
+    assert summary["timeout_escalation_ladder"][1]["planned_command_count"] == 2
+    assert summary["execution_policy"]["execute_flag"] == "not_implemented"
+    assert summary["execution_policy"]["rejected_operation_count"] >= 1
+    assert summary["warnings"]["count"] == len(full_report["warnings"])
+    assert summary["issues"] == {"count": 0, "items": []}
+
+    assert (
+        live_restart_smoke_plan.main(
+            [str(supervisor_config), "--summary", "--compact"]
+        )
+        == 0
+    )
+    cli_summary = json.loads(capsys.readouterr().out)
+    assert cli_summary["bots"]["count"] == 2
+    assert "phases" in cli_summary
+    assert "passivbot tool live-incident-bundle" in cli_summary["incident_bundle"][
+        "command"
+    ]
+    assert "command_key" not in json.dumps(cli_summary["bots"])
 
 
 def test_live_restart_smoke_plan_can_plan_summary_or_full_smoke_projection(
