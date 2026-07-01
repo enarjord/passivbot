@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `98e653ba` after PR #928, `Add per-bot event query file cap`.
+- `109c4342` after PR #929, `Add per-bot incident bundle event file cap`.
 
 Current review gate:
 
@@ -49,6 +49,31 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #929 at `109c4342`.
+- PR #929 added `live-incident-bundle --max-event-files-per-bot` and the
+  matching `build_live_incident_bundle()` option for fair, opt-in
+  per-events-directory caps in the embedded event report, problem-event
+  report, and time-window report. It reuses the shared event-query cap helper,
+  reports limit metadata in compact output and bundled JSON, and records the
+  cap in manifest filters. The slice was read-only incident-bundle/event-query
+  tooling and did not add event producers, exchange calls, cache mutation,
+  readiness gates, console routing, monitor writes, order/risk logic, or
+  trading behavior.
+- PR #929 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_incident_bundle.py`, `tests/test_live_event_query.py`,
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `98e653ba` to `109c4342` without bot restart because the
+  deployed change was read-only incident-bundle tooling. The five configured
+  bots were left running.
+- A bounded 5-minute smoke at `109c4342` completed with `ok=true`,
+  `hard_failures=0`, clean tracked repository state, all five live bot
+  processes running, and no failed account-critical remote calls. A first
+  all-rotated incident-bundle smoke with `--max-event-files-per-bot=2` was
+  interrupted after exposing a remaining slow path: the embedded smoke report
+  still received `include_rotated=true` without a file-count cap. The follow-up
+  branch `codex/v8-smoke-report-per-bot-file-limit` addresses that embedded
+  smoke-report gap.
 - Repository pulled through PR #928 at `98e653ba`.
 - PR #928 added `live-event-query --max-event-files-per-bot` and the matching
   `build_event_report()` option for fair, opt-in per-events-directory rotated

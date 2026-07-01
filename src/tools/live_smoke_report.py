@@ -131,6 +131,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-event-files-per-bot",
+        type=int,
+        default=0,
+        help=(
+            "With --include-rotated, scan at most N event segments per bot/events "
+            "directory, preferring current.ndjson and then newest rotated files. "
+            "Default 0 scans all discovered segments."
+        ),
+    )
+    parser.add_argument(
         "--log-tail-lines",
         type=int,
         default=300,
@@ -184,6 +194,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms must be <= --until-ms")
     if int(args.event_tail_lines) < 0:
         parser.error("--event-tail-lines must be non-negative")
+    if int(args.max_event_files_per_bot) < 0:
+        parser.error("--max-event-files-per-bot must be non-negative")
     report = build_live_smoke_report(
         args.monitor_root,
         logs_root=logs_root,
@@ -196,6 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         max_problem_events=int(args.max_problem_events),
         max_log_files=int(args.max_log_files),
         event_tail_lines=int(args.event_tail_lines),
+        max_event_files_per_bot=int(args.max_event_files_per_bot),
         log_tail_lines=int(args.log_tail_lines),
         max_log_matches=int(args.max_log_matches),
         log_window_unparsed_policy=str(args.log_window_unparsed_policy),

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -66,6 +67,10 @@ def _write_ndjson(path, rows):
         "".join(json.dumps(row, sort_keys=True) + "\n" for row in rows),
         encoding="utf-8",
     )
+
+
+def _set_mtime(path, seconds: int):
+    os.utime(path, (seconds, seconds))
 
 
 def _write_minimal_monitor_event(monitor_root):
@@ -206,6 +211,99 @@ def test_live_smoke_report_event_tail_lines_bounds_monitor_scan(tmp_path):
         "event_tail_methods": {"seek_tail": 1},
     }
     assert report["bots"][0]["events"] == 2
+
+
+def test_live_smoke_report_max_event_files_per_bot_is_fair(tmp_path):
+    binance_events = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    okx_events = tmp_path / "monitor" / "okx" / "okx_01" / "events"
+    files = [
+        (
+            binance_events / "current.ndjson",
+            10,
+            "binance",
+            "binance_01",
+            "binance_current",
+        ),
+        (
+            binance_events / "new.ndjson",
+            11,
+            "binance",
+            "binance_01",
+            "binance_new",
+        ),
+        (
+            binance_events / "old.ndjson",
+            12,
+            "binance",
+            "binance_01",
+            "binance_old",
+        ),
+        (okx_events / "current.ndjson", 20, "okx", "okx_01", "okx_current"),
+        (okx_events / "new.ndjson", 21, "okx", "okx_01", "okx_new"),
+        (okx_events / "old.ndjson", 22, "okx", "okx_01", "okx_old"),
+    ]
+    for path, seq, exchange, user, cycle_id in files:
+        _write_ndjson(
+            path,
+            [
+                _monitor_row(
+                    event_type="cycle.completed",
+                    seq=seq,
+                    ts=seq * 100,
+                    exchange=exchange,
+                    user=user,
+                    ids={"cycle_id": cycle_id},
+                )
+            ],
+        )
+    for path in (binance_events / "old.ndjson", okx_events / "old.ndjson"):
+        _set_mtime(path, 100)
+    for path in (binance_events / "new.ndjson", okx_events / "new.ndjson"):
+        _set_mtime(path, 200)
+    for path in (binance_events / "current.ndjson", okx_events / "current.ndjson"):
+        _set_mtime(path, 50)
+
+    report = build_live_smoke_report(
+        tmp_path / "monitor",
+        logs_root=None,
+        include_rotated=True,
+        max_event_files_per_bot=2,
+    )
+
+    assert report["ok"] is True
+    assert report["monitor"]["files_scanned"] == 4
+    assert report["monitor"]["live_events"] == 4
+    assert report["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 4,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "max_event_files_per_bot": 2,
+        "event_file_limit_scope": "per_bot",
+        "event_file_limit_groups": 2,
+        "event_files_before_limit": 6,
+        "event_files_skipped_by_limit": 2,
+        "event_file_limit_order": "current_then_recent_mtime",
+    }
+    cycle_ids = {item["cycle_id"] for item in report["monitor"]["cycle_ids_sample"]}
+    assert cycle_ids == {
+        "binance_current",
+        "binance_new",
+        "okx_current",
+        "okx_new",
+    }
+    assert {bot["bot"]: bot["events"] for bot in report["bots"]} == {
+        "binance/binance_01": 2,
+        "okx/okx_01": 2,
+    }
+
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["event_window"]["max_event_files_per_bot"] == 2
+    assert brief["event_window"]["event_file_limit_scope"] == "per_bot"
+    assert brief["event_window"]["event_files_skipped_by_limit"] == 2
 
 
 def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path):
@@ -3829,6 +3927,14 @@ def test_live_smoke_report_cli_rejects_negative_event_tail_lines(capsys):
 
     assert exc_info.value.code == 2
     assert "--event-tail-lines must be non-negative" in capsys.readouterr().err
+
+
+def test_live_smoke_report_cli_rejects_negative_max_event_files_per_bot(capsys):
+    with pytest.raises(SystemExit) as exc_info:
+        live_smoke_report.main(["monitor", "--max-event-files-per-bot", "-1"])
+
+    assert exc_info.value.code == 2
+    assert "--max-event-files-per-bot must be non-negative" in capsys.readouterr().err
 
 
 def test_live_smoke_report_process_status_matches_supervisor_config(
