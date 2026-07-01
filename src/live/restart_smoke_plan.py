@@ -9,6 +9,8 @@ from live.smoke_report import parse_tmuxp_live_commands, _user_safe_display_path
 DEFAULT_SHUTDOWN_TIMEOUT_S = 90
 DEFAULT_STARTUP_WAIT_S = 180
 DEFAULT_SMOKE_WINDOW_MINUTES = 30
+DEFAULT_SMOKE_EVENT_TAIL_LINES = 2000
+DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT = 2
 DEFAULT_MONITOR_ROOT = "monitor"
 DEFAULT_LOGS_ROOT = "logs"
 UNSAFE_PROCESS_SIGNAL_PATTERNS = (
@@ -22,6 +24,13 @@ def _positive_int(value: int, *, field: str) -> int:
     parsed = int(value)
     if parsed <= 0:
         raise ValueError(f"{field} must be positive")
+    return parsed
+
+
+def _non_negative_int(value: int, *, field: str) -> int:
+    parsed = int(value)
+    if parsed < 0:
+        raise ValueError(f"{field} must be non-negative")
     return parsed
 
 
@@ -43,6 +52,8 @@ def _smoke_report_command(
     logs_root: str | Path | None,
     supervisor_config: str | Path,
     smoke_window_minutes: int,
+    event_tail_lines: int,
+    max_event_files_per_bot: int,
     compact: bool,
     brief: bool,
     summary: bool,
@@ -60,6 +71,10 @@ def _smoke_report_command(
     ]
     if logs_root is not None:
         args.extend(["--logs-root", str(logs_root)])
+    if int(event_tail_lines) > 0:
+        args.extend(["--event-tail-lines", str(event_tail_lines)])
+    if int(max_event_files_per_bot) > 0:
+        args.extend(["--max-event-files-per-bot", str(max_event_files_per_bot)])
     if summary:
         args.append("--summary")
     elif brief:
@@ -189,6 +204,8 @@ def build_live_restart_smoke_plan(
     shutdown_timeout_s: int = DEFAULT_SHUTDOWN_TIMEOUT_S,
     startup_wait_s: int = DEFAULT_STARTUP_WAIT_S,
     smoke_window_minutes: int = DEFAULT_SMOKE_WINDOW_MINUTES,
+    smoke_event_tail_lines: int = DEFAULT_SMOKE_EVENT_TAIL_LINES,
+    smoke_max_event_files_per_bot: int = DEFAULT_SMOKE_MAX_EVENT_FILES_PER_BOT,
     compact_smoke_report: bool = True,
     brief_smoke_report: bool = True,
     summary_smoke_report: bool = False,
@@ -199,6 +216,12 @@ def build_live_restart_smoke_plan(
     shutdown_timeout_s = _positive_int(shutdown_timeout_s, field="shutdown_timeout_s")
     startup_wait_s = _positive_int(startup_wait_s, field="startup_wait_s")
     smoke_window_minutes = _positive_int(smoke_window_minutes, field="smoke_window_minutes")
+    smoke_event_tail_lines = _non_negative_int(
+        smoke_event_tail_lines, field="smoke_event_tail_lines"
+    )
+    smoke_max_event_files_per_bot = _non_negative_int(
+        smoke_max_event_files_per_bot, field="smoke_max_event_files_per_bot"
+    )
 
     supervisor = parse_tmuxp_live_commands(supervisor_config)
     bots = list(supervisor.get("expected") or [])
@@ -244,6 +267,8 @@ def build_live_restart_smoke_plan(
         logs_root=logs_root,
         supervisor_config=supervisor_config,
         smoke_window_minutes=smoke_window_minutes,
+        event_tail_lines=smoke_event_tail_lines,
+        max_event_files_per_bot=smoke_max_event_files_per_bot,
         compact=compact_smoke_report,
         brief=brief_smoke_report,
         summary=summary_smoke_report,
@@ -281,6 +306,8 @@ def build_live_restart_smoke_plan(
             "shutdown_timeout_s": shutdown_timeout_s,
             "startup_wait_s": startup_wait_s,
             "smoke_window_minutes": smoke_window_minutes,
+            "smoke_event_tail_lines": smoke_event_tail_lines,
+            "smoke_max_event_files_per_bot": smoke_max_event_files_per_bot,
         },
         "supervisor_config": {
             "path": _display_path(supervisor.get("path")),
@@ -340,6 +367,7 @@ def build_live_restart_smoke_plan(
                 "repository branch/head/dirty tracked state",
                 "recent hard log matches",
                 "monitor problem-event counts",
+                "bounded monitor event scan metadata",
                 "startup timings",
                 "shutdown lifecycle events",
                 "remote-call health",
