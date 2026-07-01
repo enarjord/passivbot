@@ -1034,14 +1034,14 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
                 seq=2,
                 ts=2000,
                 component="bot.startup",
-                data={"stage": "account", "elapsed_ms": 900},
+                data={"stage": "account", "elapsed_ms": 900, "since_previous_ms": 900},
             ),
             _monitor_row(
                 event_type="bot.startup_timing",
                 seq=3,
                 ts=3000,
                 component="bot.startup",
-                data={"stage": "hsl", "elapsed_s": 2.5},
+                data={"stage": "hsl", "elapsed_s": 2.5, "since_previous_ms": 1600},
             ),
             _monitor_row(
                 event_type="hsl.replay.progress",
@@ -1082,6 +1082,18 @@ def test_live_performance_report_startup_readiness_summary(tmp_path, monkeypatch
     assert startup["debug_profile_counts"] == {"ema": 1, "rust": 1}
     assert "api_key=should_not_render" not in json.dumps(startup, sort_keys=True)
     assert bot["startup_phases_ms"] == {"account": 900, "hsl": 2500}
+    assert startup["startup_phase_counts"] == {"account": 1, "hsl": 1}
+    assert startup["startup_phase_elapsed_ms"]["account"] == {
+        "count": 1,
+        "min": 900,
+        "max": 900,
+        "mean": 900,
+        "median": 900,
+        "p95": 900,
+    }
+    assert startup["startup_phase_elapsed_ms"]["hsl"]["max"] == 2500
+    assert startup["startup_phase_since_previous_ms"]["account"]["max"] == 900
+    assert startup["startup_phase_since_previous_ms"]["hsl"]["max"] == 1600
     assert bot["hsl_replay"]["stage"] == "pair_replay"
     assert bot["hsl_replay"]["pairs"] == 26
     assert bot["hsl_replay"]["held_pairs"] == 1
@@ -1261,6 +1273,37 @@ def test_live_performance_report_summary_includes_startup_readiness(tmp_path):
 
     assert summary["startup_readiness"]["bot_count"] == 1
     assert summary["startup_readiness"]["ready_count"] == 1
+
+
+def test_live_performance_report_startup_phase_labels_are_whitelisted(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(event_type="bot.started", seq=1, ts=1000),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=2,
+                ts=2000,
+                data={
+                    "stage": "api_key=should_not_render",
+                    "elapsed_ms": 100,
+                    "since_previous_ms": 50,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    startup = report["startup_readiness"]
+    rendered = json.dumps(report, sort_keys=True)
+
+    assert "api_key=should_not_render" not in rendered
+    assert startup["startup_phase_counts"] == {"other": 1}
+    assert startup["startup_phase_elapsed_ms"]["other"]["max"] == 100
+    assert startup["startup_phase_since_previous_ms"]["other"]["max"] == 50
+    assert startup["bots"][0]["startup_phases_ms"] == {"other": 100}
+    assert report["operation_durations"]["groups"][0]["operation"] == "startup.other"
 
 
 def test_live_performance_report_hsl_replay_profile(tmp_path):
