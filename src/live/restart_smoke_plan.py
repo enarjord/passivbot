@@ -547,3 +547,111 @@ def build_live_restart_smoke_plan(
         "warnings": warnings,
         "issues": issues,
     }
+
+
+def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
+    bots = report.get("bots")
+    phases = report.get("phases")
+    timeout_ladder = report.get("timeout_escalation_ladder")
+    warnings = report.get("warnings")
+    issues = report.get("issues")
+    bot_rows = bots if isinstance(bots, list) else []
+    phase_rows = phases if isinstance(phases, list) else []
+    timeout_rows = timeout_ladder if isinstance(timeout_ladder, list) else []
+    warning_rows = warnings if isinstance(warnings, list) else []
+    issue_rows = issues if isinstance(issues, list) else []
+    smoke_report = report.get("smoke_report")
+    incident_bundle = report.get("incident_bundle")
+    execution_policy = report.get("execution_policy")
+    signal_safety = report.get("process_signal_safety")
+    return {
+        "tool": report.get("tool"),
+        "schema_version": report.get("schema_version"),
+        "ok": report.get("ok"),
+        "metadata": report.get("metadata"),
+        "inputs": report.get("inputs"),
+        "supervisor_config": report.get("supervisor_config"),
+        "bots": {
+            "count": len(bot_rows),
+            "names": [str(bot.get("name") or "") for bot in bot_rows[:20]],
+            "truncated": max(0, len(bot_rows) - 20),
+        },
+        "phases": {
+            "count": len(phase_rows),
+            "names": [str(phase.get("name") or "") for phase in phase_rows],
+        },
+        "smoke_report": {
+            "command": (
+                smoke_report.get("command") if isinstance(smoke_report, dict) else None
+            ),
+            "execute": (
+                smoke_report.get("execute") if isinstance(smoke_report, dict) else None
+            ),
+        },
+        "incident_bundle": {
+            "command": (
+                incident_bundle.get("command")
+                if isinstance(incident_bundle, dict)
+                else None
+            ),
+            "execute": (
+                incident_bundle.get("execute")
+                if isinstance(incident_bundle, dict)
+                else None
+            ),
+            "output_path": (
+                incident_bundle.get("output_path")
+                if isinstance(incident_bundle, dict)
+                else None
+            ),
+            "event_segments": (
+                incident_bundle.get("event_segments")
+                if isinstance(incident_bundle, dict)
+                else None
+            ),
+        },
+        "process_signal_safety": {
+            "strategy": (
+                signal_safety.get("strategy") if isinstance(signal_safety, dict) else None
+            ),
+            "forbid_broad_process_pattern_signals": (
+                signal_safety.get("forbid_broad_process_pattern_signals")
+                if isinstance(signal_safety, dict)
+                else None
+            ),
+        },
+        "timeout_escalation_ladder": [
+            {
+                "level": row.get("level"),
+                "condition": row.get("condition"),
+                "execute": row.get("execute"),
+                "planned_command_count": len(
+                    row.get("planned_commands")
+                    if isinstance(row.get("planned_commands"), list)
+                    else []
+                ),
+            }
+            for row in timeout_rows
+            if isinstance(row, dict)
+        ],
+        "execution_policy": {
+            "execute_flag": (
+                execution_policy.get("execute_flag")
+                if isinstance(execution_policy, dict)
+                else None
+            ),
+            "future_execution_requires_review": (
+                execution_policy.get("future_execution_requires_review")
+                if isinstance(execution_policy, dict)
+                else None
+            ),
+            "rejected_operation_count": len(
+                execution_policy.get("rejected_operations")
+                if isinstance(execution_policy, dict)
+                and isinstance(execution_policy.get("rejected_operations"), list)
+                else []
+            ),
+        },
+        "warnings": {"count": len(warning_rows), "items": warning_rows[:20]},
+        "issues": {"count": len(issue_rows), "items": issue_rows[:20]},
+    }

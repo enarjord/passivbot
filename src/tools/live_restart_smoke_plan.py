@@ -22,6 +22,7 @@ from live.restart_smoke_plan import (  # noqa: E402
     DEFAULT_SMOKE_WINDOW_MINUTES,
     DEFAULT_STARTUP_WAIT_S,
     build_live_restart_smoke_plan,
+    summarize_live_restart_smoke_plan,
 )
 
 
@@ -150,6 +151,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit compact single-line JSON.",
     )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Emit a concise plan summary instead of the full per-bot plan.",
+    )
     return parser
 
 
@@ -184,6 +190,8 @@ def main(argv: list[str] | None = None) -> int:
         )
     except (NotImplementedError, ValueError) as exc:
         parser.error(str(exc))
+    if args.summary:
+        report = summarize_live_restart_smoke_plan(report)
     print(json.dumps(report, indent=None if args.compact else 2, sort_keys=True))
     return 0 if report["ok"] else 1
 
