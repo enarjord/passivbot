@@ -75,6 +75,14 @@ Current profile behavior:
 
 Unknown profile names should fail visibly instead of being ignored silently.
 
+## Live Event Console Projection
+
+`logging.live_event_console=true` or `PASSIVBOT_LIVE_EVENT_CONSOLE=1` enables
+an opt-in console sink fed by the structured live event pipeline. It is disabled
+by default while legacy stdlib console logs still exist, because enabling it can
+duplicate some order/execution lifecycle messages. Use it for controlled smoke
+tests of event-stream console formatting before migrating default console output.
+
 ## Review Heuristic
 
 1. Can INFO be tailed for long periods without noise overload?

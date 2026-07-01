@@ -59,12 +59,15 @@ from live.data_packets import (
 from live.freshness import ACCOUNT_SURFACES, LIVE_STATE_SURFACES, FreshnessLedger
 from live.events import DiagnosticEvent, emit_diagnostic_event, run_diagnostic_step
 from live.event_bus import (
+    ConsoleSummarySink,
     EventTypes,
+    LIVE_EVENT_CONSOLE_ENV,
     LIVE_EVENT_DEBUG_PROFILE_ENV,
     LiveEventContext,
     LiveEventPipeline,
     MonitorEventSink,
     ReasonCodes,
+    normalize_live_event_console_enabled,
     normalize_live_event_debug_profiles,
     payload_hash_raw,
 )
@@ -860,6 +863,12 @@ class Passivbot:
                 ),
             )
         )
+        self.live_event_console_enabled = normalize_live_event_console_enabled(
+            os.environ.get(
+                LIVE_EVENT_CONSOLE_ENV,
+                get_optional_config_value(config, "logging.live_event_console", False),
+            )
+        )
         self.balance_threshold = (
             1.0  # don't create orders if balance is less than threshold
         )
@@ -919,14 +928,15 @@ class Passivbot:
                 )
                 self.monitor_publisher = None
                 self._live_event_pipeline = None
-            if self.monitor_publisher is not None:
-                try:
-                    self._install_live_event_pipeline()
-                except Exception as exc:
-                    logging.warning(
-                        "[monitor] live event pipeline disabled: %s", exc
-                    )
-                    self._live_event_pipeline = None
+        if self.monitor_publisher is not None or self.live_event_console_enabled:
+            try:
+                self._install_live_event_pipeline()
+            except Exception as exc:
+                if self.monitor_publisher is not None and not self.live_event_console_enabled:
+                    logging.warning("[monitor] live event pipeline disabled: %s", exc)
+                else:
+                    logging.warning("[event] live event pipeline disabled: %s", exc)
+                self._live_event_pipeline = None
         # CandlestickManager settings from config.live
         # Use denormalized exchange name for cache paths (e.g., "binance" not "binanceusdm")
         cm_kwargs = {
@@ -934,7 +944,7 @@ class Passivbot:
             "exchange_name": self.exchange,
             "debug": self.logging_level,
         }
-        if self._live_event_pipeline is not None:
+        if self._live_event_pipeline_records_candle_remote_fetch():
             cm_kwargs["remote_fetch_callback"] = self._handle_candle_remote_fetch_event
         mem_cap_raw = require_live_value(config, "max_memory_candles_per_symbol")
         mem_cap_effective = DEFAULT_MAX_MEMORY_CANDLES_PER_SYMBOL
@@ -6589,7 +6599,12 @@ class Passivbot:
 
     def _install_live_event_pipeline(self) -> Optional[LiveEventPipeline]:
         publisher = getattr(self, "monitor_publisher", None)
-        if publisher is None:
+        console_sink = (
+            ConsoleSummarySink(logging.getLogger("passivbot.live_event_console"))
+            if bool(getattr(self, "live_event_console_enabled", False))
+            else None
+        )
+        if publisher is None and console_sink is None:
             return None
         existing = getattr(self, "_live_event_pipeline", None)
         if existing is not None:
@@ -6600,11 +6615,18 @@ class Passivbot:
                 user=getattr(self, "user", None),
                 bot_id=getattr(self, "bot_id", None),
             ),
-            monitor_sinks=[MonitorEventSink(publisher)],
+            monitor_sinks=[MonitorEventSink(publisher)] if publisher is not None else [],
+            console_sink=console_sink,
             debug_profiles=getattr(self, "live_event_debug_profiles", ()),
         )
         self._live_event_pipeline = pipeline
         return pipeline
+
+    def _live_event_pipeline_records_candle_remote_fetch(self) -> bool:
+        return (
+            getattr(self, "_live_event_pipeline", None) is not None
+            and getattr(self, "monitor_publisher", None) is not None
+        )
 
     def _close_live_event_pipeline(self, *, timeout: float = 2.0) -> bool:
         pipeline = getattr(self, "_live_event_pipeline", None)

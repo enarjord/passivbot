@@ -23,6 +23,7 @@ from live.event_bus import (
     authoritative_reason_code,
     format_console_event,
     live_event_debug_profile_enabled,
+    normalize_live_event_console_enabled,
     normalize_live_event_debug_profiles,
     normalize_event_type,
     payload_hash,
@@ -118,6 +119,18 @@ def test_live_event_debug_profiles_normalize_and_validate():
     assert LiveEventPipeline(debug_profiles="rust", start=False).debug_profiles == (
         "rust",
     )
+
+
+def test_live_event_console_flag_normalizes_common_config_values():
+    assert normalize_live_event_console_enabled(None) is False
+    assert normalize_live_event_console_enabled(False) is False
+    assert normalize_live_event_console_enabled("") is False
+    assert normalize_live_event_console_enabled("off") is False
+    assert normalize_live_event_console_enabled("0") is False
+    assert normalize_live_event_console_enabled(True) is True
+    assert normalize_live_event_console_enabled("on") is True
+    assert normalize_live_event_console_enabled("1") is True
+    assert normalize_live_event_console_enabled("console") is True
 
 
 def test_live_event_serializes_stable_envelope_and_redacts_sensitive_data():
