@@ -198,12 +198,16 @@ def _repo_check_commands(repo_path: str | Path | None) -> list[str]:
     ]
 
 
-def _config_preflight_commands(bots: list[dict[str, Any]]) -> list[str]:
+def _config_preflight_plan(bots: list[dict[str, Any]]) -> dict[str, Any]:
     commands: list[str] = []
     seen: set[str] = set()
+    skipped_without_config_path = 0
     for bot in bots:
         config_path = str(bot.get("config_path") or "").strip()
-        if not config_path or config_path in seen:
+        if not config_path:
+            skipped_without_config_path += 1
+            continue
+        if config_path in seen:
             continue
         seen.add(config_path)
         commands.append(
@@ -211,7 +215,11 @@ def _config_preflight_commands(bots: list[dict[str, Any]]) -> list[str]:
                 ["passivbot", "tool", "live-config-preflight", config_path, "--compact"]
             )
         )
-    return commands
+    return {
+        "commands": commands,
+        "command_count": len(commands),
+        "skipped_without_config_path_count": skipped_without_config_path,
+    }
 
 
 def _process_signal_safety_contract() -> dict[str, Any]:
@@ -430,7 +438,8 @@ def build_live_restart_smoke_plan(
         log_window_unparsed_policy=log_window_unparsed_policy,
         smoke_sections=smoke_sections,
     )
-    config_preflight_commands = _config_preflight_commands(bots)
+    config_preflight_plan = _config_preflight_plan(bots)
+    config_preflight_commands = list(config_preflight_plan["commands"])
     planned_bots = []
     for index, bot in enumerate(bots, start=1):
         planned_bots.append(
@@ -567,7 +576,10 @@ def build_live_restart_smoke_plan(
         },
         "config_preflight": {
             "commands": config_preflight_commands,
-            "command_count": len(config_preflight_commands),
+            "command_count": config_preflight_plan["command_count"],
+            "skipped_without_config_path_count": config_preflight_plan[
+                "skipped_without_config_path_count"
+            ],
             "execute": False,
             "expected_fields": [
                 "identity hints",
@@ -703,6 +715,11 @@ def summarize_live_restart_smoke_plan(report: dict[str, Any]) -> dict[str, Any]:
         "config_preflight": {
             "command_count": (
                 config_preflight.get("command_count")
+                if isinstance(config_preflight, dict)
+                else 0
+            ),
+            "skipped_without_config_path_count": (
+                config_preflight.get("skipped_without_config_path_count")
                 if isinstance(config_preflight, dict)
                 else 0
             ),

@@ -76,6 +76,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
         "command_count": 1,
         "commands": ["passivbot tool live-config-preflight configs/forager.json --compact"],
         "execute": False,
+        "skipped_without_config_path_count": 0,
         "expected_fields": [
             "identity hints",
             "HSL signal mode and enabled sides",
@@ -183,6 +184,31 @@ def test_live_restart_smoke_plan_deduplicates_config_preflight_commands(tmp_path
         "passivbot tool live-config-preflight configs/tradfi.json --compact",
     ]
     assert report["config_preflight"]["command_count"] == 2
+    assert report["config_preflight"]["skipped_without_config_path_count"] == 0
+
+
+def test_live_restart_smoke_plan_reports_config_preflight_skips(tmp_path):
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live -u binance_01",
+            "  - window_name: gateio_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u gateio_01",
+        ],
+    )
+
+    report = build_live_restart_smoke_plan(supervisor_config)
+    summary = summarize_live_restart_smoke_plan(report)
+
+    assert report["config_preflight"]["command_count"] == 1
+    assert report["config_preflight"]["skipped_without_config_path_count"] == 1
+    assert summary["config_preflight"]["skipped_without_config_path_count"] == 1
 
 
 def test_live_restart_smoke_plan_can_set_log_window_unparsed_policy(tmp_path):
@@ -501,6 +527,7 @@ def test_live_restart_smoke_plan_summary_projects_concise_commands(tmp_path, cap
         "command_count": 1,
         "commands": ["passivbot tool live-config-preflight configs/forager.json --compact"],
         "execute": False,
+        "skipped_without_config_path_count": 0,
     }
     assert summary["incident_bundle"]["event_segments"] == (
         "disabled_by_default_for_fast_restart_smoke_bundle"
