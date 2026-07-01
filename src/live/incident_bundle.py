@@ -648,6 +648,44 @@ def _problem_report_result_summary(problem_report: dict[str, Any]) -> dict[str, 
     }
 
 
+def _smoke_log_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
+    logs = smoke_report.get("logs") if isinstance(smoke_report.get("logs"), dict) else {}
+    window = logs.get("window") if isinstance(logs.get("window"), dict) else {}
+    return {
+        "max_files": logs.get("max_files"),
+        "tail_lines": logs.get("tail_lines"),
+        "max_matches": logs.get("max_matches"),
+        "files_scanned": logs.get("files_scanned"),
+        "hard_matches": logs.get("hard_matches"),
+        "attention_matches": logs.get("attention_matches"),
+        "risk_attention_matches": logs.get("risk_attention_matches"),
+        "risk_hard_matches": logs.get("risk_hard_matches"),
+        "non_risk_attention_matches": logs.get("non_risk_attention_matches"),
+        "non_risk_hard_matches": logs.get("non_risk_hard_matches"),
+        "dropped_unparsed_attention_matches": logs.get(
+            "dropped_unparsed_attention_matches"
+        ),
+        "dropped_unparsed_hard_matches": logs.get("dropped_unparsed_hard_matches"),
+        "window": {
+            "enabled": window.get("enabled"),
+            "since_ms": window.get("since_ms"),
+            "until_ms": window.get("until_ms"),
+            "lines_considered": window.get("lines_considered"),
+            "lines_skipped_before": window.get("lines_skipped_before"),
+            "lines_skipped_after": window.get("lines_skipped_after"),
+            "lines_skipped_unparsed": window.get("lines_skipped_unparsed"),
+            "unparsed_policy": window.get("unparsed_policy"),
+            "unparsed_ts": window.get("unparsed_ts"),
+            "dropped_unparsed_attention_matches": window.get(
+                "dropped_unparsed_attention_matches"
+            ),
+            "dropped_unparsed_hard_matches": window.get(
+                "dropped_unparsed_hard_matches"
+            ),
+        },
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -984,6 +1022,10 @@ def build_live_incident_bundle(
                     "max_event_files_per_bot": max_event_files_per_bot
                     if max_event_files_per_bot
                     else None,
+                    "max_log_files": max_log_files if max_log_files else None,
+                    "log_tail_lines": log_tail_lines if log_tail_lines else None,
+                    "max_log_matches": max_log_matches if max_log_matches else None,
+                    "log_window_unparsed_policy": log_window_unparsed_policy,
                     "include_rotated": include_rotated,
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
@@ -1074,6 +1116,7 @@ def build_live_incident_bundle(
             "hard_failures": smoke_report.get("hard_failures"),
             "attention_count": smoke_report.get("attention_count"),
             "event_window": smoke_report.get("event_window"),
+            "logs": _smoke_log_result_summary(smoke_report),
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),
