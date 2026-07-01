@@ -133,6 +133,8 @@ def test_live_restart_smoke_plan_can_focus_smoke_sections(tmp_path):
     assert report["inputs"]["smoke_sections"] == ["fill_refresh", "risk_events"]
     assert "--section fill_refresh" in report["smoke_report"]["command"]
     assert "--section risk_events" in report["smoke_report"]["command"]
+    assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
+    assert "--smoke-section risk_events" in report["incident_bundle"]["command"]
     assert report["smoke_report"]["execute"] is False
 
 
@@ -508,6 +510,8 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
     assert report["inputs"]["smoke_sections"] == ["fill_refresh", "hsl_replay"]
     assert "--section fill_refresh" in report["smoke_report"]["command"]
     assert "--section hsl_replay" in report["smoke_report"]["command"]
+    assert "--smoke-section fill_refresh" in report["incident_bundle"]["command"]
+    assert "--smoke-section hsl_replay" in report["incident_bundle"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
 
 
