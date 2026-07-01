@@ -64,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--max-event-files",
+        type=int,
+        default=0,
+        help=(
+            "Opt-in bound for monitor event file scans. When set, scan at most "
+            "N discovered event segments, preferring current.ndjson files first "
+            "and then the newest rotated files by mtime. Default 0 scans every "
+            "discovered segment. This is a global cap; use --bot, --exchange, "
+            "or --user to narrow multi-bot monitor roots."
+        ),
+    )
+    parser.add_argument(
         "--group-limit",
         type=int,
         default=80,
@@ -116,12 +128,15 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--group-limit must be >= 0")
     if args.event_tail_lines < 0:
         parser.error("--event-tail-lines must be >= 0")
+    if args.max_event_files < 0:
+        parser.error("--max-event-files must be >= 0")
     report = build_live_performance_report(
         args.path,
         since_ms=since_ms,
         until_ms=args.until_ms,
         include_rotated=bool(args.include_rotated),
         event_tail_lines=int(args.event_tail_lines),
+        max_event_files=int(args.max_event_files),
         group_limit=int(args.group_limit),
         bot_filters=args.bot,
         exchange_filters=args.exchange,

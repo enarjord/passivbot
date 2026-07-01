@@ -61,6 +61,8 @@ slices.
   and full background replay.
 - [ ] Every long operation must answer whether it delayed protective action,
   fresh entries, normal cycle cadence, or diagnostics only.
+- [ ] Smoke/report tooling over monitor history must offer explicit bounded scan
+  modes so diagnostics do not become the slow path during live validation.
 - [ ] Acceptance: one `passivbot tool live-performance-report` run can explain
   the dominant live-vs-backtest delay without SSH log archaeology.
 
