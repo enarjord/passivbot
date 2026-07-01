@@ -658,6 +658,7 @@ def _copy_event_segments(
     include_rotated: bool,
     include_segments: bool,
     max_total_bytes: int,
+    max_event_files_per_bot: int = 0,
 ) -> dict[str, Any]:
     file_discovery: dict[str, Any] = {
         "candidate_files": 0,
@@ -676,10 +677,21 @@ def _copy_event_segments(
     except FileNotFoundError:
         discovered = []
     matched_paths = _matched_segment_paths(event_report, window_report, problem_report)
+    max_event_file_count_per_bot = max(0, int(max_event_files_per_bot))
+    event_files_before_limit = 0
+    event_files_skipped_by_limit = 0
+    event_file_limit_groups = 0
     if matched_paths:
         paths = [Path(path) for path in sorted(matched_paths)]
+        selection = "matched_report_paths"
     else:
         paths = discovered
+        selection = "fallback_discovered_paths"
+        if max_event_file_count_per_bot and paths:
+            event_files_before_limit = len(paths)
+            paths, event_files_skipped_by_limit, event_file_limit_groups = (
+                _limit_recent_event_files_per_bot(paths, max_event_file_count_per_bot)
+            )
     total_bytes = 0
     files: list[dict[str, Any]] = []
     for path in paths:
@@ -719,14 +731,28 @@ def _copy_event_segments(
             }
         )
         files.append(item)
-    return {
+    report = {
         "include_segments": bool(include_segments),
         "include_rotated": bool(include_rotated),
         "max_total_bytes": int(max_total_bytes),
         "file_discovery": file_discovery,
+        "selection": selection,
         "total_included_bytes": total_bytes,
         "files": files,
     }
+    if max_event_file_count_per_bot:
+        report["max_event_files_per_bot"] = max_event_file_count_per_bot
+        report["event_file_limit_scope"] = "per_bot"
+        report["event_file_limit_applies_to"] = (
+            "fallback_discovered_segments"
+            if selection == "fallback_discovered_paths"
+            else "matched_report_paths_preserved"
+        )
+        report["event_file_limit_groups"] = event_file_limit_groups
+        report["event_files_before_limit"] = event_files_before_limit or len(paths)
+        report["event_files_skipped_by_limit"] = event_files_skipped_by_limit
+        report["event_file_limit_order"] = "current_then_recent_mtime"
+    return report
 
 
 def _tar_directory(source_dir: Path, output_path: Path) -> None:
@@ -924,6 +950,7 @@ def build_live_incident_bundle(
             include_rotated=include_rotated,
             include_segments=include_event_segments,
             max_total_bytes=max_event_segment_bytes,
+            max_event_files_per_bot=max_event_files_per_bot,
         )
         metadata = {
             "bundle_version": BUNDLE_VERSION,
@@ -1067,6 +1094,18 @@ def build_live_incident_bundle(
             "files": len(segment_manifest["files"]),
             "included": sum(1 for item in segment_manifest["files"] if item.get("included")),
             "file_discovery": segment_manifest.get("file_discovery") or {},
+            "selection": segment_manifest.get("selection"),
             "total_included_bytes": segment_manifest["total_included_bytes"],
+            "max_event_files_per_bot": segment_manifest.get("max_event_files_per_bot"),
+            "event_file_limit_scope": segment_manifest.get("event_file_limit_scope"),
+            "event_file_limit_applies_to": segment_manifest.get(
+                "event_file_limit_applies_to"
+            ),
+            "event_file_limit_groups": segment_manifest.get("event_file_limit_groups"),
+            "event_files_before_limit": segment_manifest.get("event_files_before_limit"),
+            "event_files_skipped_by_limit": segment_manifest.get(
+                "event_files_skipped_by_limit"
+            ),
+            "event_file_limit_order": segment_manifest.get("event_file_limit_order"),
         },
     }
