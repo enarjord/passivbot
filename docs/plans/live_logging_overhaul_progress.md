@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `fddd5491` after PR #946, `Focus incident bundle smoke reports`.
+- `123d59d6` after PR #947, `Focus restart incident bundle smoke sections`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #947 at `123d59d6`.
+- PR #947 made `live-restart-smoke-plan --smoke-section` apply to both planned
+  evidence commands: `live-smoke-report --section` and
+  `live-incident-bundle --smoke-section`. The slice was read-only dry-run
+  planner tooling and did not add restart execution, process signaling, tmux
+  calls, SSH/git operations, exchange calls, event producers, smoke verdict
+  changes, console routing, order logic, risk logic, or trading behavior.
+- PR #947 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_restart_smoke_plan.py`, py_compile for touched files,
+  `git diff --check`, and an added-line silent-handling scan.
+- VPS5 pulled from `fddd5491` to `123d59d6` without bot restart because the
+  deployed change was read-only planner tooling. The five configured bots were
+  left running.
+- A VPS5 `live-restart-smoke-plan /root/bots_vps5.yaml --smoke-section
+  fill_refresh_health --summary --compact` run reported `ok=true`, five
+  configured bots, six planned phases, `execute=false`, zero issues, and
+  matching focused evidence commands: `live-smoke-report ... --section
+  fill_refresh_health` and `live-incident-bundle ... --smoke-section
+  fill_refresh_health`. A follow-up 1-minute smoke reported `ok=true`,
+  `hard_failures=0`, clean tracked repository state at `123d59d6`, all five
+  configured bots matched, zero failed remote calls, zero failed
+  account-critical remote calls, and only known non-hard EMA/HSL cooldown
+  attention groups.
 - Repository pulled through PR #946 at `fddd5491`.
 - PR #946 added `live-incident-bundle --smoke-section`, allowing the embedded
   full `smoke_report.json` inside an incident bundle to keep selected

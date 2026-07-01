@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from live.smoke_report import parse_tmuxp_live_commands, _user_safe_display_path
+from live.smoke_report import (
+    DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
+    LOG_WINDOW_UNPARSED_POLICIES,
+    parse_tmuxp_live_commands,
+    _user_safe_display_path,
+)
 
 
 DEFAULT_SHUTDOWN_TIMEOUT_S = 90
@@ -44,6 +49,14 @@ def _non_negative_int(value: int, *, field: str) -> int:
     return parsed
 
 
+def _log_window_unparsed_policy(value: str | None) -> str:
+    policy = str(value or DEFAULT_LOG_WINDOW_UNPARSED_POLICY).strip().lower()
+    if policy not in LOG_WINDOW_UNPARSED_POLICIES:
+        allowed = ", ".join(sorted(LOG_WINDOW_UNPARSED_POLICIES))
+        raise ValueError(f"log_window_unparsed_policy must be one of {allowed}")
+    return policy
+
+
 def _default_incident_bundle_output() -> str:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     return (
@@ -75,6 +88,7 @@ def _smoke_report_command(
     max_log_files: int,
     log_tail_lines: int,
     max_log_matches: int,
+    log_window_unparsed_policy: str,
     compact: bool,
     brief: bool,
     summary: bool,
@@ -103,6 +117,7 @@ def _smoke_report_command(
         args.extend(["--log-tail-lines", str(log_tail_lines)])
     if int(max_log_matches) > 0:
         args.extend(["--max-log-matches", str(max_log_matches)])
+    args.extend(["--log-window-unparsed-policy", str(log_window_unparsed_policy)])
     if summary:
         args.append("--summary")
     elif brief:
@@ -128,6 +143,7 @@ def _incident_bundle_command(
     max_log_files: int,
     log_tail_lines: int,
     max_log_matches: int,
+    log_window_unparsed_policy: str,
     smoke_sections: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     args = [
@@ -156,6 +172,7 @@ def _incident_bundle_command(
         args.extend(["--log-tail-lines", str(log_tail_lines)])
     if int(max_log_matches) > 0:
         args.extend(["--max-log-matches", str(max_log_matches)])
+    args.extend(["--log-window-unparsed-policy", str(log_window_unparsed_policy)])
     for section in smoke_sections or ():
         normalized = str(section).strip()
         if normalized:
@@ -289,6 +306,7 @@ def build_live_restart_smoke_plan(
     smoke_max_log_files: int = DEFAULT_SMOKE_MAX_LOG_FILES,
     smoke_log_tail_lines: int = DEFAULT_SMOKE_LOG_TAIL_LINES,
     smoke_max_log_matches: int = DEFAULT_SMOKE_MAX_LOG_MATCHES,
+    log_window_unparsed_policy: str = DEFAULT_LOG_WINDOW_UNPARSED_POLICY,
     incident_bundle_output: str | Path | None = None,
     compact_smoke_report: bool = True,
     brief_smoke_report: bool = True,
@@ -315,6 +333,9 @@ def build_live_restart_smoke_plan(
     )
     smoke_max_log_matches = _non_negative_int(
         smoke_max_log_matches, field="smoke_max_log_matches"
+    )
+    log_window_unparsed_policy = _log_window_unparsed_policy(
+        log_window_unparsed_policy
     )
     if incident_bundle_output is None or not str(incident_bundle_output).strip():
         incident_bundle_output = _default_incident_bundle_output()
@@ -373,6 +394,7 @@ def build_live_restart_smoke_plan(
         max_log_files=smoke_max_log_files,
         log_tail_lines=smoke_log_tail_lines,
         max_log_matches=smoke_max_log_matches,
+        log_window_unparsed_policy=log_window_unparsed_policy,
         compact=compact_smoke_report,
         brief=brief_smoke_report,
         summary=summary_smoke_report,
@@ -389,6 +411,7 @@ def build_live_restart_smoke_plan(
         max_log_files=smoke_max_log_files,
         log_tail_lines=smoke_log_tail_lines,
         max_log_matches=smoke_max_log_matches,
+        log_window_unparsed_policy=log_window_unparsed_policy,
         smoke_sections=smoke_sections,
     )
     planned_bots = []
@@ -429,6 +452,7 @@ def build_live_restart_smoke_plan(
             "smoke_max_log_files": smoke_max_log_files,
             "smoke_log_tail_lines": smoke_log_tail_lines,
             "smoke_max_log_matches": smoke_max_log_matches,
+            "log_window_unparsed_policy": log_window_unparsed_policy,
             "smoke_sections": list(smoke_sections),
             "incident_bundle_output": _display_path(incident_bundle_output),
         },
