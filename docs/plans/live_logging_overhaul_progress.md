@@ -19,7 +19,7 @@ Last updated: 2026-06-30.
 
 Current `origin/v8` logging-overhaul head:
 
-- `5808f679` after PR #921, `Summarize incident problem report discovery`.
+- `82b1990c` after PR #922, `Summarize HSL replay stages in performance report`.
 
 Current review gate:
 
@@ -49,6 +49,27 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #922 at `82b1990c`.
+- PR #922 added aggregate HSL replay stage/status counters to
+  `live-performance-report` `hsl_replay_profile`, exposing
+  active/completed/failed replay bot counts and active/latest replay stage
+  counts from existing sanitized `hsl.replay.*` events. The slice was read-only
+  report tooling and did not add event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior.
+- PR #922 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `5808f679` to `82b1990c` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A 5-minute smoke at `82b1990c` completed with `ok=true`, `hard_failures=0`,
+  all five configured bots matched, clean tracked repository state, no failed
+  remote calls, and no failed account-critical remote calls. A VPS5
+  `live-performance-report --summary` verified the new HSL replay counters in
+  live output, including `active_bot_count=1`,
+  `active_stage_counts.price_history_symbol_fetch_started=1`, and
+  `latest_status_counts.active=1` for the existing Kucoin replay evidence.
 - Repository pulled through PR #921 at `5808f679`.
 - PR #921 projected `problem_event_report.file_discovery` and
   `problem_event_report.event_window` into compact incident-bundle output so
@@ -1929,20 +1950,39 @@ VPS5 deployment status:
 
 ## Current Work
 
-### Pending PR: HSL Replay Profile Stage Summary
+### Pending PR: Market Snapshot Staleness Summary
 
-- Branch: `codex/v8-hsl-replay-profile-stage-summary`.
+- Branch: `codex/v8-market-snapshot-staleness-summary`.
 - Scope: read-only live performance report tooling and tests.
-- Result: adds aggregate HSL replay stage/status counters to
-  `hsl_replay_profile`, so operators can see active/completed/failed replay
-  bots and current active replay stages without manually scanning per-bot
-  groups.
+- Result: adds bounded aggregate market-snapshot staleness counters to
+  `input_staleness`, so operators can see snapshot observations, missing
+  symbol totals, configured-age excess counts, source labels, and age summaries
+  without opening every `snapshot.built` event.
 - Expected validation: focused live-performance-report tests plus py_compile
   and `git diff --check`. No event producers, exchange calls, cache mutation,
   readiness gates, console routing, monitor writes, order/risk logic, or
   trading behavior should change.
 
 ## Merged Slices
+
+### PR #922: HSL Replay Profile Stage Summary
+
+- Branch: `codex/v8-hsl-replay-profile-stage-summary`.
+- Scope: read-only live performance report tooling and tests.
+- Result: `passivbot tool live-performance-report` now adds aggregate HSL
+  replay stage/status counters to `hsl_replay_profile`, so operators can see
+  active/completed/failed replay bots and current active replay stages without
+  manually scanning per-bot groups.
+- Review evidence: Cursor, Hermes, Claude, and CI approved the final head.
+  Local validation covered focused live-performance-report tests plus
+  py_compile and `git diff --check`. No event producers, exchange calls, cache
+  mutation, readiness gates, console routing, monitor writes, order/risk logic,
+  or trading behavior changed.
+- VPS5 evidence: deployed to `v8` at `82b1990c` without bot restart because
+  the change is read-only tooling. Smoke stayed hard-green with all five
+  configured bots running, clean tracked repository state, and
+  `live-performance-report --summary` showed the new HSL replay aggregate
+  counters from existing monitor data.
 
 ### PR #921: Incident Bundle Problem Report Discovery Summary
 

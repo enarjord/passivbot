@@ -654,6 +654,17 @@ class _InputStalenessAccumulator:
         self.snapshot_surface_age_rows = 0
         self.snapshot_market_summaries_seen = 0
         self.snapshot_market_stale_count = 0
+        self.market_snapshot_observations = 0
+        self.market_snapshot_count_values: list[int] = []
+        self.market_snapshot_symbol_count_values: list[int] = []
+        self.market_snapshot_missing_count_values: list[int] = []
+        self.market_snapshot_missing_symbols_total = 0
+        self.market_snapshot_missing_observation_count = 0
+        self.market_snapshot_max_age_values: list[int] = []
+        self.market_snapshot_mean_age_values: list[int] = []
+        self.market_snapshot_configured_max_age_values: list[int] = []
+        self.market_snapshot_configured_excess_values: list[int] = []
+        self.market_snapshot_source_counts: Counter[str] = Counter()
         self.rust_calls_seen = 0
         self.packet_refs_missing = 0
         self.snapshot_to_rust_exact_matches = 0
@@ -742,12 +753,37 @@ class _InputStalenessAccumulator:
                     )
             market_summary = data.get("market_snapshot_summary")
             if isinstance(market_summary, dict):
+                self.market_snapshot_observations += 1
                 max_age_ms = _non_negative_ms(market_summary.get("max_age_ms"))
                 mean_age_ms = _non_negative_ms(market_summary.get("mean_age_ms"))
                 configured_max_age_ms = _non_negative_ms(
                     market_summary.get("configured_max_age_ms")
                 )
+                for key, values in (
+                    ("count", self.market_snapshot_count_values),
+                    ("symbol_count", self.market_snapshot_symbol_count_values),
+                    ("missing_count", self.market_snapshot_missing_count_values),
+                ):
+                    value = _non_negative_number(market_summary.get(key))
+                    if value is not None:
+                        values.append(int(value))
+                missing_count = _non_negative_number(market_summary.get("missing_count"))
+                if missing_count is not None:
+                    missing_symbols = int(missing_count)
+                    self.market_snapshot_missing_symbols_total += missing_symbols
+                    if missing_symbols > 0:
+                        self.market_snapshot_missing_observation_count += 1
+                if configured_max_age_ms is not None:
+                    self.market_snapshot_configured_max_age_values.append(
+                        int(configured_max_age_ms)
+                    )
+                sources = market_summary.get("sources")
+                if isinstance(sources, list):
+                    for source in sources:
+                        if source is not None:
+                            self.market_snapshot_source_counts[str(source)] += 1
                 if max_age_ms is not None:
+                    self.market_snapshot_max_age_values.append(max_age_ms)
                     self.snapshot_market_summaries_seen += 1
                     self._add_group(
                         row=row,
@@ -761,16 +797,21 @@ class _InputStalenessAccumulator:
                         configured_max_age_ms is not None
                         and max_age_ms > configured_max_age_ms
                     ):
+                        configured_excess_ms = max_age_ms - configured_max_age_ms
+                        self.market_snapshot_configured_excess_values.append(
+                            configured_excess_ms
+                        )
                         self.snapshot_market_stale_count += 1
                         self._add_group(
                             row=row,
                             live_event=live_event,
                             operation="input_staleness.market_snapshot.configured_excess",
-                            value_ms=max_age_ms - configured_max_age_ms,
+                            value_ms=configured_excess_ms,
                             timing_kind="configured_age_excess",
                             trading_impact="blocks_exchange_actions",
                         )
                 if mean_age_ms is not None:
+                    self.market_snapshot_mean_age_values.append(mean_age_ms)
                     self._add_group(
                         row=row,
                         live_event=live_event,
@@ -865,6 +906,25 @@ class _InputStalenessAccumulator:
             "snapshot_surface_age_rows": int(self.snapshot_surface_age_rows),
             "snapshot_market_summaries_seen": int(self.snapshot_market_summaries_seen),
             "snapshot_market_stale_count": int(self.snapshot_market_stale_count),
+            "market_snapshot": {
+                "observations": int(self.market_snapshot_observations),
+                "count": _number_summary(self.market_snapshot_count_values),
+                "symbol_count": _number_summary(self.market_snapshot_symbol_count_values),
+                "missing_count": _number_summary(self.market_snapshot_missing_count_values),
+                "missing_symbols_total": int(self.market_snapshot_missing_symbols_total),
+                "missing_observation_count": int(
+                    self.market_snapshot_missing_observation_count
+                ),
+                "max_age_ms": _number_summary(self.market_snapshot_max_age_values),
+                "mean_age_ms": _number_summary(self.market_snapshot_mean_age_values),
+                "configured_max_age_ms": _number_summary(
+                    self.market_snapshot_configured_max_age_values
+                ),
+                "configured_excess_ms": _number_summary(
+                    self.market_snapshot_configured_excess_values
+                ),
+                "sources": dict(self.market_snapshot_source_counts.most_common(12)),
+            },
             "rust_calls_seen": int(self.rust_calls_seen),
             "packet_refs_missing": int(self.packet_refs_missing),
             "snapshot_to_rust_exact_matches": int(self.snapshot_to_rust_exact_matches),
@@ -3386,6 +3446,7 @@ def summarize_live_performance_report(
             "snapshot_market_stale_count": int(
                 input_staleness.get("snapshot_market_stale_count") or 0
             ),
+            "market_snapshot": input_staleness.get("market_snapshot") or {},
             "rust_calls_seen": int(input_staleness.get("rust_calls_seen") or 0),
             "packet_refs_missing": int(input_staleness.get("packet_refs_missing") or 0),
             "snapshot_to_rust_exact_matches": int(
