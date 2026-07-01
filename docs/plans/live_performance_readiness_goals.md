@@ -299,9 +299,10 @@ classification when enough source events exist.
   - Status: partial. Existing `hsl.replay.*` events are now summarized by
     `live-performance-report` as `hsl_replay_profile`, including bounded pair
     counts, timeline rows, rows/s, estimated dense pair-row work, observed
-    progress percentage, and startup-blocking elapsed time where present.
-    Remaining work: true protective-ready elapsed time and per-stage internal
-    replay CPU/IO profiling.
+    progress percentage, startup-blocking elapsed time where present, and
+    aggregate replay stage/status counters. Remaining work: true
+    protective-ready elapsed time and per-stage internal replay CPU/IO
+    profiling.
 - [ ] Cache readiness: fill cache coverage proof, candle coverage proof,
   checkpoint compatibility decision, repair scope, repair elapsed time.
   - Status: partial. Existing `cache.warmup_decision`,
@@ -796,9 +797,10 @@ Each slice should update this checklist with its result.
      replay using realistic pair count, fill count, and row count.
    - Acceptance: report current elapsed, rows/s, and per-stage timing without
      contacting exchanges or changing live behavior.
-   - Status: first report slice adds `hsl_replay_profile` from existing live
-     events. Offline deterministic replay fixtures and internal stage profiling
-     remain open.
+   - Status: first report slices add `hsl_replay_profile` from existing live
+     events, including per-bot replay records plus aggregate stage/status
+     counters for active/completed/failed replay state. Offline deterministic
+     replay fixtures and internal stage profiling remain open.
 
 3. [ ] Held-position protective readiness slice.
    - Classify currently held `coin+pside` pairs before unrelated flat pairs and

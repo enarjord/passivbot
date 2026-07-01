@@ -1259,6 +1259,17 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
         "hsl.replay.completed": 1,
         "hsl.replay.failed": 1,
     }
+    assert profile["stage_counts"] == {
+        "loaded": 1,
+        "pair_replay": 1,
+        "full_replay": 1,
+    }
+    assert profile["latest_status_counts"] == {"failed": 1}
+    assert profile["latest_stage_counts"] == {}
+    assert profile["active_stage_counts"] == {}
+    assert profile["active_bot_count"] == 0
+    assert profile["completed_bot_count"] == 0
+    assert profile["failed_bot_count"] == 1
     assert group["bot"] == "binance/binance_01"
     assert group["event_types"]["hsl.replay.progress"] == 2
     assert group["loaded"]["data"]["symbols"] == 5
@@ -1275,6 +1286,88 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     assert group["failed"]["derived"]["latest_elapsed_ms"] == 8000
     assert "must-not-render" not in json.dumps(group, sort_keys=True)
     assert group["completed"]["derived"]["observed_work_pct"] == 75
+
+
+def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):
+    rows = [
+        _monitor_row(
+            event_type="hsl.replay.progress",
+            seq=1,
+            ts=1000,
+            exchange="binance",
+            user="binance_01",
+            component="risk.hsl",
+            status="started",
+            data={
+                "stage": "price_history_fetch_started",
+                "history_build_elapsed_s": 45.0,
+            },
+        ),
+        _monitor_row(
+            event_type="hsl.replay.progress",
+            seq=2,
+            ts=2000,
+            exchange="gateio",
+            user="gateio_01",
+            component="risk.hsl",
+            status="started",
+            data={"stage": "pair_replay", "elapsed_s": 12.0},
+        ),
+        _monitor_row(
+            event_type="hsl.replay.completed",
+            seq=3,
+            ts=3000,
+            exchange="okx",
+            user="okx_01",
+            component="risk.hsl",
+            status="succeeded",
+            data={"stage": "full_replay", "full_elapsed_s": 18.0},
+        ),
+        _monitor_row(
+            event_type="hsl.replay.failed",
+            seq=4,
+            ts=4000,
+            exchange="kucoin",
+            user="kucoin_01",
+            component="risk.hsl",
+            status="failed",
+            data={"stage": "price_history_fetch_started", "elapsed_s": 3.0},
+        ),
+    ]
+    for row in rows:
+        exchange = row["exchange"]
+        user = row["user"]
+        _write_ndjson(
+            tmp_path / "monitor" / exchange / user / "events" / "current.ndjson",
+            [row],
+        )
+
+    report = build_live_performance_report(tmp_path / "monitor")
+    profile = report["hsl_replay_profile"]
+
+    assert profile["bot_count"] == 4
+    assert profile["stage_counts"] == {
+        "price_history_fetch_started": 2,
+        "pair_replay": 1,
+        "full_replay": 1,
+    }
+    assert profile["latest_status_counts"] == {
+        "active": 2,
+        "completed": 1,
+        "failed": 1,
+    }
+    assert profile["latest_stage_counts"] == {
+        "price_history_fetch_started": 2,
+        "full_replay": 1,
+        "pair_replay": 1,
+    }
+    assert profile["active_stage_counts"] == {
+        "price_history_fetch_started": 1,
+        "pair_replay": 1,
+    }
+    assert profile["active_bot_count"] == 2
+    assert profile["completed_bot_count"] == 1
+    assert profile["failed_bot_count"] == 1
 
 
 def test_live_performance_report_hsl_replay_profile_whitelists_values(tmp_path):
