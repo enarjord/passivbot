@@ -320,9 +320,18 @@ def test_live_incident_bundle_embeds_problem_event_report(tmp_path):
     assert report["problem_event_report"] == {
         "enabled": True,
         "files_scanned": 1,
+        "file_discovery": {
+            "bot_path_pruning_applied": False,
+            "candidate_files": 1,
+            "event_segments": 1,
+            "opaque_bot_id_full_scan": False,
+            "rotated_skipped": 0,
+            "scope_pruned": 0,
+        },
         "live_events": 3,
         "error_count": 0,
         "warning_count": 0,
+        "event_window": None,
         "matched_events": 1,
         "events_truncated": False,
         "trace_summary_matched_events": 1,
@@ -457,6 +466,14 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
         "rotated_skipped": 0,
         "scope_pruned": 1,
     }
+    assert report["problem_event_report"]["file_discovery"] == {
+        "bot_path_pruning_applied": True,
+        "candidate_files": 2,
+        "event_segments": 2,
+        "opaque_bot_id_full_scan": False,
+        "rotated_skipped": 0,
+        "scope_pruned": 1,
+    }
     assert report["time_window"]["files_scanned"] == 1
     assert report["time_window"]["file_discovery"] == {
         "bot_path_pruning_applied": True,
@@ -562,9 +579,11 @@ def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, caps
     assert report["problem_event_report"] == {
         "enabled": False,
         "files_scanned": None,
+        "file_discovery": {},
         "live_events": None,
         "error_count": None,
         "warning_count": None,
+        "event_window": None,
         "matched_events": None,
         "events_truncated": None,
         "trace_summary_matched_events": None,

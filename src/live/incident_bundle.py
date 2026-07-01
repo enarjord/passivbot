@@ -615,9 +615,11 @@ def _problem_report_result_summary(problem_report: dict[str, Any]) -> dict[str, 
     return {
         "enabled": bool(problem_report),
         "files_scanned": problem_report.get("files_scanned"),
+        "file_discovery": problem_report.get("file_discovery") or {},
         "live_events": problem_report.get("live_events"),
         "error_count": problem_report.get("error_count"),
         "warning_count": problem_report.get("warning_count"),
+        "event_window": problem_report.get("event_window"),
         "matched_events": query_section.get("matched_events"),
         "events_truncated": query_section.get("events_truncated"),
         "trace_summary_matched_events": (
