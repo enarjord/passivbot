@@ -1356,6 +1356,180 @@ def test_live_incident_bundle_includes_process_status_when_requested(
     assert smoke_report["processes"]["missing_expected"] == []
 
 
+def test_live_incident_bundle_can_embed_restart_smoke_plan(
+    tmp_path,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/v8.json -u binance_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 99 S 1.0 5.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/v8.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    report = build_live_incident_bundle(
+        tmp_path / "monitor",
+        output_path=output,
+        logs_root=None,
+        supervisor_config=supervisor_config,
+        include_event_segments=False,
+        include_restart_smoke_plan=True,
+        restart_smoke_window_minutes=7,
+        smoke_sections=["fill_refresh_health"],
+    )
+
+    assert report["ok"] is True
+    assert report["restart_smoke_plan"]["enabled"] is True
+    assert report["restart_smoke_plan"]["ok"] is True
+    assert report["restart_smoke_plan"]["bots"]["count"] == 1
+    assert report["restart_smoke_plan"]["config_preflight"]["command_count"] == 1
+    assert "commands" not in report["restart_smoke_plan"]["config_preflight"]
+
+    with tarfile.open(output, "r:gz") as tar:
+        names = set(tar.getnames())
+        assert "restart_smoke_plan.json" in names
+        manifest = _read_tar_json(tar, "manifest.json")
+        restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
+
+    assert manifest["filters"]["include_restart_smoke_plan"] is True
+    assert manifest["filters"]["restart_smoke_window_minutes"] == 7
+    assert manifest["filters"]["smoke_sections"] == ["fill_refresh_health"]
+    assert manifest["restart_smoke_plan"]["bots"]["count"] == 1
+    assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
+    assert restart_plan["metadata"] == {
+        "dry_run": True,
+        "execute": False,
+        "execution_available": False,
+        "plan_only": True,
+    }
+    assert restart_plan["inputs"]["smoke_window_minutes"] == 7
+    assert restart_plan["inputs"]["smoke_event_tail_lines"] == 2000
+    assert restart_plan["inputs"]["smoke_max_event_files_per_bot"] == 2
+    assert restart_plan["inputs"]["smoke_log_tail_lines"] == 1200
+    assert restart_plan["inputs"]["smoke_max_log_matches"] == 20
+    assert "--event-tail-lines 2000" in restart_plan["smoke_report"]["command"]
+    assert "--max-event-files-per-bot 2" in restart_plan["smoke_report"]["command"]
+    assert "--section fill_refresh_health" in restart_plan["smoke_report"]["command"]
+    assert "--smoke-section fill_refresh_health" in restart_plan["incident_bundle"][
+        "command"
+    ]
+
+
+def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_1"},
+            )
+        ],
+    )
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    supervisor_config.write_text(
+        "\n".join(
+            [
+                "session_name: passivbot",
+                "windows:",
+                "  - window_name: binance_01",
+                "    panes:",
+                "      - passivbot live configs/v8.json -u binance_01",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        smoke_report_module,
+        "_ps_process_rows",
+        lambda: (
+            [
+                (
+                    "123 1 99 S 1.0 5.0 "
+                    "/root/passivbot/venv/bin/passivbot live "
+                    "configs/v8.json -u binance_01"
+                )
+            ],
+            None,
+        ),
+    )
+    output = tmp_path / "incident.tar.gz"
+
+    rc = live_incident_bundle.main(
+        [
+            str(tmp_path / "monitor"),
+            "--output",
+            str(output),
+            "--logs-root",
+            "",
+            "--supervisor-config",
+            str(supervisor_config),
+            "--restart-smoke-plan",
+            "--restart-smoke-window-minutes",
+            "9",
+            "--no-event-segments",
+            "--compact",
+        ]
+    )
+
+    assert rc == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["restart_smoke_plan"]["enabled"] is True
+    assert report["restart_smoke_plan"]["bots"]["count"] == 1
+    with tarfile.open(output, "r:gz") as tar:
+        restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
+    assert restart_plan["inputs"]["smoke_window_minutes"] == 9
+
+
+def test_live_incident_bundle_cli_requires_supervisor_for_restart_plan(capsys):
+    with pytest.raises(SystemExit):
+        live_incident_bundle.main(["monitor", "--restart-smoke-plan"])
+
+    assert "--restart-smoke-plan requires --supervisor-config" in capsys.readouterr().err
+
+
 def test_live_incident_bundle_redacts_git_remote_url_userinfo():
     assert (
         _redact_url_userinfo("https://token:secret@example.com/org/repo.git")
