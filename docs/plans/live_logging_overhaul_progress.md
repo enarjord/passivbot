@@ -19,19 +19,20 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `f54c92147` after PR #963, `Refine trailing selected mode labels`.
+- `b9a3110e8` after PR #964, `Project forager selection to event console`.
 
 Current logging-overhaul head:
 
-- `f54c92147` after PR #963, `Refine trailing selected mode labels`.
+- `b9a3110e8` after PR #964, `Project forager selection to event console`.
 
 Current work:
 
-- Branch `codex/v8-forager-selection-console` projects existing
-  `forager.selection` events into the opt-in live event console/text sinks with
-  a compact, throttled operator summary. This continues the migration of useful
-  legacy console output into the structured event stream without changing
-  forager ranking or entry behavior.
+- Branch `codex/v8-trailing-unstuck-console` enriches existing trailing and
+  unstuck structured-event console summaries with distance-to-threshold,
+  distance-to-retracement, unstuck target distance, and the already-computed
+  monitor runtime hint for the next unstuck candidate. This continues the
+  migration of user-facing status logs into the event stream without changing
+  order generation, risk logic, or cadence.
 
 Current review gate:
 
@@ -61,6 +62,20 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #964 at `b9a3110e8`.
+- PR #964 projected existing `forager.selection` events into the opt-in live
+  event console/text sinks with a compact 5-minute-throttled operator summary.
+  It merged after Claude and Hermes approved with CI green.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, GateIO, and OKX exited within the longer
+  graceful window; Kucoin still required SIGTERM after the full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=b9a3110e`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `logs.hard_matches=0`.
+  Remaining attention was non-hard startup state: four active HSL replay
+  workers, Hyperliquid EMA-unavailable diagnostics for cache-only stock
+  symbols, staged refresh progress, and shutdown-slow history from the restart.
 - Repository pulled through PR #963 at `f54c92147`.
 - PR #963 refined the trailing `selected_mode` classifier so
   `close_auto_reduce_wel_long` reports `auto_reduce` instead of generic `grid`.
