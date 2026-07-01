@@ -19,7 +19,7 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` logging-overhaul head:
 
-- `652b019e` after PR #924, `Summarize startup phase readiness timing`.
+- `dc0ad4dd` after PR #925, `Bound performance report event scans`.
 
 Current review gate:
 
@@ -49,6 +49,29 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #925 at `dc0ad4dd`.
+- PR #925 added `live-performance-report --event-tail-lines`, an opt-in
+  per-segment row bound for smoke/debug reports. Plain current segments can seek
+  from the file end; compressed rotated segments may still require sequential
+  decompression. The slice was read-only report tooling and did not add event
+  producers, exchange calls, cache mutation, readiness gates, console routing,
+  monitor writes, order/risk logic, or trading behavior.
+- PR #925 passed Hermes + Claude + Cursor + CI. Local validation covered
+  `tests/test_live_performance_report.py`, py_compile for touched files,
+  `git diff --check`, and a touched-file silent-handling scan.
+- VPS5 pulled from `652b019e` to `dc0ad4dd` without bot restart because the
+  deployed change was read-only report tooling. The five configured bots were
+  left running.
+- A bounded current-segment performance report at `dc0ad4dd` completed with
+  `ok=true`, `include_rotated=false`, `event_tail_lines=500`,
+  `event_tail_limited_files=6`, `event_tail_methods.seek_tail=6`,
+  `records_total=2389`, and `files_scanned=6`. A 5-minute smoke rerun completed
+  with `ok=true`, `hard_failures=0`, clean tracked repository state, all five
+  configured bots matched, no failed remote calls, and no failed
+  account-critical remote calls. An attempted all-rotated performance report
+  remained too slow because many compressed rotated segments still had to be
+  opened; the next slice should add an explicit newest-segment file-count bound
+  for smoke/debug reports.
 - Repository pulled through PR #924 at `652b019e`.
 - PR #924 added aggregate startup phase timing counters to
   `live-performance-report` `startup_readiness`, exposing bounded phase counts

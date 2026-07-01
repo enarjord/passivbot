@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -3024,6 +3025,8 @@ def test_live_performance_report_cli_event_tail_lines(tmp_path, capsys):
             "--compact",
             "--event-tail-lines",
             "1",
+            "--max-event-files",
+            "1",
         ]
     )
 
@@ -3033,6 +3036,9 @@ def test_live_performance_report_cli_event_tail_lines(tmp_path, capsys):
     assert out["event_window"]["event_tail_lines"] == 1
     assert out["event_window"]["event_tail_limited_files"] == 1
     assert out["event_window"]["event_tail_methods"] == {"seek_tail": 1}
+    assert out["event_window"]["max_event_files"] == 1
+    assert out["event_window"]["event_file_limit_scope"] == "global"
+    assert out["event_window"]["event_files_skipped_by_limit"] == 0
 
 
 def test_live_performance_report_cli_rejects_negative_event_tail_lines(capsys):
@@ -3044,6 +3050,92 @@ def test_live_performance_report_cli_rejects_negative_event_tail_lines(capsys):
         raise AssertionError("negative --event-tail-lines must be rejected")
 
     assert "--event-tail-lines must be >= 0" in capsys.readouterr().err
+
+
+def test_live_performance_report_max_event_files_prefers_current_then_recent(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    old_rotated = events_dir / "2026-06-25T00-00-00.ndjson"
+    new_rotated = events_dir / "2026-06-26T00-00-00.ndjson"
+    current = events_dir / "current.ndjson"
+    _write_ndjson(
+        old_rotated,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=1,
+                ts=1000,
+                ids={"cycle_id": "cy_old"},
+                data={"elapsed_ms": 1000},
+            )
+        ],
+    )
+    _write_ndjson(
+        new_rotated,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=2,
+                ts=2000,
+                ids={"cycle_id": "cy_new"},
+                data={"elapsed_ms": 2000},
+            )
+        ],
+    )
+    _write_ndjson(
+        current,
+        [
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=3000,
+                ids={"cycle_id": "cy_current"},
+                data={"elapsed_ms": 3000},
+            )
+        ],
+    )
+    os.utime(old_rotated, (1000, 1000))
+    os.utime(new_rotated, (2000, 2000))
+    os.utime(current, (1500, 1500))
+
+    report = build_live_performance_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        max_event_files=2,
+    )
+
+    assert report["ok"] is True
+    assert report["files"] == [
+        str(current),
+        str(new_rotated),
+    ]
+    assert report["files_scanned"] == 2
+    assert report["records_total"] == 2
+    assert report["event_window"] == {
+        "enabled": False,
+        "since_ms": None,
+        "until_ms": None,
+        "events_considered": 0,
+        "events_skipped_before": 0,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+        "max_event_files": 2,
+        "event_file_limit_scope": "global",
+        "event_files_before_limit": 3,
+        "event_files_skipped_by_limit": 1,
+        "event_file_limit_order": "current_then_recent_mtime",
+    }
+    assert report["file_discovery"]["event_segments"] == 3
+
+
+def test_live_performance_report_cli_rejects_negative_max_event_files(capsys):
+    try:
+        live_performance_report.main(["monitor", "--max-event-files", "-1"])
+    except SystemExit as exc:
+        assert exc.code == 2
+    else:
+        raise AssertionError("negative --max-event-files must be rejected")
+
+    assert "--max-event-files must be >= 0" in capsys.readouterr().err
 
 
 def test_live_performance_report_redacts_missing_root_paths():

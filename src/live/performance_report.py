@@ -226,6 +226,29 @@ def _open_text(path: Path):
     return open(path, "r", encoding="utf-8")
 
 
+def _event_file_mtime_ms(path: Path) -> int:
+    try:
+        return int(path.stat().st_mtime * 1000)
+    except OSError:
+        return -1
+
+
+def _recent_event_file_sort_key(path: Path) -> tuple[int, int, str, str]:
+    return (
+        0 if path.name == "current.ndjson" else 1,
+        -_event_file_mtime_ms(path),
+        str(path.parent),
+        path.name,
+    )
+
+
+def _limit_recent_event_files(files: list[Path], max_event_files: int) -> tuple[list[Path], int]:
+    if max_event_files <= 0 or len(files) <= max_event_files:
+        return files, 0
+    ordered = sorted(files, key=_recent_event_file_sort_key)
+    return ordered[:max_event_files], len(ordered) - max_event_files
+
+
 def _record_ts(row: dict[str, Any]) -> int | None:
     try:
         return int(row.get("ts"))
@@ -3181,6 +3204,7 @@ def build_live_performance_report(
     until_ms: int | None = None,
     include_rotated: bool = False,
     event_tail_lines: int = 0,
+    max_event_files: int = 0,
     group_limit: int = GROUP_LIMIT,
     bot_filters: list[str] | tuple[str, ...] | set[str] | None = None,
     exchange_filters: list[str] | tuple[str, ...] | set[str] | None = None,
@@ -3196,6 +3220,7 @@ def build_live_performance_report(
         raise ValueError("since_ms must be <= until_ms")
     window_enabled = since_filter is not None or until_filter is not None
     max_event_tail_lines = max(0, int(event_tail_lines))
+    max_event_file_count = max(0, int(max_event_files))
     event_window = {
         "enabled": bool(window_enabled),
         "since_ms": since_filter,
@@ -3215,6 +3240,16 @@ def build_live_performance_report(
                 "event_tail_skipped_bytes": 0,
                 "event_tail_line_numbers_exact": True,
                 "event_tail_methods": {},
+            }
+        )
+    if max_event_file_count:
+        event_window.update(
+            {
+                "max_event_files": int(max_event_file_count),
+                "event_file_limit_scope": "global",
+                "event_files_before_limit": 0,
+                "event_files_skipped_by_limit": 0,
+                "event_file_limit_order": "current_then_recent_mtime",
             }
         )
     bot_filter_set = _string_filter(bot_filters)
@@ -3242,6 +3277,13 @@ def build_live_performance_report(
         )
         files = discovery.files
         file_discovery = discovery.to_dict()
+        if max_event_file_count:
+            event_window["event_files_before_limit"] = len(files)
+            files, skipped_by_file_limit = _limit_recent_event_files(
+                files,
+                max_event_file_count,
+            )
+            event_window["event_files_skipped_by_limit"] = int(skipped_by_file_limit)
     except FileNotFoundError as exc:
         files = []
         issues.append(
@@ -3474,7 +3516,7 @@ def build_live_performance_report(
             group_limit=group_limit,
         ),
     }
-    if window_enabled or max_event_tail_lines:
+    if window_enabled or max_event_tail_lines or max_event_file_count:
         report["event_window"] = event_window
     if filters["enabled"]:
         report["filters"] = filters
