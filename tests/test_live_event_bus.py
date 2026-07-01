@@ -848,6 +848,52 @@ def test_console_format_summarizes_rust_return():
     assert format_console_event(event) == "[rust] succeeded cycle=cy_6 orders=4 elapsed=17ms"
 
 
+def test_console_format_summarizes_forager_selection():
+    event = LiveEvent(
+        EventTypes.FORAGER_SELECTION,
+        status="succeeded",
+        cycle_id="cy_forager",
+        pside="long",
+        reason_code="rust_orchestrator_selection",
+        data={
+            "candidate_count": 40,
+            "eligible_count": 33,
+            "selected_count": 3,
+            "selected_symbols": [
+                "BTC/USDT:USDT",
+                "ETH/USDT:USDT",
+                "SOL/USDT:USDT",
+            ],
+            "incumbent_symbols": ["BTC/USDT:USDT"],
+            "slots_to_fill": 1,
+            "max_n_positions": 3,
+            "feature_unavailable_count": 7,
+            "volatility_dropped_count": 5,
+            "max_age_ms": 180_000,
+            "fetch_budget": 4,
+            "hysteresis_event_count": 2,
+            "source": "rust_orchestrator",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[forager] succeeded cycle=cy_forager selected=3/33/40 slots=1/3 "
+        "unavailable=7 volatility_dropped=5 "
+        "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
+        "incumbents=BTC/USDT:USDT max_age=180s fetch_budget=4 "
+        "hysteresis_events=2 source=rust_orchestrator pside=long "
+        "reason=rust_orchestrator_selection"
+    )
+
+
+def test_forager_selection_console_route_is_throttled():
+    route = DEFAULT_ROUTES[EventTypes.FORAGER_SELECTION]
+
+    assert route.console is True
+    assert route.text is True
+    assert route.throttle_interval_ms == 5 * 60 * 1000
+
+
 def test_console_format_summarizes_hsl_status_distance_to_red():
     event = LiveEvent(
         EventTypes.HSL_STATUS,

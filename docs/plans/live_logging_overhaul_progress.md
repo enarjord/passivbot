@@ -19,20 +19,19 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `675e93ba` after PR #962, `Keep waiting trailing diagnostics visible`.
+- `f54c92147` after PR #963, `Refine trailing selected mode labels`.
 
 Current logging-overhaul head:
 
-- `675e93ba` after PR #962, `Keep waiting trailing diagnostics visible`.
+- `f54c92147` after PR #963, `Refine trailing selected mode labels`.
 
 Current work:
 
-- Branch `codex/v8-trailing-selected-mode-labels` refines the
-  trailing-martingale `selected_mode` label after VPS5 showed a live
-  `close_auto_reduce_wel_long` diagnostic being generically labeled as `grid`.
-  The follow-up keeps the diagnostic behavior from PR #962 but classifies
-  `auto_reduce`, `unstuck`, explicit `grid`, `trailing`, `none`, and `other`
-  separately for clearer operator console output.
+- Branch `codex/v8-forager-selection-console` projects existing
+  `forager.selection` events into the opt-in live event console/text sinks with
+  a compact, throttled operator summary. This continues the migration of useful
+  legacy console output into the structured event stream without changing
+  forager ranking or entry behavior.
 
 Current review gate:
 
@@ -62,6 +61,24 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #963 at `f54c92147`.
+- PR #963 refined the trailing `selected_mode` classifier so
+  `close_auto_reduce_wel_long` reports `auto_reduce` instead of generic `grid`.
+  It merged after Claude and Hermes approved with CI green.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, GateIO, and OKX exited within the longer
+  graceful window; Kucoin still required SIGTERM after the full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=f54c9214`, `account_critical_remote_calls.failed=0`,
+  and `logs.hard_matches=0`. The focused follow-up report showed
+  `remote_calls.failed=0`; remaining attention was non-hard active HSL replay,
+  Hyperliquid EMA-unavailable diagnostics for cache-only stock symbols, staged
+  refresh progress, and shutdown-slow history from the restart.
+- The deployed Hyperliquid `XYZ-MU/USDC:USDC` long `trailing.status` event now
+  reports `selected_mode=auto_reduce` for
+  `order_type=close_auto_reduce_wel_long`, with threshold/retracement fields
+  still present and `triggered=false`.
 - Repository pulled through PR #962 at `675e93ba`.
 - PR #962 kept trailing-martingale diagnostics visible when the current next
   order is grid/non-trailing, exposed `selected_mode` in `trailing.status`, and
