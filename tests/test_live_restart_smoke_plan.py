@@ -112,6 +112,30 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "does_not_start_passivbot_live" in report["warnings"]
 
 
+def test_live_restart_smoke_plan_can_focus_smoke_sections(tmp_path):
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    report = build_live_restart_smoke_plan(
+        supervisor_config,
+        smoke_sections=["fill_refresh", "risk_events"],
+    )
+
+    assert report["inputs"]["smoke_sections"] == ["fill_refresh", "risk_events"]
+    assert "--section fill_refresh" in report["smoke_report"]["command"]
+    assert "--section risk_events" in report["smoke_report"]["command"]
+    assert report["smoke_report"]["execute"] is False
+
+
 def test_live_restart_smoke_plan_redacts_and_bounds_configured_commands(tmp_path):
     supervisor_config = tmp_path / "bots.yaml"
     long_secret = "S" * 600
@@ -451,6 +475,40 @@ def test_live_restart_smoke_plan_can_plan_summary_or_full_smoke_projection(
     full_report = json.loads(capsys.readouterr().out)
     assert "--summary" not in full_report["smoke_report"]["command"]
     assert "--brief" not in full_report["smoke_report"]["command"]
+
+
+def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [
+                str(supervisor_config),
+                "--smoke-section",
+                "fill_refresh",
+                "--smoke-section",
+                "hsl_replay",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["smoke_sections"] == ["fill_refresh", "hsl_replay"]
+    assert "--section fill_refresh" in report["smoke_report"]["command"]
+    assert "--section hsl_replay" in report["smoke_report"]["command"]
+    assert "--brief" in report["smoke_report"]["command"]
 
 
 def test_live_restart_smoke_plan_cli_rejects_execute(capsys):
