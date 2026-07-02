@@ -3142,6 +3142,97 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
 
 
+def test_live_smoke_report_summarizes_hsl_cooldown_active_status(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.status",
+                seq=1,
+                ts=1000,
+                exchange="gateio",
+                user="gateio_01",
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                reason_code="cooldown_active",
+                status="degraded",
+                data={
+                    "tier": "red",
+                    "cooldown_remaining_seconds": 153446.467,
+                    "cooldown_until_ms": 1783176761357,
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.status",
+                seq=2,
+                ts=2000,
+                exchange="gateio",
+                user="gateio_01",
+                symbol="NEAR/USDT:USDT",
+                pside="long",
+                reason_code="green",
+                data={
+                    "signal_mode": "coin",
+                    "tier": "green",
+                    "dist_to_red": 0.02,
+                    "drawdown_score": 0.08,
+                    "red_threshold": 0.10,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is True
+    assert report["risk_events"]["hsl_status"]["tier_counts"] == {
+        "green": 1,
+        "red": 1,
+    }
+    assert report["risk_events"]["hsl_status"]["cooldown_active"] == [
+        {
+            "bot": "gateio/gateio_01",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "tier": "red",
+            "reason_code": "cooldown_active",
+            "cooldown_remaining_seconds": 153446.467,
+            "cooldown_until_ms": 1783176761357,
+            "latest_ts": 1000,
+        }
+    ]
+    assert summary["risk_events"]["hsl_status"]["cooldown_active"] == [
+        {
+            "bot": "gateio/gateio_01",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "tier": "red",
+            "reason_code": "cooldown_active",
+            "cooldown_remaining_seconds": 153446.467,
+            "cooldown_until_ms": 1783176761357,
+            "latest_ts": 1000,
+        }
+    ]
+    assert brief["risk_events"]["hsl_status"]["cooldown_active"] == [
+        {
+            "bot": "gateio/gateio_01",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "tier": "red",
+            "reason_code": "cooldown_active",
+            "cooldown_remaining_seconds": 153446.467,
+            "cooldown_until_ms": 1783176761357,
+            "latest_ts": 1000,
+        }
+    ]
+    assert brief["risk_events"]["hsl_status"]["cooldown_active_truncated"] == 0
+    assert brief["problem_events"]["event_types"] == {"hsl.status": 1}
+
+
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 365000)
     _write_ndjson(
