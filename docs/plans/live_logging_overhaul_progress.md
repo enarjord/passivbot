@@ -5757,6 +5757,31 @@ VPS5 deployment status:
 - Expected validation: focused HSL cooldown smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #995 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `1a39d587`. The post-deploy 10-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked
+  repository state, and active HSL cooldown targets visible in
+  `risk_events.hsl_status.cooldown_active`.
+
+### Draft Slice: Staged Readiness Surface Smoke Summary
+
+- Branch: `codex/v8-smoke-staged-surface-summary`.
+- Scope: read-only smoke-report projection for existing staged-readiness
+  `cycle.degraded` events.
+- Triggering evidence: the post-PR #995 VPS5 smoke showed
+  `staged_readiness.total=1` and `latest_missing_surface_total=1`, but the
+  brief output did not name which surface was missing. A focused
+  `live-event-query` showed KuCoin deferred Rust order calculation with
+  `missing=["completed_candles"]` and
+  `defer_reason=staged_planner_inputs_not_fresh`.
+- Intended result: include bounded missing/invalid staged-readiness surface
+  maps in full, summary, and brief smoke-report output. This changes only
+  report output; it does not add event producers, exchange calls, readiness
+  gates, staged execution behavior, order logic, risk logic, monitor writes,
+  console routing, or trading behavior.
+- Expected validation: focused staged-readiness smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

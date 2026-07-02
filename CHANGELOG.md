@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now names staged-readiness missing and
+  invalid surfaces in summary and brief output, so issues like stale
+  `completed_candles` are visible without a separate event query.
 - `passivbot tool live-smoke-report` now lists active HSL cooldown targets in
   concise risk summaries, so RED cooldown symbols are visible even when they do
   not have current drawdown-distance metrics.

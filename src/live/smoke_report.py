@@ -2197,6 +2197,12 @@ def _summarize_staged_readiness_health(
             int(group.get("latest_invalid_surface_count") or 0)
             for group in groups.values()
         ),
+        "latest_missing_surfaces": _sum_counter_maps(
+            group.get("latest_missing_surfaces") for group in groups.values()
+        ),
+        "latest_invalid_surfaces": _sum_counter_maps(
+            group.get("latest_invalid_surfaces") for group in groups.values()
+        ),
         "groups": compact_groups,
     }
 
@@ -5528,6 +5534,8 @@ def _summary_limited_groups(
             or None,
             "latest_missing_surface_total": summary.get("latest_missing_surface_total"),
             "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
+            "latest_missing_surfaces": summary.get("latest_missing_surfaces") or None,
+            "latest_invalid_surfaces": summary.get("latest_invalid_surfaces") or None,
             "latest_queue_depth_total": summary.get("latest_queue_depth_total"),
             "latest_queue_unfinished_total": summary.get(
                 "latest_queue_unfinished_total"
@@ -6231,6 +6239,21 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         value = ema_readiness_health.get(key)
         if isinstance(value, dict) and value:
             ema_readiness_brief[key] = value
+    staged_readiness_brief = {
+        "total": _count_value(staged_readiness_health.get("total")),
+        "bots": _count_value(staged_readiness_health.get("bots")),
+        "latest_missing_surface_total": _count_value(
+            staged_readiness_health.get("latest_missing_surface_total")
+        ),
+        "latest_invalid_surface_total": _count_value(
+            staged_readiness_health.get("latest_invalid_surface_total")
+        ),
+        "event_types": staged_readiness_health.get("event_types") or {},
+    }
+    for key in ("latest_missing_surfaces", "latest_invalid_surfaces"):
+        value = staged_readiness_health.get(key)
+        if isinstance(value, dict) and value:
+            staged_readiness_brief[key] = value
     return {
         "ok": bool(report.get("ok")),
         "attention": bool(report.get("attention")),
@@ -6386,17 +6409,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "event_types": exchange_config_refresh_health.get("event_types") or {},
         },
-        "staged_readiness": {
-            "total": _count_value(staged_readiness_health.get("total")),
-            "bots": _count_value(staged_readiness_health.get("bots")),
-            "latest_missing_surface_total": _count_value(
-                staged_readiness_health.get("latest_missing_surface_total")
-            ),
-            "latest_invalid_surface_total": _count_value(
-                staged_readiness_health.get("latest_invalid_surface_total")
-            ),
-            "event_types": staged_readiness_health.get("event_types") or {},
-        },
+        "staged_readiness": staged_readiness_brief,
         "event_pipeline": {
             "total": _count_value(event_pipeline_health.get("total")),
             "bots": _count_value(event_pipeline_health.get("bots")),
