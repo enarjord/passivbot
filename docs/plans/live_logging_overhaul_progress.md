@@ -3085,7 +3085,24 @@ VPS5 deployment status:
 
 ## Current Work
 
-### In Progress: HSL Replay ETA Performance Report
+### In Progress: HSL Replay ETA Smoke Report
+
+- Branch: `codex/v8-smoke-hsl-replay-eta`.
+- Scope: read-only live smoke report projection and tests.
+- Result: `live-smoke-report` derives the same HSL replay remaining row and ETA
+  estimates from existing sanitized `hsl.replay.*` monitor events, and exposes
+  max active primary remaining rows/time in the compact brief summary. The full
+  `hsl_replay_health` groups keep conservative dense estimates plus
+  required-pair estimates when available.
+- Expected validation: focused and full live-smoke-report tests,
+  py_compile, `git diff --check`, and an added-line silent-handling scan. No
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, process signaling, smoke verdict policy, order/risk
+  logic, or trading behavior should change.
+
+## Merged Slices
+
+### PR #979: HSL Replay ETA Performance Report
 
 - Branch: `codex/v8-hsl-replay-eta-report`.
 - Scope: read-only live performance report projection and tests.
@@ -3094,13 +3111,15 @@ VPS5 deployment status:
   keeps the existing conservative dense pair-row estimate and adds a
   required-pair estimate when `required_pairs` is present, using
   `rows_per_second` only when the event already supplies a positive finite rate.
-- Expected validation: focused and full live-performance-report tests,
-  py_compile, `git diff --check`, and an added-line silent-handling scan. No
-  event producers, exchange calls, cache mutation, readiness gates, console
-  routing, monitor writes, process signaling, smoke verdict policy, order/risk
-  logic, or trading behavior should change.
-
-## Merged Slices
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered the full live-performance-report test file,
+  py_compile, `git diff --check`, an added-line silent-handling scan, and a
+  local compact CLI smoke.
+- VPS5 evidence: deployed to `v8` at `b35becbc` without bot restart because the
+  change is read-only tooling. Smoke stayed hard-green with all five configured
+  bots running. The deployed performance report showed new remaining/ETA fields
+  for active Binance, GateIO, and OKX HSL pair replay; Kucoin was still in
+  price-history symbol fetch, so no row-rate ETA was available there.
 
 ### PR #976: Trailing Status Risk Activity Report
 

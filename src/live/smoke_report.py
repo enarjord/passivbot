@@ -2897,11 +2897,42 @@ def _hsl_observed_rows(data: dict[str, Any]) -> int | None:
     return None
 
 
+def _hsl_replay_remaining_rows(
+    *,
+    estimated_work: int | None,
+    observed_rows: int | None,
+) -> int | None:
+    if estimated_work is None or observed_rows is None:
+        return None
+    return max(0, int(estimated_work) - int(observed_rows))
+
+
+def _hsl_replay_eta_ms(
+    *,
+    remaining_rows: int | None,
+    rows_per_second: Any,
+) -> int | None:
+    if remaining_rows is None:
+        return None
+    try:
+        rate = float(rows_per_second)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(rate) or rate <= 0.0:
+        return None
+    return int(round(1000.0 * float(remaining_rows) / rate))
+
+
 def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
     timeline_rows = _non_negative_int(data.get("timeline_rows"))
     pairs = _non_negative_int(data.get("pairs"))
+    required_pairs = _non_negative_int(data.get("required_pairs"))
+    held_pairs = _non_negative_int(data.get("held_pairs"))
+    cooldown_pairs = _non_negative_int(data.get("cooldown_pairs"))
     observed_rows = _hsl_observed_rows(data)
     out: dict[str, Any] = {}
+    dense_work: int | None = None
+    required_work: int | None = None
     if timeline_rows is not None and pairs is not None:
         dense_work = int(timeline_rows) * int(pairs)
         out["estimated_dense_pair_row_work"] = dense_work
@@ -2910,6 +2941,57 @@ def _hsl_replay_derived(data: dict[str, Any]) -> dict[str, Any]:
                 min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work))),
                 3,
             )
+    if timeline_rows is not None and required_pairs is not None:
+        required_work = int(timeline_rows) * int(required_pairs)
+        out["estimated_required_pair_row_work"] = required_work
+        if observed_rows is not None and required_work > 0:
+            out["observed_required_work_pct"] = round(
+                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(required_work))),
+                3,
+            )
+    if timeline_rows is not None and held_pairs is not None:
+        out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
+    if timeline_rows is not None and cooldown_pairs is not None:
+        out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
+    if observed_rows is not None:
+        out["observed_applied_rows"] = int(observed_rows)
+    dense_remaining_rows = _hsl_replay_remaining_rows(
+        estimated_work=dense_work,
+        observed_rows=observed_rows,
+    )
+    if dense_remaining_rows is not None:
+        out["estimated_dense_remaining_rows"] = dense_remaining_rows
+        dense_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=dense_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if dense_remaining_ms is not None:
+            out["estimated_dense_remaining_ms"] = dense_remaining_ms
+    required_remaining_rows = _hsl_replay_remaining_rows(
+        estimated_work=required_work,
+        observed_rows=observed_rows,
+    )
+    if required_remaining_rows is not None:
+        out["estimated_required_remaining_rows"] = required_remaining_rows
+        required_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=required_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if required_remaining_ms is not None:
+            out["estimated_required_remaining_ms"] = required_remaining_ms
+    primary_remaining_rows = (
+        required_remaining_rows
+        if required_remaining_rows is not None
+        else dense_remaining_rows
+    )
+    if primary_remaining_rows is not None:
+        out["estimated_remaining_rows"] = primary_remaining_rows
+        primary_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=primary_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if primary_remaining_ms is not None:
+            out["estimated_remaining_ms"] = primary_remaining_ms
     for source_key, target_key in (
         ("elapsed_s", "latest_elapsed_ms"),
         ("history_build_elapsed_s", "history_build_elapsed_ms"),
@@ -5587,6 +5669,8 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
 
     max_active_latest_elapsed_ms: int | None = None
     max_active_latest_event_age_ms: int | None = None
+    max_active_estimated_remaining_rows: int | None = None
+    max_active_estimated_remaining_ms: int | None = None
     max_completed_elapsed_ms: int | None = None
     active_stage_counts: Counter[str] = Counter()
 
@@ -5643,6 +5727,29 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
                     max_active_latest_elapsed_ms,
                     int(elapsed_ms),
                 )
+        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
+        estimated_remaining_rows = _non_negative_int(
+            derived.get("estimated_remaining_rows")
+        )
+        if estimated_remaining_rows is not None:
+            if max_active_estimated_remaining_rows is None:
+                max_active_estimated_remaining_rows = int(estimated_remaining_rows)
+            else:
+                max_active_estimated_remaining_rows = max(
+                    max_active_estimated_remaining_rows,
+                    int(estimated_remaining_rows),
+                )
+        estimated_remaining_ms = _non_negative_int(
+            derived.get("estimated_remaining_ms")
+        )
+        if estimated_remaining_ms is not None:
+            if max_active_estimated_remaining_ms is None:
+                max_active_estimated_remaining_ms = int(estimated_remaining_ms)
+            else:
+                max_active_estimated_remaining_ms = max(
+                    max_active_estimated_remaining_ms,
+                    int(estimated_remaining_ms),
+                )
         data = latest.get("data") if isinstance(latest.get("data"), dict) else {}
         stage = data.get("stage")
         if isinstance(stage, str) and stage:
@@ -5652,6 +5759,14 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
         out["max_active_latest_elapsed_ms"] = int(max_active_latest_elapsed_ms)
     if max_active_latest_event_age_ms is not None:
         out["max_active_latest_event_age_ms"] = int(max_active_latest_event_age_ms)
+    if max_active_estimated_remaining_rows is not None:
+        out["max_active_estimated_remaining_rows"] = int(
+            max_active_estimated_remaining_rows
+        )
+    if max_active_estimated_remaining_ms is not None:
+        out["max_active_estimated_remaining_ms"] = int(
+            max_active_estimated_remaining_ms
+        )
     if max_completed_elapsed_ms is not None:
         out["max_completed_elapsed_ms"] = int(max_completed_elapsed_ms)
     if active_stage_counts:
