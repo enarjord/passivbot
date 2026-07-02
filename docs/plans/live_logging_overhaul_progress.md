@@ -5947,6 +5947,39 @@ VPS5 deployment status:
 - Expected validation: focused HSL replay smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #1002 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `433ec363`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. The new active rows clearly
+  exposed dense replay work still remaining while required replay work was
+  already complete. Follow-up evidence showed the aggregate
+  `max_active_estimated_remaining_rows/ms` fields still reflected only the
+  primary required estimate and could therefore remain zero during active dense
+  replay.
+
+### Draft Slice: HSL Replay Dense Max Aggregates In Brief Smoke
+
+- Branch: `codex/v8-smoke-hsl-replay-dense-aggregates`.
+- Scope: read-only brief smoke-report projection over existing
+  `hsl_replay_health.groups` and `latest.derived` fields.
+- Triggering evidence: after PR #1002 deployment, VPS5 brief smoke showed four
+  active long-running HSL pair-replay workers. Each active row had
+  nonzero `estimated_dense_remaining_rows/ms`, but the top-level
+  `max_active_estimated_remaining_rows=0` and
+  `max_active_estimated_remaining_ms=0` because those legacy aggregate fields
+  use the primary required-position estimate.
+- Intended result: keep the legacy primary max fields for compatibility, and
+  add dense-vs-required aggregate max fields:
+  `max_active_estimated_dense_remaining_rows`,
+  `max_active_estimated_dense_remaining_ms`,
+  `max_active_estimated_required_remaining_rows`, and
+  `max_active_estimated_required_remaining_ms`. This changes only report
+  output; it does not add event producers, exchange calls, HSL replay behavior,
+  startup gating, order logic, risk logic, monitor writes, console routing, or
+  trading behavior.
+- Expected validation: focused HSL replay smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

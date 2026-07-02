@@ -3852,6 +3852,10 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         "max_active_latest_event_age_ms": 360000,
         "max_active_estimated_remaining_rows": 800020,
         "max_active_estimated_remaining_ms": 2512507,
+        "max_active_estimated_dense_remaining_rows": 43201 * 29 - 64000,
+        "max_active_estimated_dense_remaining_ms": 3733584,
+        "max_active_estimated_required_remaining_rows": 43201 * 20 - 64000,
+        "max_active_estimated_required_remaining_ms": 2512507,
         "max_completed_elapsed_ms": 1623400,
         "active_stage_counts": {"pair_replay": 1},
         "active": [

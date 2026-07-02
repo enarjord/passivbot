@@ -6553,10 +6553,20 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
     if not isinstance(groups, list):
         return out
 
+    def update_max(current: int | None, raw: Any) -> int | None:
+        value = _non_negative_int(raw)
+        if value is None:
+            return current
+        return int(value) if current is None else max(int(current), int(value))
+
     max_active_latest_elapsed_ms: int | None = None
     max_active_latest_event_age_ms: int | None = None
     max_active_estimated_remaining_rows: int | None = None
     max_active_estimated_remaining_ms: int | None = None
+    max_active_estimated_dense_remaining_rows: int | None = None
+    max_active_estimated_dense_remaining_ms: int | None = None
+    max_active_estimated_required_remaining_rows: int | None = None
+    max_active_estimated_required_remaining_ms: int | None = None
     max_completed_elapsed_ms: int | None = None
     active_stage_counts: Counter[str] = Counter()
 
@@ -6594,6 +6604,22 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
                     int(elapsed_ms),
                 )
         derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
+        max_active_estimated_dense_remaining_rows = update_max(
+            max_active_estimated_dense_remaining_rows,
+            derived.get("estimated_dense_remaining_rows"),
+        )
+        max_active_estimated_dense_remaining_ms = update_max(
+            max_active_estimated_dense_remaining_ms,
+            derived.get("estimated_dense_remaining_ms"),
+        )
+        max_active_estimated_required_remaining_rows = update_max(
+            max_active_estimated_required_remaining_rows,
+            derived.get("estimated_required_remaining_rows"),
+        )
+        max_active_estimated_required_remaining_ms = update_max(
+            max_active_estimated_required_remaining_ms,
+            derived.get("estimated_required_remaining_ms"),
+        )
         estimated_remaining_rows = _non_negative_int(
             derived.get("estimated_remaining_rows")
         )
@@ -6632,6 +6658,22 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
     if max_active_estimated_remaining_ms is not None:
         out["max_active_estimated_remaining_ms"] = int(
             max_active_estimated_remaining_ms
+        )
+    if max_active_estimated_dense_remaining_rows is not None:
+        out["max_active_estimated_dense_remaining_rows"] = int(
+            max_active_estimated_dense_remaining_rows
+        )
+    if max_active_estimated_dense_remaining_ms is not None:
+        out["max_active_estimated_dense_remaining_ms"] = int(
+            max_active_estimated_dense_remaining_ms
+        )
+    if max_active_estimated_required_remaining_rows is not None:
+        out["max_active_estimated_required_remaining_rows"] = int(
+            max_active_estimated_required_remaining_rows
+        )
+    if max_active_estimated_required_remaining_ms is not None:
+        out["max_active_estimated_required_remaining_ms"] = int(
+            max_active_estimated_required_remaining_ms
         )
     if max_completed_elapsed_ms is not None:
         out["max_completed_elapsed_ms"] = int(max_completed_elapsed_ms)
