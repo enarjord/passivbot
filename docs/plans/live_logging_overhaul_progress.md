@@ -5834,6 +5834,32 @@ VPS5 deployment status:
 - Expected validation: focused EMA-readiness smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #998 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `d5c239e9`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. The new bounded EMA symbol
+  fields were visible in VPS5 brief smoke output.
+
+### Draft Slice: Remote-Call Latency Samples In Brief Smoke
+
+- Branch: `codex/v8-smoke-remote-latency-brief`.
+- Scope: read-only brief smoke-report projection over existing
+  `remote_call_health.groups`.
+- Triggering evidence: post-PR #998 VPS5 brief smoke showed healthy remote-call
+  counts but hid latency details, while summary output showed slow surfaces
+  such as account-critical open-orders calls above 16s and candle remote fetch
+  groups above 30s. Operators had to run the larger summary to see which
+  bot/surface was slow.
+- Intended result: add a bounded `slowest` list to brief `remote_calls` and
+  `account_critical_remote_calls`, containing bot, kind/surface, count,
+  failed/throttled counts when nonzero, max/p95/latest elapsed milliseconds,
+  and latest symbol when present. This changes only report output; it does not
+  add event producers, exchange calls, remote-call behavior, readiness gates,
+  order logic, risk logic, monitor writes, console routing, or trading
+  behavior.
+- Expected validation: focused brief smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

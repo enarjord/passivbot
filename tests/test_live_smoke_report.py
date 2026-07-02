@@ -1347,6 +1347,18 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "authoritative_state_fetch": 1
     }
     assert brief["remote_calls"]["failed_surfaces"] == {"balance": 1}
+    assert brief["remote_calls"]["slowest"] == [
+        {
+            "bot": "binance/binance_01",
+            "kind": "authoritative_state_fetch",
+            "surface": "balance",
+            "count": 1,
+            "failed": 1,
+            "max_ms": 5000,
+            "p95_ms": 5000,
+            "latest_elapsed_ms": 5000,
+        }
+    ]
     assert brief["account_critical_remote_calls"]["total"] == 1
     assert brief["account_critical_remote_calls"]["failed"] == 1
     assert brief["account_critical_remote_calls"]["failed_reason_codes"] == {
@@ -1361,6 +1373,18 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert brief["account_critical_remote_calls"]["failed_surfaces"] == {
         "balance": 1
     }
+    assert brief["account_critical_remote_calls"]["slowest"] == [
+        {
+            "bot": "binance/binance_01",
+            "kind": "authoritative_state_fetch",
+            "surface": "balance",
+            "count": 1,
+            "failed": 1,
+            "max_ms": 5000,
+            "p95_ms": 5000,
+            "latest_elapsed_ms": 5000,
+        }
+    ]
     assert brief["ema_readiness"] == {
         "total": 1,
         "bots": 1,

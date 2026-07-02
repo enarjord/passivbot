@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes bounded slowest
+  remote-call latency samples, making slow exchange/account/candle surfaces
+  visible without dumping the full summary.
 - `passivbot tool live-smoke-report` now includes bounded EMA-readiness symbol
   samples by unavailable reason in summary and brief output, so operators can
   see which symbols are affected without a separate event query.
