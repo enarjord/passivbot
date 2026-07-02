@@ -2658,8 +2658,26 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
                 },
             ),
             _monitor_row(
-                event_type="risk.realized_loss_gate_blocked",
+                event_type="trailing.status",
                 seq=6,
+                ts=4300,
+                component="risk.trailing.status",
+                status="pending",
+                reason_code="trailing_status",
+                symbol="XLM/USDT:USDT",
+                pside="long",
+                data={
+                    "threshold_pct": 0.031,
+                    "threshold_price": 0.20123,
+                    "retracement_pct": 0.012,
+                    "retracement_price": 0.19876,
+                    "projected_retracement_price": 0.19765,
+                    "secret_marker": "trailing-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="risk.realized_loss_gate_blocked",
+                seq=7,
                 ts=4500,
                 component="risk.realized_loss_gate",
                 status="deferred",
@@ -2676,7 +2694,7 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
             ),
             _monitor_row(
                 event_type="hsl.replay.progress",
-                seq=7,
+                seq=8,
                 ts=5000,
                 component="risk.hsl.replay",
                 reason_code="replay_progress",
@@ -2695,13 +2713,14 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     }
     rendered = json.dumps(risk, sort_keys=True)
 
-    assert risk["total_events"] == 6
+    assert risk["total_events"] == 7
     assert risk["event_types"] == {
         "hsl.red_finalized_without_order": 1,
         "hsl.red_triggered": 1,
         "hsl.status": 1,
         "risk.mode_changed": 1,
         "risk.realized_loss_gate_blocked": 1,
+        "trailing.status": 1,
         "unstuck.selection": 1,
     }
     assert "hsl.replay.progress" not in risk["event_types"]
@@ -2719,6 +2738,10 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
         "BTC/USDT:USDT"
     ]
     assert groups["unstuck.selection"]["symbols_sample"] == ["ETH/USDT:USDT"]
+    assert groups["trailing.status"]["symbols_sample"] == ["XLM/USDT:USDT"]
+    assert groups["trailing.status"]["statuses"] == {"pending": 1}
+    assert groups["trailing.status"]["reason_codes"] == {"trailing_status": 1}
+    assert groups["trailing.status"]["psides"] == {"long": 1}
     assert groups["risk.realized_loss_gate_blocked"]["symbols_sample"] == ["SOL/USDT:USDT"]
     assert groups["risk.realized_loss_gate_blocked"]["statuses"] == {"deferred": 1}
     assert "98765.43" not in rendered
@@ -2729,7 +2752,11 @@ def test_live_performance_report_risk_activity_is_value_safe(tmp_path):
     assert "flat-secret" not in rendered
     assert "mode-secret" not in rendered
     assert "unstuck-secret" not in rendered
+    assert "trailing-secret" not in rendered
     assert "loss-gate-secret" not in rendered
+    assert "0.20123" not in rendered
+    assert "0.19876" not in rendered
+    assert "0.19765" not in rendered
     assert "9800" not in rendered
     assert "replay-secret" not in rendered
 

@@ -3085,20 +3085,21 @@ VPS5 deployment status:
 
 ## Current Work
 
-### In Progress: Smoke Execution Health
+### In Progress: Trailing Status Risk Activity Report
 
-- Branch: `codex/v8-smoke-execution-health`.
-- Scope: read-only smoke-report tooling and tests.
-- Result: `live-smoke-report` derives bounded `execution_health` from existing
-  `order_wave.*` and `execution.*` structured events, with concise `execution`
-  counters in brief output. The summary is intended to expose create/cancel
-  failures, rejections, ambiguous terminals, and confirmation timeouts without
-  opening full event streams.
-- Expected validation: focused live-smoke-report tests plus py_compile,
-  `git diff --check`, and an added-line silent-handling scan. No event
-  producers, exchange calls, cache mutation, readiness gates, console routing,
-  monitor writes, process signaling, smoke verdict policy, order/risk logic, or
-  trading behavior should change.
+- Branch: `codex/v8-live-performance-trailing-risk-activity`.
+- Scope: read-only live performance report projection and tests.
+- Result: `live-performance-report` includes existing `trailing.status` events
+  in the bounded `risk_activity` section, so trailing/waiting position state can
+  be found beside HSL and unstuck risk-state events without opening the full
+  event stream. The projection uses event-envelope labels and bounded symbol
+  samples only; threshold/retracement prices and detailed event payload values
+  remain out of the shareable report.
+- Expected validation: focused and full live-performance-report tests,
+  py_compile, `git diff --check`, and an added-line silent-handling scan. No
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, process signaling, smoke verdict policy, order/risk
+  logic, or trading behavior should change.
 
 ## Merged Slices
 
