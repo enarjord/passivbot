@@ -93,6 +93,7 @@ RISK_EVENT_GROUP_LIMIT = 20
 SHUTDOWN_EVENT_GROUP_LIMIT = 20
 PROBLEM_EVENT_GROUP_LIMIT = 20
 EMA_READINESS_GROUP_LIMIT = 20
+EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
@@ -1724,6 +1725,82 @@ def _reason_symbol_counts(value: Any) -> dict[str, int]:
     return dict(counts.most_common())
 
 
+def _summary_symbol_sample(value: Any, *, limit: int) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {}
+    count = int(_non_negative_int(value.get("count")) or 0)
+    raw_sample = value.get("sample")
+    sample: list[str] = []
+    if isinstance(raw_sample, list):
+        for symbol in raw_sample:
+            if symbol is None:
+                continue
+            safe_symbol = _redact_log_text(str(symbol), max_len=80)
+            if safe_symbol and safe_symbol not in sample:
+                sample.append(safe_symbol)
+            if len(sample) >= limit:
+                break
+    if count <= 0:
+        count = len(sample)
+    if count <= 0 and not sample:
+        return {}
+    return {
+        "count": count,
+        "sample": sample,
+        "truncated": max(0, count - len(sample)),
+    }
+
+
+def _reason_symbol_summaries(value: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(value, list):
+        return {}
+    summaries: dict[str, dict[str, Any]] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        reason = str(item.get("reason") or "unknown")
+        symbol_summary = _summary_symbol_sample(
+            item.get("symbols"),
+            limit=EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT,
+        )
+        if symbol_summary:
+            summaries[reason] = symbol_summary
+    return summaries
+
+
+def _sum_reason_symbol_summaries(values: Iterable[Any]) -> dict[str, dict[str, Any]]:
+    totals: dict[str, int] = defaultdict(int)
+    samples: dict[str, Counter[str]] = defaultdict(Counter)
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for reason, summary in value.items():
+            if not isinstance(summary, dict):
+                continue
+            key = str(reason)
+            totals[key] += int(_non_negative_int(summary.get("count")) or 0)
+            raw_sample = summary.get("sample")
+            if isinstance(raw_sample, list):
+                for symbol in raw_sample:
+                    if symbol is not None:
+                        safe_symbol = _redact_log_text(str(symbol), max_len=80)
+                        if safe_symbol:
+                            samples[key][safe_symbol] += 1
+    merged: dict[str, dict[str, Any]] = {}
+    for reason, count in sorted(totals.items(), key=lambda item: (-item[1], item[0])):
+        sample_summary = _symbol_sample(
+            samples.get(reason, Counter()),
+            limit=EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT,
+        )
+        sample = sample_summary.get("sample") if isinstance(sample_summary, dict) else []
+        merged[reason] = {
+            "count": int(count),
+            "sample": sample or [],
+            "truncated": max(0, int(count) - len(sample or [])),
+        }
+    return merged
+
+
 def _candidate_error_type_counts(value: Any) -> dict[str, int]:
     if not isinstance(value, list):
         return {}
@@ -1786,6 +1863,12 @@ def _ema_readiness_group(
         "unavailable_reason_counts": _reason_symbol_counts(
             payload.get("unavailable_reasons")
         ),
+        "candidate_reason_symbols": _reason_symbol_summaries(
+            payload.get("candidate_unavailable_groups")
+        ),
+        "unavailable_reason_symbols": _reason_symbol_summaries(
+            payload.get("unavailable_reasons")
+        ),
         "candidate_error_type_counts": _candidate_error_type_counts(
             payload.get("candidate_unavailable_groups")
         ),
@@ -1837,6 +1920,8 @@ def _merge_ema_readiness_group(
             "latest_optional_drop_count",
             "candidate_reason_counts",
             "unavailable_reason_counts",
+            "candidate_reason_symbols",
+            "unavailable_reason_symbols",
             "candidate_error_type_counts",
             "latest_ids",
             "latest_data",
@@ -1889,6 +1974,12 @@ def _summarize_ema_readiness_health(
         ),
         "latest_unavailable_reason_counts": _sum_counter_maps(
             group.get("unavailable_reason_counts") for group in groups.values()
+        ),
+        "latest_candidate_reason_symbols": _sum_reason_symbol_summaries(
+            group.get("candidate_reason_symbols") for group in groups.values()
+        ),
+        "latest_unavailable_reason_symbols": _sum_reason_symbol_summaries(
+            group.get("unavailable_reason_symbols") for group in groups.values()
         ),
         "latest_candidate_error_type_counts": _sum_counter_maps(
             group.get("candidate_error_type_counts") for group in groups.values()
@@ -5693,6 +5784,14 @@ def _summary_limited_groups(
                 "latest_unavailable_reason_counts"
             )
             or None,
+            "latest_candidate_reason_symbols": summary.get(
+                "latest_candidate_reason_symbols"
+            )
+            or None,
+            "latest_unavailable_reason_symbols": summary.get(
+                "latest_unavailable_reason_symbols"
+            )
+            or None,
             "latest_candidate_error_type_counts": summary.get(
                 "latest_candidate_error_type_counts"
             )
@@ -6402,6 +6501,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     for key in (
         "latest_candidate_reason_counts",
         "latest_unavailable_reason_counts",
+        "latest_candidate_reason_symbols",
+        "latest_unavailable_reason_symbols",
         "latest_candidate_error_type_counts",
     ):
         value = ema_readiness_health.get(key)

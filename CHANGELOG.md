@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now includes bounded EMA-readiness symbol
+  samples by unavailable reason in summary and brief output, so operators can
+  see which symbols are affected without a separate event query.
 - `passivbot tool live-smoke-report` now summarizes HSL raw-red-pending
   targets in concise risk output, including bounded red-proximity and
   EMA-gap-to-red percentages without exposing raw drawdown internals.

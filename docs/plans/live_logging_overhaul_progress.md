@@ -5809,6 +5809,31 @@ VPS5 deployment status:
 - Expected validation: focused raw-red-pending smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #997 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `f7e49f37`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. The raw-red-pending event had
+  aged out of the 10-minute smoke window by the deployment check.
+
+### Draft Slice: EMA-Readiness Symbol Samples In Smoke Summary
+
+- Branch: `codex/v8-smoke-ema-symbol-samples`.
+- Scope: read-only smoke-report projection for existing `ema.unavailable`
+  monitor events.
+- Triggering evidence: the post-PR #997 VPS5 smoke still showed EMA-readiness
+  attention by reason, but identifying affected symbols required a separate
+  `live-event-query`. The underlying `ema.unavailable` events already included
+  bounded `candidate_unavailable_groups` and `unavailable_reasons` symbol
+  samples.
+- Intended result: include bounded symbol samples by EMA unavailable reason in
+  full, summary, and brief smoke-report output. The projection must omit
+  `example_error` prose and payload extras from the concise fields. This
+  changes only report output; it does not add event producers, exchange calls,
+  readiness gates, EMA behavior, order logic, risk logic, monitor writes,
+  console routing, or trading behavior.
+- Expected validation: focused EMA-readiness smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

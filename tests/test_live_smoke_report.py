@@ -1725,6 +1725,7 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
                                 "truncated": 0,
                             },
                             "error_types": ["MissingCloseEma"],
+                            "example_error": "stale api_key=OLDSECRET",
                         }
                     ],
                     "unavailable_reasons": [
@@ -1776,6 +1777,7 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
                                 "truncated": 0,
                             },
                             "error_types": ["MissingLogRangeEma"],
+                            "example_error": "fresh api_key=NEWSECRET",
                         }
                     ],
                     "unavailable_reasons": [
@@ -1819,6 +1821,25 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
         "never_fetched_cache_only": 3,
         "cache_only_fetch_failed": 2,
     }
+    assert health["latest_candidate_reason_symbols"] == {
+        "cache_only_fetch_failed": {
+            "count": 2,
+            "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+            "truncated": 0,
+        }
+    }
+    assert health["latest_unavailable_reason_symbols"] == {
+        "never_fetched_cache_only": {
+            "count": 3,
+            "sample": ["SUI/USDT:USDT"],
+            "truncated": 2,
+        },
+        "cache_only_fetch_failed": {
+            "count": 2,
+            "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+            "truncated": 0,
+        },
+    }
     assert health["latest_candidate_error_type_counts"] == {
         "MissingLogRangeEma": 1
     }
@@ -1833,6 +1854,25 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
         "never_fetched_cache_only": 3,
         "cache_only_fetch_failed": 2,
     }
+    assert health["groups"][0]["candidate_reason_symbols"] == {
+        "cache_only_fetch_failed": {
+            "count": 2,
+            "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+            "truncated": 0,
+        }
+    }
+    assert health["groups"][0]["unavailable_reason_symbols"] == {
+        "cache_only_fetch_failed": {
+            "count": 2,
+            "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+            "truncated": 0,
+        },
+        "never_fetched_cache_only": {
+            "count": 3,
+            "sample": ["SUI/USDT:USDT"],
+            "truncated": 2,
+        },
+    }
     assert health["groups"][0]["candidate_error_type_counts"] == {
         "MissingLogRangeEma": 1
     }
@@ -1840,6 +1880,15 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     assert summary["ema_readiness_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_ema_2"
     }
+    assert summary["ema_readiness_health"]["latest_candidate_reason_symbols"] == {
+        "cache_only_fetch_failed": {
+            "count": 2,
+            "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+            "truncated": 0,
+        }
+    }
+    assert "OLDSECRET" not in json.dumps(summary["ema_readiness_health"])
+    assert "NEWSECRET" not in json.dumps(summary["ema_readiness_health"])
     assert brief["ema_readiness"] == {
         "total": 2,
         "bots": 1,
@@ -1850,6 +1899,25 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
         "latest_unavailable_reason_counts": {
             "never_fetched_cache_only": 3,
             "cache_only_fetch_failed": 2,
+        },
+        "latest_candidate_reason_symbols": {
+            "cache_only_fetch_failed": {
+                "count": 2,
+                "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                "truncated": 0,
+            }
+        },
+        "latest_unavailable_reason_symbols": {
+            "never_fetched_cache_only": {
+                "count": 3,
+                "sample": ["SUI/USDT:USDT"],
+                "truncated": 2,
+            },
+            "cache_only_fetch_failed": {
+                "count": 2,
+                "sample": ["AVAX/USDT:USDT", "WLD/USDT:USDT"],
+                "truncated": 0,
+            },
         },
         "latest_candidate_error_type_counts": {"MissingLogRangeEma": 1},
         "event_types": {"ema.unavailable": 2},
