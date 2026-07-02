@@ -5638,6 +5638,25 @@ VPS5 deployment status:
   problem event in detailed, summary, and brief smoke output. This changes only
   report classification; it does not add exchange calls, change live recovery,
   or alter trading behavior.
+- Result: PR #990 was reviewed, merged to `v8`, and deployed to VPS5. After the
+  transient Kucoin maintenance timeout aged out of the requested 10-minute
+  window, VPS5 smoke was green on `bed4f285` with all five expected bots
+  running and no hard problem/log/process failures.
+
+### Draft Slice: Text Log Match Context
+
+- Branch: `codex/v8-log-match-context`.
+- Scope: read-only smoke-report text-log projection for existing log matches.
+- Triggering evidence: the post-PR #990 VPS5 smoke briefly stayed hard-red
+  because Kucoin logged a transient `maintain_hourly_cycle` exchange timeout
+  with traceback fragments. The structured event stream already classified the
+  config-refresh failure as a warning, but the hard text-log matches only showed
+  `Traceback (most recent call last):` without the timestamped context line in
+  the compact match entry.
+- Intended result: attach the nearest timestamped log context line to matched
+  unparseable traceback/error lines. This should make future smoke reports
+  explain what subsystem emitted a hard text-log fragment without suppressing
+  or down-classifying the hard match.
 
 ## Current Next Steps
 

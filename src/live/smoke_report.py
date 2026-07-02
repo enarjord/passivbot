@@ -5084,10 +5084,14 @@ def _scan_logs(
     dropped_unparsed_hard_matches = 0
     for path in files:
         log_context_ts_ms: int | None = None
+        log_context_line_no: int | None = None
+        log_context_text: str | None = None
         for line_no, line in _tail_lines(path, max_lines=tail_lines):
             line_ts = _parse_log_line_ts_ms(line)
             if line_ts is not None:
                 log_context_ts_ms = line_ts
+                log_context_line_no = int(line_no)
+                log_context_text = line
             attention = bool(ATTENTION_LOG_PATTERN.search(line))
             if window_enabled:
                 if line_ts is None:
@@ -5141,6 +5145,14 @@ def _scan_logs(
                 }
                 if line_ts is not None:
                     match["ts"] = line_ts
+                elif log_context_ts_ms is not None:
+                    match["context_ts"] = int(log_context_ts_ms)
+                    if log_context_line_no is not None:
+                        match["context_line"] = int(log_context_line_no)
+                    if log_context_text:
+                        match["context_text"] = _redact_log_text(
+                            log_context_text, max_len=500
+                        )
                 matches.append(match)
     return {
         "root": str(Path(root).expanduser()),
