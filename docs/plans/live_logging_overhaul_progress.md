@@ -5705,6 +5705,30 @@ VPS5 deployment status:
 - Expected validation: focused remote-call smoke-report tests, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #993 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `32e80518`. The post-deploy 10-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, clean tracked
+  repository state, and non-hard attention from known EMA/HSL status events.
+
+### Draft Slice: HSL Proximity Smoke Summary
+
+- Branch: `codex/v8-smoke-hsl-proximity-summary`.
+- Scope: read-only smoke-report projection for existing `hsl.status` risk
+  events.
+- Triggering evidence: the post-PR #993 VPS5 smoke showed non-hard HSL status
+  attention and a `risk_events.hsl_status.closest_to_red` list, but concise
+  summary/brief output omitted the existing `dist_to_red` and `red_threshold`
+  fields. Operators could see which symbols were closest to red, but not how
+  close they were without a full event query.
+- Intended result: include bounded HSL proximity values in summary and brief
+  closest-to-red samples while continuing to suppress raw drawdown internals.
+  This changes only report output; it does not add event producers, exchange
+  calls, readiness gates, HSL behavior, order logic, risk logic, or trading
+  behavior.
+- Expected validation: focused HSL risk smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

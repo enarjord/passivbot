@@ -2670,6 +2670,8 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
                     "pside",
                     "tier",
                     "signal_mode",
+                    "dist_to_red",
+                    "red_threshold",
                     "latest_ts",
                 )
                 if isinstance(item, dict) and item.get(key) not in (None, "", {})
