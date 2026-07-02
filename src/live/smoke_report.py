@@ -524,12 +524,15 @@ def _remote_call_health_group(
     raw_status = _remote_call_raw_status(live_event)
     reason_code = live_event.get("reason_code")
     error_type = payload.get("error_type")
+    kind = payload.get("kind")
+    surface = payload.get("surface")
     symbol = live_event.get("symbol")
+    failed = status == "failed"
     return {
         "bot": bot_key,
         "component": live_event.get("component"),
-        "kind": payload.get("kind"),
-        "surface": payload.get("surface"),
+        "kind": kind,
+        "surface": surface,
         "count": 1,
         "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
         "statuses": Counter([status]) if status else Counter(),
@@ -539,6 +542,18 @@ def _remote_call_health_group(
         "reason_codes": Counter([str(reason_code)]) if reason_code not in (None, "") else Counter(),
         "error_types": Counter([str(error_type)]) if error_type not in (None, "") else Counter(),
         "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
+        "failed_reason_codes": Counter([str(reason_code)])
+        if failed and reason_code not in (None, "")
+        else Counter(),
+        "failed_error_types": Counter([str(error_type)])
+        if failed and error_type not in (None, "")
+        else Counter(),
+        "failed_kinds": Counter([str(kind)])
+        if failed and kind not in (None, "")
+        else Counter(),
+        "failed_surfaces": Counter([str(surface)])
+        if failed and surface not in (None, "")
+        else Counter(),
         "latest_ts": row.get("ts"),
         "latest_seq": row.get("seq"),
         "latest_path": str(path),
@@ -573,7 +588,17 @@ def _merge_remote_call_health_group(
         return
     existing["count"] = _count_value(existing.get("count")) + 1
     existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
-    for field in ("statuses", "raw_statuses", "reason_codes", "error_types", "symbols"):
+    for field in (
+        "statuses",
+        "raw_statuses",
+        "reason_codes",
+        "error_types",
+        "symbols",
+        "failed_reason_codes",
+        "failed_error_types",
+        "failed_kinds",
+        "failed_surfaces",
+    ):
         counter = existing.setdefault(field, Counter())
         counter.update(group.get(field) or Counter())
     current_key = _sort_event_position_key(
@@ -651,9 +676,22 @@ def _summarize_remote_call_health(
 ) -> dict[str, Any]:
     ordered = sorted(groups.values(), key=_remote_call_health_sort_key)
     status_totals: Counter[str] = Counter()
+    failed_reason_codes: Counter[str] = Counter()
+    failed_error_types: Counter[str] = Counter()
+    failed_kinds: Counter[str] = Counter()
+    failed_surfaces: Counter[str] = Counter()
     for group in groups.values():
         statuses = group.get("statuses") if isinstance(group.get("statuses"), Counter) else Counter()
         status_totals.update(statuses)
+        for source, target in (
+            ("failed_reason_codes", failed_reason_codes),
+            ("failed_error_types", failed_error_types),
+            ("failed_kinds", failed_kinds),
+            ("failed_surfaces", failed_surfaces),
+        ):
+            values = group.get(source)
+            if isinstance(values, Counter):
+                target.update(values)
     total = sum(int(group.get("count", 0)) for group in groups.values())
     total_succeeded_count = int(status_totals.get("succeeded", 0))
     total_failed_count = int(status_totals.get("failed", 0))
@@ -733,7 +771,7 @@ def _summarize_remote_call_health(
                 and value not in (None, {}, [])
             }
         )
-    return {
+    out = {
         "total": total,
         "succeeded": total_succeeded_count,
         "failed": total_failed_count,
@@ -743,6 +781,19 @@ def _summarize_remote_call_health(
         "groups_truncated": len(ordered) > REMOTE_CALL_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
+    for key, values in (
+        ("failed_reason_codes", failed_reason_codes),
+        ("failed_error_types", failed_error_types),
+        ("failed_kinds", failed_kinds),
+        ("failed_surfaces", failed_surfaces),
+    ):
+        compact_values = _top_counter_values(
+            values,
+            limit=REMOTE_CALL_HEALTH_VALUE_LIMIT,
+        )
+        if compact_values:
+            out[key] = compact_values
+    return out
 
 
 def _execution_health_outcome(event_type: str, status: str | None) -> str:
@@ -5374,6 +5425,10 @@ def _summary_limited_groups(
             "event_types": summary.get("event_types"),
             "statuses": summary.get("statuses"),
             "outcomes": summary.get("outcomes"),
+            "failed_reason_codes": summary.get("failed_reason_codes") or None,
+            "failed_error_types": summary.get("failed_error_types") or None,
+            "failed_kinds": summary.get("failed_kinds") or None,
+            "failed_surfaces": summary.get("failed_surfaces") or None,
             "bots": summary.get("bots"),
             "active_bots": summary.get("active_bots"),
             "stale_active_bots": summary.get("stale_active_bots"),
@@ -5776,7 +5831,7 @@ def _count_value(value: Any) -> int:
 def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict):
         summary = {}
-    return {
+    out = {
         key: value
         for key, value in {
             "total": _count_value(summary.get("total")),
@@ -5788,6 +5843,16 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
         }.items()
         if value is not None
     }
+    for key in (
+        "failed_reason_codes",
+        "failed_error_types",
+        "failed_kinds",
+        "failed_surfaces",
+    ):
+        value = summary.get(key)
+        if isinstance(value, dict) and value:
+            out[key] = value
+    return out
 
 
 def _brief_fill_refresh_health(summary: Any) -> dict[str, Any]:

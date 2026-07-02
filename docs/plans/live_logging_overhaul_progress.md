@@ -5657,8 +5657,8 @@ VPS5 deployment status:
   unparseable traceback/error lines. This should make future smoke reports
   explain what subsystem emitted a hard text-log fragment without suppressing
   or down-classifying the hard match.
-- Result: PR #991 was reviewed by Hermes and Claude, merged to `v8`, and is
-  pending VPS5 deployment together with the next approved smoke-report slice.
+- Result: PR #991 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 together with PR #992 at `03f2fc10`.
 
 ### Draft Slice: EMA Readiness Reason Smoke Summary
 
@@ -5677,6 +5677,32 @@ VPS5 deployment status:
   it does not add event producers, exchange calls, readiness gates, EMA
   behavior, order logic, risk logic, or trading behavior.
 - Expected validation: focused EMA-readiness smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
+- Result: PR #992 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `03f2fc10`. The first post-deploy smoke showed a
+  transient GateIO positions `RequestTimeout` from an existing running bot; a
+  follow-up after the event aged out reported `ok=true`, `hard_failures=0`,
+  five expected bots matched, clean tracked repository state, zero
+  account-critical failures, no hard log matches, and the new EMA-readiness
+  reason maps visible in brief output.
+
+### Draft Slice: Remote Call Failure Cause Smoke Summary
+
+- Branch: `codex/v8-smoke-remote-call-failure-summary`.
+- Scope: read-only smoke-report projection for existing `remote_call.*`
+  health events.
+- Triggering evidence: the post-PR #991/#992 VPS5 smoke briefly went hard-red
+  from one GateIO `remote_call.failed` / `cycle.degraded` pair. The brief smoke
+  showed remote-call failure counts, but identifying that the failing surface
+  was `authoritative_positions` and the error type was `RequestTimeout`
+  required a separate `live-event-query`.
+- Intended result: aggregate failed remote-call reason codes, surfaces, logical
+  call kinds, and error types into full, summary, and brief smoke-report
+  projections. This changes only report output; it does not add event
+  producers, exchange calls, readiness gates, order logic, risk logic, or
+  trading behavior.
+- Expected validation: focused remote-call smoke-report tests, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
 
