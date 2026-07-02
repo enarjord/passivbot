@@ -232,7 +232,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.EXCHANGE_CONFIG_REFRESH,
         EventTypes.FILLS_REFRESH_SUMMARY,
         EventTypes.BOT_STARTUP_TIMING,
-        EventTypes.HEALTH_SUMMARY,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.HSL_RAW_RED_PENDING,
@@ -270,6 +269,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
+    assert DEFAULT_ROUTES[EventTypes.HEALTH_SUMMARY].console is True
+    assert DEFAULT_ROUTES[EventTypes.HEALTH_SUMMARY].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_STATUS].text is True
     assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].console is True
@@ -1112,6 +1113,75 @@ def test_console_format_summarizes_unstuck_status():
         "next=BTC/USDT:USDT:target=101000:target_dist=0.5000%:ema_gate=1.2500% "
         "short:disabled over_budget=long changed=true reason=unstuck_status"
     )
+
+
+def test_console_format_summarizes_periodic_health():
+    event = LiveEvent(
+        EventTypes.HEALTH_SUMMARY,
+        status="succeeded",
+        cycle_id="cy_health",
+        reason_code=ReasonCodes.PERIODIC_HEALTH_SUMMARY,
+        data={
+            "uptime_ms": 123_456,
+            "last_loop_duration_ms": 1_250,
+            "positions_long": 2,
+            "positions_short": 1,
+            "balance_raw": 1_005.25,
+            "equity": 1_010.75,
+            "orders_placed": 3,
+            "orders_cancelled": 1,
+            "fills": 2,
+            "pnl": -1.5,
+            "errors_last_hour": 1,
+            "ws_reconnects": 2,
+            "rate_limits": 3,
+            "rss_bytes": 157_286_400,
+            "event_queue_depth": 4,
+            "event_queue_maxsize": 1000,
+            "event_dropped_total": 2,
+            "event_sink_error_total": 1,
+            "event_pipeline_worker_alive": True,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[health] succeeded cycle=cy_health uptime=123s loop=1.2s "
+        "positions=2L/1S balance=1005.25 equity=1010.75 orders=+3/-1 "
+        "fills=2:pnl=-1.5 errors=1/h ws=2 rate_limits=3 rss=150.0MiB "
+        "event_q=4/1000 event_dropped=2 sink_errors=1 "
+        "reason=periodic_health_summary"
+    )
+
+
+def test_console_format_summarizes_health_error_burst_without_raw_error():
+    event = LiveEvent(
+        EventTypes.HEALTH_SUMMARY,
+        level="warning",
+        status="degraded",
+        cycle_id="cy_error",
+        reason_code=ReasonCodes.EXECUTION_LOOP_ERROR_BURST,
+        data={
+            "count": 3,
+            "window_s": 60,
+            "top_endpoints": [
+                {"endpoint": "account-overview", "count": 2},
+                {"endpoint": "open-orders", "count": 1},
+            ],
+            "latest_error_type": "RequestTimeout",
+            "latest_status": "-",
+            "latest_code": "-",
+            "latest_error": "kucoinfutures GET https://example.invalid/account?apiKey=SECRET",
+        },
+    )
+
+    rendered = format_console_event(event)
+    assert rendered == (
+        "[health] degraded cycle=cy_error errors=3/60s "
+        "top=account-overview:2,open-orders:1 latest=RequestTimeout "
+        "status=- code=- reason=execution_loop_error_burst"
+    )
+    assert "SECRET" not in rendered
+    assert "example.invalid" not in rendered
 
 
 def test_console_format_summarizes_fill_ingested():
