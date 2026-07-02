@@ -4026,6 +4026,12 @@ def test_live_smoke_report_log_window_drop_preserves_unparseable_hard_signal(tmp
         "1970-01-01T00:00:03Z ERROR exchange call failed",
         "Traceback (most recent call last):",
     ]
+    assert report["logs"]["matches"][1]["context_ts"] == 3000
+    assert report["logs"]["matches"][1]["context_line"] == 1
+    assert (
+        report["logs"]["matches"][1]["context_text"]
+        == "1970-01-01T00:00:03Z ERROR exchange call failed"
+    )
 
 
 def test_live_smoke_report_log_window_drops_stale_traceback_with_context(tmp_path):
