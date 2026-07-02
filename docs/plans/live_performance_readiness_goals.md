@@ -493,6 +493,10 @@ Trading-impact labels:
 
 - [ ] Replace `timeline_rows * pairs` replay with an exact lower-complexity
   path.
+  - First optimization slice: finite-lookback replay now seeds pre-window state
+    from fills, clamps dense candle/timeline construction to the configured
+    lookback window, and skips old flat symbols with no in-window/current
+    exposure.
   - Preferred shape: one pass through the timeline updating all active pair
     states that have values on that row, or per-pair sparse series built once.
   - Avoid repeated nested dict scans and repeated full fill-list scans per
