@@ -257,7 +257,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].console is True
     assert DEFAULT_ROUTES[EventTypes.ORDER_WAVE_COMPLETED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_DEFERRED].console is False
-    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].console is False
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].console is True
+    assert DEFAULT_ROUTES[EventTypes.EXECUTION_CREATE_SKIPPED].text is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].console is True
     assert DEFAULT_ROUTES[EventTypes.EXECUTION_CONFIRMATION_TIMEOUT].text is True
     assert DEFAULT_ROUTES[EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED].console is True
@@ -856,6 +857,34 @@ def test_console_format_summarizes_create_filter_payload():
         "symbols=BTC/USDT:USDT,ETH/USDT:USDT "
         "reason=pending_exchange_config "
         "create orders skipped while exchange config update is pending"
+    )
+
+
+def test_console_format_summarizes_low_balance_create_skip():
+    event = LiveEvent(
+        EventTypes.EXECUTION_CREATE_SKIPPED,
+        status="skipped",
+        cycle_id="cy_low_balance",
+        order_wave_id="ow_5",
+        reason_code=ReasonCodes.LOW_BALANCE,
+        message="exposure-increasing creates skipped because balance is below threshold",
+        data={
+            "order_count": 3,
+            "symbols": ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"],
+            "raw_balance": 0.25,
+            "balance_threshold": 1.0,
+            "quote": "USDT",
+            "allowed_cancel": 2,
+            "allowed_protective_create": 1,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[gate] skipped cycle=cy_low_balance wave=ow_5 orders=3 "
+        "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
+        "balance=0.25 USDT threshold=1 USDT allow_cancel=2 "
+        "allow_protective_create=1 reason=low_balance "
+        "exposure-increasing creates skipped because balance is below threshold"
     )
 
 

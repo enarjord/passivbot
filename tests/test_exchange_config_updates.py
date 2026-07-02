@@ -550,6 +550,7 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
             pb_mod.Passivbot._emit_execution_create_filter_event
         )
         _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
         _shutdown_requested = pb_mod.Passivbot._shutdown_requested
 
         debug_mode = False
@@ -633,6 +634,95 @@ async def test_execute_to_exchange_allows_cancellations_when_balance_too_low(
         for record in caplog.records
     )
     assert any("allowing 1 cancellations and 0 protective creates" in record.message for record in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_low_balance_create_skip_uses_event_console_when_available(caplog):
+    import passivbot as pb_mod
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_execution_create_filter_event = (
+            pb_mod.Passivbot._emit_execution_create_filter_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _live_event_console_available = pb_mod.Passivbot._live_event_console_available
+        _shutdown_requested = pb_mod.Passivbot._shutdown_requested
+
+        debug_mode = False
+        balance_threshold = 1.0
+        quote = "USDT"
+        stop_signal_received = False
+        state_change_detected_by_symbol = set()
+
+        def __init__(self):
+            self.live_event_console_enabled = True
+            self._live_event_current_cycle_id = "cy_low_balance"
+            self._live_event_sink = ListEventSink()
+            self._live_event_console_sink = ListEventSink()
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[self._live_event_sink],
+                monitor_sinks=[],
+                console_sink=self._live_event_console_sink,
+            )
+            self.cancel_called = False
+            self.create_called = False
+            self.config_called = False
+            self.execution_scheduled = False
+
+        async def execution_cycle(self):
+            return None
+
+        async def calc_orders_to_cancel_and_create(self):
+            return [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "buy",
+                    "position_side": "long",
+                    "price": 1.0,
+                    "qty": 1.0,
+                }
+            ], [
+                {
+                    "symbol": "BTC/USDT:USDT",
+                    "side": "sell",
+                    "position_side": "long",
+                    "price": 0.9,
+                    "qty": 1.0,
+                }
+            ]
+
+        def get_raw_balance(self):
+            return 0.0
+
+        async def execute_cancellations_parent(self, orders):
+            self.cancel_called = True
+            return []
+
+        async def update_exchange_configs(self, symbols=None):
+            self.config_called = True
+            return set(symbols or [])
+
+        async def execute_orders_parent(self, orders):
+            self.create_called = True
+            return []
+
+    bot = FakeBot()
+    with caplog.at_level(logging.INFO):
+        await pb_mod.Passivbot.execute_to_exchange(bot)
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert bot.cancel_called
+    assert not bot.create_called
+    assert not any("[balance] too low" in record.message for record in caplog.records)
+    assert [event.event_type for event in bot._live_event_console_sink.events] == [
+        EventTypes.EXECUTION_CREATE_SKIPPED
+    ]
+    console_event = bot._live_event_console_sink.events[0]
+    assert console_event.reason_code == ReasonCodes.LOW_BALANCE
+    assert console_event.data["raw_balance"] == pytest.approx(0.0)
+    assert console_event.data["balance_threshold"] == pytest.approx(1.0)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
 @pytest.mark.asyncio
