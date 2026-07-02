@@ -109,7 +109,9 @@ recent order/fill activity, errors, and resource pressure. Degraded
 and must not expose raw exchange URLs or credentials in console summaries.
 Startup timing events are console-visible because they explain which startup
 phase is slow or complete: account state, active-candle warmup, HSL replay,
-full warmup, market state, and final startup readiness.
+full warmup, market state, and final startup readiness. The legacy stdlib
+startup timing line is only a fallback when the structured event console path
+is unavailable or explicitly disabled.
 Position-level `trailing.status`, `unstuck.status`, and `unstuck.selection`
 events are console-visible because they explain why an existing position is
 waiting, armed, triggered, over budget, selected for unstucking, or blocked by

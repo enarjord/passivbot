@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Legacy startup timing console lines are now suppressed when the structured
+  live event console path is active, leaving the structured `[boot]` projection
+  as the default operator output while preserving a fallback if that path is
+  disabled.
 - Startup timing events now appear in the live event console projection by
   default, making account-ready, candle-ready, HSL-ready, market-ready, and
   startup-ready phase durations visible from the structured event stream.

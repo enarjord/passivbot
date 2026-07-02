@@ -211,6 +211,53 @@ def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_startup_timing_mark_suppresses_legacy_log_when_event_console_active(
+    monkeypatch,
+    caplog,
+):
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+    clock_values = iter([1_000, 3_500])
+    monkeypatch.setattr(pb_mod, "utc_ms", lambda: next(clock_values))
+
+    class FakeBot:
+        _startup_timing_begin = pb_mod.Passivbot._startup_timing_begin
+        _startup_timing_mark = pb_mod.Passivbot._startup_timing_mark
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self.live_event_console_enabled = True
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._startup_timing_begin()
+    with caplog.at_level(logging.INFO):
+        bot._startup_timing_mark("account")
+
+    assert not any(
+        "[boot] startup timing | account-ready" in record.message
+        for record in caplog.records
+    )
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    assert len(sink.events) == 1
+    event = sink.events[0]
+    assert event.event_type == EventTypes.BOT_STARTUP_TIMING
+    assert event.level == "info"
+    assert event.data == {
+        "phase": "account",
+        "elapsed_ms": 2500,
+        "since_previous_ms": 2500,
+    }
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_routine_planning_defer_summary_emits_live_event(monkeypatch):
     import passivbot as pb_mod
 
