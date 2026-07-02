@@ -104,15 +104,19 @@ compact operator heartbeat covering uptime, loop latency, position counts,
 recent order/fill activity, errors, and resource pressure. Degraded
 `health.summary` events such as execution-loop error bursts must stay immediate
 and must not expose raw exchange URLs or credentials in console summaries.
-Position-level `trailing.status` and `unstuck.status` events are console-visible
-because they explain why an existing position is waiting, armed, triggered, over
-budget, or blocked by the unstuck EMA gate. Unsupported strategy diagnostics
-must say so explicitly instead of fabricating threshold/retracement prices.
+Position-level `trailing.status`, `unstuck.status`, and `unstuck.selection`
+events are console-visible because they explain why an existing position is
+waiting, armed, triggered, over budget, selected for unstucking, or blocked by
+the unstuck EMA gate. Unsupported strategy diagnostics must say so explicitly
+instead of fabricating threshold/retracement prices.
 Supported trailing diagnostics should include the selected mode, such as
 `trailing`, `grid`, `auto_reduce`, `unstuck`, `none`, or `other`, when the next
-order state is known. `forager.selection` events are also console-visible
-through a throttled compact summary because they explain which coins are being
-selected, retained, or skipped when forager entries are possible.
+order state is known. They should also show the effective threshold percentage
+and price, retracement percentage and price, and the projected retracement price
+that would apply if the threshold were reached. `forager.selection` events are
+also console-visible through a throttled compact summary because they explain
+which coins are being selected, retained, or skipped when forager entries are
+possible.
 
 ## Review Heuristic
 

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Improved opt-in live event console summaries for trailing and unstuck
+  positions, including threshold/retracement prices and unstuck selection
+  details from existing structured events.
 - Added `--level` filtering to `passivbot tool live-event-query`, so operator
   event, timeline, trace-summary, order-trace, and cycle-trace reports can be
   scoped by live-event severity.

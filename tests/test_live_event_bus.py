@@ -239,7 +239,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
         EventTypes.HSL_COOLDOWN_STARTED,
         EventTypes.HSL_COOLDOWN_ENDED,
-        EventTypes.UNSTUCK_SELECTION,
     ):
         assert DEFAULT_ROUTES[event_type].structured is True
         assert DEFAULT_ROUTES[event_type].monitor is True
@@ -277,6 +276,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.TRAILING_STATUS].text is True
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].console is True
     assert DEFAULT_ROUTES[EventTypes.UNSTUCK_STATUS].text is True
+    assert DEFAULT_ROUTES[EventTypes.UNSTUCK_SELECTION].console is True
+    assert DEFAULT_ROUTES[EventTypes.UNSTUCK_SELECTION].text is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].console is True
     assert DEFAULT_ROUTES[EventTypes.REALIZED_LOSS_GATE_BLOCKED].text is True
 
@@ -1056,9 +1057,9 @@ def test_console_format_summarizes_trailing_status():
 
     assert format_console_event(event) == (
         "[trailing] succeeded cycle=cy_trailing kind=entry "
-        "trailing_status=waiting_threshold mode=grid threshold_met=False threshold=1.2500% "
-        "threshold_price=98750 threshold_dist=2.2785% retracement_met=False retracement=0.4000% "
-        "retracement_price=99145 retracement_dist=1.8710% threshold_retrace_price=99145 current=101000 "
+        "trailing_status=waiting_threshold mode=grid threshold_met=no threshold=1.2500%@98750 "
+        "threshold_dist=2.2785% retracement_met=no retracement=0.4000%@99145 "
+        "retracement_dist=1.8710% if_threshold_retrace=0.4000%@99145 current=101000 "
         "symbol=BTC/USDT:USDT pside=long reason=trailing_status"
     )
 
@@ -1109,9 +1110,32 @@ def test_console_format_summarizes_unstuck_status():
     )
 
     assert format_console_event(event) == (
-        "[unstuck] succeeded long:ok:allowance=-12.3:over_budget:"
-        "next=BTC/USDT:USDT:target=101000:target_dist=0.5000%:ema_gate=1.2500% "
+        "[unstuck] succeeded long:ok allowance=-12.3 over_budget "
+        "candidate=BTC/USDT:USDT target=101000 target_dist=0.5000% ema_gate_dist=1.2500% "
         "short:disabled over_budget=long changed=true reason=unstuck_status"
+    )
+
+
+def test_console_format_summarizes_unstuck_selection():
+    event = LiveEvent(
+        EventTypes.UNSTUCK_SELECTION,
+        status="succeeded",
+        symbol="SUI/USDT:USDT",
+        pside="long",
+        reason_code="unstuck_selection",
+        data={
+            "changed": True,
+            "entry_price": 1.0,
+            "current_price": 1.1,
+            "price_diff_pct": 10.0,
+            "allowance": -12.3,
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[unstuck] succeeded entry=1 current=1.1 pos_pnl_dist=10.0000% "
+        "allowance=-12.3 changed=true symbol=SUI/USDT:USDT pside=long "
+        "reason=unstuck_selection"
     )
 
 

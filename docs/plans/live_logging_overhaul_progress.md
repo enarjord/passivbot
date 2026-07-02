@@ -19,20 +19,19 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `9ff2b8582` after PR #968, `Project entry gate events to console`.
+- `426f3ae0b` after PR #969, `Project health summaries to event console`.
 
 Current logging-overhaul head:
 
-- `9ff2b8582` after PR #968, `Project entry gate events to console`.
+- `426f3ae0b` after PR #969, `Project health summaries to event console`.
 
 Current work:
 
-- Branch `codex/v8-next-logging-slice-2` projects existing `health.summary`
-  events into the opt-in live event console/text sinks with compact operator
-  summaries. It keeps periodic health as an INFO-level event matching the
-  existing legacy `[health]` line, keeps degraded execution-loop error bursts
-  immediate, and does not change health producer timing, trading behavior,
-  exchange I/O, or resource counters.
+- Branch `codex/v8-trailing-unstuck-event-console` refines the existing
+  trailing/unstuck console projection. It keeps trading behavior unchanged,
+  routes the already-throttled `unstuck.selection` event to the opt-in live
+  event console/text sinks, and makes trailing/unstuck summaries more directly
+  operator-facing.
 
 Current review gate:
 
@@ -62,6 +61,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #969 at `426f3ae0b`.
+- PR #969 projected existing `health.summary` events into the opt-in live event
+  console/text sinks with compact operator summaries. It kept periodic health
+  as an INFO-level event matching the existing legacy `[health]` line, kept
+  degraded execution-loop error bursts immediate, and did not change health
+  producer timing, trading behavior, exchange I/O, or resource counters. It
+  merged after Hermes approved, Claude approved, and CI was green; Cursor did
+  not post during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited within the first graceful window; Binance, GateIO, and OKX exited
+  during the longer graceful window; Kucoin still required SIGTERM after the
+  full wait window.
+- VPS5 smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=426f3ae0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `logs.hard_matches=0`, and
+  `fill_refresh.failed=0`. The event pipeline saw `health.summary` with no
+  degraded/dropped/sink errors. Remaining attention was non-hard Hyperliquid
+  EMA-unavailable diagnostics and active HSL replay.
 - Repository pulled through PR #968 at `9ff2b8582`.
 - PR #968 projected existing initial-entry distance gate blocked/cleared,
   min-effective-cost entry skip, and realized-loss gate deferral events into
