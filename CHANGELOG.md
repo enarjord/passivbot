@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Low-balance exposure-increasing create skips now appear through the
+  structured live event console as `execution.create_skipped` summaries, and
+  the legacy `[balance] too low` line is only a fallback when that path is
+  unavailable or disabled.
 - Legacy balance and position-change console lines are now suppressed when the
   structured live event console path is active, leaving `balance.changed` and
   `position.changed` projections as the default operator output while

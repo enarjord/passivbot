@@ -104,6 +104,10 @@ events are console-visible because they explain operator-relevant order
 omissions: staged entries waiting for an acceptable market distance, entries
 skipped because the configured slot size is below exchange-effective minimums,
 and loss-realizing closes deferred by the realized-loss gate.
+Low-balance exposure-increasing create skips are also console-visible through
+`execution.create_skipped`; the legacy `[balance] too low` line is only a
+fallback when the structured event console path is unavailable or explicitly
+disabled.
 Periodic `health.summary` events are console-visible because they provide a
 compact operator heartbeat covering uptime, loop latency, position counts,
 recent order/fill activity, errors, and resource pressure. Degraded

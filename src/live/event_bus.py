@@ -698,7 +698,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.EXECUTION_CREATE_FAILED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_REJECTED: EventRoute(console=True, text=True),
     EventTypes.EXECUTION_CREATE_DEFERRED: EventRoute(console=False, text=False),
-    EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=False, text=False),
+    EventTypes.EXECUTION_CREATE_SKIPPED: EventRoute(console=True, text=True),
     EventTypes.ENTRY_INITIAL_DISTANCE_GATE_BLOCKED: EventRoute(
         console=True, text=True
     ),
@@ -955,6 +955,21 @@ def _console_create_filter_summary(event: LiveEvent) -> list[str]:
     symbols = _compact_csv(data.get("symbols"), limit=4)
     if symbols:
         parts.append(f"symbols={symbols}")
+    raw_balance = _data_number(data, "raw_balance")
+    quote = _data_str(data, "quote")
+    if raw_balance is not None:
+        suffix = f" {quote}" if quote else ""
+        parts.append(f"balance={raw_balance:g}{suffix}")
+    balance_threshold = _data_number(data, "balance_threshold")
+    if balance_threshold is not None:
+        suffix = f" {quote}" if quote else ""
+        parts.append(f"threshold={balance_threshold:g}{suffix}")
+    allowed_cancel = _data_int(data, "allowed_cancel")
+    if allowed_cancel is not None:
+        parts.append(f"allow_cancel={allowed_cancel}")
+    allowed_protective_create = _data_int(data, "allowed_protective_create")
+    if allowed_protective_create is not None:
+        parts.append(f"allow_protective_create={allowed_protective_create}")
     return parts
 
 

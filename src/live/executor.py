@@ -201,15 +201,22 @@ async def execute_order_plan(
                         "allowed_protective_create": len(to_create),
                     },
                 )
-            logging.info(
-                "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
-                "allowing %d cancellations and %d protective creates",
-                raw_balance,
-                bot.quote,
-                len(blocked_creates),
-                len(to_cancel),
-                len(to_create),
+            live_event_console_available = False
+            live_event_console_available_fn = getattr(
+                passivbot_cls, "_live_event_console_available", None
             )
+            if callable(live_event_console_available_fn):
+                live_event_console_available = bool(live_event_console_available_fn(bot))
+            if not live_event_console_available:
+                logging.info(
+                    "[balance] too low: %.2f %s; skipped %d exposure-increasing order creates; "
+                    "allowing %d cancellations and %d protective creates",
+                    raw_balance,
+                    bot.quote,
+                    len(blocked_creates),
+                    len(to_cancel),
+                    len(to_create),
+                )
     if bot.debug_mode:
         if to_cancel:
             print(

@@ -19,20 +19,19 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `f6700c5cd` after PR #983, `Dedupe order wave console summaries`.
+- `b15da359` after PR #984, `Dedupe account state console summaries`.
 
 Current logging-overhaul head:
 
-- `f6700c5cd` after PR #983, `Dedupe order wave console summaries`.
+- `b15da359` after PR #984, `Dedupe account state console summaries`.
 
 Current work:
 
-- Branch `codex/v8-dedupe-account-state-console` suppresses duplicate legacy
-  balance and position-change stdlib console lines when the structured
-  live-event console path is active. The existing `balance.changed` and
-  `position.changed` events remain the console source of truth, and the legacy
-  lines remain fallback output if the structured event console path is disabled
-  or unavailable.
+- Branch `codex/v8-low-balance-console-event` makes existing
+  `execution.create_skipped` low-balance create-skip events visible in the
+  structured live-event console and leaves the legacy `[balance] too low` line
+  as fallback output if the structured event console path is disabled or
+  unavailable.
 
 Current review gate:
 
@@ -62,6 +61,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #984 at `b15da359`.
+- PR #984 suppressed duplicate legacy balance and position-change stdlib
+  console lines when the structured live-event console path is active. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `b15da359` on disk without restarting running
+  bots because the slice was console-only and HSL replay remained active. Smoke
+  after the fast-forward reported `ok=true`, `hard_failures=0`, five running
+  live processes, clean tracked repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `fill_refresh.failed=0`;
+  remaining attention was non-hard active HSL replay and EMA/readiness
+  diagnostics.
 - Repository pulled through PR #983 at `f6700c5cd`.
 - PR #983 suppressed legacy order-wave complete/settled stdlib console lines
   when the structured live-event console path is active. It merged after Claude
