@@ -2150,6 +2150,189 @@ def test_live_smoke_report_problem_events_include_cycle_degraded_details(tmp_pat
     }
 
 
+def test_live_smoke_report_recovers_time_sync_cycle_degraded(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="degraded",
+                level="error",
+                reason_code="InvalidNonce",
+                ids={"cycle_id": "cy_1"},
+                data={
+                    "error_type": "InvalidNonce",
+                    "error": 'kucoinfutures {"code":"400002","msg":"Invalid KC-API-TIMESTAMP"}',
+                },
+            ),
+            _monitor_row(
+                event_type="exchange.time_sync",
+                seq=2,
+                ts=1100,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="succeeded",
+                level="debug",
+                reason_code="exchange_time_sync",
+                ids={"cycle_id": "cy_1"},
+                data={
+                    "error_type": "InvalidNonce",
+                    "recovered": True,
+                    "synced_count": 2,
+                    "failed_count": 0,
+                },
+            ),
+            _monitor_row(
+                event_type="cycle.completed",
+                seq=3,
+                ts=1200,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="succeeded",
+                level="info",
+                reason_code="cycle_completed",
+                ids={"cycle_id": "cy_2"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["hard_failures"] == 0
+    assert report["hard_problem_event_count"] == 0
+    assert report["recovered_problem_events"] == {
+        "total": 1,
+        "hard": 1,
+        "event_types": {"cycle.degraded": 1},
+    }
+    assert report["problem_events"][0]["hard"] is False
+    assert report["problem_events"][0]["recovered"] is True
+    assert report["problem_events"][0]["recovery"] == {
+        "event_type": "exchange.time_sync",
+        "reason_code": "exchange_time_sync",
+        "status": "succeeded",
+        "ts": 1100,
+        "cycle_id": "cy_1",
+    }
+    assert report["problem_event_groups"]["groups"][0]["recovered"] is True
+    assert summary["recovered_problem_events"]["hard"] == 1
+    assert brief["recovered_problem_events"]["hard"] == 1
+
+
+def test_live_smoke_report_recovers_time_sync_after_cycle_id_cleared(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="degraded",
+                level="error",
+                reason_code="InvalidNonce",
+                ids={"cycle_id": "cy_1"},
+                data={"error_type": "InvalidNonce"},
+            ),
+            _monitor_row(
+                event_type="exchange.time_sync",
+                seq=2,
+                ts=1100,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="succeeded",
+                level="debug",
+                reason_code="exchange_time_sync",
+                ids={},
+                data={
+                    "error_type": "InvalidNonce",
+                    "recovered": True,
+                    "synced_count": 2,
+                    "failed_count": 0,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is True
+    assert report["hard_problem_event_count"] == 0
+    assert report["recovered_problem_events"] == {
+        "total": 1,
+        "hard": 1,
+        "event_types": {"cycle.degraded": 1},
+    }
+    assert report["problem_events"][0]["recovery"] == {
+        "event_type": "exchange.time_sync",
+        "reason_code": "exchange_time_sync",
+        "status": "succeeded",
+        "ts": 1100,
+        "cycle_id": None,
+    }
+
+
+def test_live_smoke_report_keeps_unrecovered_time_sync_cycle_degraded_hard(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cycle.degraded",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="degraded",
+                level="error",
+                reason_code="InvalidNonce",
+                ids={"cycle_id": "cy_1"},
+                data={"error_type": "InvalidNonce"},
+            ),
+            _monitor_row(
+                event_type="exchange.time_sync",
+                seq=2,
+                ts=1100,
+                exchange="kucoin",
+                user="kucoin_01",
+                status="degraded",
+                level="warning",
+                reason_code="exchange_time_sync",
+                ids={"cycle_id": "cy_1"},
+                data={
+                    "error_type": "InvalidNonce",
+                    "recovered": False,
+                    "synced_count": 0,
+                    "failed_count": 1,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    assert report["ok"] is False
+    assert report["hard_failures"] == 1
+    assert report["hard_problem_event_count"] == 1
+    assert report["recovered_problem_events"] == {
+        "total": 0,
+        "hard": 0,
+        "event_types": {},
+    }
+    assert report["problem_events"][0]["hard"] is True
+    assert "recovered" not in report["problem_events"][0]
+
+
 def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     events_dir = tmp_path / "monitor" / "hyperliquid" / "tradfi" / "events"
     _write_ndjson(

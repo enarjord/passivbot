@@ -5577,6 +5577,11 @@ VPS5 deployment status:
   output by adding stale-progress and long-running active counts from existing
   bounded monitor data. This is observability-only and does not change HSL,
   order, candle, exchange, readiness, or risk behavior.
+- Result: PR #988 added the stale and long-running active HSL replay
+  classification, was reviewed, merged to `v8`, and deployed to VPS5. The
+  first post-deploy smoke helped identify Kucoin as stopped after a terminal
+  startup validation failure, which moved the next slice from observability to
+  a narrow trading-path fix.
 
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
@@ -5611,14 +5616,37 @@ VPS5 deployment status:
   available to runtime coin-HSL through the PnL manager once the bot is active.
 - Intended result: faster and less brittle coin-HSL startup for flat accounts,
   while preserving hard validation for held symbols and cooldown reconstruction.
+- Result: PR #989 was reviewed, merged to `v8`, and deployed to VPS5. Kucoin
+  was restarted and passed the prior AVAX missing-UPnL failure. HSL price
+  replay no longer loaded candle history for flat non-panic symbols, but the
+  dense row replay still took about `1237.7s` and the bot reached READY after
+  about `1445s`. The next trading-path slice should reduce or bypass the serial
+  `timeline_minutes * pairs` replay for immediate protective readiness.
+
+### Draft Slice: Recovered Time-Sync Smoke Classification
+
+- Branch: `codex/v8-smoke-recovered-time-sync`.
+- Scope: read-only smoke-report classification for existing
+  `cycle.degraded` and `exchange.time_sync` monitor events.
+- Triggering evidence: after PR #989 was deployed and Kucoin reached READY,
+  VPS5 smoke was temporarily hard-red because the 10-minute window still
+  contained a first-cycle `InvalidNonce` `cycle.degraded` event. The following
+  `exchange.time_sync` event succeeded, subsequent cycles continued, and the
+  same smoke window became green once the recovered event aged out.
+- Intended result: keep unrecovered timestamp/nonce cycle errors hard, but
+  classify same-cycle successful `exchange.time_sync` recovery as a recovered
+  problem event in detailed, summary, and brief smoke output. This changes only
+  report classification; it does not add exchange calls, change live recovery,
+  or alter trading behavior.
 
 ## Current Next Steps
 
 1. Prioritize a separate trading-path PR for coin-HSL startup replay latency:
    held-position protective readiness must be bounded, exact where data is
    available, and observable before full historical replay of unrelated coins.
-   PR #819 now makes active/completed replay state visible in standard smoke,
-   but it does not reduce the replay latency.
+   PRs #819, #988, and #989 improve observability and remove one flat-history
+   validation failure, but they do not solve the remaining dense replay
+   latency.
 2. Continue collecting smoke evidence with the new source breakdown and
    risk-vs-general log-match counters before changing any verdict policy. If
    future HSL RED/cooldown episodes make smoke red, the report can now show

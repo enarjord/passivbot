@@ -1534,15 +1534,18 @@ def _problem_event_group(
     path: Path,
     line_no: int,
     hard: bool,
+    recovered: bool = False,
+    recovery: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     ids = _event_ids(live_event)
-    return {
+    group = {
         "bot": bot_key,
         "event_type": live_event.get("event_type") or row.get("kind"),
         "reason_code": live_event.get("reason_code"),
         "status": live_event.get("status"),
         "level": live_event.get("level"),
         "hard": bool(hard),
+        "recovered": bool(recovered),
         "symbol": live_event.get("symbol") or row.get("symbol"),
         "pside": live_event.get("pside") or row.get("pside"),
         "component": live_event.get("component"),
@@ -1563,6 +1566,9 @@ def _problem_event_group(
             if ids.get(key) is not None
         },
     }
+    if recovery:
+        group["latest_recovery"] = recovery
+    return group
 
 
 def _merge_problem_event_group(
@@ -1575,6 +1581,7 @@ def _merge_problem_event_group(
         group.get("reason_code"),
         group.get("status"),
         group.get("hard"),
+        group.get("recovered"),
         group.get("symbol"),
         group.get("pside"),
     )
@@ -1605,6 +1612,7 @@ def _merge_problem_event_group(
             "latest_line",
             "latest_data",
             "latest_ids",
+            "latest_recovery",
         ):
             existing[field] = group.get(field)
 
@@ -1633,6 +1641,7 @@ def _summarize_problem_event_groups(
             key: value
             for key, value in group.items()
             if key not in {"latest_path", "latest_line", "latest_seq"}
+            and not (key == "recovered" and value is False)
             and value not in (None, {}, [])
         }
         for group in ordered[:PROBLEM_EVENT_GROUP_LIMIT]
@@ -4238,6 +4247,121 @@ def _event_window_report(
     return report
 
 
+RECOVERABLE_TIME_SYNC_REASON_CODES = frozenset(
+    {
+        "InvalidNonce",
+        "exchange_timestamp_nonce_error",
+    }
+)
+
+
+def _is_successful_time_sync_event(live_event: dict[str, Any]) -> bool:
+    if str(live_event.get("event_type") or "") != EventTypes.EXCHANGE_TIME_SYNC:
+        return False
+    if str(live_event.get("status") or "").lower() != "succeeded":
+        return False
+    data = live_event.get("data")
+    if isinstance(data, dict) and data.get("recovered") is False:
+        return False
+    return True
+
+
+def _is_recoverable_time_sync_problem(live_event: dict[str, Any]) -> bool:
+    if str(live_event.get("event_type") or "") != EventTypes.CYCLE_DEGRADED:
+        return False
+    reason_code = str(live_event.get("reason_code") or "")
+    data = live_event.get("data")
+    error_type = str(data.get("error_type") or "") if isinstance(data, dict) else ""
+    if reason_code in RECOVERABLE_TIME_SYNC_REASON_CODES:
+        return True
+    if error_type in RECOVERABLE_TIME_SYNC_REASON_CODES:
+        return True
+    text = " ".join(str(item).lower() for item in (reason_code, error_type))
+    return "nonce" in text or "timestamp" in text
+
+
+def _recovery_summary_for_event(
+    problem_record: dict[str, Any],
+    recoveries: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    live_event = problem_record["live_event"]
+    if not bool(problem_record.get("base_hard")):
+        return None
+    if not _is_recoverable_time_sync_problem(live_event):
+        return None
+    bot_key = str(problem_record.get("bot_key") or "")
+    problem_ts = _non_negative_int(problem_record["row"].get("ts"))
+    if problem_ts is None:
+        return None
+    ids = _event_ids(live_event)
+    cycle_id = ids.get("cycle_id")
+    data = live_event.get("data")
+    problem_error_type = (
+        str(data.get("error_type") or "") if isinstance(data, dict) else ""
+    )
+    candidates: list[dict[str, Any]] = []
+    for recovery in recoveries:
+        if str(recovery.get("bot_key") or "") != bot_key:
+            continue
+        recovery_ts = _non_negative_int(recovery.get("ts"))
+        if recovery_ts is None or recovery_ts < problem_ts:
+            continue
+        recovery_cycle_id = recovery.get("cycle_id")
+        if cycle_id is not None:
+            if recovery_cycle_id == cycle_id:
+                pass
+            elif recovery_cycle_id is None:
+                if recovery_ts - problem_ts > 5 * 60 * 1000:
+                    continue
+                recovery_error_type = str(recovery.get("error_type") or "")
+                if (
+                    problem_error_type
+                    and recovery_error_type
+                    and recovery_error_type != problem_error_type
+                ):
+                    continue
+            else:
+                continue
+        elif recovery_ts - problem_ts > 5 * 60 * 1000:
+            continue
+        candidates.append(recovery)
+    if not candidates:
+        return None
+    recovery = min(candidates, key=lambda item: int(item.get("ts") or 0))
+    return {
+        "event_type": EventTypes.EXCHANGE_TIME_SYNC,
+        "reason_code": recovery.get("reason_code"),
+        "status": recovery.get("status"),
+        "ts": recovery.get("ts"),
+        "cycle_id": recovery.get("cycle_id"),
+    }
+
+
+def _problem_event_recovery_report(
+    problem_records: list[dict[str, Any]],
+    recoveries: list[dict[str, Any]],
+) -> dict[str, Any]:
+    recovered = 0
+    recovered_hard = 0
+    by_event_type: Counter[str] = Counter()
+    for record in problem_records:
+        recovery = _recovery_summary_for_event(record, recoveries)
+        record["recovery"] = recovery
+        record["recovered"] = recovery is not None
+        if recovery is not None:
+            recovered += 1
+            if bool(record.get("base_hard")):
+                recovered_hard += 1
+            event_type = str(record["live_event"].get("event_type") or "")
+            if event_type:
+                by_event_type[event_type] += 1
+    return {
+        "total": int(recovered),
+        "hard": int(recovered_hard),
+        "event_types": dict(by_event_type.most_common()),
+    }
+
+
 def _monitor_issue(
     path: str | Path,
     line: int | None,
@@ -4314,6 +4438,8 @@ def _scan_events(
         }
     )
     problem_events: deque[dict[str, Any]] = deque(maxlen=max(0, int(max_problem_events)))
+    problem_records: list[dict[str, Any]] = []
+    time_sync_recoveries: list[dict[str, Any]] = []
     invalid_rows = 0
     events_considered = 0
     events_skipped_before = 0
@@ -4476,6 +4602,21 @@ def _scan_events(
                             bot["invalid_ts"] += 1
                     if event_type:
                         bot["event_types"][str(event_type)] += 1
+                    if _is_successful_time_sync_event(live_event):
+                        time_sync_recoveries.append(
+                            {
+                                "bot_key": bot_key,
+                                "ts": row.get("ts"),
+                                "cycle_id": _event_ids(live_event).get("cycle_id"),
+                                "reason_code": live_event.get("reason_code"),
+                                "status": live_event.get("status"),
+                                "error_type": (
+                                    str(live_event.get("data", {}).get("error_type") or "")
+                                    if isinstance(live_event.get("data"), dict)
+                                    else ""
+                                ),
+                            }
+                        )
                     if event_type == EventTypes.REMOTE_CALL_FAILED:
                         _merge_remote_call_failure_group(
                             remote_call_failure_groups,
@@ -4624,29 +4765,15 @@ def _scan_events(
                         bot["statuses"][str(status).lower()] += 1
                     if is_problem_event(live_event):
                         bot["problem_events"] += 1
-                        hard = is_hard_problem_event(live_event)
-                        if hard:
-                            bot["hard_problem_events"] += 1
-                        _merge_problem_event_group(
-                            problem_event_groups,
-                            _problem_event_group(
-                                bot_key=bot_key,
-                                row=row,
-                                live_event=live_event,
-                                path=path,
-                                line_no=line_no,
-                                hard=hard,
-                            ),
-                        )
-                        problem_event = _compact_problem_event(
-                            path=path,
-                            line_no=line_no,
-                            row=row,
-                            live_event=live_event,
-                        )
-                        problem_event["hard"] = hard
-                        problem_events.append(
-                            problem_event
+                        problem_records.append(
+                            {
+                                "bot_key": bot_key,
+                                "row": row,
+                                "live_event": live_event,
+                                "path": path,
+                                "line_no": line_no,
+                                "base_hard": is_hard_problem_event(live_event),
+                            }
                         )
                     startup_timing = _startup_timing_record(
                         row=row,
@@ -4661,6 +4788,39 @@ def _scan_events(
                 _monitor_issue(path, None, "error", "read_failed", str(exc))
             )
             invalid_rows += 1
+
+    recovered_problem_events = _problem_event_recovery_report(
+        problem_records, time_sync_recoveries
+    )
+    for record in problem_records:
+        hard = bool(record.get("base_hard")) and not bool(record.get("recovered"))
+        bot_key = str(record.get("bot_key") or "unknown")
+        if hard:
+            bots[bot_key]["hard_problem_events"] += 1
+        _merge_problem_event_group(
+            problem_event_groups,
+            _problem_event_group(
+                bot_key=bot_key,
+                row=record["row"],
+                live_event=record["live_event"],
+                path=record["path"],
+                line_no=int(record["line_no"]),
+                hard=hard,
+                recovered=bool(record.get("recovered")),
+                recovery=record.get("recovery"),
+            ),
+        )
+        problem_event = _compact_problem_event(
+            path=record["path"],
+            line_no=int(record["line_no"]),
+            row=record["row"],
+            live_event=record["live_event"],
+        )
+        problem_event["hard"] = hard
+        if bool(record.get("recovered")):
+            problem_event["recovered"] = True
+            problem_event["recovery"] = record.get("recovery")
+        problem_events.append(problem_event)
 
     error_count = sum(1 for issue in issues if issue.get("severity") == "error")
     warning_count = sum(1 for issue in issues if issue.get("severity") == "warning")
@@ -4700,6 +4860,7 @@ def _scan_events(
         ],
         "problem_events": list(problem_events),
         "problem_event_groups": _summarize_problem_event_groups(problem_event_groups),
+        "recovered_problem_events": recovered_problem_events,
         "problem_event_count": sum(int(value["problem_events"]) for value in bots.values()),
         "hard_problem_event_count": sum(
             int(value["hard_problem_events"]) for value in bots.values()
@@ -5140,6 +5301,7 @@ def build_live_smoke_report(
         "event_window": event_scan["event_window"],
         "problem_events": event_scan["problem_events"],
         "problem_event_groups": event_scan["problem_event_groups"],
+        "recovered_problem_events": event_scan["recovered_problem_events"],
         "problem_event_count": event_scan["problem_event_count"],
         "hard_problem_event_count": event_scan["hard_problem_event_count"],
         "logs": log_scan,
@@ -5400,6 +5562,7 @@ def summarize_live_smoke_report(
         "attention_count": int(report.get("attention_count") or 0),
         "hard_failure_sources": dict(report.get("hard_failure_sources") or {}),
         "attention_sources": dict(report.get("attention_sources") or {}),
+        "recovered_problem_events": dict(report.get("recovered_problem_events") or {}),
         "repository": {
             key: repository.get(key)
             for key in (
@@ -5877,6 +6040,14 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "attention_sources": {
             key: _count_value(value)
             for key, value in (report.get("attention_sources") or {}).items()
+        },
+        "recovered_problem_events": {
+            "total": _count_value((report.get("recovered_problem_events") or {}).get("total")),
+            "hard": _count_value((report.get("recovered_problem_events") or {}).get("hard")),
+            "event_types": (
+                (report.get("recovered_problem_events") or {}).get("event_types")
+                or {}
+            ),
         },
         "repository": {
             key: repository.get(key)
