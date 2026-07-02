@@ -3663,6 +3663,76 @@ async def test_get_balance_equity_history_hyperliquid_backfills_from_5m(monkeypa
 
 
 @pytest.mark.asyncio
+async def test_get_balance_equity_history_coin_hsl_skips_nonpanic_flat_price_fetch(
+    monkeypatch,
+):
+    cfg = _dummy_config()
+    cfg["live"]["pnls_max_lookback_days"] = 30.0
+    bot = _make_dummy_bot(cfg)
+    bot._live_values["pnls_max_lookback_days"] = 30.0
+    symbol = "AVAX/USDT:USDT"
+    base_minute = (1_700_000_000_000 // 60_000) * 60_000
+    bot.c_mults = {symbol: 1.0}
+    bot.inverse = False
+    bot.positions = {}
+    bot.fetched_positions = []
+    bot.get_exchange_time = lambda: base_minute + 180_000
+    bot.get_raw_balance = lambda: 95.0
+
+    async def fake_init_pnls():
+        return None
+
+    class FakeCM:
+        async def get_candles(
+            self, symbol_, start_ts=None, end_ts=None, strict=False, timeframe=None
+        ):
+            raise AssertionError(
+                f"non-panic flat coin-HSL history should not fetch candles for {symbol_}"
+            )
+
+    monkeypatch.setattr(bot, "init_pnls", fake_init_pnls)
+    bot.cm = FakeCM()
+
+    fill_events = [
+        {
+            "timestamp": base_minute,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 100.0,
+            "side": "buy",
+            "pnl": 0.0,
+            "pb_order_type": "entry",
+        },
+        {
+            "timestamp": base_minute + 60_000,
+            "symbol": symbol,
+            "position_side": "long",
+            "qty": 1.0,
+            "price": 95.0,
+            "side": "sell",
+            "pnl": -5.0,
+            "pb_order_type": "close_grid",
+        },
+    ]
+
+    history = await bot.get_balance_equity_history(
+        fill_events=fill_events,
+        current_balance=95.0,
+        hsl_replay_signal_mode="coin",
+    )
+
+    assert history["metadata"]["symbols_covered"] == []
+    assert history["metadata"]["missing_price_symbols"] == []
+    assert history["timeline"][-1]["realized_pnl_by_coin_pside"][symbol][
+        "long"
+    ] == pytest.approx(-5.0)
+    assert history["timeline"][-1]["unrealized_pnl_by_coin_pside"][symbol][
+        "long"
+    ] == pytest.approx(0.0)
+
+
+@pytest.mark.asyncio
 async def test_get_balance_equity_history_records_panic_flatten_with_same_minute_reentry(
     monkeypatch,
 ):

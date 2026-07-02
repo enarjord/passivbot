@@ -5594,6 +5594,24 @@ VPS5 deployment status:
   finishes. Fresh initial entries may remain blocked until full replay is
   complete.
 
+### Draft Slice: Coin-HSL Startup Replay Scope Narrowing
+
+- Branch: `codex/v8-hsl-coin-flat-history-upnl`.
+- Triggering evidence: after PR #988 was deployed to VPS5 at `d2021419`,
+  KuCoin was no longer running. Its latest log ended in terminal startup
+  failure during `equity_hard_stop_initialize_coin_from_history`:
+  `get_balance_equity_history()['timeline'][]['unrealized_pnl_by_coin_pside']`
+  missing required coin HSL symbol `AVAX/USDT:USDT`. The same startup had spent
+  more than an hour in coin-HSL history reconstruction and candle fetch locks
+  even though KuCoin had no current positions/open orders.
+- Root contract adjustment: coin-HSL startup replay should be strict for
+  current-position symbols and historical panic-close cooldown symbols, because
+  those can affect immediate protective action. Flat non-panic historical fill
+  symbols should not block startup or force candle-price replay; they remain
+  available to runtime coin-HSL through the PnL manager once the bot is active.
+- Intended result: faster and less brittle coin-HSL startup for flat accounts,
+  while preserving hard validation for held symbols and cooldown reconstruction.
+
 ## Current Next Steps
 
 1. Prioritize a separate trading-path PR for coin-HSL startup replay latency:
