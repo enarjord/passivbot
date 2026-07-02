@@ -3317,10 +3317,61 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
         ],
         "closest_to_red_truncated": 0,
     }
+    assert brief["risk_events"]["latest_groups"] == [
+        {
+            "bot": "binance/binance_01",
+            "event_type": "unstuck.selection",
+            "reason_code": "unstuck_selection",
+            "status": "succeeded",
+            "level": "info",
+            "symbol": "SUI/USDT:USDT",
+            "pside": "long",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 5000,
+        },
+        {
+            "bot": "binance/binance_01",
+            "event_type": "hsl.red_finalized_without_order",
+            "reason_code": "hsl_red_finalized_without_exchange_order",
+            "status": "succeeded",
+            "level": "info",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 4500,
+        },
+        {
+            "bot": "binance/binance_01",
+            "event_type": "risk.mode_changed",
+            "reason_code": "hsl_runtime_forced_modes",
+            "status": "succeeded",
+            "level": "info",
+            "pside": "long",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 4000,
+        },
+        {
+            "bot": "binance/binance_01",
+            "event_type": "hsl.status",
+            "reason_code": "yellow",
+            "status": "succeeded",
+            "level": "info",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "component": "test",
+            "count": 2,
+            "latest_ts": 3000,
+        },
+    ]
+    assert brief["risk_events"]["latest_groups_truncated"] is False
     assert "red_proximity_pct" in json.dumps(summary["risk_events"]["hsl_status"])
     assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
     assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
+    assert "latest_data" not in json.dumps(brief["risk_events"])
 
 
 def test_live_smoke_report_summarizes_hsl_cooldown_active_status(tmp_path):
