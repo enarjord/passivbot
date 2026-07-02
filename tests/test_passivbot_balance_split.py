@@ -2412,6 +2412,35 @@ def test_order_wave_summary_logs_elapsed_lifecycle(monkeypatch, caplog):
     )
 
 
+def test_order_wave_summary_uses_event_console_when_available(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._order_wave_seq = 0
+    bot._order_wave_last_summary_key = None
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = object()
+    emitted = []
+    bot._emit_order_wave_completed_event = lambda wave, **kwargs: emitted.append(
+        (wave, kwargs)
+    )
+    clock = iter([1_000_000, 1_002_500])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(clock))
+
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT"}],
+        [{"symbol": "ETH/USDT:USDT"}],
+    )
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+
+    with caplog.at_level(logging.INFO):
+        bot._log_order_wave_summary(wave)
+
+    assert emitted
+    assert emitted[0][1]["elapsed_ms"] == 2500
+    assert emitted[0][1]["level"] == "info"
+    assert not any("[order] wave complete" in record.message for record in caplog.records)
+
+
 def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, caplog):
     bot = Passivbot.__new__(Passivbot)
     bot._order_wave_seq = 0
@@ -2451,6 +2480,47 @@ def test_order_wave_settlement_logs_authoritative_confirmation(monkeypatch, capl
         and "symbols=BTC,ETH" in record.message
         for record in caplog.records
     )
+
+
+def test_order_wave_settlement_uses_event_console_when_available(monkeypatch, caplog):
+    bot = Passivbot.__new__(Passivbot)
+    bot._order_wave_seq = 0
+    bot._pending_order_waves = []
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = object()
+    emitted = []
+    bot._emit_execution_confirmation_satisfied_event = (
+        lambda **kwargs: emitted.append(kwargs)
+    )
+    times = iter([1_000_000, 1_000_500, 1_003_000, 1_003_000])
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: next(times))
+
+    wave = bot._begin_order_wave(
+        [{"symbol": "BTC/USDT:USDT"}],
+        [{"symbol": "ETH/USDT:USDT"}],
+    )
+    bot._authoritative_refresh_epoch = 4
+    bot._authoritative_pending_confirmations = {}
+    bot._order_wave_in_progress = wave
+    bot._request_authoritative_confirmation({"open_orders"})
+    bot._order_wave_in_progress = None
+    wave["cancel_posted"] = 1
+    wave["create_posted"] = 1
+    bot._track_order_wave_confirmation(wave)
+
+    with caplog.at_level(logging.INFO):
+        bot._log_settled_order_waves(
+            current_epoch=5,
+            fresh_surfaces={"open_orders"},
+            changed_surfaces=["open_orders", "positions"],
+        )
+
+    assert emitted
+    assert emitted[0]["elapsed_ms"] == 3000
+    assert emitted[0]["confirm_ms"] == 2500
+    assert emitted[0]["level"] == "info"
+    assert bot._pending_order_waves == []
+    assert not any("[order] wave settled" in record.message for record in caplog.records)
 
 
 def test_order_wave_settlement_demotes_quick_open_orders_confirmation(

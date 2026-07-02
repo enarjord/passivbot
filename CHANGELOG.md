@@ -8,6 +8,10 @@ All notable user-facing changes will be documented in this file.
   `hsl.red_triggered` event as informational instead of critical when no
   exchange close was needed, so smoke reports no longer treat cooldown-only
   flat symbols as hard panic failures.
+- Legacy order-wave complete/settled console lines are now suppressed when the
+  structured live event console path is active, leaving structured execution
+  wave summaries as the default operator output while preserving the legacy
+  lines as fallback.
 - Legacy unstuck status/selection console lines are now suppressed when the
   structured live event console path is active, leaving the structured
   `[unstuck]` projection as the default operator output while preserving a

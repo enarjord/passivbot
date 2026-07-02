@@ -4501,6 +4501,8 @@ class Passivbot:
                 elapsed_ms=elapsed_ms,
                 level=logging.getLevelName(log_level).lower(),
             )
+        if self._live_event_console_available():
+            return
         if log_level == logging.DEBUG and summary_key == getattr(
             self, "_order_wave_last_summary_key", None
         ):
@@ -4645,6 +4647,8 @@ class Passivbot:
                     confirm_ms=confirm_ms,
                     level=logging.getLevelName(log_level).lower(),
                 )
+            if self._live_event_console_available():
+                continue
             logging.log(
                 log_level,
                 "[order] wave settled | id=%s | elapsed_ms=%d | confirm_ms=%d | "
