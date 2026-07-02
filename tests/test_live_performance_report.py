@@ -1441,9 +1441,16 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     assert group["loaded"]["data"]["symbols"] == 5
     assert group["progress"]["data"]["is_held_pair"] is True
     assert group["progress"]["derived"]["observed_work_pct"] == 30
+    assert group["progress"]["derived"]["observed_required_work_pct"] == 40
     assert group["progress"]["derived"]["estimated_dense_pair_row_work"] == 40
     assert group["progress"]["derived"]["estimated_held_pair_row_work"] == 10
     assert group["progress"]["derived"]["estimated_required_pair_row_work"] == 30
+    assert group["progress"]["derived"]["estimated_dense_remaining_rows"] == 28
+    assert group["progress"]["derived"]["estimated_required_remaining_rows"] == 18
+    assert group["progress"]["derived"]["estimated_remaining_rows"] == 18
+    assert group["progress"]["derived"]["estimated_dense_remaining_ms"] == 227
+    assert group["progress"]["derived"]["estimated_required_remaining_ms"] == 146
+    assert group["progress"]["derived"]["estimated_remaining_ms"] == 146
     assert group["progress"]["derived"]["latest_elapsed_ms"] == 2500
     assert group["completed"]["derived"]["startup_blocking_elapsed_ms"] == 7500
     assert group["completed"]["derived"]["startup_blocking"] is True
@@ -1452,6 +1459,10 @@ def test_live_performance_report_hsl_replay_profile(tmp_path):
     assert group["failed"]["derived"]["latest_elapsed_ms"] == 8000
     assert "must-not-render" not in json.dumps(group, sort_keys=True)
     assert group["completed"]["derived"]["observed_work_pct"] == 75
+    assert group["completed"]["derived"]["estimated_dense_remaining_rows"] == 10
+    assert group["completed"]["derived"]["estimated_dense_remaining_ms"] == 250
+    assert group["completed"]["derived"]["estimated_remaining_rows"] == 0
+    assert group["completed"]["derived"]["estimated_remaining_ms"] == 0
 
 
 def test_live_performance_report_hsl_replay_profile_stage_summary(tmp_path):
