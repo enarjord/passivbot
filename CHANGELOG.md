@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Coin-mode HSL startup reconstruction now limits candle-price replay and
+  strict historical UPnL validation to current-position symbols and historical
+  panic-close cooldown symbols. Flat non-panic historical fill symbols no
+  longer block startup or force broad candle replay, while runtime coin-HSL
+  still evaluates them from fill history after startup.
 - `passivbot tool live-smoke-report` now labels active HSL startup replay
   groups as stale or long-running when existing monitor events show no recent
   progress or prolonged replay elapsed time, making startup-blocked bots easier

@@ -1271,6 +1271,60 @@ async def test_coin_hsl_history_replay_requires_relevant_symbol_fields():
 
 
 @pytest.mark.asyncio
+async def test_coin_hsl_startup_skips_flat_nonpanic_history_missing_upnl():
+    bot = make_coin_bot()
+    symbol = "A"
+
+    async def fake_history(current_balance=None, **kwargs):
+        return {
+            "timeline": [
+                {
+                    "timestamp": 60_000,
+                    "balance": 100.0,
+                    "realized_pnl": 0.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": 0.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+                {
+                    "timestamp": 120_000,
+                    "balance": 95.0,
+                    "realized_pnl": -5.0,
+                    "realized_pnl_by_coin_pside": {symbol: {"long": -5.0, "short": 0.0}},
+                    "unrealized_pnl_by_coin_pside": {},
+                },
+            ],
+            "panic_flatten_events": [],
+            "fill_events": [
+                {
+                    "timestamp": 60_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "increase",
+                    "qty": 1.0,
+                    "price": 100.0,
+                    "pnl": 0.0,
+                },
+                {
+                    "timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                    "action": "decrease",
+                    "qty": 1.0,
+                    "price": 95.0,
+                    "pnl": -5.0,
+                },
+            ],
+        }
+
+    bot.get_balance_equity_history = fake_history
+
+    await bot._equity_hard_stop_initialize_coin_from_history()
+
+    assert bot._equity_hard_stop_coin_initialized is True
+    assert bot._runtime_forced_modes == {"long": {}, "short": {}}
+
+
+@pytest.mark.asyncio
 async def test_coin_hsl_history_replay_allows_flat_realized_only_rows():
     bot = make_coin_bot()
     symbol = "A"
@@ -1380,7 +1434,14 @@ async def test_coin_hsl_history_replay_requires_upnl_for_flat_ambiguous_decrease
                     "unrealized_pnl_by_coin_pside": {},
                 },
             ],
-            "panic_flatten_events": [],
+            "panic_flatten_events": [
+                {
+                    "timestamp": 120_000,
+                    "minute_timestamp": 120_000,
+                    "symbol": symbol,
+                    "pside": "long",
+                }
+            ],
             "fill_events": [
                 {
                     "timestamp": 120_000,
@@ -1390,6 +1451,7 @@ async def test_coin_hsl_history_replay_requires_upnl_for_flat_ambiguous_decrease
                     "qty": 1.0,
                     "price": 95.0,
                     "pnl": -5.0,
+                    "pb_order_type": "close_panic_long",
                 },
             ],
         }

@@ -12349,7 +12349,16 @@ class Passivbot:
             )
         }
         symbols.update(current_position_symbols)
+        panic_event_symbols = {
+            evt["symbol"]
+            for evt in events
+            if evt["symbol"]
+            and "panic" in str(evt.get("pb_order_type") or "").lower()
+        }
         price_replay_symbols = set(symbols)
+        if str(hsl_replay_signal_mode or "").lower() == "coin":
+            coin_required_price_symbols = current_position_symbols | panic_event_symbols
+            price_replay_symbols.intersection_update(coin_required_price_symbols)
         known_market_symbols = (
             set(self.c_mults) if isinstance(getattr(self, "c_mults", None), dict) else set()
         )
@@ -12386,6 +12395,8 @@ class Passivbot:
                     "symbols": len(symbols),
                     "price_replay_symbols": len(price_replay_symbols),
                     "skipped_price_symbols": len(symbols - price_replay_symbols),
+                    "current_position_symbols": len(current_position_symbols),
+                    "panic_event_symbols": len(panic_event_symbols),
                     "history_minutes": history_minutes,
                     "replay_concurrency": int(replay_concurrency),
                     "lookback_days": lookback.display_value,
@@ -12538,6 +12549,8 @@ class Passivbot:
                         1 for prices in price_lookup.values() if not prices
                     ),
                     "approximate_price_symbols": len(approximate_price_sources),
+                    "current_position_symbols": len(current_position_symbols),
+                    "panic_event_symbols": len(panic_event_symbols),
                     "history_minutes": history_minutes,
                     "replay_concurrency": int(replay_concurrency),
                     "price_history_fetch_elapsed_s": round(candle_fetch_elapsed_s, 3),

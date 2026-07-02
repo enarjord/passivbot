@@ -2648,8 +2648,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     continue
                 pside = _equity_hard_stop_fill_pside(event)
                 symbols.add(symbol)
-                required_replay_pairs.add((pside, symbol))
-                remember_required_replay_start(pside, symbol, ts)
+                if (pside, symbol) in current_position_pairs:
+                    required_replay_pairs.add((pside, symbol))
+                    remember_required_replay_start(pside, symbol, ts)
         for row in timeline:
             if not isinstance(row, dict):
                 continue
@@ -2723,11 +2724,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
         rows = 0
         replay_started_s = time.monotonic()
         last_progress_log_s = replay_started_s
+        replay_symbols = set(symbols)
         active_pairs = [
             (pside, symbol)
             for pside in self._hsl_psides()
             if self._equity_hard_stop_coin_active_pside(pside)
-            for symbol in sorted(symbols)
+            for symbol in sorted(replay_symbols)
         ]
         active_pair_set = set(active_pairs)
         active_held_pairs = active_pair_set.intersection(current_position_pairs)
@@ -2823,7 +2825,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
             cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
             no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-            for symbol in sorted(symbols):
+            for symbol in sorted(replay_symbols):
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
                 state = self._hsl_coin_state(pside, symbol)
@@ -2956,6 +2958,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     if not has_unrealized and require_coin_timeline_value:
                         replay_position_size = replay_size_at(ts)
                         if replay_ambiguous or replay_position_size > 1e-12:
+                            if not require_coin_timeline_fields:
+                                continue
                             current_upnl = _equity_hard_stop_history_coin_value(
                                 row,
                                 "unrealized_pnl_by_coin_pside",
