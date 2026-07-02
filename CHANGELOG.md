@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Legacy unstuck status/selection console lines are now suppressed when the
+  structured live event console path is active, leaving the structured
+  `[unstuck]` projection as the default operator output while preserving a
+  fallback if that path is disabled.
 - Legacy startup timing console lines are now suppressed when the structured
   live event console path is active, leaving the structured `[boot]` projection
   as the default operator output while preserving a fallback if that path is
