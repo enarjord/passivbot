@@ -2574,6 +2574,7 @@ def _summarize_hsl_status(
     tier_counts: Counter[str] = Counter()
     signal_mode_counts: Counter[str] = Counter()
     closest: list[dict[str, Any]] = []
+    cooldown_active: list[dict[str, Any]] = []
     for group in groups.values():
         if group.get("event_type") != EventTypes.HSL_STATUS:
             continue
@@ -2595,6 +2596,27 @@ def _summarize_hsl_status(
         signal_mode = data.get("signal_mode")
         if signal_mode not in (None, ""):
             signal_mode_counts[str(signal_mode)] += count
+        cooldown_until_ms = _non_negative_int(data.get("cooldown_until_ms"))
+        cooldown_remaining_seconds = _numeric_value(
+            data.get("cooldown_remaining_seconds")
+        )
+        if cooldown_until_ms is not None or cooldown_remaining_seconds is not None:
+            cooldown_active.append(
+                {
+                    key: value
+                    for key, value in {
+                        "bot": bot,
+                        "symbol": symbol,
+                        "pside": group.get("pside"),
+                        "tier": str(tier) if tier not in (None, "") else None,
+                        "reason_code": group.get("reason_code"),
+                        "cooldown_remaining_seconds": cooldown_remaining_seconds,
+                        "cooldown_until_ms": cooldown_until_ms,
+                        "latest_ts": _non_negative_int(group.get("latest_ts")),
+                    }.items()
+                    if value not in (None, "", {})
+                }
+            )
         dist_to_red = _numeric_value(data.get("dist_to_red"))
         if dist_to_red is None:
             continue
@@ -2645,7 +2667,16 @@ def _summarize_hsl_status(
             str(item.get("pside") or ""),
         ),
     )
-    return {
+    cooldown_sorted = sorted(
+        cooldown_active,
+        key=lambda item: (
+            -int(item.get("latest_ts") or 0),
+            str(item.get("bot") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+        ),
+    )
+    out = {
         "total": total,
         "bots": len(bots),
         "symbols": _symbol_sample(symbols, limit=8),
@@ -2654,6 +2685,10 @@ def _summarize_hsl_status(
         "closest_to_red": closest_sorted[:5],
         "closest_to_red_truncated": max(0, len(closest_sorted) - 5),
     }
+    if cooldown_sorted:
+        out["cooldown_active"] = cooldown_sorted[:5]
+        out["cooldown_active_truncated"] = max(0, len(cooldown_sorted) - 5)
+    return out
 
 
 def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
@@ -2668,6 +2703,7 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
             "tier_counts",
             "signal_mode_counts",
             "closest_to_red_truncated",
+            "cooldown_active_truncated",
         )
         if hsl_status.get(key) is not None
     }
@@ -2690,6 +2726,28 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
             for item in closest[:5]
             if isinstance(item, dict)
         ]
+    cooldown_active = hsl_status.get("cooldown_active")
+    if isinstance(cooldown_active, list):
+        compact_cooldown_active = [
+            {
+                key: item.get(key)
+                for key in (
+                    "bot",
+                    "symbol",
+                    "pside",
+                    "tier",
+                    "reason_code",
+                    "cooldown_remaining_seconds",
+                    "cooldown_until_ms",
+                    "latest_ts",
+                )
+                if isinstance(item, dict) and item.get(key) not in (None, "", {})
+            }
+            for item in cooldown_active[:5]
+            if isinstance(item, dict)
+        ]
+        if compact_cooldown_active:
+            out["cooldown_active"] = compact_cooldown_active
     return out
 
 

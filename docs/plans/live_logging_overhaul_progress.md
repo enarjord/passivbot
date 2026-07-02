@@ -5730,6 +5730,33 @@ VPS5 deployment status:
 - Expected validation: focused HSL risk smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #994 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `a071492a`. The post-deploy 10-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `matched_expected=5`, clean tracked
+  repository state, and the new normalized `red_proximity_pct` values visible
+  in `risk_events.hsl_status.closest_to_red`.
+
+### Draft Slice: HSL Cooldown Smoke Summary
+
+- Branch: `codex/v8-smoke-hsl-cooldown-summary`.
+- Scope: read-only smoke-report projection for existing `hsl.status` cooldown
+  events.
+- Triggering evidence: the post-PR #994 VPS5 smoke showed
+  `risk_events.hsl_status.tier_counts.red > 0`, but `closest_to_red` contained
+  only green symbols. A focused `live-event-query` showed RED cooldown
+  `hsl.status` events for ZEC with `tier=red`, `reason_code=cooldown_active`,
+  `cooldown_remaining_seconds`, and `cooldown_until_ms`, but no drawdown
+  distance metrics. Operators should not need an event query to see which RED
+  cooldown targets explain the red tier count.
+- Intended result: include bounded active HSL cooldown target samples in full,
+  summary, and brief smoke-report risk summaries. This changes only report
+  output; it does not add event producers, exchange calls, readiness gates, HSL
+  behavior, order logic, risk logic, monitor writes, console routing, or
+  trading behavior.
+- Expected validation: focused HSL cooldown smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

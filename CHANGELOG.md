@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now lists active HSL cooldown targets in
+  concise risk summaries, so RED cooldown symbols are visible even when they do
+  not have current drawdown-distance metrics.
 - `passivbot tool live-smoke-report` now includes normalized HSL red-proximity
   percentages in concise closest-to-red risk summaries, making current HSL
   proximity visible without exposing raw drawdown-space thresholds.
