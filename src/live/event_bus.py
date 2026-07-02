@@ -335,6 +335,19 @@ def normalize_live_event_console_enabled(value: Any) -> bool:
     return bool(value)
 
 
+def resolve_live_event_console_enabled(
+    *,
+    config_value: Any = None,
+    env_value: Any = None,
+    default: bool = True,
+) -> bool:
+    if env_value is not None:
+        return normalize_live_event_console_enabled(env_value)
+    if config_value is not None:
+        return normalize_live_event_console_enabled(config_value)
+    return bool(default)
+
+
 PHASE1_EVENT_TYPES = {
     EventTypes.BOT_STARTED,
     EventTypes.BOT_READY,
