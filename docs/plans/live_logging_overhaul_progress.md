@@ -5980,6 +5980,35 @@ VPS5 deployment status:
 - Expected validation: focused HSL replay smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #1003 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `c0238f0d`. A short post-deploy smoke reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state, and the five configured live bots still running. The new dense max
+  aggregate fields were visible: dense remaining rows/time were nonzero while
+  the legacy primary required-work max fields correctly remained zero. A wider
+  45-minute smoke window also exposed an older KuCoin NEAR HSL RED hard text
+  match; finding the actual log lines required rerunning the larger summary
+  report.
+
+### Draft Slice: Brief Log Match Samples
+
+- Branch: `codex/v8-smoke-brief-log-match-samples`.
+- Scope: read-only brief smoke-report projection over existing sanitized text
+  log matches.
+- Triggering evidence: after PR #1003 deployment, the short post-deploy smoke
+  was green, but a wider window reported `log_hard_matches=2` from an older
+  KuCoin NEAR HSL RED event. The brief output showed only counts, so the
+  operator had to rerun summary sections to identify the log path, line, and
+  text.
+- Intended result: keep the full `matches` list out of `--brief`, but include
+  bounded `hard_samples` and `attention_samples` under `logs`, sourced from the
+  same redacted match objects already emitted by the summary report. This
+  changes only report output; it does not add log scanning, event producers,
+  exchange calls, HSL behavior, order/risk logic, monitor writes, console
+  routing, or trading behavior.
+- Expected validation: focused log-sample smoke-report tests, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 
