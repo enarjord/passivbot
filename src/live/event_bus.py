@@ -719,7 +719,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.HSL_COOLDOWN_ENDED: EventRoute(console=False, text=False),
     EventTypes.TRAILING_STATUS: EventRoute(console=True, text=True),
     EventTypes.UNSTUCK_STATUS: EventRoute(console=True, text=True),
-    EventTypes.UNSTUCK_SELECTION: EventRoute(console=False, text=False),
+    EventTypes.UNSTUCK_SELECTION: EventRoute(console=True, text=True),
     EventTypes.RISK_ENTRY_COOLDOWN_DELTA_ANCHORED: EventRoute(
         console=False, text=False
     ),
@@ -797,6 +797,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.HSL_STATUS: "risk",
     EventTypes.TRAILING_STATUS: "trailing",
     EventTypes.UNSTUCK_STATUS: "unstuck",
+    EventTypes.UNSTUCK_SELECTION: "unstuck",
     EventTypes.REALIZED_LOSS_GATE_BLOCKED: "risk",
     EventTypes.SINK_DEGRADED: "logging",
 }
@@ -1410,34 +1411,40 @@ def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
         parts.append(f"mode={selected_mode}")
     threshold_met = data.get("threshold_met")
     if threshold_met is not None:
-        parts.append(f"threshold_met={bool(threshold_met)}")
+        parts.append(f"threshold_met={'yes' if bool(threshold_met) else 'no'}")
     threshold_pct = _data_number(data, "threshold_pct")
-    if threshold_pct is not None:
+    threshold_price = _data_number(data, "threshold_price")
+    if threshold_pct is not None and threshold_price:
+        parts.append(f"threshold={threshold_pct * 100.0:.4f}%@{threshold_price:g}")
+    elif threshold_pct is not None:
         parts.append(f"threshold={threshold_pct * 100.0:.4f}%")
-    threshold_price = _data_float(data, "threshold_price")
-    if threshold_price:
-        parts.append(f"threshold_price={threshold_price}")
+    elif threshold_price:
+        parts.append(f"threshold_price={threshold_price:g}")
     threshold_dist = _data_number(data, "current_vs_threshold_ratio")
     if threshold_dist is not None:
         parts.append(f"threshold_dist={threshold_dist * 100.0:.4f}%")
     retracement_met = data.get("retracement_met")
     if retracement_met is not None:
-        parts.append(f"retracement_met={bool(retracement_met)}")
+        parts.append(f"retracement_met={'yes' if bool(retracement_met) else 'no'}")
     retracement_pct = _data_number(data, "retracement_pct")
-    if retracement_pct is not None:
+    retracement_price = _data_number(data, "retracement_price")
+    if retracement_pct is not None and retracement_price:
+        parts.append(f"retracement={retracement_pct * 100.0:.4f}%@{retracement_price:g}")
+    elif retracement_pct is not None:
         parts.append(f"retracement={retracement_pct * 100.0:.4f}%")
-    retracement_price = _data_float(data, "retracement_price")
-    if retracement_price:
-        parts.append(f"retracement_price={retracement_price}")
+    elif retracement_price:
+        parts.append(f"retracement_price={retracement_price:g}")
     retracement_dist = _data_number(data, "current_vs_retracement_ratio")
     if retracement_dist is not None:
         parts.append(f"retracement_dist={retracement_dist * 100.0:.4f}%")
-    projected = _data_float(data, "threshold_projection_retracement_price")
-    if projected:
-        parts.append(f"threshold_retrace_price={projected}")
-    current_price = _data_float(data, "current_price")
+    projected = _data_number(data, "threshold_projection_retracement_price")
+    if projected and retracement_pct is not None:
+        parts.append(f"if_threshold_retrace={retracement_pct * 100.0:.4f}%@{projected:g}")
+    elif projected:
+        parts.append(f"if_threshold_retrace_price={projected:g}")
+    current_price = _data_number(data, "current_price")
     if current_price:
-        parts.append(f"current={current_price}")
+        parts.append(f"current={current_price:g}")
     return parts
 
 
@@ -1453,29 +1460,49 @@ def _console_unstuck_status_summary(event: LiveEvent) -> list[str]:
                 continue
             status = str(info.get("status") or "unknown")
             bit = f"{pside}:{status}"
-            allowance = _data_float(info, "allowance")
-            if allowance:
-                bit += f":allowance={allowance}"
+            allowance = _data_number(info, "allowance")
+            if allowance is not None:
+                bit += f" allowance={allowance:g}"
             if info.get("over_budget") is True:
-                bit += ":over_budget"
+                bit += " over_budget"
             next_symbol = _data_str(info, "next_symbol")
             if next_symbol:
-                bit += f":next={next_symbol}"
-            target_price = _data_float(info, "next_target_price")
+                bit += f" candidate={next_symbol}"
+            target_price = _data_number(info, "next_target_price")
             if target_price:
-                bit += f":target={target_price}"
+                bit += f" target={target_price:g}"
             target_dist = _data_number(info, "next_target_distance_ratio")
             if target_dist is not None:
-                bit += f":target_dist={target_dist * 100.0:.4f}%"
+                bit += f" target_dist={target_dist * 100.0:.4f}%"
             trigger_dist = _data_number(info, "next_unstuck_trigger_distance_ratio")
             if trigger_dist is not None:
-                bit += f":ema_gate={trigger_dist * 100.0:.4f}%"
+                bit += f" ema_gate_dist={trigger_dist * 100.0:.4f}%"
             side_parts.append(bit)
         if side_parts:
             parts.append(" ".join(side_parts))
     over_budget = _compact_csv(data.get("over_budget_sides"), limit=2)
     if over_budget:
         parts.append(f"over_budget={over_budget}")
+    if data.get("changed") is True:
+        parts.append("changed=true")
+    return parts
+
+
+def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    entry_price = _data_number(data, "entry_price")
+    if entry_price:
+        parts.append(f"entry={entry_price:g}")
+    current_price = _data_number(data, "current_price")
+    if current_price:
+        parts.append(f"current={current_price:g}")
+    diff_pct = _data_number(data, "price_diff_pct")
+    if diff_pct is not None:
+        parts.append(f"pos_pnl_dist={diff_pct:.4f}%")
+    allowance = _data_number(data, "allowance")
+    if allowance is not None:
+        parts.append(f"allowance={allowance:g}")
     if data.get("changed") is True:
         parts.append("changed=true")
     return parts
@@ -1533,6 +1560,8 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_trailing_status_summary(event)
     if event.event_type == EventTypes.UNSTUCK_STATUS:
         return _console_unstuck_status_summary(event)
+    if event.event_type == EventTypes.UNSTUCK_SELECTION:
+        return _console_unstuck_selection_summary(event)
     if event.event_type == EventTypes.REALIZED_LOSS_GATE_BLOCKED:
         return _console_realized_loss_gate_summary(event)
     return []
