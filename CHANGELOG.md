@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now reports timestamp/nonce
+  `cycle.degraded` events recovered by a subsequent successful
+  `exchange.time_sync` event as recovered problem events instead of hard smoke
+  failures, while unrecovered timestamp/nonce errors remain hard.
 - Coin-mode HSL startup reconstruction now limits candle-price replay and
   strict historical UPnL validation to current-position symbols and historical
   panic-close cooldown symbols. Flat non-panic historical fill symbols no

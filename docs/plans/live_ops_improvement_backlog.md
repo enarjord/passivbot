@@ -131,6 +131,29 @@ Related detailed plans:
      events, with value-safe shareable summary/brief output. This makes current
      HSL tier/symbol/bot status visible in smoke loops, but does not reduce
      startup replay latency or change panic/cooldown behavior.
+   - 2026-07-02: PR #988 added active HSL replay stale/long-running
+     classification to `live-smoke-report`, making a missing completion event
+     visible while a bot is still startup-blocked. A subsequent VPS5 deploy
+     exposed Kucoin as stopped after a terminal coin-HSL startup validation
+     failure, not merely slow replay.
+   - 2026-07-02: PR #989 narrowed coin-mode HSL price replay strictness to
+     current-position and historical panic/cooldown symbols. Kucoin no longer
+     failed on a flat, non-panic historical AVAX fill and no candle cache was
+     used for HSL price replay (`cm_cache=0.00 MiB`). However, the remaining
+     dense row replay still took `1237.7s` and the bot reached READY only after
+     about `1445s`, confirming the next fix must target the
+     `timeline_minutes * pairs` replay loop rather than only candle fetching or
+     missing-UPnL validation.
+   - 2026-07-02: The same Kucoin restart emitted a recovered first-cycle
+     `InvalidNonce` after the long startup and finalized a NEAR coin-HSL RED
+     cooldown from replayed history. These should be handled as separate
+     follow-ups: refresh exchange time before the first cycle after very long
+     startup, and review whether smoke should distinguish expected HSL
+     red/cooldown risk events from software hard failures. Branch
+     `codex/v8-smoke-recovered-time-sync` addresses the smoke side for
+     timestamp/nonce recovery by classifying same-cycle successful
+     `exchange.time_sync` as recovered problem evidence instead of a persistent
+     hard failure.
 
 1. [x] Incident bundle generator.
    Status: initial implementation plus trace-report integration merged.
