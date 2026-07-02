@@ -832,6 +832,21 @@ async def test_coin_hsl_finalize_emits_flat_without_order_event():
     assert event.data["stop_event_anchor_fallback_used"] is True
     assert event.data["cooldown_until_ms"] == 480_000
     assert event.data["drawdown_raw"] == 0.0
+    red_events = [
+        event for event in sink.events if event.event_type == EventTypes.HSL_RED_TRIGGERED
+    ]
+    assert len(red_events) == 1
+    red_event = red_events[0]
+    assert red_event.level == "info"
+    assert red_event.status == "succeeded"
+    assert red_event.reason_code == "coin_red_stop_finalized"
+    assert red_event.data["no_exchange_close_needed"] is True
+    assert red_event.data["exchange_close_order_submitted"] is False
+    assert red_event.data["panic_order_submitted_count"] == 0
+    assert red_event.data["symbol_position_open"] is False
+    assert red_event.data["entry_orders"] == 0
+    assert red_event.data["nonpanic_close_orders"] == 0
+    assert red_event.data["flat_confirmations"] == 2
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

@@ -255,6 +255,7 @@ def _emit_hsl_red_triggered_once(
 ) -> None:
     if state.get("red_trigger_event_emitted"):
         return
+    no_exchange_close_needed = bool(data.get("no_exchange_close_needed"))
     _emit_hsl_event(
         self,
         "hsl.red_triggered",
@@ -263,8 +264,8 @@ def _emit_hsl_red_triggered_once(
         pside=pside,
         symbol=symbol,
         ts=ts,
-        level="critical",
-        status="degraded",
+        level="info" if no_exchange_close_needed else "critical",
+        status="succeeded" if no_exchange_close_needed else "degraded",
         reason_code=reason_code,
     )
     state["red_trigger_event_emitted"] = True
@@ -4070,17 +4071,27 @@ async def _equity_hard_stop_finalize_coin_red_stop(
             entry_orders=entry_orders,
             nonpanic_close_orders=nonpanic_close_orders,
         )
+    trigger_extra = {
+        "reason": "coin_red_stop_finalized",
+        "cooldown_until_ms": cooldown_until_ms,
+        "no_restart_latched": bool(no_restart_latched),
+    }
+    if finalized_without_order:
+        trigger_extra.update(
+            {
+                "no_exchange_close_needed": True,
+                "exchange_close_order_submitted": False,
+                "panic_order_submitted_count": 0,
+                "symbol_position_open": False,
+                "entry_orders": entry_orders,
+                "nonpanic_close_orders": nonpanic_close_orders,
+                "flat_confirmations": flat_confirmations,
+            }
+        )
     _emit_hsl_red_triggered_once(
         self,
         state,
-        _hsl_event_data(
-            stop_event,
-            {
-                "reason": "coin_red_stop_finalized",
-                "cooldown_until_ms": cooldown_until_ms,
-                "no_restart_latched": bool(no_restart_latched),
-            },
-        ),
+        _hsl_event_data(stop_event, trigger_extra),
         pside=pside,
         symbol=symbol,
         ts=stop_ts_ms,

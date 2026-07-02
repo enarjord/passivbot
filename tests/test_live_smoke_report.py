@@ -3294,6 +3294,22 @@ def test_live_smoke_report_distinguishes_attention_and_hard_structured_events(
                 level="critical",
                 reason_code="terminal_startup_failure",
             ),
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                seq=3,
+                ts=1200,
+                status="succeeded",
+                level="info",
+                reason_code="coin_red_stop_finalized",
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                data={
+                    "no_exchange_close_needed": True,
+                    "exchange_close_order_submitted": False,
+                    "panic_order_submitted_count": 0,
+                    "symbol_position_open": False,
+                },
+            ),
         ],
     )
 
