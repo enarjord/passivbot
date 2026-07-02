@@ -103,6 +103,7 @@ RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
     EventTypes.HSL_TRANSITION,
     EventTypes.HSL_STATUS,
+    EventTypes.HSL_RAW_RED_PENDING,
     EventTypes.HSL_RED_TRIGGERED,
     EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER,
     EventTypes.HSL_COOLDOWN_STARTED,
@@ -2405,6 +2406,8 @@ def _risk_event_group(
             "drawdown_raw",
             "drawdown_ema",
             "dist_to_red",
+            "ema_gap_to_red",
+            "elapsed_minutes",
             "red_threshold",
             "cooldown_until_ms",
             "cooldown_remaining",
@@ -2433,6 +2436,7 @@ def _risk_event_group(
     event_type = live_event.get("event_type") or row.get("kind")
     hsl_anchor_sources: Counter[str] = Counter()
     hsl_anchor_fallback_used = 0
+    hsl_raw_red_pending_data: dict[str, Any] = {}
     if event_type == EventTypes.HSL_RED_FINALIZED_WITHOUT_ORDER:
         for key in (
             "drawdown_score",
@@ -2447,6 +2451,28 @@ def _risk_event_group(
             hsl_anchor_sources[str(anchor_source)] += 1
         if latest_data.get("stop_event_anchor_fallback_used") is True:
             hsl_anchor_fallback_used = 1
+    if event_type == EventTypes.HSL_RAW_RED_PENDING:
+        hsl_raw_red_pending_data = {
+            key: latest_data.get(key)
+            for key in (
+                "signal_mode",
+                "tier",
+                "drawdown_score",
+                "ema_gap_to_red",
+                "elapsed_minutes",
+                "red_threshold",
+            )
+            if latest_data.get(key) is not None
+        }
+        for key in (
+            "drawdown_score",
+            "drawdown_raw",
+            "drawdown_ema",
+            "dist_to_red",
+            "ema_gap_to_red",
+            "red_threshold",
+        ):
+            latest_data.pop(key, None)
     return {
         "bot": bot_key,
         "event_type": event_type,
@@ -2464,6 +2490,7 @@ def _risk_event_group(
         "latest_data": latest_data,
         "_hsl_anchor_sources": hsl_anchor_sources,
         "_hsl_anchor_fallback_used": hsl_anchor_fallback_used,
+        "_hsl_raw_red_pending_data": hsl_raw_red_pending_data,
         "latest_ids": {
             key: ids.get(key)
             for key in ("cycle_id", "snapshot_id", "plan_id", "action_id")
@@ -2516,6 +2543,7 @@ def _merge_risk_event_group(
             "latest_path",
             "latest_line",
             "latest_data",
+            "_hsl_raw_red_pending_data",
             "latest_ids",
         ):
             existing[field] = group.get(field)
@@ -2697,6 +2725,97 @@ def _summarize_hsl_status(
     return out
 
 
+def _summarize_hsl_raw_red_pending(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+) -> dict[str, Any]:
+    total = 0
+    bots: set[str] = set()
+    symbols: Counter[str] = Counter()
+    signal_mode_counts: Counter[str] = Counter()
+    pending: list[dict[str, Any]] = []
+    for group in groups.values():
+        if group.get("event_type") != EventTypes.HSL_RAW_RED_PENDING:
+            continue
+        count = int(group.get("count") or 0)
+        if count <= 0:
+            continue
+        total += count
+        bot = group.get("bot")
+        if bot not in (None, ""):
+            bots.add(str(bot))
+        symbol = group.get("symbol")
+        if symbol not in (None, ""):
+            symbols[str(symbol)] += count
+        latest_data = group.get("latest_data")
+        raw_pending_data = group.get("_hsl_raw_red_pending_data")
+        data = (
+            raw_pending_data
+            if isinstance(raw_pending_data, dict) and raw_pending_data
+            else latest_data
+            if isinstance(latest_data, dict)
+            else {}
+        )
+        signal_mode = data.get("signal_mode")
+        if signal_mode not in (None, ""):
+            signal_mode_counts[str(signal_mode)] += count
+        tier = data.get("tier")
+        red_threshold = _numeric_value(data.get("red_threshold"))
+        drawdown_score = _numeric_value(data.get("drawdown_score"))
+        red_proximity_pct = None
+        if red_threshold is not None and red_threshold > 0 and drawdown_score is not None:
+            red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
+        ema_gap_to_red = _numeric_value(data.get("ema_gap_to_red"))
+        ema_gap_to_red_pct = None
+        if red_threshold is not None and red_threshold > 0 and ema_gap_to_red is not None:
+            ema_gap_to_red_pct = round((ema_gap_to_red / red_threshold) * 100.0, 3)
+        pending.append(
+            {
+                key: value
+                for key, value in {
+                    "bot": bot,
+                    "symbol": symbol,
+                    "pside": group.get("pside"),
+                    "tier": str(tier) if tier not in (None, "") else None,
+                    "signal_mode": str(signal_mode)
+                    if signal_mode not in (None, "")
+                    else None,
+                    "red_proximity_pct": red_proximity_pct,
+                    "ema_gap_to_red_pct": ema_gap_to_red_pct,
+                    "elapsed_minutes": _non_negative_int(data.get("elapsed_minutes")),
+                    "latest_ts": _non_negative_int(group.get("latest_ts")),
+                }.items()
+                if value not in (None, "", {})
+            }
+        )
+    if total <= 0:
+        return {
+            "total": 0,
+            "bots": 0,
+            "symbols": {"count": 0, "sample": [], "truncated": 0},
+            "signal_mode_counts": {},
+            "pending": [],
+            "pending_truncated": 0,
+        }
+    pending_sorted = sorted(
+        pending,
+        key=lambda item: (
+            -float(item.get("red_proximity_pct") or 0.0),
+            -int(item.get("latest_ts") or 0),
+            str(item.get("bot") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+        ),
+    )
+    return {
+        "total": total,
+        "bots": len(bots),
+        "symbols": _symbol_sample(symbols, limit=8),
+        "signal_mode_counts": dict(signal_mode_counts.most_common()),
+        "pending": pending_sorted[:5],
+        "pending_truncated": max(0, len(pending_sorted) - 5),
+    }
+
+
 def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
     if not isinstance(hsl_status, dict):
         return {}
@@ -2757,6 +2876,46 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
     return out
 
 
+def _shareable_hsl_raw_red_pending(raw_red_pending: Any) -> dict[str, Any]:
+    if not isinstance(raw_red_pending, dict):
+        return {}
+    out = {
+        key: raw_red_pending.get(key)
+        for key in (
+            "total",
+            "bots",
+            "symbols",
+            "signal_mode_counts",
+            "pending_truncated",
+        )
+        if raw_red_pending.get(key) is not None
+    }
+    pending = raw_red_pending.get("pending")
+    if isinstance(pending, list):
+        compact_pending = [
+            {
+                key: item.get(key)
+                for key in (
+                    "bot",
+                    "symbol",
+                    "pside",
+                    "tier",
+                    "signal_mode",
+                    "red_proximity_pct",
+                    "ema_gap_to_red_pct",
+                    "elapsed_minutes",
+                    "latest_ts",
+                )
+                if isinstance(item, dict) and item.get(key) not in (None, "", {})
+            }
+            for item in pending[:5]
+            if isinstance(item, dict)
+        ]
+        if compact_pending:
+            out["pending"] = compact_pending
+    return out
+
+
 SHAREABLE_RISK_LATEST_DATA_KEYS = frozenset(
     {
         "signal_mode",
@@ -2770,6 +2929,7 @@ SHAREABLE_RISK_LATEST_DATA_KEYS = frozenset(
         "cooldown_remaining_seconds",
         "last_red_ts",
         "pending_red_since_ms",
+        "elapsed_minutes",
         "stop_event_timestamp_ms",
         "stop_event_anchor_source",
         "stop_event_anchor_timestamp_ms",
@@ -2814,12 +2974,13 @@ def _summarize_risk_events(
                 "latest_seq",
                 "_hsl_anchor_sources",
                 "_hsl_anchor_fallback_used",
+                "_hsl_raw_red_pending_data",
             }
             and value not in (None, {}, [])
         }
         for group in ordered[:RISK_EVENT_GROUP_LIMIT]
     ]
-    return {
+    out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > RISK_EVENT_GROUP_LIMIT,
         "event_types": dict(event_type_counts.most_common()),
@@ -2829,6 +2990,10 @@ def _summarize_risk_events(
         "hsl_status": _summarize_hsl_status(groups),
         "groups": compact_groups,
     }
+    hsl_raw_red_pending = _summarize_hsl_raw_red_pending(groups)
+    if int(hsl_raw_red_pending.get("total") or 0) > 0:
+        out["hsl_raw_red_pending"] = hsl_raw_red_pending
+    return out
 
 
 def _compact_shutdown_event_data(live_event: dict[str, Any]) -> dict[str, Any]:
@@ -5551,6 +5716,9 @@ def _summary_limited_groups(
                 "hsl_flat_finalization_anchors"
             ),
             "hsl_status": _shareable_hsl_status(summary.get("hsl_status")),
+            "hsl_raw_red_pending": _shareable_hsl_raw_red_pending(
+                summary.get("hsl_raw_red_pending")
+            ),
             "groups_truncated": bool(summary.get("groups_truncated"))
             or len(groups) > limit,
             "groups": limited_groups,
@@ -6254,6 +6422,20 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         value = staged_readiness_health.get(key)
         if isinstance(value, dict) and value:
             staged_readiness_brief[key] = value
+    risk_events_brief = {
+        "total": _count_value(risk_events.get("total")),
+        "event_types": risk_events.get("event_types") or {},
+        "hsl_flat_finalization_anchors": risk_events.get(
+            "hsl_flat_finalization_anchors"
+        )
+        or {},
+        "hsl_status": _shareable_hsl_status(risk_events.get("hsl_status")),
+    }
+    raw_red_pending = _shareable_hsl_raw_red_pending(
+        risk_events.get("hsl_raw_red_pending")
+    )
+    if raw_red_pending:
+        risk_events_brief["hsl_raw_red_pending"] = raw_red_pending
     return {
         "ok": bool(report.get("ok")),
         "attention": bool(report.get("attention")),
@@ -6437,15 +6619,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             "event_types": event_pipeline_health.get("event_types") or {},
         },
         "hsl_replay": _brief_hsl_replay_health(hsl_replay_health),
-        "risk_events": {
-            "total": _count_value(risk_events.get("total")),
-            "event_types": risk_events.get("event_types") or {},
-            "hsl_flat_finalization_anchors": risk_events.get(
-                "hsl_flat_finalization_anchors"
-            )
-            or {},
-            "hsl_status": _shareable_hsl_status(risk_events.get("hsl_status")),
-        },
+        "risk_events": risk_events_brief,
         "shutdown_events": {
             "total": _count_value(shutdown_events.get("total")),
             "event_types": shutdown_events.get("event_types") or {},

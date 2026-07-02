@@ -5782,6 +5782,33 @@ VPS5 deployment status:
 - Expected validation: focused staged-readiness smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #996 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `fae2b0b8`. The post-deploy 10-minute brief smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked
+  repository state, and the five configured live bots still running.
+
+### Draft Slice: HSL Raw-Red-Pending Smoke Summary
+
+- Branch: `codex/v8-smoke-hsl-raw-red-pending-summary`.
+- Scope: read-only smoke-report projection for existing `hsl.raw_red_pending`
+  events.
+- Triggering evidence: the post-PR #996 VPS5 smoke showed
+  `problem_events.event_types.hsl.raw_red_pending=1`, but the concise
+  `risk_events` section did not identify the pending target. A focused
+  `live-event-query` showed KuCoin `ASTER/USDT:USDT` long with
+  `reason_code=hsl_raw_red_pending_ema_confirmation`, `tier=yellow`, raw
+  drawdown already beyond red, and EMA drawdown still below red by
+  `ema_gap_to_red`.
+- Intended result: include bounded HSL raw-red-pending target samples in full,
+  summary, and brief smoke-report risk output, with normalized
+  `red_proximity_pct` and `ema_gap_to_red_pct` but without raw drawdown,
+  threshold, balance, or payload internals. This changes only report output; it
+  does not add event producers, exchange calls, readiness gates, HSL behavior,
+  order logic, risk logic, monitor writes, console routing, or trading
+  behavior.
+- Expected validation: focused raw-red-pending smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

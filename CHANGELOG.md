@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now summarizes HSL raw-red-pending
+  targets in concise risk output, including bounded red-proximity and
+  EMA-gap-to-red percentages without exposing raw drawdown internals.
 - `passivbot tool live-smoke-report` now names staged-readiness missing and
   invalid surfaces in summary and brief output, so issues like stale
   `completed_candles` are visible without a separate event query.

@@ -3257,6 +3257,145 @@ def test_live_smoke_report_summarizes_hsl_cooldown_active_status(tmp_path):
     assert brief["problem_events"]["event_types"] == {"hsl.status": 1}
 
 
+def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.raw_red_pending",
+                seq=1,
+                ts=1000,
+                exchange="kucoin",
+                user="kucoin_01",
+                symbol="ASTER/USDT:USDT",
+                pside="long",
+                reason_code="hsl_raw_red_pending_ema_confirmation",
+                status="degraded",
+                level="warning",
+                ids={"cycle_id": "cy_pending"},
+                data={
+                    "signal_mode": "coin",
+                    "tier": "yellow",
+                    "drawdown_score": 0.08,
+                    "drawdown_raw": 0.18,
+                    "drawdown_ema": 0.08,
+                    "dist_to_red": 0.03,
+                    "ema_gap_to_red": 0.03,
+                    "red_threshold": 0.10,
+                    "raw_excess": 0.08,
+                    "elapsed_minutes": 5,
+                    "balance": 12345.67,
+                    "secret_marker": "pending-secret",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.raw_red_pending",
+                seq=2,
+                ts=2000,
+                exchange="kucoin",
+                user="kucoin_01",
+                symbol="ASTER/USDT:USDT",
+                pside="long",
+                reason_code="hsl_raw_red_pending_ema_confirmation",
+                status="degraded",
+                level="warning",
+                ids={"cycle_id": "cy_pending_2"},
+                data={
+                    "signal_mode": "coin",
+                    "tier": "red",
+                    "drawdown_score": 0.095,
+                    "drawdown_raw": 0.19,
+                    "drawdown_ema": 0.095,
+                    "dist_to_red": 0.005,
+                    "ema_gap_to_red": 0.005,
+                    "red_threshold": 0.10,
+                    "raw_excess": 0.09,
+                    "elapsed_minutes": 8,
+                    "balance": 98765.43,
+                    "secret_marker": "new-pending-secret",
+                },
+            )
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["ok"] is True
+    assert report["attention"] is True
+    assert report["risk_events"]["event_types"] == {"hsl.raw_red_pending": 2}
+    assert report["risk_events"]["groups"][0]["count"] == 2
+    assert report["risk_events"]["groups"][0]["latest_data"] == {
+        "signal_mode": "coin",
+        "tier": "red",
+        "elapsed_minutes": 8,
+    }
+    assert report["risk_events"]["hsl_raw_red_pending"] == {
+        "total": 2,
+        "bots": 1,
+        "symbols": {
+            "count": 1,
+            "sample": ["ASTER/USDT:USDT"],
+            "truncated": 0,
+        },
+        "signal_mode_counts": {"coin": 2},
+        "pending": [
+            {
+                "bot": "kucoin/kucoin_01",
+                "symbol": "ASTER/USDT:USDT",
+                "pside": "long",
+                "tier": "red",
+                "signal_mode": "coin",
+                "red_proximity_pct": 95.0,
+                "ema_gap_to_red_pct": 5.0,
+                "elapsed_minutes": 8,
+                "latest_ts": 2000,
+            }
+        ],
+        "pending_truncated": 0,
+    }
+    assert summary["risk_events"]["hsl_raw_red_pending"] == {
+        "total": 2,
+        "bots": 1,
+        "symbols": {
+            "count": 1,
+            "sample": ["ASTER/USDT:USDT"],
+            "truncated": 0,
+        },
+        "signal_mode_counts": {"coin": 2},
+        "pending_truncated": 0,
+        "pending": [
+            {
+                "bot": "kucoin/kucoin_01",
+                "symbol": "ASTER/USDT:USDT",
+                "pside": "long",
+                "tier": "red",
+                "signal_mode": "coin",
+                "red_proximity_pct": 95.0,
+                "ema_gap_to_red_pct": 5.0,
+                "elapsed_minutes": 8,
+                "latest_ts": 2000,
+            }
+        ],
+    }
+    assert brief["risk_events"]["hsl_raw_red_pending"] == summary["risk_events"][
+        "hsl_raw_red_pending"
+    ]
+    rendered = json.dumps(report["risk_events"], sort_keys=True)
+    assert "drawdown_score" not in rendered
+    assert "drawdown_raw" not in rendered
+    assert "drawdown_ema" not in rendered
+    assert "dist_to_red" not in rendered
+    assert "red_threshold" not in rendered
+    assert "raw_excess" not in rendered
+    assert "12345.67" not in rendered
+    assert "98765.43" not in rendered
+    assert "pending-secret" not in rendered
+    assert "new-pending-secret" not in rendered
+
+
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 365000)
     _write_ndjson(
