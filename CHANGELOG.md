@@ -7,6 +7,10 @@ All notable user-facing changes will be documented in this file.
 - `passivbot tool live-smoke-report` now attaches the timestamped log context
   line to unparseable traceback/error matches, making hard text-log matches
   easier to attribute without changing smoke verdict policy.
+- `passivbot tool live-smoke-report` now summarizes EMA-readiness unavailable
+  reasons and candidate error types in concise smoke output, making
+  `cache_only_fetch_failed` vs `never_fetched_cache_only` visible without a
+  separate event query.
 - `passivbot tool live-smoke-report` now reports timestamp/nonce
   `cycle.degraded` events recovered by a subsequent successful
   `exchange.time_sync` event as recovered problem events instead of hard smoke

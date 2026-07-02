@@ -5657,6 +5657,28 @@ VPS5 deployment status:
   unparseable traceback/error lines. This should make future smoke reports
   explain what subsystem emitted a hard text-log fragment without suppressing
   or down-classifying the hard match.
+- Result: PR #991 was reviewed by Hermes and Claude, merged to `v8`, and is
+  pending VPS5 deployment together with the next approved smoke-report slice.
+
+### Draft Slice: EMA Readiness Reason Smoke Summary
+
+- Branch: `codex/v8-smoke-ema-reason-summary`.
+- Scope: read-only smoke-report projection for existing `ema.unavailable`
+  events.
+- Triggering evidence: current VPS5 smoke was green but still showed non-hard
+  EMA-readiness attention. A focused `live-event-query` revealed useful
+  structured detail already present in the events, including
+  `cache_only_fetch_failed`, `never_fetched_cache_only`, and candidate error
+  type groups. Operators should not need a second event-query just to identify
+  the dominant EMA-readiness reason in concise smoke output.
+- Intended result: aggregate latest EMA-readiness candidate reason counts,
+  unavailable reason counts, and candidate error-type counts into the full,
+  summary, and brief smoke-report projections. This changes only report output;
+  it does not add event producers, exchange calls, readiness gates, EMA
+  behavior, order logic, risk logic, or trading behavior.
+- Expected validation: focused EMA-readiness smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 
