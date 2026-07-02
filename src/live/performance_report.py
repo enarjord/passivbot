@@ -1449,6 +1449,29 @@ def _hsl_replay_observed_rows(data: dict[str, Any]) -> int | None:
     return None
 
 
+def _hsl_replay_remaining_rows(
+    *,
+    estimated_work: int | None,
+    observed_rows: int | None,
+) -> int | None:
+    if estimated_work is None or observed_rows is None:
+        return None
+    return max(0, int(estimated_work) - int(observed_rows))
+
+
+def _hsl_replay_eta_ms(
+    *,
+    remaining_rows: int | None,
+    rows_per_second: Any,
+) -> int | None:
+    if remaining_rows is None:
+        return None
+    rate = _non_negative_number(rows_per_second)
+    if rate is None or float(rate) <= 0.0:
+        return None
+    return int(round(1000.0 * float(remaining_rows) / float(rate)))
+
+
 def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
     timeline_rows = _non_negative_number(data.get("timeline_rows"))
     pairs = _non_negative_number(data.get("pairs"))
@@ -1457,6 +1480,8 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
     cooldown_pairs = _non_negative_number(data.get("cooldown_pairs"))
     observed_rows = _hsl_replay_observed_rows(data)
     out: dict[str, Any] = {}
+    dense_work: int | None = None
+    required_work: int | None = None
     if timeline_rows is not None and pairs is not None:
         dense_work = int(timeline_rows) * int(pairs)
         out["estimated_dense_pair_row_work"] = dense_work
@@ -1465,13 +1490,55 @@ def _derive_hsl_replay_profile(data: dict[str, Any]) -> dict[str, Any]:
                 min(100.0, max(0.0, 100.0 * float(observed_rows) / float(dense_work)))
             )
     if timeline_rows is not None and required_pairs is not None:
-        out["estimated_required_pair_row_work"] = int(timeline_rows) * int(required_pairs)
+        required_work = int(timeline_rows) * int(required_pairs)
+        out["estimated_required_pair_row_work"] = required_work
+        if observed_rows is not None and required_work > 0:
+            out["observed_required_work_pct"] = _rounded_float(
+                min(100.0, max(0.0, 100.0 * float(observed_rows) / float(required_work)))
+            )
     if timeline_rows is not None and held_pairs is not None:
         out["estimated_held_pair_row_work"] = int(timeline_rows) * int(held_pairs)
     if timeline_rows is not None and cooldown_pairs is not None:
         out["estimated_cooldown_pair_row_work"] = int(timeline_rows) * int(cooldown_pairs)
     if observed_rows is not None:
         out["observed_applied_rows"] = int(observed_rows)
+    dense_remaining_rows = _hsl_replay_remaining_rows(
+        estimated_work=dense_work,
+        observed_rows=observed_rows,
+    )
+    if dense_remaining_rows is not None:
+        out["estimated_dense_remaining_rows"] = dense_remaining_rows
+        dense_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=dense_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if dense_remaining_ms is not None:
+            out["estimated_dense_remaining_ms"] = dense_remaining_ms
+    required_remaining_rows = _hsl_replay_remaining_rows(
+        estimated_work=required_work,
+        observed_rows=observed_rows,
+    )
+    if required_remaining_rows is not None:
+        out["estimated_required_remaining_rows"] = required_remaining_rows
+        required_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=required_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if required_remaining_ms is not None:
+            out["estimated_required_remaining_ms"] = required_remaining_ms
+    primary_remaining_rows = (
+        required_remaining_rows
+        if required_remaining_rows is not None
+        else dense_remaining_rows
+    )
+    if primary_remaining_rows is not None:
+        out["estimated_remaining_rows"] = primary_remaining_rows
+        primary_remaining_ms = _hsl_replay_eta_ms(
+            remaining_rows=primary_remaining_rows,
+            rows_per_second=data.get("rows_per_second"),
+        )
+        if primary_remaining_ms is not None:
+            out["estimated_remaining_ms"] = primary_remaining_ms
     for source_key, target_key in (
         ("elapsed_s", "latest_elapsed_ms"),
         ("history_build_elapsed_s", "history_build_elapsed_ms"),

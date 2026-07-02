@@ -3085,7 +3085,24 @@ VPS5 deployment status:
 
 ## Current Work
 
-### In Progress: Trailing Status Risk Activity Report
+### In Progress: HSL Replay ETA Performance Report
+
+- Branch: `codex/v8-hsl-replay-eta-report`.
+- Scope: read-only live performance report projection and tests.
+- Result: `live-performance-report` derives HSL replay remaining row estimates
+  and ETA from existing sanitized `hsl.replay.*` monitor events. The report
+  keeps the existing conservative dense pair-row estimate and adds a
+  required-pair estimate when `required_pairs` is present, using
+  `rows_per_second` only when the event already supplies a positive finite rate.
+- Expected validation: focused and full live-performance-report tests,
+  py_compile, `git diff --check`, and an added-line silent-handling scan. No
+  event producers, exchange calls, cache mutation, readiness gates, console
+  routing, monitor writes, process signaling, smoke verdict policy, order/risk
+  logic, or trading behavior should change.
+
+## Merged Slices
+
+### PR #976: Trailing Status Risk Activity Report
 
 - Branch: `codex/v8-live-performance-trailing-risk-activity`.
 - Scope: read-only live performance report projection and tests.
@@ -3095,13 +3112,14 @@ VPS5 deployment status:
   event stream. The projection uses event-envelope labels and bounded symbol
   samples only; threshold/retracement prices and detailed event payload values
   remain out of the shareable report.
-- Expected validation: focused and full live-performance-report tests,
-  py_compile, `git diff --check`, and an added-line silent-handling scan. No
-  event producers, exchange calls, cache mutation, readiness gates, console
-  routing, monitor writes, process signaling, smoke verdict policy, order/risk
-  logic, or trading behavior should change.
-
-## Merged Slices
+- Review evidence: CI was green. Claude and Hermes approved with no findings.
+  Local validation covered the full live-performance-report test file,
+  py_compile, `git diff --check`, and an added-line silent-handling scan.
+- VPS5 evidence: deployed to `v8` at `1823d3e1` with all five configured bots
+  restarted and left running. Repeated smoke checks stayed hard-green with no
+  failed remote calls or account-critical remote calls. The final performance
+  report showed `risk_activity` populated with deployed `trailing.status`
+  events.
 
 ### PR #924: Startup Phase Readiness Summary
 
