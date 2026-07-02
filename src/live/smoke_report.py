@@ -62,6 +62,7 @@ FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
 EXECUTION_HEALTH_GROUP_LIMIT = 20
 EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
+SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "attention",
@@ -6174,6 +6175,67 @@ def _count_value(value: Any) -> int:
         return 0
 
 
+def _brief_remote_call_slowest(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = summary.get("groups")
+    if not isinstance(groups, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict):
+            continue
+        elapsed = group.get("elapsed_ms")
+        elapsed_map = elapsed if isinstance(elapsed, dict) else {}
+        max_ms = _non_negative_int(elapsed_map.get("max_ms"))
+        p95_ms = _non_negative_int(elapsed_map.get("p95_ms"))
+        latest_elapsed_ms = _non_negative_int(group.get("latest_elapsed_ms"))
+        sort_ms = max(
+            int(max_ms or 0),
+            int(p95_ms or 0),
+            int(latest_elapsed_ms or 0),
+        )
+        if sort_ms <= 0:
+            continue
+        latest_symbol = group.get("latest_symbol")
+        row = {
+            "bot": _redact_log_text(str(group.get("bot")), max_len=120)
+            if group.get("bot") not in (None, "")
+            else None,
+            "kind": _redact_log_text(str(group.get("kind")), max_len=80)
+            if group.get("kind") not in (None, "")
+            else None,
+            "surface": _redact_log_text(str(group.get("surface")), max_len=80)
+            if group.get("surface") not in (None, "")
+            else None,
+            "count": _count_value(group.get("count")),
+            "failed": _count_value(group.get("failed")),
+            "throttled": _count_value(group.get("throttled")),
+            "max_ms": int(max_ms or 0),
+            "p95_ms": int(p95_ms or 0),
+            "latest_elapsed_ms": int(latest_elapsed_ms or 0),
+            "latest_symbol": _redact_log_text(str(latest_symbol), max_len=120)
+            if latest_symbol not in (None, "")
+            else None,
+        }
+        rows.append(
+            {
+                key: value
+                for key, value in row.items()
+                if value not in (None, "", {}, [])
+                and not (key in {"failed", "throttled"} and value == 0)
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            -int(item.get("max_ms") or 0),
+            -int(item.get("p95_ms") or 0),
+            -int(item.get("latest_elapsed_ms") or 0),
+            str(item.get("bot") or ""),
+            str(item.get("kind") or item.get("surface") or ""),
+        )
+    )
+    return rows[:SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT]
+
+
 def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict):
         summary = {}
@@ -6198,6 +6260,9 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
         value = summary.get(key)
         if isinstance(value, dict) and value:
             out[key] = value
+    slowest = _brief_remote_call_slowest(summary)
+    if slowest:
+        out["slowest"] = slowest
     return out
 
 
