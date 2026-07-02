@@ -6381,6 +6381,18 @@ def _brief_hsl_replay_active_groups(groups: Any) -> list[dict[str, Any]]:
             "rows_per_second": _numeric_value(data.get("rows_per_second")),
             "observed_required_work_pct": derived.get("observed_required_work_pct"),
             "observed_work_pct": derived.get("observed_work_pct"),
+            "estimated_dense_remaining_rows": _non_negative_int(
+                derived.get("estimated_dense_remaining_rows")
+            ),
+            "estimated_dense_remaining_ms": _non_negative_int(
+                derived.get("estimated_dense_remaining_ms")
+            ),
+            "estimated_required_remaining_rows": _non_negative_int(
+                derived.get("estimated_required_remaining_rows")
+            ),
+            "estimated_required_remaining_ms": _non_negative_int(
+                derived.get("estimated_required_remaining_ms")
+            ),
             "estimated_remaining_rows": _non_negative_int(
                 derived.get("estimated_remaining_rows")
             ),

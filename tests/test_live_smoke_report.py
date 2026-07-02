@@ -3874,6 +3874,10 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
                 "rows_per_second": 318.415,
                 "observed_required_work_pct": 7.407,
                 "observed_work_pct": 5.108,
+                "estimated_dense_remaining_rows": 43201 * 29 - 64000,
+                "estimated_dense_remaining_ms": 3733584,
+                "estimated_required_remaining_rows": 43201 * 20 - 64000,
+                "estimated_required_remaining_ms": 2512507,
                 "estimated_remaining_rows": 800020,
                 "estimated_remaining_ms": 2512507,
             }

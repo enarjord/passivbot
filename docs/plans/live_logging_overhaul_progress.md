@@ -5918,6 +5918,35 @@ VPS5 deployment status:
 - Expected validation: focused HSL replay smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #1001 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `1c6f5882`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. The new brief `active` rows were
+  visible for OKX, KuCoin, Binance, and Gateio. Follow-up evidence showed the
+  primary required-work estimate could be `0` while dense pair replay was still
+  active, so the next slice should expose dense and required remaining work
+  separately.
+
+### Draft Slice: HSL Replay Dense Progress In Brief Smoke
+
+- Branch: `codex/v8-smoke-hsl-replay-dense-progress`.
+- Scope: read-only brief smoke-report projection over existing
+  `hsl_replay_health.groups` and `latest.derived` fields.
+- Triggering evidence: after PR #1001 deployment, VPS5 brief smoke remained
+  `ok=true` with zero hard failures and the active HSL replay rows were visible,
+  but several rows showed `estimated_remaining_rows=0` while the stage remained
+  `pair_replay` and dense progress was well below 100%. The primary estimate was
+  reflecting required-position work, not dense replay work.
+- Intended result: add bounded dense-vs-required remaining row/time fields to
+  active HSL replay rows: `estimated_dense_remaining_rows`,
+  `estimated_dense_remaining_ms`, `estimated_required_remaining_rows`, and
+  `estimated_required_remaining_ms`. This changes only report output; it does
+  not add event producers, exchange calls, HSL replay behavior, startup gating,
+  order logic, risk logic, monitor writes, console routing, or trading
+  behavior.
+- Expected validation: focused HSL replay smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

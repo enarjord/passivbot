@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now distinguishes dense and
+  required HSL replay remaining-work estimates in active replay samples, so
+  dense pair replay is not hidden when required-position replay is already
+  complete.
 - `passivbot tool live-smoke-report --brief` now includes bounded active HSL
   replay samples with bot, stage, symbol, elapsed age, progress, and remaining
   work estimates, making long-running HSL startup replay easier to attribute.
