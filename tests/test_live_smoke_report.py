@@ -2978,6 +2978,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "signal_mode": "coin",
                     "dist_to_red": 0.02,
                     "red_threshold": 0.1,
+                    "red_proximity_pct": 80.0,
                     "latest_ts": 3000,
                 },
             ],
@@ -3095,8 +3096,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "pside": "long",
             "tier": "yellow",
             "signal_mode": "coin",
-            "dist_to_red": 0.02,
-            "red_threshold": 0.1,
+            "red_proximity_pct": 80.0,
             "latest_ts": 3000,
         }
     ]
@@ -3130,15 +3130,15 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "pside": "long",
                 "tier": "yellow",
                 "signal_mode": "coin",
-                "dist_to_red": 0.02,
-                "red_threshold": 0.1,
+                "red_proximity_pct": 80.0,
                 "latest_ts": 3000,
             }
         ],
         "closest_to_red_truncated": 0,
     }
-    assert "dist_to_red" in json.dumps(summary["risk_events"]["hsl_status"])
-    assert "red_threshold" in json.dumps(brief["risk_events"]["hsl_status"])
+    assert "red_proximity_pct" in json.dumps(summary["risk_events"]["hsl_status"])
+    assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
+    assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
 
 

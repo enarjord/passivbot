@@ -5718,11 +5718,12 @@ VPS5 deployment status:
   events.
 - Triggering evidence: the post-PR #993 VPS5 smoke showed non-hard HSL status
   attention and a `risk_events.hsl_status.closest_to_red` list, but concise
-  summary/brief output omitted the existing `dist_to_red` and `red_threshold`
-  fields. Operators could see which symbols were closest to red, but not how
-  close they were without a full event query.
-- Intended result: include bounded HSL proximity values in summary and brief
-  closest-to-red samples while continuing to suppress raw drawdown internals.
+  summary/brief output omitted proximity context. Operators could see which
+  symbols were closest to red, but not how close they were without a full event
+  query.
+- Intended result: include a bounded normalized HSL red-proximity percentage in
+  summary and brief closest-to-red samples while continuing to suppress raw
+  drawdown-space thresholds/distances and raw drawdown internals.
   This changes only report output; it does not add event producers, exchange
   calls, readiness gates, HSL behavior, order logic, risk logic, or trading
   behavior.
