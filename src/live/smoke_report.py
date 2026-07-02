@@ -96,6 +96,7 @@ PROBLEM_EVENT_GROUP_LIMIT = 20
 EMA_READINESS_GROUP_LIMIT = 20
 EMA_READINESS_REASON_SYMBOL_SAMPLE_LIMIT = 8
 STAGED_READINESS_GROUP_LIMIT = 20
+STAGED_READINESS_VALUE_LIMIT = 8
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
@@ -2121,10 +2122,11 @@ def _summarize_exchange_config_refresh_health(
 
 
 def _staged_readiness_event(live_event: dict[str, Any]) -> bool:
-    if (live_event.get("event_type") or "") != EventTypes.CYCLE_DEGRADED:
-        return False
+    event_type = live_event.get("event_type") or ""
     reason_code = str(live_event.get("reason_code") or "")
-    return reason_code.startswith("staged_execution")
+    if event_type == EventTypes.CYCLE_DEGRADED:
+        return reason_code.startswith("staged_execution")
+    return event_type == EventTypes.PLANNING_UNAVAILABLE
 
 
 def _string_counts(value: Any) -> dict[str, int]:
@@ -2162,6 +2164,47 @@ def _completed_candle_mismatch_counts(value: Any) -> dict[str, int]:
     return dict(counts.most_common())
 
 
+def _staged_readiness_text(value: Any) -> str | None:
+    if not isinstance(value, str) or not value:
+        return None
+    return _redact_log_text(value, max_len=120)
+
+
+def _staged_readiness_timings_ms(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        return {}
+    timings: dict[str, int] = {}
+    for key, raw in value.items():
+        parsed = _non_negative_int(raw)
+        if parsed is None:
+            continue
+        timings[_redact_log_text(str(key), max_len=80)] = int(parsed)
+    return dict(
+        sorted(timings.items(), key=lambda item: (-int(item[1]), str(item[0])))[
+            :STAGED_READINESS_VALUE_LIMIT
+        ]
+    )
+
+
+def _max_counter_maps(values: Iterable[Any]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, raw in value.items():
+            parsed = _non_negative_int(raw)
+            if parsed is None:
+                continue
+            safe_key = str(key)
+            current = out.get(safe_key)
+            out[safe_key] = int(parsed) if current is None else max(int(parsed), current)
+    return dict(
+        sorted(out.items(), key=lambda item: (-int(item[1]), str(item[0])))[
+            :STAGED_READINESS_VALUE_LIMIT
+        ]
+    )
+
+
 def _staged_readiness_group(
     *,
     bot_key: str,
@@ -2173,14 +2216,18 @@ def _staged_readiness_group(
     data = live_event.get("data")
     payload = data if isinstance(data, dict) else {}
     details = payload.get("details")
-    detail_payload = details if isinstance(details, dict) else {}
+    detail_payload = details if isinstance(details, dict) else payload
     ids = _event_ids(live_event)
     invalid = detail_payload.get("invalid")
     missing_surfaces = _string_counts(detail_payload.get("missing"))
     invalid_surfaces = _invalid_surface_counts(invalid)
+    reason_code = _staged_readiness_text(live_event.get("reason_code"))
+    latest_context = _staged_readiness_text(detail_payload.get("context"))
+    latest_defer_reason = _staged_readiness_text(detail_payload.get("defer_reason"))
+    latest_timings_ms = _staged_readiness_timings_ms(payload.get("timings_ms"))
     return {
         "bot": bot_key,
-        "reason_code": live_event.get("reason_code"),
+        "reason_code": reason_code,
         "status": live_event.get("status"),
         "level": live_event.get("level"),
         "component": live_event.get("component"),
@@ -2189,10 +2236,11 @@ def _staged_readiness_group(
         "latest_seq": row.get("seq"),
         "latest_path": str(path),
         "latest_line": int(line_no),
-        "latest_context": detail_payload.get("context"),
-        "latest_defer_reason": detail_payload.get("defer_reason"),
+        "latest_context": latest_context,
+        "latest_defer_reason": latest_defer_reason,
         "latest_missing_surfaces": missing_surfaces,
         "latest_invalid_surfaces": invalid_surfaces,
+        "latest_timings_ms": latest_timings_ms,
         "latest_completed_candle_mismatch_counts": _completed_candle_mismatch_counts(
             invalid
         ),
@@ -2245,6 +2293,7 @@ def _merge_staged_readiness_group(
             "latest_defer_reason",
             "latest_missing_surfaces",
             "latest_invalid_surfaces",
+            "latest_timings_ms",
             "latest_completed_candle_mismatch_counts",
             "latest_missing_surface_count",
             "latest_invalid_surface_count",
@@ -2295,6 +2344,24 @@ def _summarize_staged_readiness_health(
         ),
         "latest_invalid_surfaces": _sum_counter_maps(
             group.get("latest_invalid_surfaces") for group in groups.values()
+        ),
+        "reason_codes": _sum_counter_maps(
+            {group.get("reason_code"): group.get("count")}
+            for group in groups.values()
+            if group.get("reason_code") not in (None, "")
+        ),
+        "latest_defer_reasons": _sum_counter_maps(
+            {group.get("latest_defer_reason"): 1}
+            for group in groups.values()
+            if group.get("latest_defer_reason") not in (None, "")
+        ),
+        "latest_contexts": _sum_counter_maps(
+            {group.get("latest_context"): 1}
+            for group in groups.values()
+            if group.get("latest_context") not in (None, "")
+        ),
+        "latest_timings_ms_max": _max_counter_maps(
+            group.get("latest_timings_ms") for group in groups.values()
         ),
         "groups": compact_groups,
     }
@@ -5801,6 +5868,10 @@ def _summary_limited_groups(
             "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
             "latest_missing_surfaces": summary.get("latest_missing_surfaces") or None,
             "latest_invalid_surfaces": summary.get("latest_invalid_surfaces") or None,
+            "reason_codes": summary.get("reason_codes") or None,
+            "latest_defer_reasons": summary.get("latest_defer_reasons") or None,
+            "latest_contexts": summary.get("latest_contexts") or None,
+            "latest_timings_ms_max": summary.get("latest_timings_ms_max") or None,
             "latest_queue_depth_total": summary.get("latest_queue_depth_total"),
             "latest_queue_unfinished_total": summary.get(
                 "latest_queue_unfinished_total"
@@ -6584,7 +6655,14 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "event_types": staged_readiness_health.get("event_types") or {},
     }
-    for key in ("latest_missing_surfaces", "latest_invalid_surfaces"):
+    for key in (
+        "latest_missing_surfaces",
+        "latest_invalid_surfaces",
+        "reason_codes",
+        "latest_defer_reasons",
+        "latest_contexts",
+        "latest_timings_ms_max",
+    ):
         value = staged_readiness_health.get(key)
         if isinstance(value, dict) and value:
             staged_readiness_brief[key] = value
