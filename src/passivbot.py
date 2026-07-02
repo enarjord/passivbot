@@ -3943,14 +3943,19 @@ class Passivbot:
         since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
         marks[label] = now_ms
         self._startup_timing_last_mark_ms = now_ms
-        suffix = f" | {details}" if details else ""
-        logging.info(
-            "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
-            label,
-            elapsed_s,
-            since_previous_s,
-            suffix,
+        event_console_available = bool(
+            getattr(self, "live_event_console_enabled", False)
+            and getattr(self, "_live_event_pipeline", None) is not None
         )
+        if not event_console_available:
+            suffix = f" | {details}" if details else ""
+            logging.info(
+                "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
+                label,
+                elapsed_s,
+                since_previous_s,
+                suffix,
+            )
         Passivbot._emit_startup_timing_event(
             self,
             phase=label,

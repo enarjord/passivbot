@@ -19,17 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `45cd1d7e` after PR #971, `Enable live event console by default`.
+- `f789dccc` after PR #972, `Project startup timing to event console`.
 
 Current logging-overhaul head:
 
-- `45cd1d7e` after PR #971, `Enable live event console by default`.
+- `f789dccc` after PR #972, `Project startup timing to event console`.
 
 Current work:
 
-- Branch `codex/v8-startup-timing-event-console` projects existing
-  `bot.startup_timing` events into the default live event console/text sinks,
-  keeping startup phase timing visible from the structured event stream.
+- Branch `codex/v8-dedupe-startup-timing-console` suppresses the duplicate
+  legacy startup timing line when the structured event-console path is active,
+  while keeping the legacy line as a fallback if that path is disabled or
+  unavailable.
 
 Current review gate:
 
@@ -59,6 +60,26 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #972 at `f789dccc`.
+- PR #972 projected existing `bot.startup_timing` events into the default live
+  event console/text sinks and kept trading behavior unchanged. It merged after
+  Hermes and Claude approved with no findings, CI was green, and Cursor did not
+  post during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited in the first graceful window; Binance, GateIO, and OKX exited during
+  the longer graceful window; Kucoin still required SIGTERM after the full wait
+  window.
+- VPS5 settled smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=f789dccc`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and
+  `logs.hard_matches=0`. Remaining attention was non-hard active HSL replay on
+  the four forager bots plus Hyperliquid EMA-unavailable/staged-refresh
+  diagnostics.
+- Focused log inspection confirmed the new structured startup projection was
+  active on VPS5, for example Hyperliquid emitted `[boot] succeeded
+  phase=account-ready ... reason=startup_phase_ready` and related
+  active-candle/startup/market/full-warmup phase lines.
 - Repository pulled through PR #971 at `45cd1d7e`.
 - PR #971 made the structured live event console projection default-on for
   `passivbot live` while preserving explicit config/env opt-outs. It merged
