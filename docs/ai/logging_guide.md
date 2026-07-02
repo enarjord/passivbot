@@ -112,6 +112,9 @@ phase is slow or complete: account state, active-candle warmup, HSL replay,
 full warmup, market state, and final startup readiness. The legacy stdlib
 startup timing line is only a fallback when the structured event console path
 is unavailable or explicitly disabled.
+Order-wave complete/settled summaries are console-visible through structured
+events, and the legacy stdlib order-wave summary lines are only fallbacks when
+the structured event console path is unavailable or explicitly disabled.
 Position-level `trailing.status`, `unstuck.status`, and `unstuck.selection`
 events are console-visible because they explain why an existing position is
 waiting, armed, triggered, over budget, selected for unstucking, or blocked by

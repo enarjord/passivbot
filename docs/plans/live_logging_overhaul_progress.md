@@ -5510,6 +5510,19 @@ VPS5 deployment status:
   `hard_failures=0`, `logs.hard_matches=0`, `matched_expected=5`, clean tracked
   repository state, and all hard failure sources at zero.
 
+### Draft Slice: Order Wave Console Dedupe
+
+- Branch: `codex/v8-dedupe-order-wave-console`.
+- Scope: observability-only console routing cleanup for order-wave lifecycle
+  summaries.
+- Result: when the structured live-event console path is active, legacy stdlib
+  `[order] wave complete` and `[order] wave settled` lines are suppressed so
+  operators see the structured execution/confirmation summaries without
+  duplicate legacy lines. If the structured console path is unavailable or
+  disabled, legacy order-wave lines remain the fallback.
+- Local validation: targeted order-wave console tests and live-event console
+  formatter tests passed, plus `py_compile` for touched Python files.
+
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
 - Discovery: Binance VPS5 startup on 2026-06-26 showed coin-mode HSL history
