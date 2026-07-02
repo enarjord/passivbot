@@ -1308,7 +1308,7 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
             {
                 "category": "general",
                 "hard": False,
-                "path": str(logs_dir / "kucoin_01.log"),
+                "path": "kucoin_01.log",
                 "line": 1,
                 "ts": 1782345600000,
                 "text": "2026-06-25T00:00:00Z ERROR exchange timeout",
@@ -4372,7 +4372,7 @@ def test_live_smoke_report_log_scan_classifies_risk_matches(tmp_path):
         {
             "category": "risk",
             "hard": True,
-            "path": str(logs_dir / "binance_01.log"),
+            "path": "binance_01.log",
             "line": 1,
             "ts": 1782576384000,
             "text": (
@@ -4383,7 +4383,7 @@ def test_live_smoke_report_log_scan_classifies_risk_matches(tmp_path):
         {
             "category": "general",
             "hard": True,
-            "path": str(logs_dir / "binance_01.log"),
+            "path": "binance_01.log",
             "line": 2,
             "ts": 1782576385000,
             "text": "2026-06-27T16:06:25Z CRITICAL uncaught task failure",

@@ -6555,6 +6555,8 @@ def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
             value = match.get(key)
             if value is None or value == "" or value == {} or value == []:
                 continue
+            if key == "path":
+                value = Path(str(value)).name
             sample[key] = value
         if not sample:
             continue
