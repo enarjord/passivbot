@@ -3002,6 +3002,9 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
                     "stage": "pair_replay",
                     "pair_idx": 3,
                     "pairs": 29,
+                    "held_pairs": 1,
+                    "cooldown_pairs": 1,
+                    "required_pairs": 20,
                     "current_position_pairs": 1,
                     "timeline_rows": 43201,
                     "start_ts": 1782492000000,
@@ -3144,8 +3147,28 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
         43201 * 29
     )
+    assert active_group["latest"]["derived"]["estimated_held_pair_row_work"] == 43201
+    assert active_group["latest"]["derived"]["estimated_cooldown_pair_row_work"] == 43201
+    assert active_group["latest"]["derived"]["estimated_required_pair_row_work"] == (
+        43201 * 20
+    )
+    assert active_group["latest"]["derived"]["estimated_dense_remaining_rows"] == (
+        43201 * 29 - 64000
+    )
+    assert active_group["latest"]["derived"]["estimated_required_remaining_rows"] == (
+        43201 * 20 - 64000
+    )
+    assert active_group["latest"]["derived"]["estimated_remaining_rows"] == (
+        43201 * 20 - 64000
+    )
+    assert active_group["latest"]["derived"]["estimated_dense_remaining_ms"] == 3733584
+    assert active_group["latest"]["derived"]["estimated_required_remaining_ms"] == 2512507
+    assert active_group["latest"]["derived"]["estimated_remaining_ms"] == 2512507
     assert active_group["latest"]["derived"]["observed_work_pct"] == pytest.approx(
         5.108
+    )
+    assert active_group["latest"]["derived"]["observed_required_work_pct"] == pytest.approx(
+        7.407
     )
     assert "AKIA123" not in json.dumps(report["hsl_replay_health"], sort_keys=True)
     assert "must-not-render" not in json.dumps(
@@ -3184,6 +3207,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         "failed_attention_bots": 1,
         "max_active_latest_elapsed_ms": 255750,
         "max_active_latest_event_age_ms": 60000,
+        "max_active_estimated_remaining_rows": 800020,
+        "max_active_estimated_remaining_ms": 2512507,
         "max_completed_elapsed_ms": 1623400,
         "active_stage_counts": {"pair_replay": 1},
         "event_types": {
