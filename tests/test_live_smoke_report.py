@@ -1304,6 +1304,17 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         "non_risk_hard_matches": 0,
         "dropped_unparsed_attention_matches": 0,
         "dropped_unparsed_hard_matches": 0,
+        "attention_samples": [
+            {
+                "category": "general",
+                "hard": False,
+                "path": str(logs_dir / "kucoin_01.log"),
+                "line": 1,
+                "ts": 1782345600000,
+                "text": "2026-06-25T00:00:00Z ERROR exchange timeout",
+            }
+        ],
+        "attention_samples_truncated": False,
         "window": {
             "enabled": False,
             "since_ms": None,
@@ -4356,6 +4367,30 @@ def test_live_smoke_report_log_scan_classifies_risk_matches(tmp_path):
     assert summary["logs"]["non_risk_hard_matches"] == 1
     assert brief["logs"]["risk_hard_matches"] == 1
     assert brief["logs"]["non_risk_hard_matches"] == 1
+    assert "matches" not in brief["logs"]
+    assert brief["logs"]["hard_samples"] == [
+        {
+            "category": "risk",
+            "hard": True,
+            "path": str(logs_dir / "binance_01.log"),
+            "line": 1,
+            "ts": 1782576384000,
+            "text": (
+                "2026-06-27T16:06:24Z CRITICAL [binance] [risk] "
+                "HSL[long:XLM/USDT:USDT] reconstructed active coin RED cooldown"
+            ),
+        },
+        {
+            "category": "general",
+            "hard": True,
+            "path": str(logs_dir / "binance_01.log"),
+            "line": 2,
+            "ts": 1782576385000,
+            "text": "2026-06-27T16:06:25Z CRITICAL uncaught task failure",
+        },
+    ]
+    assert brief["logs"]["hard_samples_truncated"] is False
+    assert brief["logs"]["attention_samples_truncated"] is False
 
 
 def test_live_smoke_report_log_window_filters_parseable_timestamps(tmp_path):

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes bounded hard and
+  attention log-match samples, so hard smoke verdicts can be attributed without
+  rerunning the larger summary report.
 - `passivbot tool live-smoke-report --brief` now adds dense and required HSL
   replay max remaining-work aggregates alongside the existing primary
   remaining-work max fields.

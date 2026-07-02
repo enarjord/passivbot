@@ -62,6 +62,7 @@ FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
 EXECUTION_HEALTH_GROUP_LIMIT = 20
 EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
+SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT = 3
 SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
 SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT = 5
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
@@ -6531,6 +6532,52 @@ def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
+    matches = logs.get("matches")
+    if not isinstance(matches, list):
+        return {}
+    limit = max(0, int(SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT))
+    hard_samples: list[dict[str, Any]] = []
+    attention_samples: list[dict[str, Any]] = []
+    for match in matches:
+        if not isinstance(match, dict):
+            continue
+        sample: dict[str, Any] = {}
+        for key in (
+            "category",
+            "hard",
+            "path",
+            "line",
+            "ts",
+            "context_ts",
+            "text",
+        ):
+            value = match.get(key)
+            if value is None or value == "" or value == {} or value == []:
+                continue
+            sample[key] = value
+        if not sample:
+            continue
+        if bool(match.get("hard")) and len(hard_samples) < limit:
+            hard_samples.append(sample)
+        if len(attention_samples) < limit:
+            attention_samples.append(sample)
+        if len(hard_samples) >= limit and len(attention_samples) >= limit:
+            break
+    out: dict[str, Any] = {}
+    if hard_samples:
+        out["hard_samples"] = hard_samples
+        out["hard_samples_truncated"] = int(logs.get("hard_matches") or 0) > len(
+            hard_samples
+        )
+    if attention_samples:
+        out["attention_samples"] = attention_samples
+        out["attention_samples_truncated"] = int(
+            logs.get("attention_matches") or 0
+        ) > len(attention_samples)
+    return out
+
+
 def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any]:
     out: dict[str, Any] = {
         "total": _count_value(hsl_replay_health.get("total")),
@@ -6935,7 +6982,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
                 logs.get("dropped_unparsed_hard_matches")
             ),
             "window": _brief_log_window(logs),
-        },
+        }
+        | _brief_log_match_samples(logs),
         "problem_events": {
             "total": _count_value(report.get("problem_event_count")),
             "hard": _count_value(report.get("hard_problem_event_count")),
