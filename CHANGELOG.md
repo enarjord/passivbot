@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now labels active HSL startup replay
+  groups as stale or long-running when existing monitor events show no recent
+  progress or prolonged replay elapsed time, making startup-blocked bots easier
+  to spot without changing trading behavior.
 - Low-balance exposure-increasing create skips now appear through the
   structured live event console as `execution.create_skipped` summaries, and
   the legacy `[balance] too low` line is only a fallback when that path is

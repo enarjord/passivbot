@@ -96,6 +96,8 @@ EMA_READINESS_GROUP_LIMIT = 20
 STAGED_READINESS_GROUP_LIMIT = 20
 EVENT_PIPELINE_HEALTH_GROUP_LIMIT = 20
 HSL_REPLAY_HEALTH_GROUP_LIMIT = 20
+HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS = 5 * 60 * 1000
+HSL_REPLAY_LONG_RUNNING_ACTIVE_MS = 10 * 60 * 1000
 EXCHANGE_CONFIG_REFRESH_HEALTH_GROUP_LIMIT = 20
 RISK_EVENT_TYPES = {
     EventTypes.RISK_MODE_CHANGED,
@@ -3152,6 +3154,25 @@ def _hsl_replay_latest_event_age_ms(
     return int(max(0, int(report_ts_ms) - int(ts)))
 
 
+def _hsl_replay_record_elapsed_ms(record: Any) -> int | None:
+    if not isinstance(record, dict):
+        return None
+    derived = record.get("derived") if isinstance(record.get("derived"), dict) else {}
+    elapsed_candidates = [
+        _non_negative_int(derived.get(key))
+        for key in (
+            "latest_elapsed_ms",
+            "startup_blocking_elapsed_ms",
+            "full_elapsed_ms",
+            "history_build_elapsed_ms",
+            "price_history_fetch_elapsed_ms",
+            "timeline_replay_elapsed_ms",
+        )
+    ]
+    elapsed_values = [int(value) for value in elapsed_candidates if value is not None]
+    return max(elapsed_values) if elapsed_values else None
+
+
 def _with_hsl_replay_active_age(
     group: dict[str, Any],
     *,
@@ -3171,6 +3192,18 @@ def _with_hsl_replay_active_age(
     latest_out["derived"] = derived_out
     out["latest"] = latest_out
     out["active_latest_event_age_ms"] = int(age_ms)
+    elapsed_ms = _hsl_replay_record_elapsed_ms(latest_out)
+    stale = int(age_ms) >= HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS
+    long_running = (
+        elapsed_ms is not None
+        and int(elapsed_ms) >= HSL_REPLAY_LONG_RUNNING_ACTIVE_MS
+    )
+    if stale:
+        out["active_stale"] = True
+        out["active_stale_threshold_ms"] = HSL_REPLAY_STALE_ACTIVE_EVENT_AGE_MS
+    if long_running:
+        out["active_long_running"] = True
+        out["active_long_running_threshold_ms"] = HSL_REPLAY_LONG_RUNNING_ACTIVE_MS
     return out
 
 
@@ -3198,6 +3231,8 @@ def _summarize_hsl_replay_health(
     )
     compact_groups: list[dict[str, Any]] = []
     active_bots = 0
+    stale_active_bots = 0
+    long_running_active_bots = 0
     completed_bots = 0
     failed_bots = 0
     failed_attention_bots = 0
@@ -3239,6 +3274,10 @@ def _summarize_hsl_replay_health(
             public_group,
             report_ts_ms=int(report_ts_ms),
         )
+        if active and bool(public_group.get("active_stale")):
+            stale_active_bots += 1
+        if active and bool(public_group.get("active_long_running")):
+            long_running_active_bots += 1
         compact_groups.append(
             {
                 key: value
@@ -3252,6 +3291,8 @@ def _summarize_hsl_replay_health(
         "event_types": dict(event_type_counts.most_common()),
         "bots": len(groups),
         "active_bots": int(active_bots),
+        "stale_active_bots": int(stale_active_bots),
+        "long_running_active_bots": int(long_running_active_bots),
         "completed_bots": int(completed_bots),
         "failed_bots": int(failed_bots),
         "failed_attention_bots": int(failed_attention_bots),
@@ -5140,6 +5181,8 @@ def _summary_limited_groups(
             "outcomes": summary.get("outcomes"),
             "bots": summary.get("bots"),
             "active_bots": summary.get("active_bots"),
+            "stale_active_bots": summary.get("stale_active_bots"),
+            "long_running_active_bots": summary.get("long_running_active_bots"),
             "completed_bots": summary.get("completed_bots"),
             "failed_bots": summary.get("failed_bots"),
             "latest_failed_bots": summary.get("latest_failed_bots"),
@@ -5656,6 +5699,12 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
         "total": _count_value(hsl_replay_health.get("total")),
         "bots": _count_value(hsl_replay_health.get("bots")),
         "active_bots": _count_value(hsl_replay_health.get("active_bots")),
+        "stale_active_bots": _count_value(
+            hsl_replay_health.get("stale_active_bots")
+        ),
+        "long_running_active_bots": _count_value(
+            hsl_replay_health.get("long_running_active_bots")
+        ),
         "completed_bots": _count_value(hsl_replay_health.get("completed_bots")),
         "failed_bots": _count_value(hsl_replay_health.get("failed_bots")),
         "failed_attention_bots": _count_value(
@@ -5674,30 +5723,10 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
     max_completed_elapsed_ms: int | None = None
     active_stage_counts: Counter[str] = Counter()
 
-    def record_elapsed_ms(record: Any) -> int | None:
-        if not isinstance(record, dict):
-            return None
-        derived = record.get("derived") if isinstance(record.get("derived"), dict) else {}
-        elapsed_candidates = [
-            _non_negative_int(derived.get(key))
-            for key in (
-                "latest_elapsed_ms",
-                "startup_blocking_elapsed_ms",
-                "full_elapsed_ms",
-                "history_build_elapsed_ms",
-                "price_history_fetch_elapsed_ms",
-                "timeline_replay_elapsed_ms",
-            )
-        ]
-        elapsed_values = [
-            int(value) for value in elapsed_candidates if value is not None
-        ]
-        return max(elapsed_values) if elapsed_values else None
-
     for group in groups:
         if not isinstance(group, dict):
             continue
-        completed_elapsed_ms = record_elapsed_ms(group.get("completed"))
+        completed_elapsed_ms = _hsl_replay_record_elapsed_ms(group.get("completed"))
         if completed_elapsed_ms is not None:
             if max_completed_elapsed_ms is None:
                 max_completed_elapsed_ms = int(completed_elapsed_ms)
@@ -5718,7 +5747,7 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
                     int(event_age_ms),
                 )
         latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
-        elapsed_ms = record_elapsed_ms(latest)
+        elapsed_ms = _hsl_replay_record_elapsed_ms(latest)
         if elapsed_ms is not None:
             if max_active_latest_elapsed_ms is None:
                 max_active_latest_elapsed_ms = int(elapsed_ms)
