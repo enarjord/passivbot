@@ -1437,6 +1437,110 @@ async def test_balance_equity_history_paces_replay_candle_fetches(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_balance_equity_history_clamps_finite_replay_to_lookback_after_state_seed(
+    monkeypatch,
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.config = {"live": {"pnls_max_lookback_days": 1.0}}
+    bot.exchange = "kucoin"
+    bot.user = "test_user"
+    bot.init_pnls = AsyncMock()
+    bot.live_value = lambda key: bot.config["live"][key]
+    day_ms = 86_400_000
+    now_ms = 1_800_000_000_000
+    lookback_start_ms = now_ms - day_ms
+    lookback_start_minute = (lookback_start_ms // 60_000) * 60_000
+    old_open_ts = lookback_start_ms - 5 * day_ms
+    symbol = "XLM/USDT:USDT"
+    old_flat_symbol = "AAVE/USDT:USDT"
+    bot.get_exchange_time = lambda: now_ms
+    bot.get_raw_balance = lambda: 1000.0
+    bot.get_symbol_id_inv = lambda symbol: symbol
+    bot.positions = {
+        symbol: {
+            "long": {"size": 1.0, "price": 100.0},
+            "short": {"size": 0.0, "price": 0.0},
+        }
+    }
+    bot._pnls_manager = None
+    bot.inverse = False
+    bot._candle_fetch_concurrency = lambda *, context="runtime": 1
+    bot._get_fetch_delay_seconds = lambda: 0.0
+    bot.c_mults = {symbol: 1.0, old_flat_symbol: 1.0}
+    monkeypatch.setattr(
+        passivbot_module, "compute_psize_pprice", lambda *args, **kwargs: None
+    )
+
+    class _CM:
+        def __init__(self):
+            self.calls = []
+
+        async def get_candles(self, symbol_, **kwargs):
+            self.calls.append((symbol_, dict(kwargs)))
+            assert symbol_ == symbol
+            assert kwargs["start_ts"] == lookback_start_minute
+            assert kwargs["end_ts"] == (now_ms // 60_000) * 60_000
+            return np.array(
+                [
+                    (lookback_start_minute, 109.0, 111.0, 108.0, 110.0, 1.0),
+                    (lookback_start_minute + 60_000, 110.0, 112.0, 109.0, 111.0, 1.0),
+                    ((now_ms // 60_000) * 60_000, 111.0, 113.0, 110.0, 112.0, 1.0),
+                ],
+                dtype=passivbot_module.CANDLE_DTYPE,
+            )
+
+    bot.cm = _CM()
+    history = await bot.get_balance_equity_history(
+        fill_events=[
+            {
+                "timestamp": old_open_ts,
+                "symbol": symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 100.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": old_open_ts,
+                "symbol": old_flat_symbol,
+                "position_side": "long",
+                "side": "buy",
+                "qty": 1.0,
+                "price": 50.0,
+                "pnl": 0.0,
+            },
+            {
+                "timestamp": old_open_ts + 60_000,
+                "symbol": old_flat_symbol,
+                "position_side": "long",
+                "side": "sell",
+                "qty": 1.0,
+                "price": 49.0,
+                "pnl": -1.0,
+            },
+        ],
+        current_balance=1000.0,
+        hsl_replay_signal_mode="coin",
+    )
+
+    assert [symbol_ for symbol_, _kwargs in bot.cm.calls] == [symbol]
+    assert history["timeline"]
+    assert history["timeline"][0]["timestamp"] == lookback_start_minute
+    assert len(history["timeline"]) == int(
+        ((now_ms // 60_000) * 60_000 - lookback_start_minute) // 60_000
+    ) + 1
+    assert history["timeline"][0]["unrealized_pnl_by_coin_pside"][symbol][
+        "long"
+    ] == pytest.approx(10.0)
+    assert history["timeline"][-1]["unrealized_pnl_by_coin_pside"][symbol][
+        "long"
+    ] == pytest.approx(12.0)
+    assert old_flat_symbol not in history["metadata"]["symbols_covered"]
+    assert history["metadata"]["events_used"] == 3
+
+
+@pytest.mark.asyncio
 async def test_balance_equity_history_skips_unsupported_closed_historical_symbols(monkeypatch):
     bot = Passivbot.__new__(Passivbot)
     bot.config = {"live": {}}

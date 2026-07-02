@@ -12319,7 +12319,7 @@ class Passivbot:
             record_start_ts = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
             record_start_minute = int(math.floor(start_ts / ONE_MIN_MS) * ONE_MIN_MS)
         else:
-            start_ts = min(ensure_millis(events[0]["timestamp"]), lookback_start)
+            start_ts = lookback_start
             record_start_ts = int(lookback_start)
             record_start_minute = int(
                 math.floor(lookback_start / ONE_MIN_MS) * ONE_MIN_MS
@@ -12329,17 +12329,27 @@ class Passivbot:
         if end_minute < record_start_minute:
             end_minute = record_start_minute
 
-        symbols = {evt["symbol"] for evt in events if evt["symbol"]}
+        current_position_symbols = {
+            symbol
+            for (symbol, _pside), (size, _price) in current_position_state.items()
+            if size > 1e-12
+        }
+        symbols = {
+            evt["symbol"]
+            for evt in events
+            if evt["symbol"]
+            and (
+                lookback_start is None
+                or int(evt["timestamp"]) >= int(record_start_ts)
+                or evt["symbol"] in current_position_symbols
+            )
+        }
+        symbols.update(current_position_symbols)
         price_replay_symbols = set(symbols)
         known_market_symbols = (
             set(self.c_mults) if isinstance(getattr(self, "c_mults", None), dict) else set()
         )
         if known_market_symbols:
-            current_position_symbols = {
-                symbol
-                for (symbol, _pside), (size, _price) in current_position_state.items()
-                if size > 1e-12
-            }
             skipped_price_symbols = {
                 symbol
                 for symbol in symbols
@@ -12603,6 +12613,7 @@ class Passivbot:
         balance = baseline_balance
         event_idx = 0
         last_price: Dict[str, float] = {}
+        pre_window_events_applied = 0
 
         history_minutes = int(max(0, (end_minute - start_minute) // ONE_MIN_MS)) + 1
         _emit_hsl_history_progress(
@@ -12619,69 +12630,92 @@ class Passivbot:
             reason_code=ReasonCodes.HSL_TIMELINE_REPLAY_STARTED,
         )
         timeline_replay_started_s = time.monotonic()
+
+        def apply_event_and_account(
+            evt: dict,
+            *,
+            minute_for_panic: Optional[int],
+        ) -> int:
+            nonlocal balance
+            _apply_event(evt)
+            realized_delta = evt["pnl"] + evt.get("fee", 0.0)
+            balance += realized_delta
+            realized_pnl_pside_running[evt["pside"]] += realized_delta
+            symbol_realized = realized_pnl_coin_pside_running.setdefault(
+                evt["symbol"], {"long": 0.0, "short": 0.0}
+            )
+            symbol_realized[evt["pside"]] += realized_delta
+            if minute_for_panic is None:
+                return 0
+            if "panic" not in str(evt.get("pb_order_type") or ""):
+                return 0
+            after_psize = _safe_float(evt.get("psize"), math.nan)
+            symbol_pside_key = (evt["symbol"], evt["pside"])
+            authoritative_symbol_flat_override = (
+                symbol_pside_key in actual_symbol_pside_flat
+                and actual_symbol_pside_flat[symbol_pside_key]
+                and last_event_ts_by_symbol_pside.get(symbol_pside_key)
+                == evt["timestamp"]
+            )
+            if authoritative_symbol_flat_override and (
+                not math.isfinite(after_psize) or after_psize > 1e-12
+            ):
+                logging.warning(
+                    "[risk] balance-equity replay trusting current flat %s symbol state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
+                    evt["pside"],
+                    evt["timestamp"],
+                    (
+                        f"{after_psize:.12f}"
+                        if math.isfinite(after_psize)
+                        else "nan"
+                    ),
+                    Passivbot._log_symbol(evt["symbol"]),
+                )
+            if (
+                (math.isfinite(after_psize) and after_psize <= 1e-12)
+                or authoritative_symbol_flat_override
+                or _symbol_pside_is_flat(evt["symbol"], evt["pside"])
+            ):
+                panic_flatten_events.append(
+                    {
+                        "timestamp": int(evt["timestamp"]),
+                        "minute_timestamp": int(minute_for_panic),
+                        "pside": str(evt["pside"]),
+                        "symbol": str(evt["symbol"]),
+                    }
+                )
+                return 1
+            return 0
+
+        while (
+            event_idx < len(events)
+            and int(events[event_idx]["timestamp"]) < int(record_start_ts)
+        ):
+            apply_event_and_account(events[event_idx], minute_for_panic=None)
+            event_idx += 1
+            pre_window_events_applied += 1
+        record_start_balance = float(balance)
+        record_start_realized_pnl_pside = {
+            "long": float(realized_pnl_pside_running["long"]),
+            "short": float(realized_pnl_pside_running["short"]),
+        }
+        record_start_realized_pnl_coin_pside = {
+            sym: {
+                "long": float(values["long"]),
+                "short": float(values["short"]),
+            }
+            for sym, values in realized_pnl_coin_pside_running.items()
+        }
+
         minute = start_minute
         while minute <= end_minute:
             boundary = minute + ONE_MIN_MS
             panic_fill_count = 0
             while event_idx < len(events) and events[event_idx]["timestamp"] < boundary:
                 evt = events[event_idx]
-                if record_start_balance is None and int(evt["timestamp"]) >= record_start_ts:
-                    record_start_balance = float(balance)
-                    record_start_realized_pnl_pside = {
-                        "long": float(realized_pnl_pside_running["long"]),
-                        "short": float(realized_pnl_pside_running["short"]),
-                    }
-                    record_start_realized_pnl_coin_pside = {
-                        sym: {
-                            "long": float(values["long"]),
-                            "short": float(values["short"]),
-                        }
-                        for sym, values in realized_pnl_coin_pside_running.items()
-                    }
-                _apply_event(evt)
-                realized_delta = evt["pnl"] + evt.get("fee", 0.0)
-                balance += realized_delta
-                realized_pnl_pside_running[evt["pside"]] += realized_delta
-                symbol_realized = realized_pnl_coin_pside_running.setdefault(
-                    evt["symbol"], {"long": 0.0, "short": 0.0}
+                panic_fill_count += apply_event_and_account(
+                    evt, minute_for_panic=int(minute)
                 )
-                symbol_realized[evt["pside"]] += realized_delta
-                if "panic" in str(evt.get("pb_order_type") or ""):
-                    panic_fill_count += 1
-                    after_psize = _safe_float(evt.get("psize"), math.nan)
-                    symbol_pside_key = (evt["symbol"], evt["pside"])
-                    authoritative_symbol_flat_override = (
-                        symbol_pside_key in actual_symbol_pside_flat
-                        and actual_symbol_pside_flat[symbol_pside_key]
-                        and last_event_ts_by_symbol_pside.get(symbol_pside_key) == evt["timestamp"]
-                    )
-                    if authoritative_symbol_flat_override and (
-                        not math.isfinite(after_psize) or after_psize > 1e-12
-                    ):
-                        logging.warning(
-                            "[risk] balance-equity replay trusting current flat %s symbol state over residual panic replay size | timestamp=%s replay_after_psize=%s symbol=%s",
-                            evt["pside"],
-                            evt["timestamp"],
-                            (
-                                f"{after_psize:.12f}"
-                                if math.isfinite(after_psize)
-                                else "nan"
-                            ),
-                            Passivbot._log_symbol(evt["symbol"]),
-                        )
-                    if (
-                        (math.isfinite(after_psize) and after_psize <= 1e-12)
-                        or authoritative_symbol_flat_override
-                        or _symbol_pside_is_flat(evt["symbol"], evt["pside"])
-                    ):
-                        panic_flatten_events.append(
-                            {
-                                "timestamp": int(evt["timestamp"]),
-                                "minute_timestamp": int(minute),
-                                "pside": str(evt["pside"]),
-                                "symbol": str(evt["symbol"]),
-                            }
-                        )
                 event_idx += 1
             upnl = 0.0
             upnl_by_pside = {"long": 0.0, "short": 0.0}
@@ -12831,6 +12865,7 @@ class Passivbot:
             "lookback_days": lookback.display_value,
             "resolution_ms": ONE_MIN_MS,
             "events_used": len(events),
+            "pre_window_events_applied": int(pre_window_events_applied),
             "symbols_covered": sorted(price_replay_symbols),
             "missing_price_symbols": sorted(missing_price_symbols),
             "approximate_price_sources": approximate_price_sources,
@@ -12845,6 +12880,7 @@ class Passivbot:
                 "panic_events": len(panic_flatten_events),
                 "missing_price_symbols": len(missing_price_symbols),
                 "history_minutes": history_minutes,
+                "pre_window_events_applied": int(pre_window_events_applied),
                 "timeline_replay_elapsed_s": round(
                     max(0.0, time.monotonic() - timeline_replay_started_s), 3
                 ),
