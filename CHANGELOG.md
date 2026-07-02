@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now adds dense and required HSL
+  replay max remaining-work aggregates alongside the existing primary
+  remaining-work max fields.
 - `passivbot tool live-smoke-report --brief` now distinguishes dense and
   required HSL replay remaining-work estimates in active replay samples, so
   dense pair replay is not hidden when required-position replay is already
