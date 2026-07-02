@@ -792,6 +792,78 @@ async def test_log_position_changes_classifies_signed_exposure_changes(
 
 
 @pytest.mark.asyncio
+async def test_log_position_changes_suppresses_legacy_table_when_event_console_active(
+    monkeypatch, caplog
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.inverse = False
+    bot.c_mults = {"XMR/USDT:USDT": 1.0}
+    bot.pside_int_map = {"long": 1, "short": -1}
+    bot.get_raw_balance = lambda: 1_000.0
+    bot.bp = lambda pside, key, symbol: 1.0 if key == "wallet_exposure_limit" else 0.0
+    bot.bot_value = lambda pside, key: 10.0
+    bot.live_event_console_enabled = True
+    sink = ListEventSink()
+    bot.exchange = "binance"
+    bot.user = "binance_01"
+    bot.bot_id = "bot_1"
+    bot._live_event_current_cycle_id = "cy_pos"
+    bot._live_event_pipeline = LiveEventPipeline(
+        structured_sinks=[sink],
+        monitor_sinks=[],
+    )
+    bot._current_live_event_cycle_id = Passivbot._current_live_event_cycle_id.__get__(
+        bot, Passivbot
+    )
+    bot._emit_live_event = Passivbot._emit_live_event.__get__(bot, Passivbot)
+    bot._emit_position_changed_event = (
+        Passivbot._emit_position_changed_event.__get__(bot, Passivbot)
+    )
+
+    async def _get_live_last_prices(symbols, **kwargs):
+        return {symbol: 0.0 for symbol in symbols}
+
+    bot._get_live_last_prices = _get_live_last_prices
+    monkeypatch.setattr(
+        passivbot_module.pbr,
+        "qty_to_cost",
+        lambda qty, price, c_mult: abs(qty) * price * c_mult,
+    )
+    monkeypatch.setattr(
+        passivbot_module.pbr, "calc_pprice_diff_int", lambda *args: 0.0, raising=False
+    )
+
+    with caplog.at_level(logging.INFO):
+        await bot.log_position_changes(
+            [
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "size": 0.1,
+                    "price": 100.0,
+                }
+            ],
+            [
+                {
+                    "symbol": "XMR/USDT:USDT",
+                    "position_side": "long",
+                    "size": 0.3,
+                    "price": 100.0,
+                }
+            ],
+        )
+
+    assert not any("[pos]" in record.getMessage() for record in caplog.records)
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    event = sink.events[-1]
+    assert event.event_type == EventTypes.POSITION_CHANGED
+    assert event.reason_code == "added"
+    assert event.data["old_size"] == pytest.approx(0.1)
+    assert event.data["new_size"] == pytest.approx(0.3)
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
+@pytest.mark.asyncio
 async def test_shutdown_gracefully_awaits_cancelled_maintainers():
     bot = Passivbot.__new__(Passivbot)
     bot._shutdown_in_progress = False

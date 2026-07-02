@@ -94,6 +94,8 @@ coin; routine flat coin-universe status remains in the structured event stream
 but is kept off the console. Fill, position, and balance change events are
 console-visible because they are the primary operator-facing account state
 changes.
+Legacy stdlib position-change and balance-change lines are only fallbacks when
+the structured event console path is unavailable or explicitly disabled.
 `risk.mode_changed` and `hsl.transition` events are console-visible because
 mode changes and HSL tier transitions explain risk-state changes that affect
 trading.
