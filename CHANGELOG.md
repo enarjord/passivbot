@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now includes normalized HSL red-proximity
+  percentages in concise closest-to-red risk summaries, making current HSL
+  proximity visible without exposing raw drawdown-space thresholds.
 - `passivbot tool live-smoke-report` now summarizes failed remote-call
   reasons, surfaces, kinds, and error types in concise smoke output, making
   transient exchange failures easier to identify without a separate event

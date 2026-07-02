@@ -2598,6 +2598,17 @@ def _summarize_hsl_status(
         dist_to_red = _numeric_value(data.get("dist_to_red"))
         if dist_to_red is None:
             continue
+        red_threshold = _numeric_value(data.get("red_threshold"))
+        drawdown_score = _numeric_value(data.get("drawdown_score"))
+        red_proximity_pct = None
+        if red_threshold is not None and red_threshold > 0:
+            if drawdown_score is not None:
+                red_proximity_pct = round((drawdown_score / red_threshold) * 100.0, 3)
+            else:
+                red_proximity_pct = round(
+                    max(0.0, 1.0 - (dist_to_red / red_threshold)) * 100.0,
+                    3,
+                )
         sample = {
             key: value
             for key, value in {
@@ -2609,7 +2620,8 @@ def _summarize_hsl_status(
                 if signal_mode not in (None, "")
                 else None,
                 "dist_to_red": dist_to_red,
-                "red_threshold": _numeric_value(data.get("red_threshold")),
+                "red_threshold": red_threshold,
+                "red_proximity_pct": red_proximity_pct,
                 "latest_ts": _non_negative_int(group.get("latest_ts")),
             }.items()
             if value not in (None, "", {})
@@ -2670,6 +2682,7 @@ def _shareable_hsl_status(hsl_status: Any) -> dict[str, Any]:
                     "pside",
                     "tier",
                     "signal_mode",
+                    "red_proximity_pct",
                     "latest_ts",
                 )
                 if isinstance(item, dict) and item.get(key) not in (None, "", {})
