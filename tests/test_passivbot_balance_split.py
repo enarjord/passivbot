@@ -2853,6 +2853,41 @@ def test_unstuck_status_logs_info_on_change_then_hourly(monkeypatch, caplog):
     assert captured_events[0]["side_statuses"]["short"]["status"] == "disabled"
 
 
+def test_unstuck_status_suppresses_legacy_log_when_event_console_active(
+    monkeypatch, caplog
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = object()
+    bot._unstuck_last_log_ms = 0
+    bot._unstuck_log_interval_ms = 5 * 60 * 1000
+    bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._unstuck_allowance_log_hyst_snap_pct = 0.002
+    bot._unstuck_allowance_log_snap_by_pside = {}
+    bot._unstuck_last_status_signature = None
+    bot._unstuck_last_status_info_ms = 0
+    bot._monitor_runtime_unstuck_hints = {}
+    captured_events = []
+    bot._emit_unstuck_status_event = lambda **kwargs: captured_events.append(kwargs)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 5 * 60 * 1000)
+    bot._calc_unstuck_allowance_for_logging = lambda pside: (
+        {
+            "status": "ok",
+            "allowance": -41.01,
+            "peak": 16400.0,
+            "pct_from_peak": -0.3,
+        }
+        if pside == "long"
+        else {"status": "disabled"}
+    )
+
+    with caplog.at_level(logging.INFO):
+        bot._maybe_log_unstuck_status()
+
+    assert captured_events
+    assert not any("[unstuck]" in record.message for record in caplog.records)
+
+
 def test_hysteresis_snapped_unstuck_allowance_updates_only_after_threshold():
     bot = Passivbot.__new__(Passivbot)
     bot._unstuck_allowance_log_hyst_snap_pct = 0.002
@@ -2962,6 +2997,32 @@ def test_unstuck_selection_logs_on_change_then_hourly(monkeypatch, caplog):
     assert [event["changed"] for event in captured_events] == [True, False, True]
     assert captured_events[0]["symbol"] == "SUI/USDT:USDT"
     assert captured_events[2]["symbol"] == "ADA/USDT:USDT"
+
+
+def test_unstuck_selection_suppresses_legacy_log_when_event_console_active(
+    monkeypatch, caplog
+):
+    bot = Passivbot.__new__(Passivbot)
+    bot.live_event_console_enabled = True
+    bot._live_event_pipeline = object()
+    bot._unstuck_unchanged_info_log_interval_ms = 60 * 60 * 1000
+    bot._unstuck_last_selection_signature = None
+    bot._unstuck_last_selection_info_ms = 0
+    captured_events = []
+    bot._emit_unstuck_selection_event = lambda **kwargs: captured_events.append(kwargs)
+    monkeypatch.setattr(passivbot_module, "utc_ms", lambda: 0)
+
+    with caplog.at_level(logging.INFO):
+        bot._maybe_log_unstuck_selection(
+            symbol="SUI/USDT:USDT",
+            pside="long",
+            entry_price=1.0,
+            current_price=1.1,
+            allowance=-41.0,
+        )
+
+    assert captured_events
+    assert not any("[unstuck] selecting" in record.message for record in caplog.records)
 
 
 def test_trailing_status_emits_on_change_then_hourly(monkeypatch):

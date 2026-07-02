@@ -707,6 +707,13 @@ class Passivbot:
     _next_live_event_remote_call_id = live_event_emitters.next_live_event_remote_call_id
     _set_live_event_context_ids = live_event_emitters.set_live_event_context_ids
 
+    def _live_event_console_available(self) -> bool:
+        """Return True when structured live events already feed the console."""
+        return bool(
+            getattr(self, "live_event_console_enabled", False)
+            and getattr(self, "_live_event_pipeline", None) is not None
+        )
+
     @staticmethod
     def _log_symbol(symbol: Any) -> str:
         """Return a compact operator-facing symbol label for logs only."""
@@ -3353,7 +3360,8 @@ class Passivbot:
             status_changed
             or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms
         ):
-            logging.info("[unstuck] %s", " | ".join(parts))
+            if not self._live_event_console_available():
+                logging.info("[unstuck] %s", " | ".join(parts))
             self._emit_unstuck_status_event(
                 side_statuses=side_infos,
                 changed=status_changed,
@@ -3388,16 +3396,17 @@ class Passivbot:
             price_diff_pct = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
-        logging.info(
-            "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
-            coin,
-            pside,
-            entry_price,
-            current_price,
-            sign,
-            price_diff_pct,
-            allowance,
-        )
+        if not self._live_event_console_available():
+            logging.info(
+                "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
+                coin,
+                pside,
+                entry_price,
+                current_price,
+                sign,
+                price_diff_pct,
+                allowance,
+            )
         self._emit_unstuck_selection_event(
             symbol=symbol,
             pside=pside,
@@ -3943,11 +3952,7 @@ class Passivbot:
         since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
         marks[label] = now_ms
         self._startup_timing_last_mark_ms = now_ms
-        event_console_available = bool(
-            getattr(self, "live_event_console_enabled", False)
-            and getattr(self, "_live_event_pipeline", None) is not None
-        )
-        if not event_console_available:
+        if not self._live_event_console_available():
             suffix = f" | {details}" if details else ""
             logging.info(
                 "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",

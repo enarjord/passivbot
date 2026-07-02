@@ -19,18 +19,19 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `f789dccc` after PR #972, `Project startup timing to event console`.
+- `c2a04904` after PR #973, `Dedupe startup timing console logs`.
 
 Current logging-overhaul head:
 
-- `f789dccc` after PR #972, `Project startup timing to event console`.
+- `c2a04904` after PR #973, `Dedupe startup timing console logs`.
 
 Current work:
 
-- Branch `codex/v8-dedupe-startup-timing-console` suppresses the duplicate
-  legacy startup timing line when the structured event-console path is active,
-  while keeping the legacy line as a fallback if that path is disabled or
-  unavailable.
+- Branch `codex/v8-trailing-unstuck-console-events` keeps the existing
+  structured `trailing.status`, `unstuck.status`, and `unstuck.selection`
+  operator summaries as the console source of truth and suppresses duplicate
+  legacy unstuck stdlib lines when the event-console path is active. The legacy
+  unstuck lines remain fallback output if that path is disabled or unavailable.
 
 Current review gate:
 

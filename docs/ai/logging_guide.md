@@ -117,6 +117,8 @@ events are console-visible because they explain why an existing position is
 waiting, armed, triggered, over budget, selected for unstucking, or blocked by
 the unstuck EMA gate. Unsupported strategy diagnostics must say so explicitly
 instead of fabricating threshold/retracement prices.
+Legacy stdlib unstuck status/selection lines are only fallbacks when the
+structured event console path is unavailable or explicitly disabled.
 Supported trailing diagnostics should include the selected mode, such as
 `trailing`, `grid`, `auto_reduce`, `unstuck`, `none`, or `other`, when the next
 order state is known. They should also show the effective threshold percentage
