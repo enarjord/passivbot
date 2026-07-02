@@ -2910,7 +2910,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
-    monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 65000)
+    monkeypatch.setattr(smoke_report_module, "utc_ms", lambda: 365000)
     _write_ndjson(
         tmp_path
         / "monitor"
@@ -3015,8 +3015,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
                     "skipped_price_symbols": 1,
                     "missing_price_symbols": 2,
                     "rows_per_second": 318.415,
-                    "elapsed_s": 201.2,
-                    "history_build_elapsed_s": 255.75,
+                    "elapsed_s": 701.2,
+                    "history_build_elapsed_s": 755.75,
                     "price_history_fetch_elapsed_s": 210.5,
                     "timeline_replay_elapsed_s": 12.25,
                     "timeframe": "1m",
@@ -3117,6 +3117,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     assert report["attention_sources"]["hsl_replay_failed_bots"] == 1
     assert report["attention_sources"]["total"] == 3
     assert report["hsl_replay_health"]["active_bots"] == 1
+    assert report["hsl_replay_health"]["stale_active_bots"] == 1
+    assert report["hsl_replay_health"]["long_running_active_bots"] == 1
     assert report["hsl_replay_health"]["completed_bots"] == 1
     assert report["hsl_replay_health"]["failed_bots"] == 2
     assert report["hsl_replay_health"]["failed_attention_bots"] == 1
@@ -3129,7 +3131,11 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     active_group = report["hsl_replay_health"]["groups"][0]
     assert active_group["bot"] == "gateio/gateio_01"
     assert active_group["active"] is True
-    assert active_group["active_latest_event_age_ms"] == 60000
+    assert active_group["active_latest_event_age_ms"] == 360000
+    assert active_group["active_stale"] is True
+    assert active_group["active_stale_threshold_ms"] == 300000
+    assert active_group["active_long_running"] is True
+    assert active_group["active_long_running_threshold_ms"] == 600000
     assert active_group["latest"]["symbol"] == "ZEC/USDT:USDT"
     assert active_group["latest"]["data"]["timeframe"] == "1m"
     assert active_group["latest"]["data"]["history_minutes"] == 43201
@@ -3140,8 +3146,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
     assert active_group["latest"]["data"]["start_ts"] == 1782492000000
     assert active_group["latest"]["data"]["end_ts"] == 1782492600000
     assert active_group["latest"]["data"]["record_start_ts"] == 1782492000000
-    assert active_group["latest"]["derived"]["history_build_elapsed_ms"] == 255750
-    assert active_group["latest"]["derived"]["latest_event_age_ms"] == 60000
+    assert active_group["latest"]["derived"]["history_build_elapsed_ms"] == 755750
+    assert active_group["latest"]["derived"]["latest_event_age_ms"] == 360000
     assert active_group["latest"]["derived"]["price_history_fetch_elapsed_ms"] == 210500
     assert active_group["latest"]["derived"]["timeline_replay_elapsed_ms"] == 12250
     assert active_group["latest"]["derived"]["estimated_dense_pair_row_work"] == (
@@ -3182,6 +3188,8 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         sort_keys=True,
     )
     assert summary["hsl_replay_health"]["active_bots"] == 1
+    assert summary["hsl_replay_health"]["stale_active_bots"] == 1
+    assert summary["hsl_replay_health"]["long_running_active_bots"] == 1
     assert summary["hsl_replay_health"]["groups"][0]["active"] is True
     failed_group = next(
         group
@@ -3202,11 +3210,13 @@ def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):
         "total": 9,
         "bots": 4,
         "active_bots": 1,
+        "stale_active_bots": 1,
+        "long_running_active_bots": 1,
         "completed_bots": 1,
         "failed_bots": 2,
         "failed_attention_bots": 1,
-        "max_active_latest_elapsed_ms": 255750,
-        "max_active_latest_event_age_ms": 60000,
+        "max_active_latest_elapsed_ms": 755750,
+        "max_active_latest_event_age_ms": 360000,
         "max_active_estimated_remaining_rows": 800020,
         "max_active_estimated_remaining_ms": 2512507,
         "max_completed_elapsed_ms": 1623400,

@@ -5562,6 +5562,22 @@ VPS5 deployment status:
 - Local validation: targeted order-wave console tests and live-event console
   formatter tests passed, plus `py_compile` for touched Python files.
 
+### Draft Slice: HSL Replay Stale Smoke Classification
+
+- Branch: `codex/v8-hsl-replay-stale-smoke`.
+- Scope: read-only smoke-report refinement for existing HSL replay monitor
+  events.
+- Triggering evidence: after PR #987 was merged and VPS5 was fast-forwarded to
+  `c021376d`, a smoke run stayed non-green because GateIO had one recovered
+  `cycle.degraded` from market snapshots aging just past the 10s readiness
+  limit, and KuCoin showed an active coin-HSL replay with no completion event.
+  Follow-up event queries showed GateIO completed later cycles, while KuCoin
+  was still startup-blocked in HSL replay after long candle-history fetches.
+- Intended result: make active HSL replay groups easier to classify in smoke
+  output by adding stale-progress and long-running active counts from existing
+  bounded monitor data. This is observability-only and does not change HSL,
+  order, candle, exchange, readiness, or risk behavior.
+
 ### Critical Live Safety Gap: Coin-HSL Startup Replay Latency
 
 - Discovery: Binance VPS5 startup on 2026-06-26 showed coin-mode HSL history
