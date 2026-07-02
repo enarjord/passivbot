@@ -19,19 +19,18 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `426f3ae0b` after PR #969, `Project health summaries to event console`.
+- `ac425a1f0` after PR #970, `Refine trailing and unstuck event console summaries`.
 
 Current logging-overhaul head:
 
-- `426f3ae0b` after PR #969, `Project health summaries to event console`.
+- `ac425a1f0` after PR #970, `Refine trailing and unstuck event console summaries`.
 
 Current work:
 
-- Branch `codex/v8-trailing-unstuck-event-console` refines the existing
-  trailing/unstuck console projection. It keeps trading behavior unchanged,
-  routes the already-throttled `unstuck.selection` event to the opt-in live
-  event console/text sinks, and makes trailing/unstuck summaries more directly
-  operator-facing.
+- Branch `codex/v8-live-event-console-default` makes the structured live event
+  console projection default-on for `passivbot live`, while keeping explicit
+  config/env opt-outs. This moves default operator output closer to the target
+  shape where console is a projection of the structured event stream.
 
 Current review gate:
 
@@ -61,6 +60,25 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #970 at `ac425a1f0`.
+- PR #970 refined existing trailing/unstuck event-console summaries, routed the
+  already-throttled `unstuck.selection` event to the opt-in console/text sinks,
+  and kept trading behavior unchanged. It merged after Claude and Hermes
+  approved with no findings and CI was green; Cursor did not post during the
+  bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited during the first graceful window; Binance, GateIO, and OKX exited
+  during the longer graceful window; Kucoin still required SIGTERM after the
+  full wait window.
+- VPS5 settled smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=ac425a1f`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and
+  `logs.hard_matches=0`. Remaining attention was non-hard active HSL replay on
+  three forager bots and Hyperliquid EMA-unavailable diagnostics.
+- The deployed VPS5 configs did not set `logging.live_event_console`, so PR
+  #970's new console projection was present in the event-console path but not
+  visible in the default legacy console logs on that host.
 - Repository pulled through PR #969 at `426f3ae0b`.
 - PR #969 projected existing `health.summary` events into the opt-in live event
   console/text sinks with compact operator summaries. It kept periodic health

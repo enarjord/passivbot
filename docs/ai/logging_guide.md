@@ -77,20 +77,23 @@ Unknown profile names should fail visibly instead of being ignored silently.
 
 ## Live Event Console Projection
 
-`logging.live_event_console=true` or `PASSIVBOT_LIVE_EVENT_CONSOLE=1` enables
-an opt-in console sink fed by the structured live event pipeline. It is disabled
-by default while legacy stdlib console logs still exist, because enabling it can
-duplicate some order/execution lifecycle messages. Use it for controlled smoke
-tests of event-stream console formatting before migrating default console output.
+The live event console sink is enabled by default and is fed by the structured
+live event pipeline. Set `logging.live_event_console=false` or
+`PASSIVBOT_LIVE_EVENT_CONSOLE=0` to disable it during controlled comparisons.
+Some legacy stdlib console logs still exist, so the default projection may
+temporarily duplicate a few order/execution lifecycle messages until those
+legacy call sites are migrated.
 The console projection is operator-facing and local: it should prefer
-trading-relevant summaries over internal data plumbing. Do not ship opt-in
-console/text output containing account-state magnitudes such as balance, equity,
-PnL, fees, or position size to shared or centralized log aggregation without a
-deliberate redaction policy. HSL status events are console-visible
-only when they are pside-level, red/cooldown, or tied to a held coin; routine
-flat coin-universe status remains in the structured event stream but is kept off
-the console. Fill, position, and balance change events are console-visible
-because they are the primary operator-facing account state changes.
+trading-relevant summaries over internal data plumbing. Because this projection
+is enabled by default, account-state magnitudes such as balance, equity, PnL,
+fees, or position size may appear on the operator console by default. Do not
+forward console/stdout to shared or centralized log aggregation without either
+opting out or applying a deliberate redaction policy. HSL status events are
+console-visible only when they are pside-level, red/cooldown, or tied to a held
+coin; routine flat coin-universe status remains in the structured event stream
+but is kept off the console. Fill, position, and balance change events are
+console-visible because they are the primary operator-facing account state
+changes.
 `risk.mode_changed` and `hsl.transition` events are console-visible because
 mode changes and HSL tier transitions explain risk-state changes that affect
 trading.

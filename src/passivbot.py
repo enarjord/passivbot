@@ -67,9 +67,9 @@ from live.event_bus import (
     LiveEventPipeline,
     MonitorEventSink,
     ReasonCodes,
-    normalize_live_event_console_enabled,
     normalize_live_event_debug_profiles,
     payload_hash_raw,
+    resolve_live_event_console_enabled,
 )
 import live.event_emitters as live_event_emitters
 from monitor_publisher import MonitorPublisher
@@ -864,11 +864,12 @@ class Passivbot:
                 ),
             )
         )
-        self.live_event_console_enabled = normalize_live_event_console_enabled(
-            os.environ.get(
-                LIVE_EVENT_CONSOLE_ENV,
-                get_optional_config_value(config, "logging.live_event_console", False),
-            )
+        self.live_event_console_enabled = resolve_live_event_console_enabled(
+            env_value=os.environ.get(LIVE_EVENT_CONSOLE_ENV),
+            config_value=get_optional_config_value(
+                config, "logging.live_event_console", None
+            ),
+            default=True,
         )
         self.balance_threshold = (
             1.0  # don't create orders if balance is less than threshold

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live event console summaries are now enabled by default for `passivbot live`;
+  set `logging.live_event_console=false` or `PASSIVBOT_LIVE_EVENT_CONSOLE=0`
+  to opt out while legacy console logs are still being migrated.
 - Improved opt-in live event console summaries for trailing and unstuck
   positions, including threshold/retracement prices and unstuck selection
   details from existing structured events.

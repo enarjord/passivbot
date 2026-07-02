@@ -29,6 +29,7 @@ from live.event_bus import (
     payload_hash,
     payload_hash_raw,
     redact_payload,
+    resolve_live_event_console_enabled,
     sink_failed_reason_code,
 )
 from live.events import DiagnosticEvent
@@ -131,6 +132,16 @@ def test_live_event_console_flag_normalizes_common_config_values():
     assert normalize_live_event_console_enabled("on") is True
     assert normalize_live_event_console_enabled("1") is True
     assert normalize_live_event_console_enabled("console") is True
+
+
+def test_live_event_console_resolver_defaults_on_with_explicit_opt_outs():
+    assert resolve_live_event_console_enabled() is True
+    assert resolve_live_event_console_enabled(config_value=None, env_value=None) is True
+    assert resolve_live_event_console_enabled(config_value=False) is False
+    assert resolve_live_event_console_enabled(config_value="off") is False
+    assert resolve_live_event_console_enabled(config_value=True) is True
+    assert resolve_live_event_console_enabled(config_value=False, env_value="1") is True
+    assert resolve_live_event_console_enabled(config_value=True, env_value="0") is False
 
 
 def test_live_event_serializes_stable_envelope_and_redacts_sensitive_data():
