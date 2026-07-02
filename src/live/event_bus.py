@@ -645,7 +645,7 @@ DEFAULT_ROUTE = EventRoute(structured=True, monitor=True, console=False, text=Fa
 DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STARTED: EventRoute(console=True, text=True),
     EventTypes.BOT_READY: EventRoute(console=True, text=True),
-    EventTypes.BOT_STARTUP_TIMING: EventRoute(console=False, text=False),
+    EventTypes.BOT_STARTUP_TIMING: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
@@ -777,6 +777,7 @@ class ListEventSink:
 _CONSOLE_EVENT_TAGS = {
     EventTypes.BOT_STARTED: "bot",
     EventTypes.BOT_READY: "bot",
+    EventTypes.BOT_STARTUP_TIMING: "boot",
     EventTypes.BOT_STOPPING: "bot",
     EventTypes.BOT_SHUTDOWN_STAGE: "shutdown",
     EventTypes.BOT_STOPPED: "bot",
@@ -1402,6 +1403,24 @@ def _console_hsl_status_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_startup_timing_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    phase = _data_str(data, "phase")
+    if phase:
+        parts.append(f"phase={phase}-ready")
+    elapsed_ms = _data_number(data, "elapsed_ms")
+    if elapsed_ms is not None:
+        parts.append(f"elapsed={elapsed_ms / 1000.0:.2f}s")
+    since_previous_ms = _data_number(data, "since_previous_ms")
+    if since_previous_ms is not None:
+        parts.append(f"since_previous={since_previous_ms / 1000.0:.2f}s")
+    details = _data_str(data, "details")
+    if details:
+        parts.append(f"details={details}")
+    return parts
+
+
 def _console_trailing_status_summary(event: LiveEvent) -> list[str]:
     data = event.data if isinstance(event.data, Mapping) else {}
     parts: list[str] = []
@@ -1522,6 +1541,8 @@ def _console_unstuck_selection_summary(event: LiveEvent) -> list[str]:
 
 
 def _console_data_summary(event: LiveEvent) -> list[str]:
+    if event.event_type == EventTypes.BOT_STARTUP_TIMING:
+        return _console_startup_timing_summary(event)
     if event.event_type == EventTypes.ORDER_WAVE_COMPLETED:
         return _console_order_wave_summary(event)
     if event.event_type in {
