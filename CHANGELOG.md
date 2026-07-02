@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes bounded active HSL
+  replay samples with bot, stage, symbol, elapsed age, progress, and remaining
+  work estimates, making long-running HSL startup replay easier to attribute.
 - `passivbot tool live-smoke-report` now summarizes staged-readiness reason
   codes, defer reasons, contexts, and bounded max timing fields in concise
   output, making current-epoch planning delays easier to attribute without a

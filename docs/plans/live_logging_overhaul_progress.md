@@ -5889,6 +5889,35 @@ VPS5 deployment status:
 - Expected validation: focused staged-readiness smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #1000 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `1a73776f`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. No staged-readiness events
+  appeared in the post-deploy smoke window, so the new fields were not
+  exercised live yet; the test fixture covers both `cycle.degraded` and
+  `planning.unavailable` shapes.
+
+### Draft Slice: HSL Replay Active Samples In Brief Smoke
+
+- Branch: `codex/v8-smoke-hsl-replay-active-samples`.
+- Scope: read-only brief smoke-report projection over existing
+  `hsl_replay_health.groups`.
+- Triggering evidence: after PR #1000 deployment, VPS5 smoke remained
+  `ok=true` with zero hard failures, but HSL replay stayed active on four bots
+  and became long-running on all four. Brief smoke showed only aggregate counts,
+  max elapsed/event-age values, and `active_stage_counts={"pair_replay": 4}`.
+  A focused `live-event-query` was still required to learn which bot, symbol,
+  pair index, progress, and ETA were responsible.
+- Intended result: add a bounded `active` list to brief `hsl_replay`, including
+  bot, stage, signal mode, symbol/pside, latest elapsed/event age, stale and
+  long-running flags, pair counters, row progress, row rate, observed work
+  percentages, and estimated remaining rows/time. This changes only report
+  output; it does not add event producers, exchange calls, HSL replay behavior,
+  startup gating, order logic, risk logic, monitor writes, console routing, or
+  trading behavior.
+- Expected validation: focused HSL replay smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 
@@ -5919,10 +5948,10 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-5. Continue monitoring staged-readiness summaries. After PR #999 the signal
-   returned without missing/invalid surfaces, and the next slice should make
-   defer reason, context, and slow timing evidence visible directly in smoke
-   output.
+5. Continue monitoring long-running HSL replay. After PR #1000 deployment, the
+   replay was still active and progressing on four bots, but brief smoke did
+   not identify the active bot/symbol/pair progress without a separate
+   `live-event-query`.
 6. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 7. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
