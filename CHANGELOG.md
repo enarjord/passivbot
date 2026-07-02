@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Legacy balance and position-change console lines are now suppressed when the
+  structured live event console path is active, leaving `balance.changed` and
+  `position.changed` projections as the default operator output while
+  preserving legacy lines as fallback.
 - Flat coin-mode HSL cooldown finalizations now emit their
   `hsl.red_triggered` event as informational instead of critical when no
   exchange close was needed, so smoke reports no longer treat cooldown-only

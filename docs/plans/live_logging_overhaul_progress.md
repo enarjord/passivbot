@@ -19,19 +19,20 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `c2a04904` after PR #973, `Dedupe startup timing console logs`.
+- `f6700c5cd` after PR #983, `Dedupe order wave console summaries`.
 
 Current logging-overhaul head:
 
-- `c2a04904` after PR #973, `Dedupe startup timing console logs`.
+- `f6700c5cd` after PR #983, `Dedupe order wave console summaries`.
 
 Current work:
 
-- Branch `codex/v8-trailing-unstuck-console-events` keeps the existing
-  structured `trailing.status`, `unstuck.status`, and `unstuck.selection`
-  operator summaries as the console source of truth and suppresses duplicate
-  legacy unstuck stdlib lines when the event-console path is active. The legacy
-  unstuck lines remain fallback output if that path is disabled or unavailable.
+- Branch `codex/v8-dedupe-account-state-console` suppresses duplicate legacy
+  balance and position-change stdlib console lines when the structured
+  live-event console path is active. The existing `balance.changed` and
+  `position.changed` events remain the console source of truth, and the legacy
+  lines remain fallback output if the structured event console path is disabled
+  or unavailable.
 
 Current review gate:
 
@@ -61,6 +62,23 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #983 at `f6700c5cd`.
+- PR #983 suppressed legacy order-wave complete/settled stdlib console lines
+  when the structured live-event console path is active. It merged after Claude
+  and Hermes approved with no findings, CI was green, and local focused tests
+  passed. VPS5 checkout was updated to `f6700c5cd` on disk without restarting
+  running bots because the slice was console-only and HSL replay was still
+  active.
+- Repository pulled through PR #982 at `c7a89c9c`.
+- PR #982 made flat coin-mode HSL cooldown finalizations informational instead
+  of critical when no exchange close was needed. It merged after Claude and
+  Hermes approved with no findings and CI was green. VPS5 bots were restarted
+  and left running; settled smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=c7a89c9c`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and
+  `logs.hard_matches=0`. Remaining attention was non-hard active HSL replay
+  and EMA-unavailable/staged-refresh diagnostics.
 - Repository pulled through PR #972 at `f789dccc`.
 - PR #972 projected existing `bot.startup_timing` events into the default live
   event console/text sinks and kept trading behavior unchanged. It merged after

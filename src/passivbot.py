@@ -10471,7 +10471,7 @@ class Passivbot:
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 self._monitor_last_equity = float(equity)
-                if should_log:
+                if should_log and not self._live_event_console_available():
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -10481,8 +10481,8 @@ class Passivbot:
                         equity,
                         source,
                     )
-                    if raw_only:
-                        self._last_raw_only_log_time = now
+                if should_log and raw_only:
+                    self._last_raw_only_log_time = now
                 self._monitor_record_event(
                     "account.balance",
                     ("account", "balance"),
@@ -13103,6 +13103,9 @@ class Passivbot:
                     pbr.round_dynamic(upnl, 3),
                 ]
             )
+
+        if self._live_event_console_available():
+            return
 
         # Print aligned table with [pos] prefix
         for line in table.get_string().splitlines():
