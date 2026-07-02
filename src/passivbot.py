@@ -3360,7 +3360,7 @@ class Passivbot:
             status_changed
             or (now_ms - last_info_ms) >= self._unstuck_unchanged_info_log_interval_ms
         ):
-            if not self._live_event_console_available():
+            if not Passivbot._live_event_console_available(self):
                 logging.info("[unstuck] %s", " | ".join(parts))
             self._emit_unstuck_status_event(
                 side_statuses=side_infos,
@@ -3396,7 +3396,7 @@ class Passivbot:
             price_diff_pct = 0.0
             sign = ""
         coin = symbol.split("/")[0] if "/" in symbol else symbol
-        if not self._live_event_console_available():
+        if not Passivbot._live_event_console_available(self):
             logging.info(
                 "[unstuck] selecting %s %s | entry=%.2f now=%.2f (%s%.1f%%) | allowance=%.2f",
                 coin,
@@ -3952,7 +3952,7 @@ class Passivbot:
         since_previous_s = max(0.0, (now_ms - previous_ms) / 1000.0)
         marks[label] = now_ms
         self._startup_timing_last_mark_ms = now_ms
-        if not self._live_event_console_available():
+        if not Passivbot._live_event_console_available(self):
             suffix = f" | {details}" if details else ""
             logging.info(
                 "[boot] startup timing | %s-ready=%.2fs | since_previous=%.2fs%s",
@@ -4501,7 +4501,7 @@ class Passivbot:
                 elapsed_ms=elapsed_ms,
                 level=logging.getLevelName(log_level).lower(),
             )
-        if self._live_event_console_available():
+        if Passivbot._live_event_console_available(self):
             return
         if log_level == logging.DEBUG and summary_key == getattr(
             self, "_order_wave_last_summary_key", None
@@ -4647,7 +4647,7 @@ class Passivbot:
                     confirm_ms=confirm_ms,
                     level=logging.getLevelName(log_level).lower(),
                 )
-            if self._live_event_console_available():
+            if Passivbot._live_event_console_available(self):
                 continue
             logging.log(
                 log_level,
@@ -10471,7 +10471,7 @@ class Passivbot:
             try:
                 equity = balance_raw + (await self.calc_upnl_sum())
                 self._monitor_last_equity = float(equity)
-                if should_log and not self._live_event_console_available():
+                if should_log and not Passivbot._live_event_console_available(self):
                     logging.info(
                         "[balance] raw %.6f -> %.6f | snap %.6f -> %.6f | equity: %.4f source: %s",
                         self._previous_balance_raw,
@@ -13104,7 +13104,7 @@ class Passivbot:
                 ]
             )
 
-        if self._live_event_console_available():
+        if Passivbot._live_event_console_available(self):
             return
 
         # Print aligned table with [pos] prefix

@@ -19,19 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `b15da359` after PR #984, `Dedupe account state console summaries`.
+- `947b75b1` after PR #985, `Project low-balance create skips to event console`.
 
 Current logging-overhaul head:
 
-- `b15da359` after PR #984, `Dedupe account state console summaries`.
+- `947b75b1` after PR #985, `Project low-balance create skips to event console`.
 
 Current work:
 
-- Branch `codex/v8-low-balance-console-event` makes existing
-  `execution.create_skipped` low-balance create-skip events visible in the
-  structured live-event console and leaves the legacy `[balance] too low` line
-  as fallback output if the structured event console path is disabled or
-  unavailable.
+- Branch `codex/v8-defensive-event-console-gates` makes previously merged
+  passivbot.py console-dedup gates robust for borrowed-method FakeBot callers by
+  using the class helper directly. This is production-behavior neutral and
+  restores executor-path test coverage broken by #983/#984.
 
 Current review gate:
 
@@ -61,6 +60,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #985 at `947b75b1`.
+- PR #985 projected existing `execution.create_skipped` low-balance create-skip
+  events into the structured console/text sinks and made the legacy
+  `[balance] too low` line fallback-only. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `947b75b1` on disk without restarting running bots because the slice was
+  console-only and HSL replay remained active. Smoke after the fast-forward
+  reported `ok=true`, `hard_failures=0`, five running live processes, clean
+  tracked repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `fill_refresh.failed=0`;
+  remaining attention was non-hard active HSL replay and Hyperliquid EMA
+  readiness diagnostics.
 - Repository pulled through PR #984 at `b15da359`.
 - PR #984 suppressed duplicate legacy balance and position-change stdlib
   console lines when the structured live-event console path is active. It
