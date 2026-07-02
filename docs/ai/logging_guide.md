@@ -107,6 +107,9 @@ compact operator heartbeat covering uptime, loop latency, position counts,
 recent order/fill activity, errors, and resource pressure. Degraded
 `health.summary` events such as execution-loop error bursts must stay immediate
 and must not expose raw exchange URLs or credentials in console summaries.
+Startup timing events are console-visible because they explain which startup
+phase is slow or complete: account state, active-candle warmup, HSL replay,
+full warmup, market state, and final startup readiness.
 Position-level `trailing.status`, `unstuck.status`, and `unstuck.selection`
 events are console-visible because they explain why an existing position is
 waiting, armed, triggered, over budget, selected for unstucking, or blocked by

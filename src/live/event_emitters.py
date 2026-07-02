@@ -1193,7 +1193,7 @@ def _emit_startup_timing_event_unchecked(
     _safe_emit(
         bot,
         EventTypes.BOT_STARTUP_TIMING,
-        level="debug",
+        level="info",
         component="bot.startup",
         tags=("bot", "startup", "timing"),
         cycle_id=current_live_event_cycle_id(bot),

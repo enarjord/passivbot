@@ -242,7 +242,6 @@ def test_route_table_keeps_data_events_off_console_by_default():
         EventTypes.CACHE_WARMUP_DECISION,
         EventTypes.EXCHANGE_CONFIG_REFRESH,
         EventTypes.FILLS_REFRESH_SUMMARY,
-        EventTypes.BOT_STARTUP_TIMING,
         EventTypes.PLANNING_DEFER_SUMMARY,
         EventTypes.PLANNING_SYMBOL_STATE,
         EventTypes.HSL_RAW_RED_PENDING,
@@ -277,6 +276,8 @@ def test_route_table_keeps_data_events_off_console_by_default():
     assert DEFAULT_ROUTES[EventTypes.RISK_MODE_CHANGED].text is True
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].console is True
     assert DEFAULT_ROUTES[EventTypes.HSL_TRANSITION].text is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_STARTUP_TIMING].console is True
+    assert DEFAULT_ROUTES[EventTypes.BOT_STARTUP_TIMING].text is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].console is True
     assert DEFAULT_ROUTES[EventTypes.BOT_SHUTDOWN_STAGE].text is True
     assert DEFAULT_ROUTES[EventTypes.HEALTH_SUMMARY].console is True
@@ -786,6 +787,25 @@ def test_console_format_summarizes_order_wave_payload():
         "deferred_create=1 elapsed=642ms "
         "symbols=BTC/USDT:USDT,ETH/USDT:USDT,SOL/USDT:USDT "
         "reason=create_deferred"
+    )
+
+
+def test_console_format_summarizes_startup_timing():
+    event = LiveEvent(
+        EventTypes.BOT_STARTUP_TIMING,
+        status="succeeded",
+        reason_code=ReasonCodes.STARTUP_PHASE_READY,
+        data={
+            "phase": "hsl",
+            "elapsed_ms": 12345,
+            "since_previous_ms": 2345,
+            "details": "mode=coin",
+        },
+    )
+
+    assert format_console_event(event) == (
+        "[boot] succeeded phase=hsl-ready elapsed=12.35s since_previous=2.35s "
+        "details=mode=coin reason=startup_phase_ready"
     )
 
 

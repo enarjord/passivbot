@@ -194,6 +194,7 @@ def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
         EventTypes.BOT_STARTUP_TIMING,
     ]
     assert events[0].component == "bot.startup"
+    assert events[0].level == "info"
     assert events[0].reason_code == "startup_phase_ready"
     assert events[0].data == {
         "phase": "account",
@@ -206,6 +207,7 @@ def test_startup_timing_mark_emits_structured_event(monkeypatch, caplog):
         "since_previous_ms": 4500,
         "details": "mode=coin",
     }
+    assert events[1].level == "info"
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 

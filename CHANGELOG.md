@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Startup timing events now appear in the live event console projection by
+  default, making account-ready, candle-ready, HSL-ready, market-ready, and
+  startup-ready phase durations visible from the structured event stream.
 - Live event console summaries are now enabled by default for `passivbot live`;
   set `logging.live_event_console=false` or `PASSIVBOT_LIVE_EVENT_CONSOLE=0`
   to opt out while legacy console logs are still being migrated.

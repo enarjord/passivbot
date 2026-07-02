@@ -15,22 +15,21 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-07-01.
+Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `ac425a1f0` after PR #970, `Refine trailing and unstuck event console summaries`.
+- `45cd1d7e` after PR #971, `Enable live event console by default`.
 
 Current logging-overhaul head:
 
-- `ac425a1f0` after PR #970, `Refine trailing and unstuck event console summaries`.
+- `45cd1d7e` after PR #971, `Enable live event console by default`.
 
 Current work:
 
-- Branch `codex/v8-live-event-console-default` makes the structured live event
-  console projection default-on for `passivbot live`, while keeping explicit
-  config/env opt-outs. This moves default operator output closer to the target
-  shape where console is a projection of the structured event stream.
+- Branch `codex/v8-startup-timing-event-console` projects existing
+  `bot.startup_timing` events into the default live event console/text sinks,
+  keeping startup phase timing visible from the structured event stream.
 
 Current review gate:
 
@@ -60,6 +59,26 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #971 at `45cd1d7e`.
+- PR #971 made the structured live event console projection default-on for
+  `passivbot live` while preserving explicit config/env opt-outs. It merged
+  after Claude and Hermes approved the amended head, CI was green, and no open
+  PRs remained.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited in the first graceful window; Binance, Kucoin, GateIO, and OKX exited
+  during the longer graceful window without SIGTERM.
+- VPS5 settled smoke after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=45cd1d7e`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and
+  `logs.hard_matches=0`. Remaining attention was non-hard active HSL replay on
+  the four forager bots plus Hyperliquid EMA-unavailable/staged-refresh
+  diagnostics.
+- Focused log inspection confirmed the default console projection was active:
+  Hyperliquid emitted structured `[trailing]` and `[unstuck]` summaries with
+  threshold, retracement, allowance, and distance fields, while legacy duplicate
+  text lines still remained for some account-state changes pending later
+  cleanup.
 - Repository pulled through PR #970 at `ac425a1f0`.
 - PR #970 refined existing trailing/unstuck event-console summaries, routed the
   already-throttled `unstuck.selection` event to the opt-in console/text sinks,
