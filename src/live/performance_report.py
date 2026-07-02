@@ -175,6 +175,7 @@ _RISK_ACTIVITY_EVENT_TYPES = {
     "hsl.red_finalized_without_order",
     "hsl.cooldown_started",
     "hsl.cooldown_ended",
+    "trailing.status",
     "unstuck.status",
     "unstuck.selection",
 }
