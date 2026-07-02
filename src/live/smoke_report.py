@@ -63,6 +63,7 @@ EXECUTION_HEALTH_GROUP_LIMIT = 20
 EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
 SMOKE_REPORT_BRIEF_REMOTE_CALL_SLOWEST_LIMIT = 3
+SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT = 5
 _SMOKE_REPORT_SECTION_BASE_KEYS = (
     "ok",
     "attention",
@@ -6337,6 +6338,75 @@ def _brief_remote_call_health(summary: Any) -> dict[str, Any]:
     return out
 
 
+def _brief_hsl_replay_active_groups(groups: Any) -> list[dict[str, Any]]:
+    if not isinstance(groups, list):
+        return []
+    rows: list[dict[str, Any]] = []
+    for group in groups:
+        if not isinstance(group, dict) or not bool(group.get("active")):
+            continue
+        latest = group.get("latest") if isinstance(group.get("latest"), dict) else {}
+        data = latest.get("data") if isinstance(latest.get("data"), dict) else {}
+        derived = latest.get("derived") if isinstance(latest.get("derived"), dict) else {}
+        row = {
+            "bot": _redact_log_text(str(group.get("bot")), max_len=120)
+            if group.get("bot") not in (None, "")
+            else None,
+            "stage": _redact_log_text(str(data.get("stage")), max_len=80)
+            if data.get("stage") not in (None, "")
+            else None,
+            "signal_mode": _redact_log_text(str(data.get("signal_mode")), max_len=80)
+            if data.get("signal_mode") not in (None, "")
+            else None,
+            "symbol": _redact_log_text(str(latest.get("symbol")), max_len=120)
+            if latest.get("symbol") not in (None, "")
+            else None,
+            "pside": _redact_log_text(str(latest.get("pside")), max_len=40)
+            if latest.get("pside") not in (None, "")
+            else None,
+            "latest_elapsed_ms": _hsl_replay_record_elapsed_ms(latest),
+            "latest_event_age_ms": _non_negative_int(
+                group.get("active_latest_event_age_ms")
+            ),
+            "active_stale": True if bool(group.get("active_stale")) else None,
+            "active_long_running": True
+            if bool(group.get("active_long_running"))
+            else None,
+            "pair_idx": _non_negative_int(data.get("pair_idx")),
+            "pairs": _non_negative_int(data.get("pairs")),
+            "required_pairs": _non_negative_int(data.get("required_pairs")),
+            "held_pairs": _non_negative_int(data.get("held_pairs")),
+            "cooldown_pairs": _non_negative_int(data.get("cooldown_pairs")),
+            "total_applied_rows": _non_negative_int(data.get("total_applied_rows")),
+            "rows_per_second": _numeric_value(data.get("rows_per_second")),
+            "observed_required_work_pct": derived.get("observed_required_work_pct"),
+            "observed_work_pct": derived.get("observed_work_pct"),
+            "estimated_remaining_rows": _non_negative_int(
+                derived.get("estimated_remaining_rows")
+            ),
+            "estimated_remaining_ms": _non_negative_int(
+                derived.get("estimated_remaining_ms")
+            ),
+        }
+        rows.append(
+            {
+                key: value
+                for key, value in row.items()
+                if value not in (None, "", {}, [])
+            }
+        )
+    rows.sort(
+        key=lambda item: (
+            0 if item.get("active_long_running") else 1,
+            0 if item.get("active_stale") else 1,
+            -int(item.get("latest_elapsed_ms") or 0),
+            -int(item.get("latest_event_age_ms") or 0),
+            str(item.get("bot") or ""),
+        )
+    )
+    return rows[:SMOKE_REPORT_BRIEF_HSL_REPLAY_ACTIVE_LIMIT]
+
+
 def _brief_fill_refresh_health(summary: Any) -> dict[str, Any]:
     if not isinstance(summary, dict):
         summary = {}
@@ -6555,6 +6625,9 @@ def _brief_hsl_replay_health(hsl_replay_health: dict[str, Any]) -> dict[str, Any
         out["max_completed_elapsed_ms"] = int(max_completed_elapsed_ms)
     if active_stage_counts:
         out["active_stage_counts"] = dict(active_stage_counts.most_common())
+    active = _brief_hsl_replay_active_groups(groups)
+    if active:
+        out["active"] = active
     return out
 
 
