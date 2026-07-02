@@ -1781,6 +1781,16 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
     assert health["latest_unavailable_total"] == 5
     assert health["latest_optional_drop_total"] == 2
     assert health["event_types"] == {"ema.unavailable": 2}
+    assert health["latest_candidate_reason_counts"] == {
+        "cache_only_fetch_failed": 2
+    }
+    assert health["latest_unavailable_reason_counts"] == {
+        "never_fetched_cache_only": 3,
+        "cache_only_fetch_failed": 2,
+    }
+    assert health["latest_candidate_error_type_counts"] == {
+        "MissingLogRangeEma": 1
+    }
     assert health["groups"][0]["count"] == 2
     assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_ema_2"}
     assert health["groups"][0]["latest_candidate_unavailable_count"] == 2
@@ -1805,6 +1815,12 @@ def test_live_smoke_report_summarizes_ema_readiness_health(tmp_path):
         "latest_candidate_unavailable_total": 2,
         "latest_unavailable_total": 5,
         "latest_optional_drop_total": 2,
+        "latest_candidate_reason_counts": {"cache_only_fetch_failed": 2},
+        "latest_unavailable_reason_counts": {
+            "never_fetched_cache_only": 3,
+            "cache_only_fetch_failed": 2,
+        },
+        "latest_candidate_error_type_counts": {"MissingLogRangeEma": 1},
         "event_types": {"ema.unavailable": 2},
     }
 

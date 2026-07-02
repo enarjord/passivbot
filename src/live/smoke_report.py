@@ -9,7 +9,7 @@ import subprocess
 from collections import Counter, defaultdict, deque
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from live.event_bus import LIVE_EVENT_MONITOR_PAYLOAD_KEY, EventTypes, utc_ms
 from live.event_file_rows import event_file_rows
@@ -1687,6 +1687,18 @@ def _candidate_error_type_counts(value: Any) -> dict[str, int]:
     return dict(counts.most_common())
 
 
+def _sum_counter_maps(values: Iterable[Any]) -> dict[str, int]:
+    counts: Counter[str] = Counter()
+    for value in values:
+        if not isinstance(value, dict):
+            continue
+        for key, count in value.items():
+            if key is None:
+                continue
+            counts[str(key)] += int(_non_negative_int(count) or 0)
+    return dict(counts.most_common())
+
+
 def _ema_readiness_group(
     *,
     bot_key: str,
@@ -1819,6 +1831,15 @@ def _summarize_ema_readiness_health(
         "latest_optional_drop_total": sum(
             int(group.get("latest_optional_drop_count") or 0)
             for group in groups.values()
+        ),
+        "latest_candidate_reason_counts": _sum_counter_maps(
+            group.get("candidate_reason_counts") for group in groups.values()
+        ),
+        "latest_unavailable_reason_counts": _sum_counter_maps(
+            group.get("unavailable_reason_counts") for group in groups.values()
+        ),
+        "latest_candidate_error_type_counts": _sum_counter_maps(
+            group.get("candidate_error_type_counts") for group in groups.values()
         ),
         "groups": compact_groups,
     }
@@ -5367,6 +5388,18 @@ def _summary_limited_groups(
             ),
             "latest_unavailable_total": summary.get("latest_unavailable_total"),
             "latest_optional_drop_total": summary.get("latest_optional_drop_total"),
+            "latest_candidate_reason_counts": summary.get(
+                "latest_candidate_reason_counts"
+            )
+            or None,
+            "latest_unavailable_reason_counts": summary.get(
+                "latest_unavailable_reason_counts"
+            )
+            or None,
+            "latest_candidate_error_type_counts": summary.get(
+                "latest_candidate_error_type_counts"
+            )
+            or None,
             "latest_missing_surface_total": summary.get("latest_missing_surface_total"),
             "latest_invalid_surface_total": summary.get("latest_invalid_surface_total"),
             "latest_queue_depth_total": summary.get("latest_queue_depth_total"),
@@ -6040,6 +6073,28 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     event_window = (
         report.get("event_window") if isinstance(report.get("event_window"), dict) else {}
     )
+    ema_readiness_brief = {
+        "total": _count_value(ema_readiness_health.get("total")),
+        "bots": _count_value(ema_readiness_health.get("bots")),
+        "latest_candidate_unavailable_total": _count_value(
+            ema_readiness_health.get("latest_candidate_unavailable_total")
+        ),
+        "latest_unavailable_total": _count_value(
+            ema_readiness_health.get("latest_unavailable_total")
+        ),
+        "latest_optional_drop_total": _count_value(
+            ema_readiness_health.get("latest_optional_drop_total")
+        ),
+        "event_types": ema_readiness_health.get("event_types") or {},
+    }
+    for key in (
+        "latest_candidate_reason_counts",
+        "latest_unavailable_reason_counts",
+        "latest_candidate_error_type_counts",
+    ):
+        value = ema_readiness_health.get(key)
+        if isinstance(value, dict) and value:
+            ema_readiness_brief[key] = value
     return {
         "ok": bool(report.get("ok")),
         "attention": bool(report.get("attention")),
@@ -6181,20 +6236,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         "startup_timings": _brief_startup_timings(report.get("startup_timings")),
         "execution": _brief_execution_health(execution_health),
         "fill_refresh": _brief_fill_refresh_health(fill_refresh_health),
-        "ema_readiness": {
-            "total": _count_value(ema_readiness_health.get("total")),
-            "bots": _count_value(ema_readiness_health.get("bots")),
-            "latest_candidate_unavailable_total": _count_value(
-                ema_readiness_health.get("latest_candidate_unavailable_total")
-            ),
-            "latest_unavailable_total": _count_value(
-                ema_readiness_health.get("latest_unavailable_total")
-            ),
-            "latest_optional_drop_total": _count_value(
-                ema_readiness_health.get("latest_optional_drop_total")
-            ),
-            "event_types": ema_readiness_health.get("event_types") or {},
-        },
+        "ema_readiness": ema_readiness_brief,
         "exchange_config_refresh": {
             "total": _count_value(exchange_config_refresh_health.get("total")),
             "bots": _count_value(exchange_config_refresh_health.get("bots")),
