@@ -2502,7 +2502,29 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
                                 }
                             ]
                         },
-                    }
+                    },
+                    "timings_ms": {"market_state": 112},
+                },
+            ),
+            _monitor_row(
+                event_type="planning.unavailable",
+                seq=4,
+                ts=1500,
+                status="degraded",
+                level="debug",
+                reason_code="staged_execution_precondition",
+                ids={"cycle_id": "33"},
+                data={
+                    "context": "rust order calculation",
+                    "defer_reason": "staged_planner_inputs_not_fresh",
+                    "missing": [],
+                    "required_surfaces": ["market_snapshot"],
+                    "min_epochs": {"market_snapshot": 33},
+                    "timings_ms": {
+                        "authoritative": "[redacted]",
+                        "market_state": 303339,
+                        "planning_universe": 16,
+                    },
                 },
             ),
             _monitor_row(
@@ -2535,7 +2557,11 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
                                 {"mismatch_type": "epoch_stale", "missing_count": 1}
                             ],
                         },
-                    }
+                    },
+                    "timings_ms": {
+                        "market_state": 239061,
+                        "planning_universe": 1919,
+                    },
                 },
             ),
             _monitor_row(
@@ -2556,7 +2582,7 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     brief = summarize_live_smoke_report_brief(report)
 
     health = report["staged_readiness_health"]
-    assert health["total"] == 2
+    assert health["total"] == 3
     assert health["bots"] == 1
     assert health["latest_missing_surface_total"] == 2
     assert health["latest_invalid_surface_total"] == 3
@@ -2568,7 +2594,19 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
         "completed_candles": 2,
         "market_prices": 1,
     }
-    assert health["event_types"] == {"cycle.degraded": 2}
+    assert health["event_types"] == {"cycle.degraded": 2, "planning.unavailable": 1}
+    assert health["reason_codes"] == {
+        "staged_execution_not_ready": 2,
+        "staged_execution_precondition": 1,
+    }
+    assert health["latest_defer_reasons"] == {"staged_planner_inputs_not_fresh": 2}
+    assert health["latest_contexts"] == {
+        "rust order calculation": 2,
+    }
+    assert health["latest_timings_ms_max"] == {
+        "market_state": 303339,
+        "planning_universe": 1919,
+    }
     assert health["groups"][0]["count"] == 2
     assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_stage_2"}
     assert health["groups"][0]["latest_context"] == "rust order calculation"
@@ -2583,7 +2621,7 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     assert health["groups"][0]["latest_completed_candle_mismatch_counts"] == {
         "completed_candle_target_changed": 2
     }
-    assert summary["staged_readiness_health"]["total"] == 2
+    assert summary["staged_readiness_health"]["total"] == 3
     assert summary["staged_readiness_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_stage_2"
     }
@@ -2595,8 +2633,12 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
         "completed_candles": 2,
         "market_prices": 1,
     }
+    assert summary["staged_readiness_health"]["latest_timings_ms_max"] == {
+        "market_state": 303339,
+        "planning_universe": 1919,
+    }
     assert brief["staged_readiness"] == {
-        "total": 2,
+        "total": 3,
         "bots": 1,
         "latest_missing_surface_total": 2,
         "latest_invalid_surface_total": 3,
@@ -2608,7 +2650,19 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
             "completed_candles": 2,
             "market_prices": 1,
         },
-        "event_types": {"cycle.degraded": 2},
+        "event_types": {"cycle.degraded": 2, "planning.unavailable": 1},
+        "reason_codes": {
+            "staged_execution_not_ready": 2,
+            "staged_execution_precondition": 1,
+        },
+        "latest_defer_reasons": {"staged_planner_inputs_not_fresh": 2},
+        "latest_contexts": {
+            "rust order calculation": 2,
+        },
+        "latest_timings_ms_max": {
+            "market_state": 303339,
+            "planning_universe": 1919,
+        },
     }
 
 

@@ -5860,6 +5860,35 @@ VPS5 deployment status:
 - Expected validation: focused brief smoke-report test, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #999 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `8e6aaf4b`. The post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state, and
+  the five configured live bots still running. The new brief `slowest` rows
+  exposed slow surfaces such as OKX candle fetches near 35s and account-critical
+  open-orders/balance calls above 10s.
+
+### Draft Slice: Staged Readiness Reason And Timing Smoke Summary
+
+- Branch: `codex/v8-smoke-staged-degraded-timing`.
+- Scope: read-only smoke-report projection over existing `cycle.degraded` and
+  `planning.unavailable` staged-readiness events.
+- Triggering evidence: post-PR #999 VPS5 brief smoke showed
+  `staged_readiness.total=1` and `latest_missing_surface_total=0`, while a
+  focused event query showed KuCoin degraded because Rust order calculation was
+  deferred with `defer_reason=staged_planner_inputs_not_fresh`,
+  `reason_code=staged_execution_precondition`, and long `timings_ms` such as
+  `market_state=303339`. The brief smoke did not surface those reason/timing
+  fields, so the operator still needed a separate event query to understand why
+  planning degraded.
+- Intended result: include bounded reason-code counts, latest defer-reason
+  counts, latest context counts, and max latest timing fields in full, summary,
+  and brief staged-readiness smoke output. This changes only report output; it
+  does not add event producers, exchange calls, readiness gates, staged
+  execution behavior, order logic, risk logic, monitor writes, console routing,
+  or trading behavior.
+- Expected validation: focused staged-readiness smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 
@@ -5890,10 +5919,10 @@ VPS5 deployment status:
    `exchange_surface_health` notes over the existing endpoint outcomes.
    Remaining useful slices should be driven by a concrete live exchange gap
    rather than broad probe expansion.
-5. Continue monitoring staged-readiness summaries after PR #762. The first
-   post-restart smokes showed `staged_readiness.total=0`; if the signal returns,
-   inspect whether it is a real current-epoch account surface delay or a new
-   completed-candle readiness shape.
+5. Continue monitoring staged-readiness summaries. After PR #999 the signal
+   returned without missing/invalid surfaces, and the next slice should make
+   defer reason, context, and slow timing evidence visible directly in smoke
+   output.
 6. Start the live restart/smoke automation slice if operational workflow speed
    becomes the higher leverage next step.
 7. Continue cache-doctor refinements in separate adjacent PRs: deeper metadata
