@@ -423,6 +423,9 @@ def test_live_smoke_report_summarizes_monitor_events_and_log_attention(tmp_path)
         "throttled": 0,
         "failure_pct": 100,
         "throttled_pct": 0,
+        "failed_reason_codes": {"request_timeout": 1},
+        "failed_error_types": {"RequestTimeout": 1},
+        "failed_surfaces": {"balance": 1},
         "groups_truncated": False,
         "groups": [
             {
@@ -774,6 +777,10 @@ def test_live_smoke_report_remote_call_health_totals_mixed_groups(tmp_path):
     assert health["throttled"] == 1
     assert health["failure_pct"] == 18
     assert health["throttled_pct"] == 9
+    assert health["failed_reason_codes"] == {"authoritative_balance": 2}
+    assert health["failed_error_types"] == {"RequestTimeout": 2}
+    assert health["failed_kinds"] == {"authoritative_state_fetch": 2}
+    assert health["failed_surfaces"] == {"balance": 2}
     groups_by_surface = {
         (group.get("kind"), group.get("surface")): group for group in health["groups"]
     }
@@ -895,6 +902,10 @@ def test_live_smoke_report_account_critical_remote_call_health_subset(tmp_path):
     assert account_health["throttled"] == 0
     assert account_health["failure_pct"] == 33
     assert account_health["throttled_pct"] == 0
+    assert account_health["failed_reason_codes"] == {"authoritative_balance": 1}
+    assert account_health["failed_error_types"] == {"RequestTimeout": 1}
+    assert account_health["failed_kinds"] == {"authoritative_state_fetch": 1}
+    assert account_health["failed_surfaces"] == {"balance": 1}
     group_surfaces = {group.get("surface") for group in account_health["groups"]}
     assert group_surfaces == {"balance", "positions", "open_orders"}
 
@@ -1328,8 +1339,28 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
         assert "latest_line" not in group
     assert brief["remote_calls"]["total"] == 1
     assert brief["remote_calls"]["failed"] == 1
+    assert brief["remote_calls"]["failed_reason_codes"] == {
+        "authoritative_balance": 1
+    }
+    assert brief["remote_calls"]["failed_error_types"] == {"RequestTimeout": 1}
+    assert brief["remote_calls"]["failed_kinds"] == {
+        "authoritative_state_fetch": 1
+    }
+    assert brief["remote_calls"]["failed_surfaces"] == {"balance": 1}
     assert brief["account_critical_remote_calls"]["total"] == 1
     assert brief["account_critical_remote_calls"]["failed"] == 1
+    assert brief["account_critical_remote_calls"]["failed_reason_codes"] == {
+        "authoritative_balance": 1
+    }
+    assert brief["account_critical_remote_calls"]["failed_error_types"] == {
+        "RequestTimeout": 1
+    }
+    assert brief["account_critical_remote_calls"]["failed_kinds"] == {
+        "authoritative_state_fetch": 1
+    }
+    assert brief["account_critical_remote_calls"]["failed_surfaces"] == {
+        "balance": 1
+    }
     assert brief["ema_readiness"] == {
         "total": 1,
         "bots": 1,

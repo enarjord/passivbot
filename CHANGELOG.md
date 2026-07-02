@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now summarizes failed remote-call
+  reasons, surfaces, kinds, and error types in concise smoke output, making
+  transient exchange failures easier to identify without a separate event
+  query.
 - `passivbot tool live-smoke-report` now attaches the timestamped log context
   line to unparseable traceback/error matches, making hard text-log matches
   easier to attribute without changing smoke verdict policy.
