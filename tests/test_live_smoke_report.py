@@ -2468,6 +2468,14 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     assert health["bots"] == 1
     assert health["latest_missing_surface_total"] == 2
     assert health["latest_invalid_surface_total"] == 3
+    assert health["latest_missing_surfaces"] == {
+        "completed_candles": 1,
+        "market_prices": 1,
+    }
+    assert health["latest_invalid_surfaces"] == {
+        "completed_candles": 2,
+        "market_prices": 1,
+    }
     assert health["event_types"] == {"cycle.degraded": 2}
     assert health["groups"][0]["count"] == 2
     assert health["groups"][0]["latest_ids"] == {"cycle_id": "cy_stage_2"}
@@ -2487,11 +2495,27 @@ def test_live_smoke_report_summarizes_staged_readiness_health(tmp_path):
     assert summary["staged_readiness_health"]["groups"][0]["latest_ids"] == {
         "cycle_id": "cy_stage_2"
     }
+    assert summary["staged_readiness_health"]["latest_missing_surfaces"] == {
+        "completed_candles": 1,
+        "market_prices": 1,
+    }
+    assert summary["staged_readiness_health"]["latest_invalid_surfaces"] == {
+        "completed_candles": 2,
+        "market_prices": 1,
+    }
     assert brief["staged_readiness"] == {
         "total": 2,
         "bots": 1,
         "latest_missing_surface_total": 2,
         "latest_invalid_surface_total": 3,
+        "latest_missing_surfaces": {
+            "completed_candles": 1,
+            "market_prices": 1,
+        },
+        "latest_invalid_surfaces": {
+            "completed_candles": 2,
+            "market_prices": 1,
+        },
         "event_types": {"cycle.degraded": 2},
     }
 
