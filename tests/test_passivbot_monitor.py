@@ -964,7 +964,7 @@ def test_health_summary_event_emitter_records_payload():
     assert bot._live_event_pipeline.flush(timeout=2.0) is True
     event = sink.events[0]
     assert event.event_type == EventTypes.HEALTH_SUMMARY
-    assert event.level == "debug"
+    assert event.level == "info"
     assert event.component == "bot.health"
     assert event.tags == ("health", "resource")
     assert event.cycle_id == "cy_health"

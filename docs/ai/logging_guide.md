@@ -99,6 +99,11 @@ events are console-visible because they explain operator-relevant order
 omissions: staged entries waiting for an acceptable market distance, entries
 skipped because the configured slot size is below exchange-effective minimums,
 and loss-realizing closes deferred by the realized-loss gate.
+Periodic `health.summary` events are console-visible because they provide a
+compact operator heartbeat covering uptime, loop latency, position counts,
+recent order/fill activity, errors, and resource pressure. Degraded
+`health.summary` events such as execution-loop error bursts must stay immediate
+and must not expose raw exchange URLs or credentials in console summaries.
 Position-level `trailing.status` and `unstuck.status` events are console-visible
 because they explain why an existing position is waiting, armed, triggered, over
 budget, or blocked by the unstuck EMA gate. Unsupported strategy diagnostics

@@ -1222,7 +1222,7 @@ def _emit_health_summary_event_unchecked(
     _safe_emit(
         bot,
         EventTypes.HEALTH_SUMMARY,
-        level="debug",
+        level="info",
         component="bot.health",
         tags=(EventTags.HEALTH, EventTags.RESOURCE),
         cycle_id=current_live_event_cycle_id(bot),

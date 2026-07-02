@@ -19,19 +19,20 @@ Last updated: 2026-07-01.
 
 Current `origin/v8` head:
 
-- `ca686cf5a` after PR #967, `Project risk state events to console`.
+- `9ff2b8582` after PR #968, `Project entry gate events to console`.
 
 Current logging-overhaul head:
 
-- `ca686cf5a` after PR #967, `Project risk state events to console`.
+- `9ff2b8582` after PR #968, `Project entry gate events to console`.
 
 Current work:
 
-- Branch `codex/v8-next-logging-console-slice` projects existing entry/risk
-  gate-block events into the opt-in live event console/text sinks with compact
-  operator summaries. This covers initial-entry distance gate blocked/cleared,
-  min-effective-cost entry skips, and realized-loss gate deferrals without
-  changing producer throttling, gate policy, order generation, or exchange I/O.
+- Branch `codex/v8-next-logging-slice-2` projects existing `health.summary`
+  events into the opt-in live event console/text sinks with compact operator
+  summaries. It keeps periodic health as an INFO-level event matching the
+  existing legacy `[health]` line, keeps degraded execution-loop error bursts
+  immediate, and does not change health producer timing, trading behavior,
+  exchange I/O, or resource counters.
 
 Current review gate:
 
@@ -61,6 +62,28 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #968 at `9ff2b8582`.
+- PR #968 projected existing initial-entry distance gate blocked/cleared,
+  min-effective-cost entry skip, and realized-loss gate deferral events into
+  the opt-in live event console/text sinks with compact operator summaries. It
+  merged after Hermes and Claude approved and CI was green; Cursor did not post
+  during the bounded wait.
+- Bots were restarted from `/root/bots_vps5.yaml` and left running. Hyperliquid
+  exited quickly after Ctrl-C; Binance, Kucoin, GateIO, and OKX were still
+  present after 25 seconds, and all exited gracefully within the longer wait
+  window without SIGTERM.
+- VPS5 smoke immediately after restart reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, `missing_expected_count=0`, clean tracked repository
+  state at `repository.head=9ff2b858`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `logs.hard_matches=0`.
+  A later smoke observed one Hyperliquid routine fill-prefetch `RequestTimeout`
+  which recovered on subsequent refreshes while fill coverage remained ready.
+  The final short-window smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and
+  `logs.hard_matches=0`. Remaining attention was non-hard Hyperliquid EMA
+  unavailable diagnostics for cache-only stock symbols and active HSL replay on
+  two bots.
 - Repository pulled through PR #967 at `ca686cf5a`.
 - PR #967 projected existing `risk.mode_changed` and `hsl.transition` events
   into the opt-in live event console/text sinks with compact operator

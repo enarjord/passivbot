@@ -636,7 +636,7 @@ DEFAULT_ROUTES: dict[str, EventRoute] = {
     EventTypes.BOT_STOPPING: EventRoute(console=True, text=True),
     EventTypes.BOT_SHUTDOWN_STAGE: EventRoute(console=True, text=True),
     EventTypes.BOT_STOPPED: EventRoute(console=True, text=True),
-    EventTypes.HEALTH_SUMMARY: EventRoute(console=False, text=False),
+    EventTypes.HEALTH_SUMMARY: EventRoute(console=True, text=True),
     EventTypes.MARKET_SNAPSHOT_DIAGNOSTIC_SKIPPED: EventRoute(
         console=False, text=False
     ),
@@ -767,6 +767,7 @@ _CONSOLE_EVENT_TAGS = {
     EventTypes.BOT_STOPPING: "bot",
     EventTypes.BOT_SHUTDOWN_STAGE: "shutdown",
     EventTypes.BOT_STOPPED: "bot",
+    EventTypes.HEALTH_SUMMARY: "health",
     EventTypes.CYCLE_STARTED: "cycle",
     EventTypes.CYCLE_COMPLETED: "cycle",
     EventTypes.CYCLE_DEGRADED: "cycle",
@@ -1257,6 +1258,97 @@ def _console_forager_selection_summary(event: LiveEvent) -> list[str]:
     return parts
 
 
+def _console_health_summary(event: LiveEvent) -> list[str]:
+    data = event.data if isinstance(event.data, Mapping) else {}
+    parts: list[str] = []
+    if event.reason_code == ReasonCodes.EXECUTION_LOOP_ERROR_BURST:
+        count = _data_int(data, "count")
+        window = _data_int(data, "window_s")
+        if count is not None:
+            if window is not None:
+                parts.append(f"errors={count}/{window}s")
+            else:
+                parts.append(f"errors={count}")
+        endpoints = data.get("top_endpoints")
+        if isinstance(endpoints, list):
+            shown = []
+            for item in endpoints[:3]:
+                if not isinstance(item, Mapping):
+                    continue
+                endpoint = _data_str(item, "endpoint")
+                endpoint_count = _data_int(item, "count")
+                if endpoint and endpoint_count is not None:
+                    shown.append(f"{endpoint}:{endpoint_count}")
+            if shown:
+                parts.append("top=" + ",".join(shown))
+        latest_type = _data_str(data, "latest_error_type")
+        if latest_type:
+            parts.append(f"latest={latest_type}")
+        latest_status = _data_str(data, "latest_status")
+        if latest_status:
+            parts.append(f"status={latest_status}")
+        latest_code = _data_str(data, "latest_code")
+        if latest_code:
+            parts.append(f"code={latest_code}")
+        return parts
+
+    uptime_ms = _data_int(data, "uptime_ms")
+    if uptime_ms is not None:
+        parts.append(f"uptime={uptime_ms // 1000}s")
+    loop_ms = _data_int(data, "last_loop_duration_ms")
+    if loop_ms is not None:
+        parts.append(f"loop={loop_ms / 1000.0:.1f}s")
+    long_count = _data_int(data, "positions_long")
+    short_count = _data_int(data, "positions_short")
+    if long_count is not None or short_count is not None:
+        parts.append(f"positions={long_count or 0}L/{short_count or 0}S")
+    balance = _data_float(data, "balance_raw")
+    if balance:
+        parts.append(f"balance={balance}")
+    equity = _data_float(data, "equity")
+    if equity:
+        parts.append(f"equity={equity}")
+    placed = _data_int(data, "orders_placed")
+    cancelled = _data_int(data, "orders_cancelled")
+    if placed is not None or cancelled is not None:
+        parts.append(f"orders=+{placed or 0}/-{cancelled or 0}")
+    fills = _data_int(data, "fills")
+    if fills is not None:
+        fill_part = f"fills={fills}"
+        pnl = _data_float(data, "pnl")
+        if pnl and fills:
+            fill_part += f":pnl={pnl}"
+        parts.append(fill_part)
+    errors = _data_int(data, "errors_last_hour")
+    if errors is not None:
+        parts.append(f"errors={errors}/h")
+    ws = _data_int(data, "ws_reconnects")
+    if ws:
+        parts.append(f"ws={ws}")
+    rate_limits = _data_int(data, "rate_limits")
+    if rate_limits:
+        parts.append(f"rate_limits={rate_limits}")
+    rss_bytes = _data_int(data, "rss_bytes")
+    if rss_bytes is not None:
+        parts.append(f"rss={rss_bytes / 1024.0 / 1024.0:.1f}MiB")
+    queue_depth = _data_int(data, "event_queue_depth")
+    if queue_depth:
+        queue_max = _data_int(data, "event_queue_maxsize")
+        if queue_max:
+            parts.append(f"event_q={queue_depth}/{queue_max}")
+        else:
+            parts.append(f"event_q={queue_depth}")
+    dropped = _data_int(data, "event_dropped_total")
+    if dropped:
+        parts.append(f"event_dropped={dropped}")
+    sink_errors = _data_int(data, "event_sink_error_total")
+    if sink_errors:
+        parts.append(f"sink_errors={sink_errors}")
+    if data.get("event_pipeline_worker_alive") is False:
+        parts.append("event_worker=dead")
+    return parts
+
+
 def _format_console_ratio(value: Any) -> str | None:
     if value is None:
         return None
@@ -1423,6 +1515,8 @@ def _console_data_summary(event: LiveEvent) -> list[str]:
         return _console_rust_summary(event)
     if event.event_type == EventTypes.FORAGER_SELECTION:
         return _console_forager_selection_summary(event)
+    if event.event_type == EventTypes.HEALTH_SUMMARY:
+        return _console_health_summary(event)
     if event.event_type == EventTypes.FILL_INGESTED:
         return _console_fill_ingested_summary(event)
     if event.event_type == EventTypes.POSITION_CHANGED:
