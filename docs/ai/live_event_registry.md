@@ -217,6 +217,7 @@ to add bounded, opt-in diagnostic details for selected live event families.
 `all` enables every profile. Empty, false-like, or `none` values disable debug
 profile enrichment.
 
+- `cache`
 - `candles`
 - `ema`
 - `execution`

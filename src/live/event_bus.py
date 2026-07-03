@@ -29,6 +29,7 @@ LIVE_EVENT_ID_KEYS = (
 LIVE_EVENT_DEBUG_PROFILE_ENV = "PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES"
 LIVE_EVENT_CONSOLE_ENV = "PASSIVBOT_LIVE_EVENT_CONSOLE"
 LIVE_EVENT_DEBUG_PROFILES = (
+    "cache",
     "candles",
     "ema",
     "execution",
@@ -42,7 +43,9 @@ LIVE_EVENT_DEBUG_PROFILES = (
 )
 _LIVE_EVENT_DEBUG_PROFILE_SET = frozenset(LIVE_EVENT_DEBUG_PROFILES)
 _LIVE_EVENT_DEBUG_PROFILE_ALIASES = {
+    "warmup": "cache",
     "candle": "candles",
+    "caches": "cache",
     "emas": "ema",
     "ema-readiness": "ema",
     "ema_readiness": "ema",

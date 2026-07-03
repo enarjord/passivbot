@@ -2326,6 +2326,54 @@ def _reason_counts(data: Any) -> dict[str, int]:
     return dict(sorted(out.items()))
 
 
+def _cache_debug_payload(
+    payload: dict[str, Any],
+    *,
+    data: dict[str, Any],
+    event_kind: str,
+    limit: int = 32,
+) -> dict[str, Any]:
+    out: dict[str, Any] = {
+        "event_kind": str(event_kind),
+        "payload_keys": sorted(str(key) for key in payload)[:limit],
+        "data_keys": sorted(str(key) for key in data)[:limit],
+    }
+    numeric_keys: list[str] = []
+    nonzero_numeric_keys: list[str] = []
+    for key in sorted(data):
+        parsed = _safe_int(data.get(key))
+        if parsed is None:
+            continue
+        numeric_keys.append(str(key))
+        if parsed != 0:
+            nonzero_numeric_keys.append(str(key))
+    if numeric_keys:
+        out["numeric_keys"] = numeric_keys[:limit]
+    if nonzero_numeric_keys:
+        out["nonzero_numeric_keys"] = nonzero_numeric_keys[:limit]
+    source_days = data.get("source_days")
+    if isinstance(source_days, dict) and source_days:
+        out["source_day_sources"] = sorted(str(key) for key in source_days)[:limit]
+        out["source_day_total"] = int(
+            sum(
+                int(value)
+                for value in source_days.values()
+                if _safe_int(value) is not None
+            )
+        )
+    reason_counts = data.get("reason_counts")
+    if isinstance(reason_counts, dict) and reason_counts:
+        out["reason_count_keys"] = sorted(str(key) for key in reason_counts)[:limit]
+        out["reason_count_total"] = int(
+            sum(
+                int(value)
+                for value in reason_counts.values()
+                if _safe_int(value) is not None
+            )
+        )
+    return {key: value for key, value in out.items() if value not in (None, {}, [])}
+
+
 def _emit_cache_load_completed_event_unchecked(
     bot: Any,
     payload: dict[str, Any],
@@ -2359,6 +2407,13 @@ def _emit_cache_load_completed_event_unchecked(
                 clean_source_days[str(key)] = int(count)
         if clean_source_days:
             data["source_days"] = dict(sorted(clean_source_days.items()))
+    if live_event_debug_profile_enabled(bot, "cache"):
+        data["debug_profile"] = "cache"
+        data["debug"] = _cache_debug_payload(
+            data_in,
+            data=data,
+            event_kind="load_completed",
+        )
     _safe_emit(
         bot,
         EventTypes.CACHE_LOAD_COMPLETED,
@@ -2402,6 +2457,13 @@ def _emit_cache_flush_completed_event_unchecked(
         value = _safe_int(data_in.get(key))
         if value is not None:
             data[key] = value
+    if live_event_debug_profile_enabled(bot, "cache"):
+        data["debug_profile"] = "cache"
+        data["debug"] = _cache_debug_payload(
+            data_in,
+            data=data,
+            event_kind="flush_completed",
+        )
     _safe_emit(
         bot,
         EventTypes.CACHE_FLUSH_COMPLETED,
@@ -2463,6 +2525,13 @@ def _emit_cache_warmup_decision_event_unchecked(
         safe = _safe_int(value)
         if safe is not None:
             data[key] = safe
+    if live_event_debug_profile_enabled(bot, "cache"):
+        data["debug_profile"] = "cache"
+        data["debug"] = _cache_debug_payload(
+            {},
+            data=data,
+            event_kind="warmup_decision",
+        )
     _safe_emit(
         bot,
         EventTypes.CACHE_WARMUP_DECISION,
