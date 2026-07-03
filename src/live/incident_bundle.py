@@ -732,12 +732,23 @@ def _smoke_execution_result_summary(smoke_report: dict[str, Any]) -> dict[str, A
     }
 
 
-def _smoke_risk_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
-    summary = summarize_live_smoke_report_brief(smoke_report)
-    risk_events = summary.get("risk_events")
-    if not isinstance(risk_events, dict):
+def _smoke_brief_section_result_summary(
+    smoke_brief_summary: dict[str, Any], section: str
+) -> dict[str, Any]:
+    value = smoke_brief_summary.get(section)
+    if not isinstance(value, dict):
         return {}
-    return risk_events
+    return value
+
+
+def _smoke_risk_result_summary(smoke_brief_summary: dict[str, Any]) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(smoke_brief_summary, "risk_events")
+
+
+def _smoke_ema_readiness_result_summary(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(smoke_brief_summary, "ema_readiness")
 
 
 def _copy_event_segments(
@@ -1071,8 +1082,12 @@ def build_live_incident_bundle(
         smoke_report,
         smoke_sections,
     )
+    smoke_brief_summary = summarize_live_smoke_report_brief(smoke_report)
     smoke_execution_summary = _smoke_execution_result_summary(smoke_report)
-    smoke_risk_summary = _smoke_risk_result_summary(smoke_report)
+    smoke_risk_summary = _smoke_risk_result_summary(smoke_brief_summary)
+    smoke_ema_readiness_summary = _smoke_ema_readiness_result_summary(
+        smoke_brief_summary
+    )
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1175,6 +1190,7 @@ def build_live_incident_bundle(
             "smoke_report": {
                 "execution": smoke_execution_summary,
                 "risk_events": smoke_risk_summary,
+                "ema_readiness": smoke_ema_readiness_summary,
             },
         }
         if restart_smoke_plan_summary is not None:
@@ -1259,6 +1275,7 @@ def build_live_incident_bundle(
             "logs": _smoke_log_result_summary(smoke_report),
             "execution": smoke_execution_summary,
             "risk_events": smoke_risk_summary,
+            "ema_readiness": smoke_ema_readiness_summary,
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),
