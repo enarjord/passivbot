@@ -19,18 +19,18 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `8d2499ad` after PR #1016, `Include process smoke summary in incident bundles`.
+- `c493ea5d` after PR #1017, `Include log smoke summaries in incident manifests`.
 
 Current logging-overhaul head:
 
-- `8d2499ad` after PR #1016, `Include process smoke summary in incident bundles`.
+- `c493ea5d` after PR #1017, `Include log smoke summaries in incident manifests`.
 
 Current work:
 
-- Branch `codex/v8-incident-log-window-manifest` adds the bounded text-log and
-  event-window smoke summaries to `live-incident-bundle` `manifest.json`, so
-  manifest-level triage can explain log-sourced verdicts without opening the
-  embedded full smoke report.
+- Branch `codex/v8-incident-repo-monitor-summary` adds bounded repository and
+  monitor smoke summaries to `live-incident-bundle` returned JSON and
+  `manifest.json`, so bundle-level triage can see checkout cleanliness and
+  monitor event-count context without opening the embedded full smoke report.
 
 Current review gate:
 
@@ -60,6 +60,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1017 at `c493ea5d`.
+- PR #1017 added bounded text-log and event-window smoke summaries to
+  `live-incident-bundle` `manifest.json`. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `c493ea5d` without restarting running bots because the slice was
+  report-only. Recent-window smoke with stale unparsed traceback fragments
+  dropped reported `ok=true`, `hard_failures=0`, `matched_expected=5`, clean
+  tracked repository state at `repository.head=c493ea5d`, and no process hard
+  failures. A focused incident-bundle verification confirmed `manifest.json`
+  included `smoke_report.logs` and `smoke_report.event_window` with log hard
+  matches at zero and the event window enabled.
 - Repository pulled through PR #1016 at `8d2499ad`.
 - PR #1016 added the bounded process smoke summary to `live-incident-bundle`
   returned JSON and `manifest.json`. It merged after Claude and Hermes

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes bounded repository and
+  monitor smoke summaries in the returned report and `manifest.json`, making
+  checkout cleanliness and monitor event-count context visible in bundle-level
+  triage.
 - `passivbot tool live-incident-bundle` now includes bounded text-log and
   event-window smoke summaries in `manifest.json`, so bundle manifests can
   explain log-sourced hard or attention verdicts without opening the embedded

@@ -763,6 +763,18 @@ def _smoke_process_result_summary(
     return _smoke_brief_section_result_summary(smoke_brief_summary, "processes")
 
 
+def _smoke_repository_result_summary(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(smoke_brief_summary, "repository")
+
+
+def _smoke_monitor_result_summary(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(smoke_brief_summary, "monitor")
+
+
 def _smoke_verdict_result_summary(
     smoke_brief_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1154,6 +1166,8 @@ def build_live_incident_bundle(
         smoke_brief_summary
     )
     smoke_process_summary = _smoke_process_result_summary(smoke_brief_summary)
+    smoke_repository_summary = _smoke_repository_result_summary(smoke_brief_summary)
+    smoke_monitor_summary = _smoke_monitor_result_summary(smoke_brief_summary)
     smoke_verdict_summary = _smoke_verdict_result_summary(smoke_brief_summary)
     smoke_operational_summaries = _smoke_operational_result_summaries(
         smoke_brief_summary
@@ -1263,6 +1277,8 @@ def build_live_incident_bundle(
             "smoke_report": {
                 "event_window": smoke_event_window_summary,
                 "logs": smoke_log_summary,
+                "repository": smoke_repository_summary,
+                "monitor": smoke_monitor_summary,
                 **smoke_verdict_summary,
                 "problem_events": smoke_problem_events_summary,
                 "execution": smoke_execution_summary,
@@ -1353,6 +1369,8 @@ def build_live_incident_bundle(
             "attention_count": smoke_report.get("attention_count"),
             "event_window": smoke_event_window_summary,
             "logs": smoke_log_summary,
+            "repository": smoke_repository_summary,
+            "monitor": smoke_monitor_summary,
             **smoke_verdict_summary,
             "problem_events": smoke_problem_events_summary,
             "execution": smoke_execution_summary,
