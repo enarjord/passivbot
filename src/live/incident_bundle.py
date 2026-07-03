@@ -1030,6 +1030,8 @@ def _restart_smoke_plan_result_summary(
         "filters": filters,
         "smoke_report": summary.get("smoke_report"),
         "incident_bundle": summary.get("incident_bundle"),
+        "process_signal_safety": summary.get("process_signal_safety"),
+        "execution_policy": summary.get("execution_policy"),
         "config_preflight": config_preflight_summary,
     }
 
