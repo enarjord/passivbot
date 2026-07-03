@@ -19,19 +19,19 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `52a2fbd3` after PR #1008, `Summarize EMA smoke in incident bundles`.
+- `60ed8f60` after PR #1009, `Summarize operational smoke in incident bundles`.
 
 Current logging-overhaul head:
 
-- `52a2fbd3` after PR #1008, `Summarize EMA smoke in incident bundles`.
+- `60ed8f60` after PR #1009, `Summarize operational smoke in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-operational-smoke-summary` adds existing
-  value-safe operational smoke summaries to `live-incident-bundle` result and
-  manifest metadata: exchange config refresh, staged readiness, event-pipeline
-  health, and shutdown events. This exposes common live-smoke attention sources
-  without opening the full embedded smoke report.
+- Branch `codex/v8-incident-data-plane-smoke-summary` adds existing value-safe
+  data-plane smoke summaries to `live-incident-bundle` result and manifest
+  metadata: remote calls, account-critical remote calls, fill refresh, startup
+  timings, and HSL replay. This exposes common exchange/data-readiness and
+  startup-latency evidence without opening the full embedded smoke report.
 
 Current review gate:
 
@@ -61,6 +61,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1009 at `60ed8f60`.
+- PR #1009 added bounded operational smoke projections to
+  `live-incident-bundle` returned JSON and `manifest.json`: exchange config
+  refresh, staged readiness, event-pipeline health, and shutdown events. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `60ed8f60` without restarting running bots
+  because the slice was report-only. Smoke after the fast-forward reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state, `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `fill_refresh.failed=0`, and no hard log matches. A focused
+  incident-bundle verification confirmed all four operational manifest
+  sections were present.
 - Repository pulled through PR #1008 at `52a2fbd3`.
 - PR #1008 added the bounded `ema_readiness` brief smoke projection to
   `live-incident-bundle` returned JSON and `manifest.json`, reusing the same

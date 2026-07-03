@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes bounded data-plane smoke
+  summaries for remote calls, account-critical remote calls, fill refresh,
+  startup timings, and HSL replay in the returned report and manifest, making
+  common exchange/data-readiness and startup-latency evidence visible without
+  opening the full embedded smoke report.
 - `passivbot tool live-incident-bundle` now includes bounded operational smoke
   summaries for exchange config refresh, staged readiness, event-pipeline
   health, and shutdown events in the returned report and manifest, so common
