@@ -19,17 +19,18 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `b741f49b` after PR #1019, `Include smoke verdict fields in incident manifests`.
+- `85080299` after PR #1020, `Include bundle result in incident manifests`.
 
 Current logging-overhaul head:
 
-- `b741f49b` after PR #1019, `Include smoke verdict fields in incident manifests`.
+- `85080299` after PR #1020, `Include bundle result in incident manifests`.
 
 Current work:
 
-- Branch `codex/v8-incident-bundle-result` adds the bundle-level result verdict
-  to `live-incident-bundle` `manifest.json`, so an archived bundle can expose
-  total `ok` and `hard_failures` without relying on command stdout.
+- Branch `codex/v8-incident-time-window-summary` adds the compact
+  `time_window` summary to `live-incident-bundle` `manifest.json`, so archived
+  bundles expose matched-event, truncation, and scan-bound evidence without
+  opening `time_window_report.json`.
 
 Current review gate:
 
@@ -59,6 +60,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1020 at `85080299`.
+- PR #1020 added a bundle-level `result` verdict to
+  `live-incident-bundle` `manifest.json`, sharing the returned report's
+  total `ok` and `hard_failures` calculation. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `85080299` without restarting running bots because the slice was report-only.
+  The first post-deploy smoke caught an unrelated transient Kucoin
+  `cycle.degraded` market snapshot miss still inside the 20-minute window; a
+  Kucoin-focused event query then showed subsequent clean `cy_32` candle work
+  with hundreds of successful remote calls and no errors. After the transient
+  aged out, standard 20-minute smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=85080299`, no failed remote calls, no failed
+  account-critical remote calls, and no hard log matches. A focused
+  incident-bundle verification confirmed `manifest.result` matched the bundle
+  result.
 - Repository pulled through PR #1019 at `b741f49b`.
 - PR #1019 added top-level smoke verdict fields to `live-incident-bundle`
   `manifest.json`: `ok`, `attention`, `hard_failures`, and `attention_count`.

@@ -755,6 +755,8 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "ok": report["ok"],
         "hard_failures": report["hard_failures"],
     }
+    assert manifest["time_window"] == report["time_window"]
+    assert manifest["time_window"]["matched_events"] == window_report["matched_events"]
     for section in ("ok", "attention", "hard_failures", "attention_count"):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
     assert manifest["smoke_report"]["event_window"] == report["smoke_report"][
