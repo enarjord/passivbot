@@ -751,6 +751,20 @@ def _smoke_ema_readiness_result_summary(
     return _smoke_brief_section_result_summary(smoke_brief_summary, "ema_readiness")
 
 
+def _smoke_operational_result_summaries(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, dict[str, Any]]:
+    return {
+        section: _smoke_brief_section_result_summary(smoke_brief_summary, section)
+        for section in (
+            "exchange_config_refresh",
+            "staged_readiness",
+            "event_pipeline",
+            "shutdown_events",
+        )
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -1088,6 +1102,9 @@ def build_live_incident_bundle(
     smoke_ema_readiness_summary = _smoke_ema_readiness_result_summary(
         smoke_brief_summary
     )
+    smoke_operational_summaries = _smoke_operational_result_summaries(
+        smoke_brief_summary
+    )
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1191,6 +1208,7 @@ def build_live_incident_bundle(
                 "execution": smoke_execution_summary,
                 "risk_events": smoke_risk_summary,
                 "ema_readiness": smoke_ema_readiness_summary,
+                **smoke_operational_summaries,
             },
         }
         if restart_smoke_plan_summary is not None:
@@ -1276,6 +1294,7 @@ def build_live_incident_bundle(
             "execution": smoke_execution_summary,
             "risk_events": smoke_risk_summary,
             "ema_readiness": smoke_ema_readiness_summary,
+            **smoke_operational_summaries,
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),
