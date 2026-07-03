@@ -3168,11 +3168,21 @@ def _compact_risk_group(group: dict[str, Any]) -> dict[str, Any]:
         "count",
         "latest_ts",
     )
-    return {
+    out = {
         key: group.get(key)
         for key in safe_group_keys
         if group.get(key) not in (None, "", {}, [])
     }
+    latest_data = group.get("latest_data")
+    if isinstance(latest_data, dict):
+        safe_latest_data = {
+            key: value
+            for key, value in latest_data.items()
+            if key in SHAREABLE_RISK_LATEST_DATA_KEYS and value not in (None, {}, [])
+        }
+        if safe_latest_data:
+            out["latest_data"] = safe_latest_data
+    return out
 
 
 def _summarize_risk_events(

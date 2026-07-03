@@ -3173,6 +3173,27 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                     "changed": True,
                 },
             ),
+            _monitor_row(
+                event_type="unstuck.status",
+                seq=7,
+                ts=6000,
+                reason_code="unstuck_status",
+                ids={"cycle_id": "cy_risk_6"},
+                data={
+                    "changed": True,
+                    "status_counts": {"disabled": 1, "ok": 1},
+                    "over_budget_sides": ["long"],
+                    "sides": {
+                        "long": {
+                            "allowance": -0.6064111797120435,
+                            "loss_allowance_pct": 0.01,
+                            "over_budget": True,
+                        },
+                    },
+                    "balance": 12345.67,
+                    "secret_marker": "unstuck-secret",
+                },
+            ),
         ],
     )
 
@@ -3185,13 +3206,14 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert report["ok"] is True
     assert report["attention"] is False
     assert report["risk_events"] == {
-        "total": 5,
+        "total": 6,
         "groups_truncated": False,
         "event_types": {
             "hsl.red_finalized_without_order": 1,
             "hsl.status": 2,
             "risk.mode_changed": 1,
             "unstuck.selection": 1,
+            "unstuck.status": 1,
         },
         "hsl_flat_finalization_anchors": {
             "total": 1,
@@ -3242,6 +3264,21 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "component": "test",
                 "count": 1,
                 "latest_ts": 4500,
+                "latest_data": {
+                    "cooldown_until_ms": 999999,
+                    "entry_orders": 0,
+                    "exchange_close_order_submitted": False,
+                    "flat_confirmations": 2,
+                    "no_exchange_close_needed": True,
+                    "nonpanic_close_orders": 0,
+                    "panic_order_submitted_count": 0,
+                    "position_count": 0,
+                    "stop_event_anchor_fallback_used": True,
+                    "stop_event_anchor_source": "current_time_fallback",
+                    "stop_event_anchor_timestamp_ms": 4300,
+                    "stop_event_timestamp_ms": 4300,
+                    "symbol_position_open": False,
+                },
             },
             {
                 "bot": "binance/binance_01",
@@ -3253,10 +3290,31 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
                 "component": "test",
                 "count": 1,
                 "latest_ts": 4000,
+                "latest_data": {
+                    "action": "forced_modes",
+                    "mode": "panic",
+                    "previous_mode": "normal",
+                },
             },
         ],
         "attention_groups_truncated": False,
         "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "unstuck.status",
+                "reason_code": "unstuck_status",
+                "status": "succeeded",
+                "level": "info",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 6000,
+                "latest_data": {
+                    "changed": True,
+                    "status_counts": {"disabled": 1, "ok": 1},
+                    "over_budget_sides": ["long"],
+                },
+                "latest_ids": {"cycle_id": "cy_risk_6"},
+            },
             {
                 "bot": "binance/binance_01",
                 "event_type": "unstuck.selection",
@@ -3345,6 +3403,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "12345.67" not in rendered
     assert "0.42" not in rendered
     assert "flat-secret" not in rendered
+    assert "unstuck-secret" not in rendered
     summary = summarize_live_smoke_report(report)
     summary_risk_json = json.dumps(summary["risk_events"], sort_keys=True)
     assert "drawdown_raw" not in summary_risk_json
@@ -3411,6 +3470,21 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert brief["risk_events"]["latest_groups"] == [
         {
             "bot": "binance/binance_01",
+            "event_type": "unstuck.status",
+            "reason_code": "unstuck_status",
+            "status": "succeeded",
+            "level": "info",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 6000,
+            "latest_data": {
+                "changed": True,
+                "over_budget_sides": ["long"],
+                "status_counts": {"disabled": 1, "ok": 1},
+            },
+        },
+        {
+            "bot": "binance/binance_01",
             "event_type": "unstuck.selection",
             "reason_code": "unstuck_selection",
             "status": "succeeded",
@@ -3420,6 +3494,7 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 1,
             "latest_ts": 5000,
+            "latest_data": {"changed": True},
         },
         {
             "bot": "binance/binance_01",
@@ -3432,6 +3507,21 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 1,
             "latest_ts": 4500,
+            "latest_data": {
+                "cooldown_until_ms": 999999,
+                "entry_orders": 0,
+                "exchange_close_order_submitted": False,
+                "flat_confirmations": 2,
+                "no_exchange_close_needed": True,
+                "nonpanic_close_orders": 0,
+                "panic_order_submitted_count": 0,
+                "position_count": 0,
+                "stop_event_anchor_fallback_used": True,
+                "stop_event_anchor_source": "current_time_fallback",
+                "stop_event_anchor_timestamp_ms": 4300,
+                "stop_event_timestamp_ms": 4300,
+                "symbol_position_open": False,
+            },
         },
         {
             "bot": "binance/binance_01",
@@ -3443,6 +3533,11 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 1,
             "latest_ts": 4000,
+            "latest_data": {
+                "action": "forced_modes",
+                "mode": "panic",
+                "previous_mode": "normal",
+            },
         },
         {
             "bot": "binance/binance_01",
@@ -3455,6 +3550,10 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 2,
             "latest_ts": 3000,
+            "latest_data": {
+                "signal_mode": "coin",
+                "tier": "yellow",
+            },
         },
     ]
     assert brief["risk_events"]["latest_groups_truncated"] is False
@@ -3470,6 +3569,21 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 1,
             "latest_ts": 4500,
+            "latest_data": {
+                "cooldown_until_ms": 999999,
+                "entry_orders": 0,
+                "exchange_close_order_submitted": False,
+                "flat_confirmations": 2,
+                "no_exchange_close_needed": True,
+                "nonpanic_close_orders": 0,
+                "panic_order_submitted_count": 0,
+                "position_count": 0,
+                "stop_event_anchor_fallback_used": True,
+                "stop_event_anchor_source": "current_time_fallback",
+                "stop_event_anchor_timestamp_ms": 4300,
+                "stop_event_timestamp_ms": 4300,
+                "symbol_position_open": False,
+            },
         },
         {
             "bot": "binance/binance_01",
@@ -3481,6 +3595,11 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             "component": "test",
             "count": 1,
             "latest_ts": 4000,
+            "latest_data": {
+                "action": "forced_modes",
+                "mode": "panic",
+                "previous_mode": "normal",
+            },
         },
     ]
     assert brief["risk_events"]["attention_groups_truncated"] is False
@@ -3488,7 +3607,16 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
     assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
     assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])
     assert "drawdown_raw" not in json.dumps(brief["risk_events"]["hsl_status"])
-    assert "latest_data" not in json.dumps(brief["risk_events"])
+    brief_risk_json = json.dumps(brief["risk_events"], sort_keys=True)
+    assert "latest_data" in brief_risk_json
+    assert "allowance" not in brief_risk_json
+    assert '"sides":' not in brief_risk_json
+    assert "price_diff_pct" not in brief_risk_json
+    assert "drawdown_raw" not in brief_risk_json
+    assert "red_threshold" not in brief_risk_json
+    assert "balance" not in brief_risk_json
+    assert "flat-secret" not in brief_risk_json
+    assert "unstuck-secret" not in brief_risk_json
 
 
 def test_live_smoke_report_summarizes_hsl_cooldown_active_status(tmp_path):

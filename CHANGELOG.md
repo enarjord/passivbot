@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes allowlisted
+  `latest_data` for risk-event groups, exposing compact state such as HSL mode
+  transitions and unstuck over-budget summaries while still excluding raw
+  balances, drawdown internals, and per-side allowance details.
 - `passivbot tool live-smoke-report --summary` and `--brief` now include
   bounded dropped-unparsed log samples when `--log-window-unparsed-policy drop`
   suppresses contextless hard or attention-looking log lines.
