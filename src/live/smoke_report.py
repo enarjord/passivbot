@@ -6511,6 +6511,38 @@ def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
     }
 
 
+def _brief_risk_event_groups(risk_events: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = risk_events.get("groups")
+    if not isinstance(groups, list):
+        return []
+    limit = max(0, int(SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT))
+    safe_group_keys = (
+        "bot",
+        "event_type",
+        "reason_code",
+        "status",
+        "level",
+        "symbol",
+        "pside",
+        "component",
+        "count",
+        "latest_ts",
+    )
+    rows: list[dict[str, Any]] = []
+    for group in groups[:limit]:
+        if not isinstance(group, dict):
+            continue
+        compact: dict[str, Any] = {}
+        for key in safe_group_keys:
+            value = group.get(key)
+            if value is None or value == "" or value == {} or value == []:
+                continue
+            compact[key] = value
+        if compact:
+            rows.append(compact)
+    return rows
+
+
 def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
     window = logs.get("window") if isinstance(logs.get("window"), dict) else {}
     return {
@@ -6856,6 +6888,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     )
     if raw_red_pending:
         risk_events_brief["hsl_raw_red_pending"] = raw_red_pending
+    latest_risk_groups = _brief_risk_event_groups(risk_events)
+    if latest_risk_groups:
+        risk_events_brief["latest_groups"] = latest_risk_groups
+        risk_events_brief["latest_groups_truncated"] = bool(
+            risk_events.get("groups_truncated")
+        )
     return {
         "ok": bool(report.get("ok")),
         "attention": bool(report.get("attention")),

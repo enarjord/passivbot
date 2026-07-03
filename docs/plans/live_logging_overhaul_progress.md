@@ -6009,6 +6009,35 @@ VPS5 deployment status:
 - Expected validation: focused log-sample smoke-report tests, full
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+- Result: PR #1004 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `291a8711`. A short post-deploy smoke reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state, and the five configured live bots still running. A wider logs-only
+  smoke verified the new bounded `hard_samples`/`attention_samples` fields and
+  showed basename-only log paths for recent HSL RED log lines. The same smoke
+  also showed several recent HSL RED/cooldown/mode events in structured
+  `risk_events`, but brief output still required reading specialized HSL
+  status fields or a summary rerun to see the latest risk event rows.
+
+### Draft Slice: Brief Risk Event Samples
+
+- Branch: `codex/v8-smoke-brief-risk-event-samples`.
+- Scope: read-only brief smoke-report projection over existing summarized
+  `risk_events.groups`.
+- Triggering evidence: after PR #1004 deployment, VPS5 brief smoke showed
+  HSL cooldown and RED context through `risk_events.hsl_status`, but recent
+  structured rows such as `hsl.red_finalized_without_order`,
+  `risk.mode_changed`, and `unstuck.status` were only visible in the larger
+  summary `risk_events.groups` output.
+- Intended result: add bounded `risk_events.latest_groups` to brief output with
+  safe identifiers only: bot, event type, reason code, status, level,
+  symbol/pside, component, count, and latest timestamp. Do not include
+  `latest_data` or raw drawdown/balance/order payload fields. This changes only
+  report output; it does not add event producers, exchange calls, HSL behavior,
+  order/risk logic, monitor writes, console routing, or trading behavior.
+- Expected validation: focused risk-event smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 
