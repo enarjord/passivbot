@@ -1091,6 +1091,11 @@ def build_live_incident_bundle(
         for section in (smoke_sections or ())
         if str(section).strip()
     ]
+    performance_sections = [
+        str(section).strip()
+        for section in (performance_sections or ())
+        if str(section).strip()
+    ]
     if include_restart_smoke_plan and supervisor_config is None:
         raise ValueError("restart smoke plan requires --supervisor-config")
     restart_smoke_window_minutes = int(restart_smoke_window_minutes)
@@ -1254,7 +1259,7 @@ def build_live_incident_bundle(
         )
         performance_report = project_live_performance_report_sections(
             performance_report,
-            list(performance_sections or []),
+            performance_sections,
         )
         performance_report_summary = summarize_live_performance_report(
             performance_report,
@@ -1262,7 +1267,7 @@ def build_live_incident_bundle(
         )
         performance_report_summary = project_live_performance_report_sections(
             performance_report_summary,
-            list(performance_sections or []),
+            performance_sections,
         )
     hard_failures = _bundle_hard_failure_count(
         smoke_report=smoke_report,
@@ -1286,6 +1291,7 @@ def build_live_incident_bundle(
             smoke_max_log_matches=DEFAULT_RESTART_SMOKE_MAX_LOG_MATCHES,
             log_window_unparsed_policy=log_window_unparsed_policy,
             smoke_sections=smoke_sections,
+            performance_sections=performance_sections,
         )
         restart_smoke_plan_summary = summarize_live_restart_smoke_plan(
             restart_smoke_plan
@@ -1353,7 +1359,7 @@ def build_live_incident_bundle(
                     "max_log_matches": max_log_matches if max_log_matches else None,
                     "log_window_unparsed_policy": log_window_unparsed_policy,
                     "smoke_sections": list(smoke_sections),
-                    "performance_sections": list(performance_sections or [])
+                    "performance_sections": list(performance_sections)
                     if include_performance_report and performance_sections
                     else None,
                     "include_restart_smoke_plan": include_restart_smoke_plan,

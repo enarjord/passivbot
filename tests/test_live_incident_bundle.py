@@ -2043,6 +2043,8 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
         logs_root=None,
         supervisor_config=supervisor_config,
         include_event_segments=False,
+        include_performance_report=True,
+        performance_sections=["startup_readiness"],
         include_restart_smoke_plan=True,
         restart_smoke_window_minutes=7,
         smoke_sections=["fill_refresh_health"],
@@ -2064,6 +2066,7 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert manifest["filters"]["include_restart_smoke_plan"] is True
     assert manifest["filters"]["restart_smoke_window_minutes"] == 7
     assert manifest["filters"]["smoke_sections"] == ["fill_refresh_health"]
+    assert manifest["filters"]["performance_sections"] == ["startup_readiness"]
     assert manifest["restart_smoke_plan"]["bots"]["count"] == 1
     assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
     assert restart_plan["metadata"] == {
@@ -2077,12 +2080,16 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert restart_plan["inputs"]["smoke_max_event_files_per_bot"] == 2
     assert restart_plan["inputs"]["smoke_log_tail_lines"] == 1200
     assert restart_plan["inputs"]["smoke_max_log_matches"] == 20
+    assert restart_plan["inputs"]["performance_sections"] == ["startup_readiness"]
     assert "--event-tail-lines 2000" in restart_plan["smoke_report"]["command"]
     assert "--max-event-files-per-bot 2" in restart_plan["smoke_report"]["command"]
     assert "--section fill_refresh_health" in restart_plan["smoke_report"]["command"]
     assert "--smoke-section fill_refresh_health" in restart_plan["incident_bundle"][
         "command"
     ]
+    assert "--performance-section startup_readiness" in restart_plan[
+        "incident_bundle"
+    ]["command"]
 
 
 def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
@@ -2142,6 +2149,9 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
             "--supervisor-config",
             str(supervisor_config),
             "--restart-smoke-plan",
+            "--performance-report",
+            "--performance-section",
+            "startup_readiness",
             "--restart-smoke-window-minutes",
             "9",
             "--no-event-segments",
@@ -2156,6 +2166,10 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
     with tarfile.open(output, "r:gz") as tar:
         restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
     assert restart_plan["inputs"]["smoke_window_minutes"] == 9
+    assert restart_plan["inputs"]["performance_sections"] == ["startup_readiness"]
+    assert "--performance-section startup_readiness" in restart_plan[
+        "incident_bundle"
+    ]["command"]
 
 
 def test_live_incident_bundle_cli_requires_supervisor_for_restart_plan(capsys):

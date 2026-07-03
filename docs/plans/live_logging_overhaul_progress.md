@@ -19,22 +19,21 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `f068d9a4` after PR #1034, `Accept smoke base metadata sections`.
+- `9b83ca2a` after PR #1035, `Pass performance sections through restart smoke plans`.
 
 Current logging-overhaul head:
 
-- `f068d9a4` after PR #1034, `Accept smoke base metadata sections`.
+- `9b83ca2a` after PR #1035, `Pass performance sections through restart smoke plans`.
 
 Current work:
 
-- Branch `codex/v8-restart-smoke-performance-sections` lets
-  `live-restart-smoke-plan --performance-section` pass selected
-  performance-report sections through to the planned failure
-  `live-incident-bundle --performance-report` command. This keeps restart
-  smoke evidence planning aligned with the newer incident-bundle performance
-  projection surface. It does not execute restarts, contact exchanges, add
-  event producers, write monitor events, alter console routing, or change
-  order/risk/trading behavior.
+- Branch `codex/v8-incident-restart-performance-sections` lets
+  `live-incident-bundle --restart-smoke-plan` pass selected
+  `--performance-section` filters into the embedded restart plan's planned
+  failure-bundle command. This keeps direct incident-bundle performance
+  projections and restart-smoke follow-up plans aligned. It does not execute
+  restarts, contact exchanges, add event producers, write monitor events, alter
+  console routing, or change order/risk/trading behavior.
 
 Current review gate:
 
@@ -64,6 +63,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1035 at `9b83ca2a`.
+- PR #1035 made `live-restart-smoke-plan --performance-section` pass selected
+  performance-report sections through to the planned failure
+  `live-incident-bundle --performance-report` command. It merged after Claude
+  and Hermes approved with no findings and CI was green; Cursor was absent, so
+  the low-risk read-only tooling degraded gate was used. VPS5 checkout was
+  updated to `9b83ca2a` without restarting running bots because the slice was
+  read-only tooling. A focused VPS planner check proved the generated
+  incident-bundle command includes both `--performance-section
+  startup_readiness` and `--performance-section hsl_replay_profile`, and the
+  bounded smoke reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  clean tracked repository state, zero hard log matches, no event-pipeline
+  drops or sink errors, and only known non-hard ZEC HSL cooldown attention.
 - Repository pulled through PR #1034 at `f068d9a4`.
 - PR #1034 made `live-smoke-report --section` accept base metadata selectors
   such as `repository`, `monitor`, and `event_window`. It merged after Claude

@@ -215,7 +215,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   debug-profile, rotated-file, tail-line, and per-bot file bounds. Use
   `--performance-section SECTION` with `--performance-report` to keep only
   selected top-level performance sections plus common performance metadata in
-  the embedded artifact and compact manifest summary. Use
+  the embedded artifact and compact manifest summary. When
+  `--restart-smoke-plan` is also used, the same performance section filters are
+  passed into the embedded restart plan's planned failure bundle command. Use
   `--smoke-section SECTION` one or more times to keep only selected top-level
   sections from the embedded full `smoke_report.json` plus common smoke
   metadata, for example `--smoke-section fill_refresh_health`. Use
