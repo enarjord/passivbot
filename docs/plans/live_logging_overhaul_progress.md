@@ -19,18 +19,17 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `b8cfe90b` after PR #1012, `Show non-hard problem event counts in smoke`.
+- `bc0eb4fe` after PR #1013, `Split smoke problem event type counts`.
 
 Current logging-overhaul head:
 
-- `b8cfe90b` after PR #1012, `Show non-hard problem event counts in smoke`.
+- `bc0eb4fe` after PR #1013, `Split smoke problem event type counts`.
 
 Current work:
 
-- Branch `codex/v8-smoke-problem-type-splits` splits structured
-  problem-event type histograms into hard and non-hard counts in
-  `live-smoke-report --summary` and `--brief`, making mixed smoke attention
-  easier to triage without opening grouped event rows.
+- Branch `codex/v8-incident-problem-event-summary` adds the bounded
+  `problem_events` smoke summary to `live-incident-bundle` returned JSON and
+  `manifest.json`, including hard and non-hard problem-event type histograms.
 
 Current review gate:
 
@@ -60,6 +59,20 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1013 at `bc0eb4fe`.
+- PR #1013 split structured problem-event type histograms into hard and
+  non-hard counts in `live-smoke-report --summary` and `--brief`, making mixed
+  smoke attention easier to triage without opening grouped event rows. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `bc0eb4fe` without restarting running bots
+  because the slice was report-only. Smoke after the fast-forward reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state at `repository.head=bc0eb4fe`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and no
+  hard log matches. The new `problem_events.hard_event_types` and
+  `problem_events.non_hard_event_types` fields were visible; current attention
+  remained non-hard EMA-readiness, candle coverage, cycle degraded, and HSL
+  cooldown status.
 - Repository pulled through PR #1012 at `b8cfe90b`.
 - PR #1012 added a bounded `problem_events.non_hard` count to
   `live-smoke-report --summary` and `--brief`, making non-fatal structured

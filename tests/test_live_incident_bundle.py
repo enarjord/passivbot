@@ -460,6 +460,90 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "dropped_unparsed_hard_matches": 0,
         },
     }
+    assert report["smoke_report"]["problem_events"] == {
+        "total": 6,
+        "hard": 0,
+        "non_hard": 6,
+        "groups_truncated": True,
+        "event_types_truncated": True,
+        "hard_event_types_truncated": False,
+        "non_hard_event_types_truncated": True,
+        "event_types": {
+            "bot.shutdown.stage": 1,
+            "ema.unavailable": 1,
+            "exchange.config_refresh": 1,
+            "hsl.status": 1,
+            "planning.unavailable": 1,
+        },
+        "hard_event_types": {},
+        "non_hard_event_types": {
+            "bot.shutdown.stage": 1,
+            "ema.unavailable": 1,
+            "exchange.config_refresh": 1,
+            "hsl.status": 1,
+            "planning.unavailable": 1,
+        },
+        "groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "bot.shutdown.stage",
+                "reason_code": "maintainers_timeout",
+                "status": "degraded",
+                "level": "warning",
+                "hard": False,
+                "component": "shutdown",
+                "count": 1,
+                "latest_ts": 2480,
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "planning.unavailable",
+                "reason_code": "staged_execution_precondition",
+                "status": "degraded",
+                "level": "debug",
+                "hard": False,
+                "component": "planning",
+                "count": 1,
+                "latest_ts": 2400,
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "exchange.config_refresh",
+                "reason_code": "exchange_config_refresh_failed",
+                "status": "failed",
+                "level": "warning",
+                "hard": False,
+                "component": "exchange.config",
+                "count": 1,
+                "latest_ts": 2350,
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "ema.unavailable",
+                "reason_code": "required_ema_unavailable",
+                "status": "degraded",
+                "level": "warning",
+                "hard": False,
+                "symbol": "BTC/USDT:USDT",
+                "component": "ema.bundle",
+                "count": 1,
+                "latest_ts": 2300,
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "hsl.status",
+                "reason_code": "cooldown_active",
+                "status": "degraded",
+                "level": "info",
+                "hard": False,
+                "symbol": "ZEC/USDT:USDT",
+                "pside": "long",
+                "component": "risk.hsl",
+                "count": 1,
+                "latest_ts": 2200,
+            },
+        ],
+    }
     assert report["smoke_report"]["execution"] == {
         "total": 1,
         "bots": 1,
@@ -648,6 +732,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["smoke_report"]["problem_events"] == report["smoke_report"][
+        "problem_events"
+    ]
     assert manifest["smoke_report"]["execution"] == report["smoke_report"]["execution"]
     assert manifest["smoke_report"]["risk_events"] == report["smoke_report"][
         "risk_events"
