@@ -1678,10 +1678,17 @@ def _summarize_problem_event_groups(
     groups: dict[tuple[Any, ...], dict[str, Any]],
 ) -> dict[str, Any]:
     event_types: Counter[str] = Counter()
+    hard_event_types: Counter[str] = Counter()
+    non_hard_event_types: Counter[str] = Counter()
     for group in groups.values():
         event_type = group.get("event_type")
         if isinstance(event_type, str) and event_type:
-            event_types[event_type] += int(_non_negative_int(group.get("count")) or 0)
+            count = int(_non_negative_int(group.get("count")) or 0)
+            event_types[event_type] += count
+            if bool(group.get("hard")):
+                hard_event_types[event_type] += count
+            else:
+                non_hard_event_types[event_type] += count
     ordered = sorted(
         groups.values(),
         key=lambda item: (
@@ -1707,6 +1714,8 @@ def _summarize_problem_event_groups(
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > PROBLEM_EVENT_GROUP_LIMIT,
         "event_types": dict(event_types.most_common()),
+        "hard_event_types": dict(hard_event_types.most_common()),
+        "non_hard_event_types": dict(non_hard_event_types.most_common()),
         "groups": compact_groups,
     }
 
@@ -6261,6 +6270,9 @@ def summarize_live_smoke_report(
             "total": problem_event_count,
             "hard": hard_problem_event_count,
             "non_hard": max(0, problem_event_count - hard_problem_event_count),
+            "event_types": problem_groups.get("event_types") or {},
+            "hard_event_types": problem_groups.get("hard_event_types") or {},
+            "non_hard_event_types": problem_groups.get("non_hard_event_types") or {},
             "groups_truncated": bool(problem_groups.get("groups_truncated"))
             or len(problem_group_rows) > max_groups,
             "groups": problem_group_rows[:max_groups],
@@ -6568,21 +6580,37 @@ def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
         }
         if compact:
             compact_groups.append(compact)
-    event_types = summary.get("event_types")
-    if not isinstance(event_types, dict):
-        event_types = {}
-    ordered_event_types = sorted(
-        event_types.items(),
-        key=lambda item: (-_count_value(item[1]), str(item[0])),
+    def _brief_event_types(value: Any) -> tuple[dict[str, int], bool]:
+        if not isinstance(value, dict):
+            value = {}
+        ordered = sorted(
+            value.items(),
+            key=lambda item: (-_count_value(item[1]), str(item[0])),
+        )
+        return (
+            {
+                str(key): _count_value(count)
+                for key, count in ordered[:limit]
+                if str(key)
+            },
+            len(ordered) > limit,
+        )
+
+    event_types, event_types_truncated = _brief_event_types(summary.get("event_types"))
+    hard_event_types, hard_event_types_truncated = _brief_event_types(
+        summary.get("hard_event_types")
+    )
+    non_hard_event_types, non_hard_event_types_truncated = _brief_event_types(
+        summary.get("non_hard_event_types")
     )
     return {
         "groups_truncated": bool(summary.get("groups_truncated")) or len(groups) > limit,
-        "event_types_truncated": len(ordered_event_types) > limit,
-        "event_types": {
-            str(key): _count_value(value)
-            for key, value in ordered_event_types[:limit]
-            if str(key)
-        },
+        "event_types_truncated": event_types_truncated,
+        "hard_event_types_truncated": hard_event_types_truncated,
+        "non_hard_event_types_truncated": non_hard_event_types_truncated,
+        "event_types": event_types,
+        "hard_event_types": hard_event_types,
+        "non_hard_event_types": non_hard_event_types,
         "groups": compact_groups,
     }
 
