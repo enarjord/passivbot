@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes top-level smoke verdict
+  fields in `manifest.json`, making the bundle manifest self-contained for
+  `ok`, `attention`, and smoke failure/count triage.
 - `passivbot tool live-incident-bundle` now includes bounded repository and
   monitor smoke summaries in the returned report and `manifest.json`, making
   checkout cleanliness and monitor event-count context visible in bundle-level

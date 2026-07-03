@@ -1275,6 +1275,10 @@ def build_live_incident_bundle(
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
             "smoke_report": {
+                "ok": smoke_report.get("ok"),
+                "attention": smoke_report.get("attention"),
+                "hard_failures": smoke_report.get("hard_failures"),
+                "attention_count": smoke_report.get("attention_count"),
                 "event_window": smoke_event_window_summary,
                 "logs": smoke_log_summary,
                 "repository": smoke_repository_summary,
