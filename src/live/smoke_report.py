@@ -3110,6 +3110,62 @@ SHAREABLE_RISK_LATEST_DATA_KEYS = frozenset(
 )
 
 
+def _risk_attention_rank(group: dict[str, Any]) -> int:
+    event_type = str(group.get("event_type") or "")
+    reason_code = str(group.get("reason_code") or "")
+    status = str(group.get("status") or "")
+    level = str(group.get("level") or "").lower()
+    latest_data = group.get("latest_data")
+    if not isinstance(latest_data, dict):
+        latest_data = {}
+    tier = str(latest_data.get("tier") or "").lower()
+    modes = {
+        str(latest_data.get("mode") or "").lower(),
+        str(latest_data.get("new_mode") or "").lower(),
+    }
+    if event_type == "hsl.red_triggered" or event_type.startswith("hsl.red_"):
+        return 50
+    if event_type == "hsl.cooldown_started":
+        return 45
+    if event_type == "hsl.raw_red_pending":
+        return 40
+    if event_type == "hsl.status" and (
+        tier == "red" or reason_code == "cooldown_active"
+    ):
+        return 35
+    if event_type == "risk.mode_changed" and "panic" in modes:
+        return 30
+    if level in {"error", "critical"}:
+        return 25
+    if status in {"degraded", "failed"}:
+        return 20
+    return 0
+
+
+def _is_risk_attention_group(group: dict[str, Any]) -> bool:
+    return _risk_attention_rank(group) > 0
+
+
+def _compact_risk_group(group: dict[str, Any]) -> dict[str, Any]:
+    safe_group_keys = (
+        "bot",
+        "event_type",
+        "reason_code",
+        "status",
+        "level",
+        "symbol",
+        "pside",
+        "component",
+        "count",
+        "latest_ts",
+    )
+    return {
+        key: group.get(key)
+        for key in safe_group_keys
+        if group.get(key) not in (None, "", {}, [])
+    }
+
+
 def _summarize_risk_events(
     groups: dict[tuple[Any, ...], dict[str, Any]],
     event_type_counts: Counter[str],
@@ -3141,6 +3197,20 @@ def _summarize_risk_events(
         }
         for group in ordered[:RISK_EVENT_GROUP_LIMIT]
     ]
+    attention_ordered = sorted(
+        (group for group in groups.values() if _is_risk_attention_group(group)),
+        key=lambda item: (
+            -_risk_attention_rank(item),
+            -int(_non_negative_int(item.get("latest_ts")) or 0),
+            str(item.get("bot") or ""),
+            str(item.get("event_type") or ""),
+            str(item.get("symbol") or ""),
+            str(item.get("pside") or ""),
+        ),
+    )
+    attention_groups = [
+        _compact_risk_group(group) for group in attention_ordered[:RISK_EVENT_GROUP_LIMIT]
+    ]
     out = {
         "total": sum(int(group.get("count", 0)) for group in groups.values()),
         "groups_truncated": len(ordered) > RISK_EVENT_GROUP_LIMIT,
@@ -3151,6 +3221,9 @@ def _summarize_risk_events(
         "hsl_status": _summarize_hsl_status(groups),
         "groups": compact_groups,
     }
+    if attention_groups:
+        out["attention_groups"] = attention_groups
+        out["attention_groups_truncated"] = len(attention_ordered) > RISK_EVENT_GROUP_LIMIT
     hsl_raw_red_pending = _summarize_hsl_raw_red_pending(groups)
     if int(hsl_raw_red_pending.get("total") or 0) > 0:
         out["hsl_raw_red_pending"] = hsl_raw_red_pending
@@ -6516,28 +6589,26 @@ def _brief_risk_event_groups(risk_events: dict[str, Any]) -> list[dict[str, Any]
     if not isinstance(groups, list):
         return []
     limit = max(0, int(SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT))
-    safe_group_keys = (
-        "bot",
-        "event_type",
-        "reason_code",
-        "status",
-        "level",
-        "symbol",
-        "pside",
-        "component",
-        "count",
-        "latest_ts",
-    )
     rows: list[dict[str, Any]] = []
     for group in groups[:limit]:
         if not isinstance(group, dict):
             continue
-        compact: dict[str, Any] = {}
-        for key in safe_group_keys:
-            value = group.get(key)
-            if value is None or value == "" or value == {} or value == []:
-                continue
-            compact[key] = value
+        compact = _compact_risk_group(group)
+        if compact:
+            rows.append(compact)
+    return rows
+
+
+def _brief_risk_attention_groups(risk_events: dict[str, Any]) -> list[dict[str, Any]]:
+    groups = risk_events.get("attention_groups")
+    if not isinstance(groups, list):
+        return []
+    limit = max(0, int(SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT))
+    rows: list[dict[str, Any]] = []
+    for group in groups[:limit]:
+        if not isinstance(group, dict):
+            continue
+        compact = _compact_risk_group(group)
         if compact:
             rows.append(compact)
     return rows
@@ -6893,6 +6964,12 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         risk_events_brief["latest_groups"] = latest_risk_groups
         risk_events_brief["latest_groups_truncated"] = bool(
             risk_events.get("groups_truncated")
+        )
+    risk_attention_groups = _brief_risk_attention_groups(risk_events)
+    if risk_attention_groups:
+        risk_events_brief["attention_groups"] = risk_attention_groups
+        risk_events_brief["attention_groups_truncated"] = bool(
+            risk_events.get("attention_groups_truncated")
         )
     return {
         "ok": bool(report.get("ok")),

@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --brief` now includes bounded risk
+  attention groups, prioritizing HSL RED/cooldown/raw-red and risk panic-mode
+  context even when newer routine risk status events would otherwise bury them
+  in latest-event ordering.
 - `passivbot tool live-smoke-report --brief` now includes bounded latest risk
   event samples, making HSL RED/cooldown/mode-change smoke context visible
   without dumping verbose risk event payloads.
