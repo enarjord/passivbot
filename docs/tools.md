@@ -163,7 +163,8 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   `--brief` for top-level counters suitable for repeated VPS smoke loops. Use
   `--section SECTION` one or more times to emit selected top-level smoke-report
   sections plus common smoke metadata after the full/summary/brief projection is
-  selected, for example `--brief --section fill_refresh`.
+  selected, for example `--brief --section fill_refresh` or
+  `--section repository` for checkout metadata only.
   Full, summary, and brief output include text-log scan bounds and bounded
   text-log window counters so time-windowed smoke evidence shows the configured
   file/tail/match limits plus how many log lines were considered, skipped

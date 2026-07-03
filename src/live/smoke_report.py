@@ -7268,6 +7268,19 @@ def available_live_smoke_report_sections(report: dict[str, Any]) -> list[str]:
     return sorted(key for key in report if key not in _SMOKE_REPORT_SECTION_BASE_KEYS)
 
 
+SMOKE_REPORT_SECTION_BASE_SELECTORS = frozenset(
+    {
+        "repository",
+        "monitor",
+        "event_window",
+        "hard_failure_sources",
+        "attention_sources",
+        "problem_event_count",
+        "hard_problem_event_count",
+    }
+)
+
+
 SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "account_critical_remote_calls": ("account_critical_remote_call_health",),
     "ema_readiness": ("ema_readiness_health",),
@@ -7294,9 +7307,14 @@ def project_live_smoke_report_sections(
 
     available = available_live_smoke_report_sections(report)
     available_set = set(available)
+    base_selector_set = set(SMOKE_REPORT_SECTION_BASE_SELECTORS)
     resolved = []
+    resolved_base = []
     unknown = []
     for section in requested:
+        if section in base_selector_set:
+            resolved_base.append(section)
+            continue
         targets = (section, *SMOKE_REPORT_SECTION_ALIASES.get(section, ()))
         matched_targets = [target for target in targets if target in available_set]
         if not matched_targets:
@@ -7310,11 +7328,22 @@ def project_live_smoke_report_sections(
             "unknown --section value(s): "
             + ", ".join(unknown)
             + "; available sections: "
-            + ", ".join(available)
+            + ", ".join(sorted((*available, *base_selector_set)))
             + "; use all for the full report"
         )
 
     projected = {key: report[key] for key in _SMOKE_REPORT_SECTION_BASE_KEYS if key in report}
+    if resolved_base:
+        selected_base = {
+            "ok",
+            "attention",
+            "hard_failures",
+            "attention_count",
+            *resolved_base,
+        }
+        projected = {
+            key: value for key, value in projected.items() if key in selected_base
+        }
     for section in resolved:
         projected[section] = report[section]
     return projected
