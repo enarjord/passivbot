@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes a bounded risk-event
+  smoke summary in the returned report and manifest, so incident bundles expose
+  HSL RED/cooldown/raw-red context without requiring operators to open the full
+  embedded smoke report.
 - `passivbot tool live-smoke-report --brief` now includes bounded risk
   attention groups, prioritizing HSL RED/cooldown/raw-red and risk panic-mode
   context even when newer routine risk status events would otherwise bury them
