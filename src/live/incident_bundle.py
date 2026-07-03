@@ -1034,6 +1034,7 @@ def _restart_smoke_plan_result_summary(
         "execution_policy": summary.get("execution_policy"),
         "warnings": summary.get("warnings"),
         "issues": summary.get("issues"),
+        "timeout_escalation_ladder": summary.get("timeout_escalation_ladder"),
         "config_preflight": config_preflight_summary,
     }
 

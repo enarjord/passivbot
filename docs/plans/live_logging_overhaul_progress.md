@@ -19,20 +19,21 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `f761063f` after PR #1039, `Expose restart plan safety summaries in incident bundles`.
+- `030d77aa` after PR #1040, `Expose restart plan issue summaries in incident bundles`.
 
 Current logging-overhaul head:
 
-- `f761063f` after PR #1039, `Expose restart plan safety summaries in incident bundles`.
+- `030d77aa` after PR #1040, `Expose restart plan issue summaries in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-restart-plan-issue-provenance` exposes the embedded
-  restart-smoke plan's compact warning and issue summaries in the returned
-  incident-bundle report and manifest summary. This lets operators see malformed
-  or partial restart plans without extracting `restart_smoke_plan.json`. It does
-  not execute restarts, contact exchanges, add event producers, write monitor
-  events, alter console routing, or change order/risk/trading behavior.
+- Branch `codex/v8-incident-restart-plan-timeout-provenance` exposes the
+  embedded restart-smoke plan's compact timeout-escalation ladder summary in the
+  returned incident-bundle report and manifest summary. This lets operators see
+  the planned timeout escalation shape without extracting
+  `restart_smoke_plan.json`. It does not execute restarts, contact exchanges,
+  add event producers, write monitor events, alter console routing, or change
+  order/risk/trading behavior.
 
 Current review gate:
 
@@ -62,6 +63,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1040 at `030d77aa`.
+- PR #1040 made `live-incident-bundle --restart-smoke-plan` expose the embedded
+  restart-smoke plan's compact warning and issue summaries in the returned
+  incident-bundle report and manifest summary. It merged after Claude and Hermes
+  approved with no findings and CI was green; Cursor was absent, so the
+  low-risk read-only tooling degraded gate was used. VPS5 checkout was updated
+  to `030d77aa` without restarting running bots because the slice was read-only
+  tooling. Bounded smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard log matches,
+  no event-pipeline drops or sink errors, and only known non-hard ZEC HSL
+  cooldown attention. A focused VPS incident-bundle check proved the manifest's
+  embedded restart-smoke summary includes `warnings.count=7`, `issues.count=0`,
+  warning items, and still omits config-preflight raw command lists.
 - Repository pulled through PR #1039 at `f761063f`.
 - PR #1039 made `live-incident-bundle --restart-smoke-plan` expose the embedded
   restart-smoke plan's process-signal safety and execution-policy summaries in

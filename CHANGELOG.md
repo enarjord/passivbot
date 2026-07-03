@@ -5,6 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
+  embedded restart plan's compact timeout-escalation ladder summary in the
+  returned report and bundle manifest.
+- `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
   embedded restart plan's compact warning and issue summaries in the returned
   report and bundle manifest.
 - `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
