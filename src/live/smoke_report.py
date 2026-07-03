@@ -5621,6 +5621,7 @@ def _scan_logs(
             "non_risk_hard_matches": 0,
             "window": window_report,
             "matches": [],
+            "dropped_unparsed_matches": [],
             "dropped_unparsed_attention_matches": 0,
             "dropped_unparsed_hard_matches": 0,
         }
@@ -5639,6 +5640,7 @@ def _scan_logs(
     lines_skipped_unparsed = 0
     dropped_unparsed_attention_matches = 0
     dropped_unparsed_hard_matches = 0
+    dropped_unparsed_matches: list[dict[str, Any]] = []
     for path in files:
         log_context_ts_ms: int | None = None
         log_context_line_no: int | None = None
@@ -5665,8 +5667,21 @@ def _scan_logs(
                     ):
                         if log_context_ts_ms is None and attention:
                             dropped_unparsed_attention_matches += 1
-                            if HARD_LOG_PATTERN.search(line):
+                            hard_dropped = bool(HARD_LOG_PATTERN.search(line))
+                            if hard_dropped:
                                 dropped_unparsed_hard_matches += 1
+                            if len(dropped_unparsed_matches) < max(0, int(max_matches)):
+                                dropped_unparsed_matches.append(
+                                    {
+                                        "path": str(path),
+                                        "line": int(line_no),
+                                        "hard": hard_dropped,
+                                        "category": "risk"
+                                        if RISK_LOG_PATTERN.search(line)
+                                        else "general",
+                                        "text": _redact_log_text(line, max_len=500),
+                                    }
+                                )
                         lines_skipped_unparsed += 1
                         continue
                 else:
@@ -5736,6 +5751,7 @@ def _scan_logs(
             dropped_unparsed_hard_matches=dropped_unparsed_hard_matches,
         ),
         "matches": matches,
+        "dropped_unparsed_matches": dropped_unparsed_matches,
         "dropped_unparsed_attention_matches": dropped_unparsed_attention_matches,
         "dropped_unparsed_hard_matches": dropped_unparsed_hard_matches,
     }
@@ -6264,6 +6280,13 @@ def summarize_live_smoke_report(
             ),
             "matches_truncated": len(matches) > max_groups,
             "matches": matches[:max_groups],
+            "dropped_unparsed_matches_truncated": len(
+                logs.get("dropped_unparsed_matches") or []
+            )
+            > max_groups,
+            "dropped_unparsed_matches": (
+                logs.get("dropped_unparsed_matches") or []
+            )[:max_groups],
             "window": logs.get("window"),
         },
         "problem_events": {
@@ -6666,11 +6689,13 @@ def _brief_log_window(logs: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
-    matches = logs.get("matches")
+def _brief_log_sample_rows(
+    matches: Any,
+    *,
+    limit: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     if not isinstance(matches, list):
-        return {}
-    limit = max(0, int(SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT))
+        return [], []
     hard_samples: list[dict[str, Any]] = []
     attention_samples: list[dict[str, Any]] = []
     for match in matches:
@@ -6700,6 +6725,16 @@ def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
             attention_samples.append(sample)
         if len(hard_samples) >= limit and len(attention_samples) >= limit:
             break
+    return hard_samples, attention_samples
+
+
+def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
+    matches = logs.get("matches")
+    limit = max(0, int(SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT))
+    hard_samples, attention_samples = _brief_log_sample_rows(
+        matches,
+        limit=limit,
+    )
     out: dict[str, Any] = {}
     if hard_samples:
         out["hard_samples"] = hard_samples
@@ -6710,6 +6745,27 @@ def _brief_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
         out["attention_samples"] = attention_samples
         out["attention_samples_truncated"] = int(
             logs.get("attention_matches") or 0
+        ) > len(attention_samples)
+    return out
+
+
+def _brief_dropped_unparsed_log_match_samples(logs: dict[str, Any]) -> dict[str, Any]:
+    matches = logs.get("dropped_unparsed_matches")
+    limit = max(0, int(SMOKE_REPORT_BRIEF_LOG_SAMPLE_LIMIT))
+    hard_samples, attention_samples = _brief_log_sample_rows(
+        matches,
+        limit=limit,
+    )
+    out: dict[str, Any] = {}
+    if hard_samples:
+        out["dropped_unparsed_hard_samples"] = hard_samples
+        out["dropped_unparsed_hard_samples_truncated"] = int(
+            logs.get("dropped_unparsed_hard_matches") or 0
+        ) > len(hard_samples)
+    if attention_samples:
+        out["dropped_unparsed_attention_samples"] = attention_samples
+        out["dropped_unparsed_attention_samples_truncated"] = int(
+            logs.get("dropped_unparsed_attention_matches") or 0
         ) > len(attention_samples)
     return out
 
@@ -7133,7 +7189,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
             ),
             "window": _brief_log_window(logs),
         }
-        | _brief_log_match_samples(logs),
+        | _brief_log_match_samples(logs)
+        | _brief_dropped_unparsed_log_match_samples(logs),
         "problem_events": {
             "total": problem_event_count,
             "hard": hard_problem_event_count,

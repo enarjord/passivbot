@@ -6261,6 +6261,35 @@ VPS5 deployment status:
 - Expected validation: focused `tests/test_live_event_query.py`, `py_compile`,
   `git diff --check`, added-line silent-handling scan, and a read-only VPS5
   rotated query proving the HSL incident is recoverable with `--include-rotated`.
+- Result: PR #1022 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `c090fd5b`. A short post-deploy smoke reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state, and five configured live bots still running. A read-only Kucoin ASTER
+  current-only query now emits `current_only_rotated_segments_skipped`, while
+  `--include-rotated` recovers the HSL RED/cooldown incident events.
+
+### Draft Slice: Dropped Unparsed Log Samples
+
+- Branch: `codex/v8-smoke-dropped-unparsed-samples`.
+- Scope: read-only `passivbot tool live-smoke-report` summary/brief projection
+  over existing log-window dropped-unparsed counters.
+- Triggering evidence: after PR #1022 deployment, VPS5 brief smoke was green
+  but reported `dropped_unparsed_attention_matches=1` and
+  `dropped_unparsed_hard_matches=1` with `--log-window-unparsed-policy drop`.
+  The brief output showed the counts but not the dropped line, so an operator
+  could not tell whether the dropped hard-looking signal was a stale traceback
+  fragment or a fresh line cut off by the log tail.
+- Intended result: keep the existing verdict policy and drop behavior, but
+  retain bounded redacted samples for contextless attention/hard-looking lines
+  dropped by the unparsed-line policy. Project them into summary and brief
+  output with basename-only paths in brief, matching existing log sample
+  conventions. This changes only report output; it does not add log scanning,
+  event producers, exchange calls, monitor writes, console routing, or trading
+  behavior.
+- Expected validation: focused dropped-unparsed smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, added-line
+  silent-handling scan, and a read-only VPS5 smoke showing dropped samples when
+  the condition is present.
 
 ## Current Next Steps
 

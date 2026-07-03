@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --summary` and `--brief` now include
+  bounded dropped-unparsed log samples when `--log-window-unparsed-policy drop`
+  suppresses contextless hard or attention-looking log lines.
 - `passivbot tool live-event-query` now emits a warning issue when filtered
   current-only queries skip rotated monitor event segments, making empty
   incident queries less likely to be mistaken for complete history.
