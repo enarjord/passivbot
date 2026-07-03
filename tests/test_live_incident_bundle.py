@@ -2066,6 +2066,15 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert "passivbot tool live-incident-bundle" in report["restart_smoke_plan"][
         "incident_bundle"
     ]["command"]
+    assert report["restart_smoke_plan"]["process_signal_safety"][
+        "forbid_broad_process_pattern_signals"
+    ] is True
+    assert report["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
+        "not_implemented"
+    )
+    assert report["restart_smoke_plan"]["execution_policy"][
+        "future_execution_requires_review"
+    ] is True
     assert report["restart_smoke_plan"]["config_preflight"]["command_count"] == 1
     assert "commands" not in report["restart_smoke_plan"]["config_preflight"]
 
@@ -2092,6 +2101,15 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert "passivbot tool live-incident-bundle" in manifest["restart_smoke_plan"][
         "incident_bundle"
     ]["command"]
+    assert manifest["restart_smoke_plan"]["process_signal_safety"][
+        "forbid_broad_process_pattern_signals"
+    ] is True
+    assert manifest["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
+        "not_implemented"
+    )
+    assert manifest["restart_smoke_plan"]["execution_policy"][
+        "future_execution_requires_review"
+    ] is True
     assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
     assert restart_plan["metadata"] == {
         "dry_run": True,
@@ -2199,6 +2217,15 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
     assert "passivbot tool live-incident-bundle" in report["restart_smoke_plan"][
         "incident_bundle"
     ]["command"]
+    assert report["restart_smoke_plan"]["process_signal_safety"][
+        "forbid_broad_process_pattern_signals"
+    ] is True
+    assert report["restart_smoke_plan"]["execution_policy"]["execute_flag"] == (
+        "not_implemented"
+    )
+    assert report["restart_smoke_plan"]["execution_policy"][
+        "future_execution_requires_review"
+    ] is True
     with tarfile.open(output, "r:gz") as tar:
         restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
     assert restart_plan["inputs"]["smoke_window_minutes"] == 9

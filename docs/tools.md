@@ -227,9 +227,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   planned smoke/config-preflight commands for follow-up review. The returned
   report and manifest include the embedded restart plan's selected smoke and
   performance sections plus the planned smoke and follow-up bundle command
-  summaries as compact provenance. Its planned smoke command uses the restart
-  planner's bounded scan defaults rather than the incident bundle's event/log
-  scan settings.
+  summaries, process-signal safety, and execution-policy summaries as compact
+  provenance. Its planned smoke command uses the restart planner's bounded scan
+  defaults rather than the incident bundle's event/log scan settings.
 - `passivbot tool live-restart-smoke-plan` emits a read-only dry-run restart
   plan from a tmuxp-style supervisor config. The planned smoke command defaults
   to a brief compact smoke command with `--event-tail-lines 2000` and
