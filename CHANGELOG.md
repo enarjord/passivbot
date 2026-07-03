@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes the bounded
+  `problem_events` smoke summary in the returned report and manifest, including
+  hard and non-hard problem-event type histograms for quicker incident triage.
 - `passivbot tool live-smoke-report --summary` and `--brief` now split
   structured problem-event type counts into hard and non-hard histograms,
   making mixed smoke attention easier to triage without opening grouped event
