@@ -1028,6 +1028,8 @@ def _restart_smoke_plan_result_summary(
         "bots": summary.get("bots"),
         "phases": summary.get("phases"),
         "filters": filters,
+        "smoke_report": summary.get("smoke_report"),
+        "incident_bundle": summary.get("incident_bundle"),
         "config_preflight": config_preflight_summary,
     }
 
