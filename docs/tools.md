@@ -247,8 +247,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   event-segment copying by default. The planned failure bundle includes
   `--performance-report` and `--restart-smoke-plan`, so the archive carries
   bounded performance timing/readiness evidence plus the non-executing restart
-  plan that produced it; use `--incident-bundle-output PATH` to choose the planned
-  bundle path. The default planned bundle path is a
+  plan that produced it. Use `--performance-section SECTION` one or more times
+  to add matching `live-incident-bundle --performance-section` values to the
+  planned failure bundle command; use `--incident-bundle-output PATH` to choose
+  the planned bundle path. The default planned bundle path is a
   timestamped `/tmp/passivbot_incident_bundle_restart_smoke_<utc>.tar.gz`
   path to avoid overwriting prior evidence. The pre-restart readiness phase also
   includes one deduplicated `live-config-preflight` command for each configured

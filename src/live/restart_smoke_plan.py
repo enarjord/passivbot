@@ -145,6 +145,7 @@ def _incident_bundle_command(
     max_log_matches: int,
     log_window_unparsed_policy: str,
     smoke_sections: list[str] | tuple[str, ...] | None = None,
+    performance_sections: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     args = [
         "passivbot",
@@ -181,6 +182,10 @@ def _incident_bundle_command(
         normalized = str(section).strip()
         if normalized:
             args.extend(["--smoke-section", normalized])
+    for section in performance_sections or ():
+        normalized = str(section).strip()
+        if normalized:
+            args.extend(["--performance-section", normalized])
     args.append("--compact")
     return _shell_join(args)
 
@@ -340,6 +345,7 @@ def build_live_restart_smoke_plan(
     brief_smoke_report: bool = True,
     summary_smoke_report: bool = False,
     smoke_sections: list[str] | tuple[str, ...] | None = None,
+    performance_sections: list[str] | tuple[str, ...] | None = None,
     execute: bool = False,
 ) -> dict[str, Any]:
     if execute:
@@ -370,6 +376,11 @@ def build_live_restart_smoke_plan(
     smoke_sections = [
         str(section).strip()
         for section in (smoke_sections or ())
+        if str(section).strip()
+    ]
+    performance_sections = [
+        str(section).strip()
+        for section in (performance_sections or ())
         if str(section).strip()
     ]
 
@@ -441,6 +452,7 @@ def build_live_restart_smoke_plan(
         max_log_matches=smoke_max_log_matches,
         log_window_unparsed_policy=log_window_unparsed_policy,
         smoke_sections=smoke_sections,
+        performance_sections=performance_sections,
     )
     config_preflight_plan = _config_preflight_plan(bots)
     config_preflight_commands = list(config_preflight_plan["commands"])
@@ -484,6 +496,7 @@ def build_live_restart_smoke_plan(
             "smoke_max_log_matches": smoke_max_log_matches,
             "log_window_unparsed_policy": log_window_unparsed_policy,
             "smoke_sections": list(smoke_sections),
+            "performance_sections": list(performance_sections),
             "incident_bundle_output": _display_path(incident_bundle_output),
         },
         "supervisor_config": {

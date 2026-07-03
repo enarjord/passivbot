@@ -19,21 +19,22 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `0a225f10` after PR #1033, `Add incident bundle performance section filter`.
+- `f068d9a4` after PR #1034, `Accept smoke base metadata sections`.
 
 Current logging-overhaul head:
 
-- `0a225f10` after PR #1033, `Add incident bundle performance section filter`.
+- `f068d9a4` after PR #1034, `Accept smoke base metadata sections`.
 
 Current work:
 
-- Branch `codex/v8-smoke-section-base-metadata` makes
-  `live-smoke-report --section` accept base metadata selectors such as
-  `repository`, `monitor`, and `event_window`. This removes operator friction
-  found during the PR #1033 VPS smoke while keeping the command read-only and
-  preserving existing regular-section behavior. It does not execute restarts,
-  contact exchanges, add event producers, write monitor events, alter console
-  routing, or change order/risk/trading behavior.
+- Branch `codex/v8-restart-smoke-performance-sections` lets
+  `live-restart-smoke-plan --performance-section` pass selected
+  performance-report sections through to the planned failure
+  `live-incident-bundle --performance-report` command. This keeps restart
+  smoke evidence planning aligned with the newer incident-bundle performance
+  projection surface. It does not execute restarts, contact exchanges, add
+  event producers, write monitor events, alter console routing, or change
+  order/risk/trading behavior.
 
 Current review gate:
 
@@ -63,6 +64,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1034 at `f068d9a4`.
+- PR #1034 made `live-smoke-report --section` accept base metadata selectors
+  such as `repository`, `monitor`, and `event_window`. It merged after Claude
+  and Hermes approved with no findings and CI was green; Cursor was absent, so
+  the low-risk read-only tooling degraded gate was used. VPS5 checkout was
+  updated to `f068d9a4` without restarting running bots because the slice was
+  read-only tooling. A focused VPS check proved `--section repository` now
+  returns clean checkout metadata directly, and the settled bounded smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked
+  repository state, zero hard log/problem/process failures, and only known
+  non-hard ZEC HSL cooldown attention on binance/gateio/okx.
 - Repository pulled through PR #1033 at `0a225f10`.
 - PR #1033 added `live-incident-bundle --performance-section` for embedded
   performance reports. It merged after Claude and Hermes approved with no
