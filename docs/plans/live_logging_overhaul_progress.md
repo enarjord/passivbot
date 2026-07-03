@@ -19,22 +19,21 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `0f6611ae` after PR #1032, `Add performance reports to restart smoke bundles`.
+- `0a225f10` after PR #1033, `Add incident bundle performance section filter`.
 
 Current logging-overhaul head:
 
-- `0f6611ae` after PR #1032, `Add performance reports to restart smoke bundles`.
+- `0a225f10` after PR #1033, `Add incident bundle performance section filter`.
 
 Current work:
 
-- Branch `codex/v8-incident-performance-section` adds
-  `live-incident-bundle --performance-section` as a read-only projection for
-  embedded performance reports. The bundle still uses the existing
-  performance-report scanner and section validator; the new option only scopes
-  `performance_report.json`, the compact returned summary, and manifest
-  metadata. It does not execute restarts, contact exchanges, add event
-  producers, write monitor events, alter console routing, or change
-  order/risk/trading behavior.
+- Branch `codex/v8-smoke-section-base-metadata` makes
+  `live-smoke-report --section` accept base metadata selectors such as
+  `repository`, `monitor`, and `event_window`. This removes operator friction
+  found during the PR #1033 VPS smoke while keeping the command read-only and
+  preserving existing regular-section behavior. It does not execute restarts,
+  contact exchanges, add event producers, write monitor events, alter console
+  routing, or change order/risk/trading behavior.
 
 Current review gate:
 
@@ -64,6 +63,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1033 at `0a225f10`.
+- PR #1033 added `live-incident-bundle --performance-section` for embedded
+  performance reports. It merged after Claude and Hermes approved with no
+  findings and CI was green; Cursor was absent, so the low-risk read-only
+  tooling degraded gate was used. VPS5 checkout was updated to `0a225f10`
+  without restarting running bots because the slice was read-only tooling. A
+  first 2-minute smoke was hard-red from a transient Kucoin
+  `maintain_hourly_cycle` open-orders traceback, while process and event
+  pipeline checks were green. After the transient log window rolled forward, a
+  settled 2-minute smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard
+  log/problem/process failures, and only known non-hard ZEC HSL cooldown
+  attention on binance/gateio/okx.
 - Repository pulled through PR #1032 at `0f6611ae`.
 - PR #1032 updated `live-restart-smoke-plan` so planned post-failure incident
   bundles include the existing `--performance-report` artifact by default. It

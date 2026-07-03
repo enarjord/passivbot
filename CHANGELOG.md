@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --section` now accepts base smoke metadata
+  selectors such as `repository`, `monitor`, and `event_window`, so repeated
+  smoke loops can request checkout or scan-window evidence directly.
 - `passivbot tool live-incident-bundle --performance-report` now supports
   `--performance-section`, so embedded performance evidence can be scoped to
   selected top-level sections while keeping common metadata.
