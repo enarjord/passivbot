@@ -19,20 +19,22 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `7d001553` after PR #1031, `Add performance report to incident bundles`.
+- `0f6611ae` after PR #1032, `Add performance reports to restart smoke bundles`.
 
 Current logging-overhaul head:
 
-- `7d001553` after PR #1031, `Add performance report to incident bundles`.
+- `0f6611ae` after PR #1032, `Add performance reports to restart smoke bundles`.
 
 Current work:
 
-- Branch `codex/v8-restart-smoke-performance-bundle` updates the read-only
-  restart-smoke plan so its planned post-failure incident bundle includes the
-  existing `--performance-report` artifact by default. It changes only planned
-  operator evidence commands and docs; it does not execute restarts, contact
-  exchanges, add event producers, write monitor events, alter console routing,
-  or change order/risk/trading behavior.
+- Branch `codex/v8-incident-performance-section` adds
+  `live-incident-bundle --performance-section` as a read-only projection for
+  embedded performance reports. The bundle still uses the existing
+  performance-report scanner and section validator; the new option only scopes
+  `performance_report.json`, the compact returned summary, and manifest
+  metadata. It does not execute restarts, contact exchanges, add event
+  producers, write monitor events, alter console routing, or change
+  order/risk/trading behavior.
 
 Current review gate:
 
@@ -62,6 +64,16 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1032 at `0f6611ae`.
+- PR #1032 updated `live-restart-smoke-plan` so planned post-failure incident
+  bundles include the existing `--performance-report` artifact by default. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `0f6611ae` without restarting running bots
+  because the slice was read-only tooling. A first 5-minute smoke observed one
+  transient Kucoin `RequestTimeout` degradation, and a tighter settled
+  follow-up smoke was hard-green with five configured bots running, clean
+  tracked repository state, and only known non-hard HSL cooldown/status plus
+  stale dropped Kucoin traceback attention.
 - Repository pulled through PR #1031 at `7d001553`.
 - PR #1031 added opt-in `live-incident-bundle --performance-report`, embedding
   the existing read-only performance report artifact and compact summary in

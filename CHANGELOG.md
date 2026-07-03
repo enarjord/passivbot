@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle --performance-report` now supports
+  `--performance-section`, so embedded performance evidence can be scoped to
+  selected top-level sections while keeping common metadata.
 - `passivbot tool live-restart-smoke-plan` now includes
   `live-incident-bundle --performance-report` in its planned failure evidence
   command, so restart-smoke incident bundles capture bounded performance timing
