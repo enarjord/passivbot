@@ -91,6 +91,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     )
     assert report["phases"][0]["planned_commands"][-1]["execute"] is False
     assert report["incident_bundle"]["execute"] is False
+    assert "performance report" in report["incident_bundle"]["expected_fields"]
     assert re.search(
         INCIDENT_BUNDLE_OUTPUT_PATTERN,
         report["incident_bundle"]["output_path"],
@@ -103,6 +104,7 @@ def test_live_restart_smoke_plan_builds_plan_from_supervisor_config(tmp_path):
     assert "--processes" in incident_command
     assert "--recent-minutes 15" in incident_command
     assert "--no-event-segments" in incident_command
+    assert "--performance-report" in incident_command
     assert "--restart-smoke-plan" in incident_command
     assert "--restart-smoke-window-minutes 15" in incident_command
     assert "--event-tail-lines 2000" in incident_command
@@ -363,6 +365,7 @@ def test_live_restart_smoke_plan_cli_outputs_json(tmp_path, capsys):
     assert "--log-window-unparsed-policy keep" in report["smoke_report"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
     assert "--no-event-segments" in report["incident_bundle"]["command"]
+    assert "--performance-report" in report["incident_bundle"]["command"]
     assert (
         "--log-window-unparsed-policy keep"
         in report["incident_bundle"]["command"]

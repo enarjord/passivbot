@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-restart-smoke-plan` now includes
+  `live-incident-bundle --performance-report` in its planned failure evidence
+  command, so restart-smoke incident bundles capture bounded performance timing
+  and readiness summaries by default.
 - `passivbot tool live-incident-bundle --performance-report` now embeds an
   opt-in `live-performance-report` artifact and compact manifest summary using
   compatible bundle time, bot/exchange/user, debug-profile, and event-file

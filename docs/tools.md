@@ -209,6 +209,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Manifest git status is limited to tracked changes so local untracked configs
   and monitor artifacts do not dominate the bundle metadata. It is read-only
   and does not contact exchanges. Use
+  `--performance-report` to embed a bounded `performance_report.json` artifact
+  plus compact manifest summary using the bundle's time, bot/exchange/user,
+  debug-profile, rotated-file, tail-line, and per-bot file bounds. Use
   `--smoke-section SECTION` one or more times to keep only selected top-level
   sections from the embedded full `smoke_report.json` plus common smoke
   metadata, for example `--smoke-section fill_refresh_health`. Use
@@ -238,8 +241,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   credentials. The plan also includes a bounded `live-incident-bundle` command
   for failure evidence, reusing the same event/log scan limits and disabling
   event-segment copying by default. The planned failure bundle includes
-  `--restart-smoke-plan`, so the archive carries the non-executing restart plan
-  that produced it; use `--incident-bundle-output PATH` to choose the planned
+  `--performance-report` and `--restart-smoke-plan`, so the archive carries
+  bounded performance timing/readiness evidence plus the non-executing restart
+  plan that produced it; use `--incident-bundle-output PATH` to choose the planned
   bundle path. The default planned bundle path is a
   timestamped `/tmp/passivbot_incident_bundle_restart_smoke_<utc>.tar.gz`
   path to avoid overwriting prior evidence. The pre-restart readiness phase also

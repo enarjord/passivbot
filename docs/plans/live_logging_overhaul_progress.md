@@ -19,20 +19,20 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `a5faeaa8` after PR #1030, `Add performance report debug profile filter`.
+- `7d001553` after PR #1031, `Add performance report to incident bundles`.
 
 Current logging-overhaul head:
 
-- `a5faeaa8` after PR #1030, `Add performance report debug profile filter`.
+- `7d001553` after PR #1031, `Add performance report to incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-performance-report` adds an opt-in
-  `live-incident-bundle --performance-report` artifact, embedding the existing
-  read-only performance report and compact summary into incident bundles using
-  compatible bundle bounds. It does not add event producers, exchange calls,
-  monitor writes, console routing, startup behavior, order/risk logic, or
-  trading behavior.
+- Branch `codex/v8-restart-smoke-performance-bundle` updates the read-only
+  restart-smoke plan so its planned post-failure incident bundle includes the
+  existing `--performance-report` artifact by default. It changes only planned
+  operator evidence commands and docs; it does not execute restarts, contact
+  exchanges, add event producers, write monitor events, alter console routing,
+  or change order/risk/trading behavior.
 
 Current review gate:
 
@@ -62,6 +62,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1031 at `7d001553`.
+- PR #1031 added opt-in `live-incident-bundle --performance-report`, embedding
+  the existing read-only performance report artifact and compact summary in
+  incident bundles with compatible bundle bounds. It merged after Claude and
+  Hermes approved with no findings and CI was green. VPS5 checkout was updated
+  to `7d001553` without restarting running bots because the slice was read-only
+  tooling. Post-deploy smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard
+  log/problem/process failures, and only known non-hard HSL cooldown/status
+  attention plus dropped stale Kucoin traceback fragments under the drop
+  policy. A focused bundle smoke verified `performance_report.json` was present
+  in the generated archive.
 - Repository pulled through PR #1030 at `a5faeaa8`.
 - PR #1030 added `live-performance-report --debug-profile`, letting
   performance summaries scope to events enriched by one live-event debug
@@ -6538,6 +6550,27 @@ VPS5 deployment status:
 - Expected validation: focused incident-bundle API/CLI tests, full
   `tests/test_live_incident_bundle.py`, `py_compile`, `git diff --check`, and
   the standard added-line silent-handling scan.
+
+### Draft Slice: Restart Smoke Performance Bundle Evidence
+
+- Branch: `codex/v8-restart-smoke-performance-bundle`.
+- Scope: read-only restart-smoke plan command generation and operator docs.
+- Triggering evidence: PR #1031 made performance reports available inside
+  incident bundles, but the restart-smoke plan's post-failure bundle command
+  did not request that artifact. Failed restart/smoke investigations are exactly
+  where startup, HSL replay, readiness, operation-duration, and resource-pressure
+  summaries are most useful.
+- Intended result: include `live-incident-bundle --performance-report` in the
+  planned post-failure incident bundle command emitted by
+  `passivbot tool live-restart-smoke-plan`. The command remains non-executing
+  plan output and inherits the existing bounded restart-smoke bundle settings:
+  recent window, event tail lines, per-bot event-file cap, log bounds,
+  supervisor process checks, `--no-event-segments`, and `--compact`.
+  Do not execute restarts, contact exchanges, add event producers, write monitor
+  events, alter console routing, or change order/risk/trading behavior.
+- Expected validation: focused restart-smoke plan tests, full
+  `tests/test_live_restart_smoke_plan.py`, `py_compile`, `git diff --check`,
+  and the standard added-line silent-handling scan.
 
 ## Current Next Steps
 
