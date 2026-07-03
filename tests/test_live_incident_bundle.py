@@ -1135,7 +1135,7 @@ def test_live_incident_bundle_cli_can_focus_embedded_smoke_report(tmp_path, caps
                 "--no-trace-report",
                 "--no-problem-report",
                 "--smoke-section",
-                "fill_refresh_health",
+                "fill_refresh",
                 "--output",
                 str(output),
                 "--compact",
@@ -1155,7 +1155,7 @@ def test_live_incident_bundle_cli_can_focus_embedded_smoke_report(tmp_path, caps
     assert smoke_report["fill_refresh_health"]["total"] == 1
     assert "logs" not in smoke_report
     assert "remote_call_health" not in smoke_report
-    assert manifest["filters"]["smoke_sections"] == ["fill_refresh_health"]
+    assert manifest["filters"]["smoke_sections"] == ["fill_refresh"]
 
 
 def test_live_incident_bundle_cli_rejects_malformed_data_eq_filter(tmp_path, capsys):

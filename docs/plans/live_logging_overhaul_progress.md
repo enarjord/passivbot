@@ -19,19 +19,20 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `60ed8f60` after PR #1009, `Summarize operational smoke in incident bundles`.
+- `2f91372a` after PR #1010, `Summarize data-plane smoke in incident bundles`.
 
 Current logging-overhaul head:
 
-- `60ed8f60` after PR #1009, `Summarize operational smoke in incident bundles`.
+- `2f91372a` after PR #1010, `Summarize data-plane smoke in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-data-plane-smoke-summary` adds existing value-safe
-  data-plane smoke summaries to `live-incident-bundle` result and manifest
-  metadata: remote calls, account-critical remote calls, fill refresh, startup
-  timings, and HSL replay. This exposes common exchange/data-readiness and
-  startup-latency evidence without opening the full embedded smoke report.
+- Branch `codex/v8-incident-smoke-section-aliases` adds CLI smoke-section
+  aliases so brief smoke-summary names such as `fill_refresh`, `hsl_replay`,
+  `remote_calls`, `account_critical_remote_calls`, `ema_readiness`, and
+  operational brief keys resolve to their embedded full-report sections when
+  using `live-smoke-report --section` or
+  `live-incident-bundle --smoke-section`.
 
 Current review gate:
 
@@ -61,6 +62,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1010 at `2f91372a`.
+- PR #1010 added bounded data-plane smoke projections to
+  `live-incident-bundle` returned JSON and `manifest.json`: remote calls,
+  account-critical remote calls, fill refresh, startup timings, and HSL replay.
+  It merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `2f91372a` without restarting running bots
+  because the slice was report-only. Smoke after the fast-forward reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state at `repository.head=2f91372a`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and no
+  hard log matches. Remaining attention came from known non-hard EMA readiness
+  and ZEC HSL cooldown status. A focused incident-bundle verification confirmed
+  `remote_calls`, `account_critical_remote_calls`, `fill_refresh`,
+  `startup_timings`, and `hsl_replay` were present in both the returned report
+  and `manifest.json`.
 - Repository pulled through PR #1009 at `60ed8f60`.
 - PR #1009 added bounded operational smoke projections to
   `live-incident-bundle` returned JSON and `manifest.json`: exchange config

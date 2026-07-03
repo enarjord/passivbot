@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --section` and
+  `passivbot tool live-incident-bundle --smoke-section` now accept the brief
+  smoke-summary names such as `fill_refresh`, `hsl_replay`, and
+  `remote_calls` as aliases for their embedded full-report sections, reducing
+  CLI friction when moving between brief smoke output and incident bundles.
 - `passivbot tool live-incident-bundle` now includes bounded data-plane smoke
   summaries for remote calls, account-critical remote calls, fill refresh,
   startup timings, and HSL replay in the returned report and manifest, making
