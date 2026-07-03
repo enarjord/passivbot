@@ -19,17 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `d5a9680f` after PR #1014, `Include problem event smoke summary in incident bundles`.
+- `f02d53a9` after PR #1015, `Include smoke source breakdown in incident bundles`.
 
 Current logging-overhaul head:
 
-- `d5a9680f` after PR #1014, `Include problem event smoke summary in incident bundles`.
+- `f02d53a9` after PR #1015, `Include smoke source breakdown in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-smoke-source-breakdown` adds smoke verdict source
-  breakdowns and recovered problem-event counts to `live-incident-bundle`
-  returned JSON and `manifest.json`.
+- Branch `codex/v8-incident-process-summary` adds the bounded process smoke
+  summary to `live-incident-bundle` returned JSON and `manifest.json`, so
+  incident bundles can explain missing, duplicate, or unexpected live-bot
+  process smoke evidence without opening the embedded full smoke report.
 
 Current review gate:
 
@@ -59,6 +60,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1015 at `f02d53a9`.
+- PR #1015 added smoke verdict source breakdowns and recovered problem-event
+  counts to `live-incident-bundle` returned JSON and `manifest.json`. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `f02d53a9` without restarting running bots
+  because the slice was report-only. Smoke after the fast-forward reported
+  `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked repository
+  state at `repository.head=f02d53a9`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and no
+  hard log matches. A focused incident-bundle verification confirmed the
+  returned report and `manifest.json` both included `hard_failure_sources`,
+  `attention_sources`, `recovered_problem_events`, and `problem_events`.
 - Repository pulled through PR #1014 at `d5a9680f`.
 - PR #1014 added the bounded `problem_events` smoke summary to
   `live-incident-bundle` returned JSON and `manifest.json`, including hard and

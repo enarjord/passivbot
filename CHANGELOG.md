@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes the bounded process
+  smoke summary in the returned report and manifest, making missing,
+  duplicate, or unexpected live-bot process evidence visible without opening
+  the embedded full smoke report.
 - `passivbot tool live-incident-bundle` now includes smoke verdict source
   breakdowns and recovered problem-event counts in the returned report and
   manifest, making red or attention incidents easier to attribute without
