@@ -27,6 +27,7 @@ from live.event_query import (
 )
 from live.performance_report import (
     build_live_performance_report,
+    project_live_performance_report_sections,
     summarize_live_performance_report,
 )
 from live.restart_smoke_plan import (
@@ -1056,6 +1057,7 @@ def build_live_incident_bundle(
     include_trace_report: bool = True,
     include_problem_report: bool = True,
     include_performance_report: bool = False,
+    performance_sections: list[str] | tuple[str, ...] | None = None,
     include_rotated: bool = False,
     include_event_segments: bool = True,
     max_events: int = 500,
@@ -1250,9 +1252,17 @@ def build_live_incident_bundle(
             user_filters=user,
             debug_profile_filters=debug_profile,
         )
+        performance_report = project_live_performance_report_sections(
+            performance_report,
+            list(performance_sections or []),
+        )
         performance_report_summary = summarize_live_performance_report(
             performance_report,
             group_limit=max_events,
+        )
+        performance_report_summary = project_live_performance_report_sections(
+            performance_report_summary,
+            list(performance_sections or []),
         )
     hard_failures = _bundle_hard_failure_count(
         smoke_report=smoke_report,
@@ -1343,6 +1353,9 @@ def build_live_incident_bundle(
                     "max_log_matches": max_log_matches if max_log_matches else None,
                     "log_window_unparsed_policy": log_window_unparsed_policy,
                     "smoke_sections": list(smoke_sections),
+                    "performance_sections": list(performance_sections or [])
+                    if include_performance_report and performance_sections
+                    else None,
                     "include_restart_smoke_plan": include_restart_smoke_plan,
                     "restart_smoke_window_minutes": restart_smoke_window_minutes
                     if include_restart_smoke_plan

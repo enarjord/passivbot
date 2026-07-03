@@ -228,6 +228,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--performance-section",
+        action="append",
+        default=[],
+        help=(
+            "Only keep one top-level section from the embedded performance_report.json "
+            "plus common performance metadata. May be repeated; section names are "
+            "validated by live-performance-report."
+        ),
+    )
+    parser.add_argument(
         "--include-rotated",
         action="store_true",
         help="Also scan rotated/compressed monitor event segments.",
@@ -353,6 +363,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--since-ms/--recent-minutes must be <= --until-ms")
     if args.restart_smoke_plan and not args.supervisor_config:
         parser.error("--restart-smoke-plan requires --supervisor-config")
+    if args.performance_section and not args.performance_report:
+        parser.error("--performance-section requires --performance-report")
     if int(args.restart_smoke_window_minutes) <= 0:
         parser.error("--restart-smoke-window-minutes must be > 0")
     try:
@@ -389,6 +401,7 @@ def main(argv: list[str] | None = None) -> int:
             include_trace_report=not bool(args.no_trace_report),
             include_problem_report=not bool(args.no_problem_report),
             include_performance_report=bool(args.performance_report),
+            performance_sections=args.performance_section,
             include_rotated=bool(args.include_rotated),
             event_tail_lines=int(args.event_tail_lines),
             max_event_files_per_bot=int(args.max_event_files_per_bot),

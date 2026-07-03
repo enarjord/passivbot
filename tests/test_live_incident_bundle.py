@@ -395,6 +395,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         until_ms=2500,
         include_data=False,
         include_performance_report=True,
+        performance_sections=["hsl_replay_profile"],
         max_event_segment_bytes=100_000,
         cwd=tmp_path,
     )
@@ -435,6 +436,8 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
     }
+    assert "hsl_replay_profile" in report["performance_report"]
+    assert "performance" not in report["performance_report"]
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
@@ -780,6 +783,9 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert performance_report["event_window"] == report["performance_report"][
         "event_window"
     ]
+    assert "hsl_replay_profile" in performance_report
+    assert "performance" not in performance_report
+    assert manifest["filters"]["performance_sections"] == ["hsl_replay_profile"]
     for section in ("ok", "attention", "hard_failures", "attention_count"):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
     assert manifest["smoke_report"]["event_window"] == report["smoke_report"][
@@ -1077,6 +1083,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 "--include-data",
                 "--no-event-segments",
                 "--performance-report",
+                "--performance-section",
+                "performance",
                 "--output",
                 str(output),
                 "--compact",
@@ -1091,6 +1099,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert report["problem_event_report"]["matched_events"] == 1
     assert report["performance_report"]["ok"] is True
     assert report["performance_report"]["filters"]["debug_profiles"] == ["startup"]
+    assert "performance" in report["performance_report"]
+    assert "startup_readiness" not in report["performance_report"]
     assert report["event_report"]["file_discovery"] == {
         "bot_path_pruning_applied": True,
         "candidate_files": 2,
@@ -1153,6 +1163,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     }
     assert time_window_report["matched_events"] == 1
     assert performance_report["filters"]["debug_profiles"] == ["startup"]
+    assert "performance" in performance_report
+    assert "startup_readiness" not in performance_report
     assert manifest["performance_report"] == report["performance_report"]
     assert event_report["query"]["events"][0]["exchange"] == "okx"
     assert event_report["query"]["events"][0]["user"] == "okx_01"
@@ -1168,10 +1180,25 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert manifest["filters"]["exchange"] == ["okx"]
     assert manifest["filters"]["bot_id"] == ["okx/okx_01"]
     assert manifest["filters"]["debug_profile"] == ["startup"]
+    assert manifest["filters"]["performance_sections"] == ["performance"]
     assert manifest["filters"]["include_performance_report"] is True
     assert manifest["filters"]["data_eq"] == ["scope=target"]
     assert manifest["filters"]["since_ms"] == 0
     assert manifest["filters"]["until_ms"] == 2000
+
+
+def test_live_incident_bundle_cli_requires_performance_report_for_performance_section(capsys):
+    with pytest.raises(SystemExit) as exc:
+        live_incident_bundle.main(
+            [
+                "monitor",
+                "--performance-section",
+                "startup_readiness",
+            ]
+        )
+
+    assert exc.value.code == 2
+    assert "--performance-section requires --performance-report" in capsys.readouterr().err
 
 
 def test_live_incident_bundle_can_skip_logs_and_segments_from_cli(tmp_path, capsys):
