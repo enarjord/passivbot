@@ -112,6 +112,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="Only include one user/account name. May be repeated.",
     )
     parser.add_argument(
+        "--debug-profile",
+        action="append",
+        default=[],
+        help=(
+            "Only include events whose data has debug_profile=VALUE. "
+            "May be repeated."
+        ),
+    )
+    parser.add_argument(
         "--summary",
         action="store_true",
         help="Emit a bounded operator summary instead of the full report.",
@@ -167,6 +176,7 @@ def main(argv: list[str] | None = None) -> int:
         bot_filters=args.bot,
         exchange_filters=args.exchange,
         user_filters=args.user,
+        debug_profile_filters=args.debug_profile,
     )
     if args.summary:
         report = summarize_live_performance_report(report, group_limit=int(args.group_limit))

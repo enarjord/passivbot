@@ -323,6 +323,7 @@ def _matches_filters(
     bot_filters: set[str],
     exchange_filters: set[str],
     user_filters: set[str],
+    debug_profile_filters: set[str],
 ) -> bool:
     if bot_filters and _bot_key(row, live_event) not in bot_filters:
         return False
@@ -331,6 +332,10 @@ def _matches_filters(
         return False
     user = str(live_event.get("user") or row.get("user") or "")
     if user_filters and user not in user_filters:
+        return False
+    data = live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+    debug_profile = str(data.get("debug_profile") or "")
+    if debug_profile_filters and debug_profile not in debug_profile_filters:
         return False
     return True
 
@@ -3577,6 +3582,7 @@ def build_live_performance_report(
     bot_filters: list[str] | tuple[str, ...] | set[str] | None = None,
     exchange_filters: list[str] | tuple[str, ...] | set[str] | None = None,
     user_filters: list[str] | tuple[str, ...] | set[str] | None = None,
+    debug_profile_filters: list[str] | tuple[str, ...] | set[str] | None = None,
 ) -> dict[str, Any]:
     since_filter = int(since_ms) if since_ms is not None else None
     until_filter = int(until_ms) if until_ms is not None else None
@@ -3637,11 +3643,18 @@ def build_live_performance_report(
     bot_filter_set = _string_filter(bot_filters)
     exchange_filter_set = _string_filter(exchange_filters)
     user_filter_set = _string_filter(user_filters)
+    debug_profile_filter_set = _string_filter(debug_profile_filters)
     filters = {
-        "enabled": bool(bot_filter_set or exchange_filter_set or user_filter_set),
+        "enabled": bool(
+            bot_filter_set
+            or exchange_filter_set
+            or user_filter_set
+            or debug_profile_filter_set
+        ),
         "bots": sorted(bot_filter_set),
         "exchanges": sorted(exchange_filter_set),
         "users": sorted(user_filter_set),
+        "debug_profiles": sorted(debug_profile_filter_set),
         "events_skipped": 0,
     }
     issues: list[dict[str, Any]] = []
@@ -3758,6 +3771,7 @@ def build_live_performance_report(
             bot_filters=bot_filter_set,
             exchange_filters=exchange_filter_set,
             user_filters=user_filter_set,
+            debug_profile_filters=debug_profile_filter_set,
         ):
             filters["events_skipped"] += 1
             return
