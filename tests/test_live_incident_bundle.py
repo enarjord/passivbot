@@ -118,9 +118,17 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                 ts=2000,
                 status="failed",
                 level="warning",
-                reason_code="request_timeout",
+                reason_code="authoritative_balance",
+                component="state.refresh",
                 symbol="BTC/USDT:USDT",
                 ids={"cycle_id": "cy_2", "remote_call_id": "rc_1"},
+                data={
+                    "kind": "authoritative_state_fetch",
+                    "surface": "balance",
+                    "elapsed_ms": 5000,
+                    "error_type": "RequestTimeout",
+                    "error": "api_key=REMOTE_SECRET",
+                },
             ),
             _monitor_row(
                 event_type="execution.create_succeeded",
@@ -288,6 +296,63 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                     "error": "Authorization: Bearer SHUTDOWN_SECRET",
                 },
             ),
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=12,
+                ts=2490,
+                status="ready",
+                level="debug",
+                reason_code="fill_cache_ready",
+                component="fills.refresh",
+                ids={"cycle_id": "cy_fill_1"},
+                data={
+                    "source": "exchange",
+                    "refresh_mode": "periodic",
+                    "elapsed_ms": 420,
+                    "history_scope": "all",
+                    "event_count_after": 2705,
+                    "new_count": 1,
+                    "coverage_ready_after": True,
+                    "raw_payload": "FILL_REFRESH_SECRET",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                seq=13,
+                ts=2492,
+                status="succeeded",
+                level="debug",
+                reason_code="startup_phase_ready",
+                component="startup",
+                ids={"cycle_id": "cy_startup_1"},
+                data={
+                    "phase": "startup",
+                    "elapsed_ms": 10000,
+                    "since_previous_ms": 7000,
+                    "details": "ready api_key=STARTUP_SECRET",
+                },
+            ),
+            _monitor_row(
+                event_type="hsl.replay.completed",
+                seq=14,
+                ts=2494,
+                status="succeeded",
+                level="debug",
+                reason_code="hsl_timeline_replay_completed",
+                component="risk.hsl",
+                ids={"cycle_id": "cy_hsl_replay_1"},
+                data={
+                    "signal_mode": "coin",
+                    "stage": "full_replay",
+                    "rows": 985965,
+                    "pairs": 24,
+                    "timeline_rows": 43201,
+                    "full_elapsed_s": 1623.4,
+                    "startup_blocking_elapsed_s": 1623.4,
+                    "balance": 123456.78,
+                    "secret": "HSL_REPLAY_SECRET",
+                },
+            ),
         ],
     )
     (events_dir / "20260629.ndjson.gz").write_bytes(b"")
@@ -358,12 +423,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
-    assert report["time_window"]["matched_events"] == 8
+    assert report["time_window"]["matched_events"] == 11
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
         "until_ms": 2500,
-        "events_considered": 8,
+        "events_considered": 11,
         "events_skipped_before": 3,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
@@ -483,6 +548,65 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "total": 1,
         "event_types": {"bot.shutdown.stage": 1},
     }
+    assert report["smoke_report"]["remote_calls"] == {
+        "total": 1,
+        "succeeded": 0,
+        "failed": 1,
+        "throttled": 0,
+        "failure_pct": 100,
+        "throttled_pct": 0,
+        "failed_reason_codes": {"authoritative_balance": 1},
+        "failed_error_types": {"RequestTimeout": 1},
+        "failed_kinds": {"authoritative_state_fetch": 1},
+        "failed_surfaces": {"balance": 1},
+        "slowest": [
+            {
+                "bot": "binance/binance_01",
+                "kind": "authoritative_state_fetch",
+                "surface": "balance",
+                "count": 1,
+                "failed": 1,
+                "max_ms": 5000,
+                "p95_ms": 5000,
+                "latest_elapsed_ms": 5000,
+                "latest_symbol": "BTC/USDT:USDT",
+            }
+        ],
+    }
+    assert report["smoke_report"]["account_critical_remote_calls"] == report[
+        "smoke_report"
+    ]["remote_calls"]
+    assert report["smoke_report"]["fill_refresh"] == {
+        "total": 1,
+        "bots": 1,
+        "failed": 0,
+        "failure_pct": 0.0,
+        "failed_bots": 0,
+        "latest_failed_bots": 0,
+        "recovered_groups": 0,
+        "statuses": {"ready": 1},
+    }
+    assert report["smoke_report"]["startup_timings"] == {
+        "bots": 1,
+        "phases": 1,
+        "over_budget_phases": 0,
+        "startup_phase_bots": 1,
+        "max_latest_elapsed_ms": 10000,
+        "max_latest_phase_ms": 7000,
+        "max_startup_elapsed_ms": 10000,
+    }
+    assert report["smoke_report"]["hsl_replay"] == {
+        "total": 1,
+        "bots": 1,
+        "active_bots": 0,
+        "stale_active_bots": 0,
+        "long_running_active_bots": 0,
+        "completed_bots": 1,
+        "failed_bots": 0,
+        "failed_attention_bots": 0,
+        "event_types": {"hsl.replay.completed": 1},
+        "max_completed_elapsed_ms": 1623400,
+    }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -536,6 +660,11 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "staged_readiness",
         "event_pipeline",
         "shutdown_events",
+        "remote_calls",
+        "account_critical_remote_calls",
+        "fill_refresh",
+        "startup_timings",
+        "hsl_replay",
     ):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
     manifest_dump = json.dumps(manifest, sort_keys=True)
@@ -548,7 +677,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert "STAGED_SECRET" not in manifest_dump
     assert "PIPELINE_SECRET" not in manifest_dump
     assert "SHUTDOWN_SECRET" not in manifest_dump
+    assert "REMOTE_SECRET" not in manifest_dump
+    assert "FILL_REFRESH_SECRET" not in manifest_dump
+    assert "STARTUP_SECRET" not in manifest_dump
+    assert "HSL_REPLAY_SECRET" not in manifest_dump
     assert "12345.67" not in manifest_dump
+    assert "123456.78" not in manifest_dump
     assert "0.42" not in manifest_dump
     assert '"price"' not in manifest_dump
     assert '"qty"' not in manifest_dump
