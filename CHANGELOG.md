@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The `startup` live-event debug profile now enriches existing startup timing
+  events with bounded phase, timing, and details-shape metadata without
+  changing default event payloads or console output.
 - The `state` live-event debug profile now enriches existing state refresh
   timing and progress events with bounded plan, pending-surface, and slowest
   surface metadata without changing default event payloads or console output.
