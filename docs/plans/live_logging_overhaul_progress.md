@@ -19,20 +19,21 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `7c12497f` after PR #1036, `Propagate performance sections to embedded restart plans`.
+- `b688fed9` after PR #1037, `Expose restart plan section filters in bundle summaries`.
 
 Current logging-overhaul head:
 
-- `7c12497f` after PR #1036, `Propagate performance sections to embedded restart plans`.
+- `b688fed9` after PR #1037, `Expose restart plan section filters in bundle summaries`.
 
 Current work:
 
-- Branch `codex/v8-incident-restart-summary-filters` exposes the embedded
-  restart-smoke plan's selected smoke/performance sections in the returned
-  incident-bundle report and manifest summary. This lets operators verify the
-  projected restart follow-up scope without extracting `restart_smoke_plan.json`.
-  It does not execute restarts, contact exchanges, add event producers, write
-  monitor events, alter console routing, or change order/risk/trading behavior.
+- Branch `codex/v8-incident-bundle-restart-plan-provenance` exposes the embedded
+  restart-smoke plan's planned smoke and follow-up incident-bundle command
+  summaries in the returned incident-bundle report and manifest summary. This
+  lets operators verify the projected restart evidence commands without
+  extracting `restart_smoke_plan.json`. It does not execute restarts, contact
+  exchanges, add event producers, write monitor events, alter console routing,
+  or change order/risk/trading behavior.
 
 Current review gate:
 
@@ -62,6 +63,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1037 at `b688fed9`.
+- PR #1037 made `live-incident-bundle --restart-smoke-plan` expose the embedded
+  restart-smoke plan's selected smoke/performance sections in the returned
+  incident-bundle report and manifest summary. It merged after Claude and Hermes
+  approved with no findings and CI was green; Cursor was absent, so the
+  low-risk read-only tooling degraded gate was used. VPS5 checkout was updated
+  to `b688fed9` without restarting running bots because the slice was read-only
+  tooling. Bounded smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard log matches,
+  no event-pipeline drops or sink errors, and only known non-hard ZEC HSL
+  cooldown attention.
 - Repository pulled through PR #1036 at `7c12497f`.
 - PR #1036 made `live-incident-bundle --restart-smoke-plan` propagate selected
   `--performance-section` filters into the embedded restart plan's planned

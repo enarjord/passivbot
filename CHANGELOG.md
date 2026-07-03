@@ -5,6 +5,9 @@ All notable user-facing changes will be documented in this file.
 ## Unreleased
 
 - `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
+  embedded restart plan's planned smoke and follow-up incident-bundle command
+  summaries in the returned report and bundle manifest.
+- `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
   embedded restart plan's smoke/performance section filters in the returned
   report and bundle manifest summary.
 - `passivbot tool live-incident-bundle --restart-smoke-plan` now passes
