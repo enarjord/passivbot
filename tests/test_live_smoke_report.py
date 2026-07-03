@@ -4820,6 +4820,15 @@ def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_pat
     assert report["logs"]["hard_matches"] == 0
     assert report["logs"]["dropped_unparsed_attention_matches"] == 1
     assert report["logs"]["dropped_unparsed_hard_matches"] == 1
+    assert report["logs"]["dropped_unparsed_matches"] == [
+        {
+            "path": str(logs_dir / "kucoin_01.log"),
+            "line": 3,
+            "hard": True,
+            "category": "general",
+            "text": "Traceback (most recent call last):",
+        }
+    ]
     assert report["logs"]["matches"] == []
     assert report["logs"]["window"] == {
         "enabled": True,
@@ -4834,6 +4843,26 @@ def test_live_smoke_report_log_window_drops_contextless_tailed_traceback(tmp_pat
         "dropped_unparsed_attention_matches": 1,
         "dropped_unparsed_hard_matches": 1,
     }
+    summary = summarize_live_smoke_report(report)
+    assert summary["logs"]["dropped_unparsed_matches"] == [
+        report["logs"]["dropped_unparsed_matches"][0]
+    ]
+    assert summary["logs"]["dropped_unparsed_matches_truncated"] is False
+    brief = summarize_live_smoke_report_brief(report)
+    assert brief["logs"]["dropped_unparsed_hard_samples"] == [
+        {
+            "category": "general",
+            "hard": True,
+            "path": "kucoin_01.log",
+            "line": 3,
+            "text": "Traceback (most recent call last):",
+        }
+    ]
+    assert brief["logs"]["dropped_unparsed_attention_samples"] == [
+        brief["logs"]["dropped_unparsed_hard_samples"][0]
+    ]
+    assert brief["logs"]["dropped_unparsed_hard_samples_truncated"] is False
+    assert brief["logs"]["dropped_unparsed_attention_samples_truncated"] is False
 
 
 def test_live_smoke_report_log_scan_ignores_traceback_prose(tmp_path):
