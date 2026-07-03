@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle --restart-smoke-plan` now passes
+  `--performance-section` filters into the embedded restart plan's planned
+  failure-bundle command when performance sections are selected.
 - `passivbot tool live-restart-smoke-plan` now supports
   `--performance-section`, passing selected performance-report sections to the
   planned failure incident-bundle command.

@@ -234,7 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Only keep one top-level section from the embedded performance_report.json "
             "plus common performance metadata. May be repeated; section names are "
-            "validated by live-performance-report."
+            "validated by live-performance-report. When --restart-smoke-plan is "
+            "also used, the same sections are passed to the embedded restart "
+            "plan's planned failure bundle command."
         ),
     )
     parser.add_argument(
