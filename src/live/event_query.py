@@ -170,9 +170,6 @@ def _discover_event_files(
         ):
             continue
         event_segments += 1
-        if not include_rotated and candidate.name != "current.ndjson":
-            rotated_skipped += 1
-            continue
         if not _monitor_path_scope_matches_under_root(
             path,
             candidate,
@@ -181,6 +178,9 @@ def _discover_event_files(
             bot_path_filter=bot_path_filter,
         ):
             scope_pruned += 1
+            continue
+        if not include_rotated and candidate.name != "current.ndjson":
+            rotated_skipped += 1
             continue
         files.append(candidate)
     return EventFileDiscovery(
@@ -1180,9 +1180,10 @@ class _TraceSummaryBuilder:
     ) -> None:
         self.events += 1
         ts = row.get("ts")
-        if self.first_ts is None:
+        if self.first_ts is None or (ts is not None and ts < self.first_ts):
             self.first_ts = ts
-        self.last_ts = ts
+        if self.last_ts is None or (ts is not None and ts > self.last_ts):
+            self.last_ts = ts
         if event_type:
             self.event_types[str(event_type)] += 1
         for key, counter in (
@@ -1702,6 +1703,21 @@ def build_event_report(
             issues.append(
                 EventIssue(str(path), None, "error", "read_failed", str(exc))
             )
+
+    if has_query_filter and not include_rotated and discovery.rotated_skipped > 0:
+        issues.append(
+            EventIssue(
+                str(root),
+                None,
+                "warning",
+                "current_only_rotated_segments_skipped",
+                (
+                    "query scanned current.ndjson only while rotated event segments "
+                    "were present; rerun with --include-rotated for a complete "
+                    "history query"
+                ),
+            )
+        )
 
     error_count = sum(1 for issue in issues if issue.severity == "error")
     warning_count = sum(1 for issue in issues if issue.severity == "warning")

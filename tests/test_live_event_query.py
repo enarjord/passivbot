@@ -208,6 +208,130 @@ def test_event_query_current_only_skips_rotated_segments(tmp_path):
     assert report["cycle_ids_sample"] == [{"cycle_id": "cy_current", "events": 1}]
 
 
+def test_event_query_warns_when_filtered_query_skips_rotated_segments(tmp_path):
+    events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        events_dir / "2026-07-03T04-25-00.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_34",
+                seq=1,
+                ts=1783052758000,
+                symbol="ASTER/USDT:USDT",
+                pside="long",
+                exchange="kucoin",
+                user="kucoin_01",
+            )
+        ],
+    )
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="remote_call.succeeded",
+                cycle_id="cy_37",
+                seq=2,
+                ts=1783053568000,
+                symbol="ASTER/USDT:USDT",
+                exchange="kucoin",
+                user="kucoin_01",
+            )
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        include_rotated=False,
+        event_type="hsl.red_triggered",
+        exchange="kucoin",
+        user="kucoin_01",
+        symbol="ASTER/USDT:USDT",
+        since_ms=1783050000000,
+    )
+
+    assert report["ok"] is True
+    assert report["warning_count"] == 1
+    assert report["issues"] == [
+        {
+            "path": str(tmp_path / "monitor"),
+            "line": None,
+            "severity": "warning",
+            "code": "current_only_rotated_segments_skipped",
+            "message": (
+                "query scanned current.ndjson only while rotated event segments "
+                "were present; rerun with --include-rotated for a complete "
+                "history query"
+            ),
+        }
+    ]
+    assert report["query"]["matched_events"] == 0
+    assert report["file_discovery"]["rotated_skipped"] == 1
+
+    full_report = build_event_report(
+        tmp_path / "monitor",
+        include_rotated=True,
+        event_type=["hsl.red_triggered", "remote_call.succeeded"],
+        exchange="kucoin",
+        user="kucoin_01",
+        symbol="ASTER/USDT:USDT",
+        since_ms=1783050000000,
+        trace_summary=True,
+    )
+
+    assert full_report["warning_count"] == 0
+    assert full_report["query"]["matched_events"] == 2
+    assert full_report["query"]["trace_summary"]["first_ts"] == 1783052758000
+    assert full_report["query"]["trace_summary"]["last_ts"] == 1783053568000
+
+
+def test_event_query_rotation_warning_ignores_out_of_scope_rotated_segments(tmp_path):
+    binance_events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    kucoin_events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
+    _write_ndjson(
+        binance_events_dir / "2026-07-03T04-25-00.ndjson",
+        [
+            _monitor_row(
+                event_type="hsl.red_triggered",
+                cycle_id="cy_binance",
+                seq=1,
+                ts=1783052758000,
+                symbol="ASTER/USDT:USDT",
+            )
+        ],
+    )
+    _write_ndjson(
+        kucoin_events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="target",
+                cycle_id="cy_kucoin",
+                seq=2,
+                ts=1783053568000,
+                symbol="ASTER/USDT:USDT",
+                exchange="kucoin",
+                user="kucoin_01",
+            )
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        include_rotated=False,
+        event_type="target",
+        exchange="kucoin",
+        user="kucoin_01",
+        symbol="ASTER/USDT:USDT",
+    )
+
+    assert report["ok"] is True
+    assert report["warning_count"] == 0
+    assert report["issues"] == []
+    assert report["query"]["matched_events"] == 1
+    assert report["file_discovery"]["rotated_skipped"] == 0
+    assert report["file_discovery"]["scope_pruned"] == 1
+
+
 def test_event_query_filters_by_event_type_without_changing_summary_counts(tmp_path):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

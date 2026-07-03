@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-event-query` now emits a warning issue when filtered
+  current-only queries skip rotated monitor event segments, making empty
+  incident queries less likely to be mistaken for complete history.
 - `passivbot tool live-incident-bundle` now includes the compact time-window
   query summary in `manifest.json`, so archived bundles expose matched-event,
   truncation, and scan-bound evidence without opening `time_window_report.json`.
