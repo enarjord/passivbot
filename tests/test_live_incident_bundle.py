@@ -30,6 +30,7 @@ def _monitor_row(
     source: str = "live",
     component: str = "test",
     symbol: str | None = None,
+    pside: str | None = None,
     side: str | None = None,
     ids: dict | None = None,
     tags: list[str] | None = None,
@@ -48,6 +49,7 @@ def _monitor_row(
         "exchange": exchange,
         "user": user,
         "symbol": symbol,
+        "pside": pside,
         "side": side,
         "status": status,
         "reason_code": reason_code,
@@ -142,6 +144,27 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                     "result_status": "open",
                 },
             ),
+            _monitor_row(
+                event_type="hsl.status",
+                seq=6,
+                ts=2200,
+                status="degraded",
+                level="info",
+                reason_code="cooldown_active",
+                component="risk.hsl",
+                symbol="ZEC/USDT:USDT",
+                pside="long",
+                ids={"cycle_id": "cy_risk_1"},
+                data={
+                    "signal_mode": "coin",
+                    "tier": "red",
+                    "cooldown_until_ms": 999999,
+                    "cooldown_remaining_seconds": 123.4,
+                    "drawdown_raw": 0.42,
+                    "balance": 12345.67,
+                    "secret_marker": "risk-secret",
+                },
+            ),
         ],
     )
     (events_dir / "20260629.ndjson.gz").write_bytes(b"")
@@ -212,12 +235,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
-    assert report["time_window"]["matched_events"] == 2
+    assert report["time_window"]["matched_events"] == 3
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
         "until_ms": 2500,
-        "events_considered": 2,
+        "events_considered": 3,
         "events_skipped_before": 3,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
@@ -260,6 +283,21 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "statuses": {"succeeded": 1},
         "outcomes": {"create_succeeded": 1},
     }
+    assert report["smoke_report"]["risk_events"]["total"] == 1
+    assert report["smoke_report"]["risk_events"]["attention_groups"] == [
+        {
+            "bot": "binance/binance_01",
+            "event_type": "hsl.status",
+            "reason_code": "cooldown_active",
+            "status": "degraded",
+            "level": "info",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "component": "risk.hsl",
+            "count": 1,
+            "latest_ts": 2200,
+        }
+    ]
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -302,9 +340,15 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
     assert manifest["smoke_report"]["execution"] == report["smoke_report"]["execution"]
+    assert manifest["smoke_report"]["risk_events"] == report["smoke_report"][
+        "risk_events"
+    ]
     manifest_dump = json.dumps(manifest, sort_keys=True)
     assert "raw_order_id_should_not_summarize" not in manifest_dump
     assert "raw_client_id_should_not_summarize" not in manifest_dump
+    assert "risk-secret" not in manifest_dump
+    assert "12345.67" not in manifest_dump
+    assert "0.42" not in manifest_dump
     assert '"price"' not in manifest_dump
     assert '"qty"' not in manifest_dump
     assert manifest["filters"]["max_log_files"] == 8

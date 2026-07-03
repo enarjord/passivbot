@@ -42,6 +42,7 @@ from live.smoke_report import (
     build_live_smoke_report,
     default_logs_root_for_monitor,
     project_live_smoke_report_sections,
+    summarize_live_smoke_report_brief,
 )
 
 
@@ -731,6 +732,14 @@ def _smoke_execution_result_summary(smoke_report: dict[str, Any]) -> dict[str, A
     }
 
 
+def _smoke_risk_result_summary(smoke_report: dict[str, Any]) -> dict[str, Any]:
+    summary = summarize_live_smoke_report_brief(smoke_report)
+    risk_events = summary.get("risk_events")
+    if not isinstance(risk_events, dict):
+        return {}
+    return risk_events
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -1063,6 +1072,7 @@ def build_live_incident_bundle(
         smoke_sections,
     )
     smoke_execution_summary = _smoke_execution_result_summary(smoke_report)
+    smoke_risk_summary = _smoke_risk_result_summary(smoke_report)
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1164,6 +1174,7 @@ def build_live_incident_bundle(
             "event_segments": segment_manifest,
             "smoke_report": {
                 "execution": smoke_execution_summary,
+                "risk_events": smoke_risk_summary,
             },
         }
         if restart_smoke_plan_summary is not None:
@@ -1247,6 +1258,7 @@ def build_live_incident_bundle(
             "event_window": smoke_report.get("event_window"),
             "logs": _smoke_log_result_summary(smoke_report),
             "execution": smoke_execution_summary,
+            "risk_events": smoke_risk_summary,
             "processes": {
                 "enabled": smoke_report.get("processes", {}).get("enabled"),
                 "ok": smoke_report.get("processes", {}).get("ok"),

@@ -19,18 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `f54dae3e` after PR #1005, `Show brief smoke risk event samples`.
+- `68c3fe22` after PR #1006, `Show brief smoke risk attention groups`.
 
 Current logging-overhaul head:
 
-- `f54dae3e` after PR #1005, `Show brief smoke risk event samples`.
+- `68c3fe22` after PR #1006, `Show brief smoke risk attention groups`.
 
 Current work:
 
-- Branch `codex/v8-smoke-risk-attention-groups` adds bounded
-  `risk_events.attention_groups` to `live-smoke-report --brief`, so HSL RED,
-  cooldown, raw-red-pending, and panic-mode risk context stays visible even
-  when newer routine green/status events dominate latest-event ordering.
+- Branch `codex/v8-incident-risk-smoke-summary` adds the existing value-safe
+  smoke risk-event summary to `live-incident-bundle` result and manifest
+  metadata, so incident bundles expose HSL RED/cooldown/raw-red context without
+  opening the full embedded smoke report.
 
 Current review gate:
 
@@ -60,6 +60,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1006 at `68c3fe22`.
+- PR #1006 added bounded `risk_events.attention_groups` to
+  `live-smoke-report --brief`, prioritizing HSL RED/cooldown/raw-red and
+  panic-mode context over routine latest-event ordering while emitting only
+  safe group metadata. It merged after Claude and Hermes approved with no
+  findings and CI was green. VPS5 checkout was updated to `68c3fe22` without
+  restarting running bots because the slice was report-only. Smoke after the
+  fast-forward reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  clean tracked repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `fill_refresh.failed=0`. The
+  new `risk_events.attention_groups` field was visible and surfaced current
+  ZEC cooldown evidence.
 - Repository pulled through PR #1005 at `f54dae3e`.
 - PR #1005 added bounded `risk_events.latest_groups` to
   `live-smoke-report --brief`, sourced from existing structured risk events and
