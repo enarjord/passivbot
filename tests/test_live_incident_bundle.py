@@ -2077,6 +2077,10 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     ] is True
     assert report["restart_smoke_plan"]["warnings"]["count"] > 0
     assert report["restart_smoke_plan"]["issues"]["count"] == 0
+    assert report["restart_smoke_plan"]["timeout_escalation_ladder"]
+    assert report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+        "planned_command_count"
+    ] >= 0
     assert report["restart_smoke_plan"]["config_preflight"]["command_count"] == 1
     assert "commands" not in report["restart_smoke_plan"]["config_preflight"]
 
@@ -2114,6 +2118,10 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     ] is True
     assert manifest["restart_smoke_plan"]["warnings"]["count"] > 0
     assert manifest["restart_smoke_plan"]["issues"]["count"] == 0
+    assert manifest["restart_smoke_plan"]["timeout_escalation_ladder"]
+    assert manifest["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+        "planned_command_count"
+    ] >= 0
     assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
     assert restart_plan["metadata"] == {
         "dry_run": True,
@@ -2232,6 +2240,10 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
     ] is True
     assert report["restart_smoke_plan"]["warnings"]["count"] > 0
     assert report["restart_smoke_plan"]["issues"]["count"] == 0
+    assert report["restart_smoke_plan"]["timeout_escalation_ladder"]
+    assert report["restart_smoke_plan"]["timeout_escalation_ladder"][0][
+        "planned_command_count"
+    ] >= 0
     with tarfile.open(output, "r:gz") as tar:
         restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
     assert restart_plan["inputs"]["smoke_window_minutes"] == 9

@@ -230,9 +230,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   summaries, process-signal safety, and execution-policy summaries as compact
   provenance. They also include the restart plan's compact warning and issue
   summaries, so malformed or partial restart plans are visible without
-  extracting `restart_smoke_plan.json`. Its planned smoke command uses the
-  restart planner's bounded scan defaults rather than the incident bundle's
-  event/log scan settings.
+  extracting `restart_smoke_plan.json`, plus the compact timeout-escalation
+  ladder summary. Its planned smoke command uses the restart planner's bounded
+  scan defaults rather than the incident bundle's event/log scan settings.
 - `passivbot tool live-restart-smoke-plan` emits a read-only dry-run restart
   plan from a tmuxp-style supervisor config. The planned smoke command defaults
   to a brief compact smoke command with `--event-tail-lines 2000` and
