@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --summary` and `--brief` now split
+  structured problem-event type counts into hard and non-hard histograms,
+  making mixed smoke attention easier to triage without opening grouped event
+  rows.
 - `passivbot tool live-smoke-report --summary` and `--brief` now include
   `problem_events.non_hard`, making non-fatal structured attention easier to
   distinguish from hard problem events at a glance.

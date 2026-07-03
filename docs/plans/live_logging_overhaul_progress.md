@@ -19,18 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `57a52e80` after PR #1011, `Accept brief smoke section aliases`.
+- `b8cfe90b` after PR #1012, `Show non-hard problem event counts in smoke`.
 
 Current logging-overhaul head:
 
-- `57a52e80` after PR #1011, `Accept brief smoke section aliases`.
+- `b8cfe90b` after PR #1012, `Show non-hard problem event counts in smoke`.
 
 Current work:
 
-- Branch `codex/v8-smoke-problem-non-hard-count` adds a bounded
-  `problem_events.non_hard` count to `live-smoke-report --summary` and
-  `--brief`, making non-fatal structured attention easier to distinguish from
-  hard problem events without changing smoke verdict policy.
+- Branch `codex/v8-smoke-problem-type-splits` splits structured
+  problem-event type histograms into hard and non-hard counts in
+  `live-smoke-report --summary` and `--brief`, making mixed smoke attention
+  easier to triage without opening grouped event rows.
 
 Current review gate:
 
@@ -60,6 +60,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1012 at `b8cfe90b`.
+- PR #1012 added a bounded `problem_events.non_hard` count to
+  `live-smoke-report --summary` and `--brief`, making non-fatal structured
+  attention easier to distinguish from hard problem events without changing
+  smoke verdict policy. It merged after Claude and Hermes approved with no
+  findings and CI was green. VPS5 checkout was updated to `b8cfe90b` without
+  restarting running bots because the slice was report-only. Smoke after the
+  fast-forward reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  clean tracked repository state at `repository.head=b8cfe90b`,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`,
+  `fill_refresh.failed=0`, and no hard log matches. The new
+  `problem_events.non_hard` field was visible with known non-hard
+  EMA-readiness and HSL cooldown attention.
 - Repository pulled through PR #1011 at `57a52e80`.
 - PR #1011 added CLI smoke-section aliases so brief names such as
   `fill_refresh`, `hsl_replay`, and `remote_calls` resolve to their embedded

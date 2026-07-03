@@ -1428,6 +1428,68 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     assert "groups" not in brief["account_critical_remote_calls"]
 
 
+def test_live_smoke_report_splits_problem_event_types_by_hardness(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="execution.create_failed",
+                seq=1,
+                ts=1000,
+                status="failed",
+                level="error",
+                reason_code="exchange_exception",
+                ids={"cycle_id": "cy_hard"},
+            ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=2,
+                ts=2000,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                ids={"cycle_id": "cy_attention"},
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor")
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+
+    assert report["problem_event_groups"]["event_types"] == {
+        "execution.create_failed": 1,
+        "ema.unavailable": 1,
+    }
+    assert report["problem_event_groups"]["hard_event_types"] == {
+        "execution.create_failed": 1
+    }
+    assert report["problem_event_groups"]["non_hard_event_types"] == {
+        "ema.unavailable": 1
+    }
+    assert summary["problem_events"]["event_types"] == {
+        "execution.create_failed": 1,
+        "ema.unavailable": 1,
+    }
+    assert summary["problem_events"]["hard_event_types"] == {
+        "execution.create_failed": 1
+    }
+    assert summary["problem_events"]["non_hard_event_types"] == {
+        "ema.unavailable": 1
+    }
+    assert brief["problem_events"]["event_types"] == {
+        "ema.unavailable": 1,
+        "execution.create_failed": 1,
+    }
+    assert brief["problem_events"]["hard_event_types"] == {
+        "execution.create_failed": 1
+    }
+    assert brief["problem_events"]["non_hard_event_types"] == {
+        "ema.unavailable": 1
+    }
+
+
 def test_live_smoke_report_brief_bounds_problem_event_types(tmp_path):
     events_dir = tmp_path / "monitor" / "kucoin" / "kucoin_01" / "events"
     limit = smoke_report_module.SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT
@@ -4222,6 +4284,8 @@ def test_live_smoke_report_summarizes_problem_event_groups(tmp_path):
         "total": 3,
         "groups_truncated": False,
         "event_types": {"ema.unavailable": 2, "bot.stopped": 1},
+        "hard_event_types": {"bot.stopped": 1},
+        "non_hard_event_types": {"ema.unavailable": 2},
         "groups": [
             {
                 "bot": "binance/binance_01",
