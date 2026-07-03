@@ -19,17 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `9d3b4051` after PR #1007, `Summarize risk smoke in incident bundles`.
+- `52a2fbd3` after PR #1008, `Summarize EMA smoke in incident bundles`.
 
 Current logging-overhaul head:
 
-- `9d3b4051` after PR #1007, `Summarize risk smoke in incident bundles`.
+- `52a2fbd3` after PR #1008, `Summarize EMA smoke in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-ema-smoke-summary` adds the existing value-safe
-  smoke EMA-readiness summary to `live-incident-bundle` result and manifest
-  metadata, so incident bundles expose current EMA unavailable reason counts
+- Branch `codex/v8-incident-operational-smoke-summary` adds existing
+  value-safe operational smoke summaries to `live-incident-bundle` result and
+  manifest metadata: exchange config refresh, staged readiness, event-pipeline
+  health, and shutdown events. This exposes common live-smoke attention sources
   without opening the full embedded smoke report.
 
 Current review gate:
@@ -60,6 +61,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1008 at `52a2fbd3`.
+- PR #1008 added the bounded `ema_readiness` brief smoke projection to
+  `live-incident-bundle` returned JSON and `manifest.json`, reusing the same
+  safe EMA readiness summary surfaced by brief smoke reports. It merged after
+  Claude and Hermes approved with no findings and CI was green. VPS5 checkout
+  was updated to `52a2fbd3` without restarting running bots because the slice
+  was report-only. A focused incident-bundle verification confirmed
+  `manifest.smoke_report.ema_readiness` was present. Final short-window smoke
+  reported `ok=true`, `hard_failures=0`, `matched_expected=5`, clean tracked
+  repository state, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `fill_refresh.failed=0`. A
+  transient Kucoin hourly market-refresh timeout appeared in a wider window but
+  aged out; subsequent Kucoin events showed successful state/fill/candle work.
 - Repository pulled through PR #1007 at `9d3b4051`.
 - PR #1007 added the bounded `risk_events` brief smoke projection to
   `live-incident-bundle` returned JSON and `manifest.json`, reusing the same

@@ -211,6 +211,83 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                     "raw_exchange_payload": {"api_key": "EMA_SECRET"},
                 },
             ),
+            _monitor_row(
+                event_type="exchange.config_refresh",
+                seq=8,
+                ts=2350,
+                status="failed",
+                level="warning",
+                reason_code="exchange_config_refresh_failed",
+                component="exchange.config",
+                ids={"cycle_id": "cy_cfg_1"},
+                data={
+                    "context": "maintain_hourly_cycle",
+                    "operation": "init_markets",
+                    "started_ms": 2300,
+                    "elapsed_ms": 50,
+                    "error_type": "RequestTimeout",
+                    "error": "kucoin apiKey=CONFIG_SECRET",
+                },
+            ),
+            _monitor_row(
+                event_type="planning.unavailable",
+                seq=9,
+                ts=2400,
+                status="degraded",
+                level="debug",
+                reason_code="staged_execution_precondition",
+                component="planning",
+                ids={"cycle_id": "cy_stage_1"},
+                data={
+                    "context": "rust order calculation",
+                    "defer_reason": "staged_planner_inputs_not_fresh",
+                    "missing": ["completed_candles"],
+                    "timings_ms": {
+                        "market_state": 250,
+                        "secret_timing": "STAGED_SECRET",
+                    },
+                },
+            ),
+            _monitor_row(
+                event_type="health.summary",
+                seq=10,
+                ts=2450,
+                status="succeeded",
+                level="debug",
+                reason_code="periodic_health_summary",
+                component="health",
+                ids={"cycle_id": "cy_health_1"},
+                data={
+                    "event_queue_depth": 3,
+                    "event_queue_maxsize": 5000,
+                    "event_queue_unfinished_tasks": 4,
+                    "event_dropped_total": 2,
+                    "event_drop_counts": {"health.summary": 2},
+                    "event_sink_error_total": 1,
+                    "event_sink_error_counts": {"monitor": 1},
+                    "event_degraded_count": 3,
+                    "event_pipeline_stopping": True,
+                    "event_pipeline_worker_alive": False,
+                    "raw_status": "PIPELINE_SECRET",
+                },
+            ),
+            _monitor_row(
+                event_type="bot.shutdown.stage",
+                seq=11,
+                ts=2480,
+                status="degraded",
+                level="warning",
+                reason_code="maintainers_timeout",
+                component="shutdown",
+                ids={"cycle_id": "cy_shutdown_1"},
+                data={
+                    "stage": "maintainers_timeout",
+                    "elapsed_s": 6.25,
+                    "task_count": 4,
+                    "timeout_s": 5.0,
+                    "error": "Authorization: Bearer SHUTDOWN_SECRET",
+                },
+            ),
         ],
     )
     (events_dir / "20260629.ndjson.gz").write_bytes(b"")
@@ -281,12 +358,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
-    assert report["time_window"]["matched_events"] == 4
+    assert report["time_window"]["matched_events"] == 8
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
         "until_ms": 2500,
-        "events_considered": 4,
+        "events_considered": 8,
         "events_skipped_before": 3,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
@@ -369,6 +446,43 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         },
         "latest_candidate_error_type_counts": {"MissingCloseEma": 1},
     }
+    assert report["smoke_report"]["exchange_config_refresh"] == {
+        "total": 1,
+        "bots": 1,
+        "succeeded": 0,
+        "failed": 1,
+        "failure_pct": 100.0,
+        "failed_bots": 1,
+        "event_types": {"exchange.config_refresh": 1},
+    }
+    assert report["smoke_report"]["staged_readiness"] == {
+        "total": 1,
+        "bots": 1,
+        "latest_missing_surface_total": 1,
+        "latest_invalid_surface_total": 0,
+        "event_types": {"planning.unavailable": 1},
+        "latest_missing_surfaces": {"completed_candles": 1},
+        "reason_codes": {"staged_execution_precondition": 1},
+        "latest_defer_reasons": {"staged_planner_inputs_not_fresh": 1},
+        "latest_contexts": {"rust order calculation": 1},
+        "latest_timings_ms_max": {"market_state": 250},
+    }
+    assert report["smoke_report"]["event_pipeline"] == {
+        "total": 1,
+        "bots": 1,
+        "latest_queue_depth_total": 3,
+        "latest_queue_unfinished_total": 4,
+        "latest_dropped_total": 2,
+        "latest_sink_error_total": 1,
+        "latest_degraded_total": 3,
+        "latest_worker_not_alive_count": 1,
+        "latest_stopping_count": 1,
+        "event_types": {"health.summary": 1},
+    }
+    assert report["smoke_report"]["shutdown_events"] == {
+        "total": 1,
+        "event_types": {"bot.shutdown.stage": 1},
+    }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -417,12 +531,23 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert manifest["smoke_report"]["ema_readiness"] == report["smoke_report"][
         "ema_readiness"
     ]
+    for section in (
+        "exchange_config_refresh",
+        "staged_readiness",
+        "event_pipeline",
+        "shutdown_events",
+    ):
+        assert manifest["smoke_report"][section] == report["smoke_report"][section]
     manifest_dump = json.dumps(manifest, sort_keys=True)
     assert "raw_order_id_should_not_summarize" not in manifest_dump
     assert "raw_client_id_should_not_summarize" not in manifest_dump
     assert "risk-secret" not in manifest_dump
     assert "ema-secret-marker" not in manifest_dump
     assert "EMA_SECRET" not in manifest_dump
+    assert "CONFIG_SECRET" not in manifest_dump
+    assert "STAGED_SECRET" not in manifest_dump
+    assert "PIPELINE_SECRET" not in manifest_dump
+    assert "SHUTDOWN_SECRET" not in manifest_dump
     assert "12345.67" not in manifest_dump
     assert "0.42" not in manifest_dump
     assert '"price"' not in manifest_dump

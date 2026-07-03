@@ -4,6 +4,11 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes bounded operational smoke
+  summaries for exchange config refresh, staged readiness, event-pipeline
+  health, and shutdown events in the returned report and manifest, so common
+  live-smoke attention sources are visible without opening the full embedded
+  smoke report.
 - `passivbot tool live-incident-bundle` now includes the bounded EMA-readiness
   smoke summary in the returned report and manifest, so incident bundles expose
   current EMA unavailable reason counts without requiring operators to open the
