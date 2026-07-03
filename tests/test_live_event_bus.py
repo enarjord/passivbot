@@ -95,8 +95,9 @@ def test_live_event_debug_profiles_normalize_and_validate():
     assert normalize_live_event_debug_profiles(None) == ()
     assert normalize_live_event_debug_profiles("") == ()
     assert normalize_live_event_debug_profiles(
-        "rust,remote-calls candle EMA-readiness"
+        "rust,remote-calls candle EMA-readiness warmup"
     ) == (
+        "cache",
         "candles",
         "ema",
         "remote_calls",

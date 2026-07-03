@@ -19,21 +19,20 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `030d77aa` after PR #1040, `Expose restart plan issue summaries in incident bundles`.
+- `c5ba5f5d` after PR #1041, `Expose restart plan timeout summaries in incident bundles`.
 
 Current logging-overhaul head:
 
-- `030d77aa` after PR #1040, `Expose restart plan issue summaries in incident bundles`.
+- `c5ba5f5d` after PR #1041, `Expose restart plan timeout summaries in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-restart-plan-timeout-provenance` exposes the
-  embedded restart-smoke plan's compact timeout-escalation ladder summary in the
-  returned incident-bundle report and manifest summary. This lets operators see
-  the planned timeout escalation shape without extracting
-  `restart_smoke_plan.json`. It does not execute restarts, contact exchanges,
-  add event producers, write monitor events, alter console routing, or change
-  order/risk/trading behavior.
+- Branch `codex/v8-cache-debug-profile` adds an opt-in `cache` live-event debug
+  profile for existing cache load, flush, and warmup-decision events. The slice
+  adds bounded key/count/source metadata only when the profile is enabled. It
+  does not change default event payloads, console output, event routing,
+  exchange calls, cache behavior, startup behavior, order/risk logic, or trading
+  behavior.
 
 Current review gate:
 
@@ -63,6 +62,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1041 at `c5ba5f5d`.
+- PR #1041 made `live-incident-bundle --restart-smoke-plan` expose the embedded
+  restart-smoke plan's compact timeout-escalation ladder summary in the returned
+  incident-bundle report and manifest summary. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `c5ba5f5d` without restarting running bots because the slice was read-only
+  tooling. Bounded smoke reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state, zero hard log matches,
+  no event-pipeline drops or sink errors, and only known non-hard ZEC HSL
+  cooldown attention. A focused VPS incident-bundle check proved the manifest's
+  embedded restart-smoke summary includes a four-row non-executing
+  `timeout_escalation_ladder`, `ok=true`, and still omits config-preflight raw
+  command lists.
 - Repository pulled through PR #1040 at `030d77aa`.
 - PR #1040 made `live-incident-bundle --restart-smoke-plan` expose the embedded
   restart-smoke plan's compact warning and issue summaries in the returned
@@ -6592,6 +6604,27 @@ VPS5 deployment status:
   smoke reported `ok=true`, `hard_failures=0`, clean tracked repository state,
   five configured bots still running, no event-pipeline drops/sink errors, and
   only known non-hard HSL cooldown/status attention.
+
+### Draft Slice: Cache Debug Profile
+
+- Branch: `codex/v8-cache-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment for existing
+  `cache.load.completed`, `cache.flush.completed`, and `cache.warmup_decision`
+  events.
+- Triggering evidence: restart/warm-cache startup speed has been a repeated
+  live-ops concern, and cache events plus performance-report cache aggregation
+  already exist. Unlike `startup`, `state`, `forager`, and other debug-profile
+  event families, cache events did not yet support profile-specific bounded
+  shape metadata when operators enable a focused profile during restart
+  investigations.
+- Intended result: when `cache` debug is enabled, add bounded key/count/source
+  metadata to existing cache load, flush, and warmup-decision events. Keep raw
+  candle rows, file paths, cache contents, event routes, console output, cache
+  behavior, startup behavior, exchange calls, monitor writes, order/risk logic,
+  and trading behavior unchanged.
+- Expected validation: focused cache debug-profile monitor test, live-event
+  debug-profile normalization and registry-doc tests, `py_compile`,
+  `git diff --check`, and the standard added-line silent-handling scan.
 
 ### Draft Slice: Event Query Debug Profile Filter
 

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The `cache` live-event debug profile now enriches existing cache load,
+  flush, and warmup-decision events with bounded key/count/source metadata
+  without changing default event payloads or console output.
 - `passivbot tool live-incident-bundle --restart-smoke-plan` now exposes the
   embedded restart plan's compact timeout-escalation ladder summary in the
   returned report and bundle manifest.

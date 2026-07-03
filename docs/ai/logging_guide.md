@@ -63,11 +63,11 @@ Current profile behavior:
    to the existing `rust_orchestrator.called` and
    `rust_orchestrator.returned` events. Full raw Rust payload persistence remains
    disabled; hashes stay present for correlation.
-2. `remote_calls`, `candles`, `ema`, `fills`, `forager`, `execution`, and `hsl`
-   add bounded event-specific debug summaries such as data-key lists,
-   reason/sample counts, correlation ids, and shape metadata. These summaries
-   must not copy raw exchange/account payloads, credentials, or unbounded row
-   data.
+2. `remote_calls`, `cache`, `candles`, `ema`, `fills`, `forager`,
+   `execution`, and `hsl` add bounded event-specific debug summaries such as
+   data-key lists, reason/sample counts, correlation ids, and shape metadata.
+   These summaries must not copy raw exchange/account payloads, credentials, or
+   unbounded row data.
 3. `state` adds bounded state-refresh timing/progress shape metadata such as
    plan/pending counts, surface key lists, and slowest refreshed surface.
 4. `startup` adds bounded phase/timing/details-shape metadata to existing

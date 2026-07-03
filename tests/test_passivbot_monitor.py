@@ -1724,6 +1724,116 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_cache_debug_profile_adds_bounded_cache_event_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_cache_load_completed_event = (
+            pb_mod.Passivbot._emit_cache_load_completed_event
+        )
+        _emit_cache_flush_completed_event = (
+            pb_mod.Passivbot._emit_cache_flush_completed_event
+        )
+        _emit_cache_warmup_decision_event = (
+            pb_mod.Passivbot._emit_cache_warmup_decision_event
+        )
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("cache",)
+            self._live_event_current_cycle_id = "cy_cache"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+
+    bot._emit_cache_load_completed_event(
+        {
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "1m",
+            "start_ts": 120_000,
+            "end_ts": 240_000,
+            "loaded_rows": 3,
+            "source_days": {"primary": 1, "legacy": 0},
+            "path": "/tmp/secret-cache-path/ETH.json",
+        }
+    )
+    bot._emit_cache_flush_completed_event(
+        {
+            "symbol": "ETH/USDT:USDT",
+            "timeframe": "1m",
+            "persisted_rows": 4,
+            "persisted_start_ts": 300_000,
+            "persisted_end_ts": 480_000,
+        }
+    )
+    bot._emit_cache_warmup_decision_event(
+        context="trading-ready warmup",
+        timeframe="1m",
+        symbol_count=3,
+        reused_count=1,
+        cold_count=2,
+        reason_counts={"missing_coverage": 2, "warm_cache_accepted": 1},
+        elapsed_ms=1234,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    load, flush, warmup = sink.events
+    assert [event.event_type for event in sink.events] == [
+        EventTypes.CACHE_LOAD_COMPLETED,
+        EventTypes.CACHE_FLUSH_COMPLETED,
+        EventTypes.CACHE_WARMUP_DECISION,
+    ]
+    assert {event.data["debug_profile"] for event in sink.events} == {"cache"}
+    assert load.data["debug"] == {
+        "event_kind": "load_completed",
+        "payload_keys": [
+            "end_ts",
+            "loaded_rows",
+            "path",
+            "source_days",
+            "start_ts",
+            "symbol",
+            "timeframe",
+        ],
+        "data_keys": [
+            "debug_profile",
+            "end_ts",
+            "loaded_rows",
+            "source_days",
+            "start_ts",
+            "timeframe",
+        ],
+        "numeric_keys": ["end_ts", "loaded_rows", "start_ts"],
+        "nonzero_numeric_keys": ["end_ts", "loaded_rows", "start_ts"],
+        "source_day_sources": ["legacy", "primary"],
+        "source_day_total": 1,
+    }
+    assert flush.data["debug"]["event_kind"] == "flush_completed"
+    assert flush.data["debug"]["numeric_keys"] == [
+        "persisted_end_ts",
+        "persisted_rows",
+        "persisted_start_ts",
+    ]
+    assert warmup.data["debug"]["event_kind"] == "warmup_decision"
+    assert warmup.data["debug"]["reason_count_keys"] == [
+        "missing_coverage",
+        "warm_cache_accepted",
+    ]
+    assert warmup.data["debug"]["reason_count_total"] == 3
+    rendered = json.dumps([event.data for event in sink.events], sort_keys=True)
+    assert "/tmp/secret-cache-path" not in rendered
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_forager_debug_profile_adds_bounded_selection_shape():
     import passivbot as pb_mod
 
