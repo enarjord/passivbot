@@ -1142,6 +1142,8 @@ def build_live_incident_bundle(
         smoke_report,
         smoke_sections,
     )
+    smoke_event_window_summary = smoke_report.get("event_window")
+    smoke_log_summary = _smoke_log_result_summary(smoke_report)
     smoke_brief_summary = summarize_live_smoke_report_brief(smoke_report)
     smoke_execution_summary = _smoke_execution_result_summary(smoke_report)
     smoke_risk_summary = _smoke_risk_result_summary(smoke_brief_summary)
@@ -1259,6 +1261,8 @@ def build_live_incident_bundle(
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
             "smoke_report": {
+                "event_window": smoke_event_window_summary,
+                "logs": smoke_log_summary,
                 **smoke_verdict_summary,
                 "problem_events": smoke_problem_events_summary,
                 "execution": smoke_execution_summary,
@@ -1347,8 +1351,8 @@ def build_live_incident_bundle(
             "attention": smoke_report.get("attention"),
             "hard_failures": smoke_report.get("hard_failures"),
             "attention_count": smoke_report.get("attention_count"),
-            "event_window": smoke_report.get("event_window"),
-            "logs": _smoke_log_result_summary(smoke_report),
+            "event_window": smoke_event_window_summary,
+            "logs": smoke_log_summary,
             **smoke_verdict_summary,
             "problem_events": smoke_problem_events_summary,
             "execution": smoke_execution_summary,

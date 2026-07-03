@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes bounded text-log and
+  event-window smoke summaries in `manifest.json`, so bundle manifests can
+  explain log-sourced hard or attention verdicts without opening the embedded
+  full smoke report.
 - `passivbot tool live-incident-bundle` now includes the bounded process
   smoke summary in the returned report and manifest, making missing,
   duplicate, or unexpected live-bot process evidence visible without opening
