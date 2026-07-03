@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-performance-report` now supports `--debug-profile`, so
+  performance summaries can be scoped to events enriched by one live-event
+  debug profile.
 - `passivbot tool live-incident-bundle` now supports `--debug-profile`, passing
   the first-class debug-profile filter through its embedded event, problem-event,
   and time-window reports plus the bundle manifest.

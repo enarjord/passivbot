@@ -274,7 +274,7 @@ def test_live_performance_report_filters_by_bot_exchange_and_user(tmp_path):
                 ts=1000,
                 exchange="binance",
                 user="binance_01",
-                data={"elapsed_ms": 1000},
+                data={"elapsed_ms": 1000, "debug_profile": "state"},
             ),
             _monitor_row(
                 event_type="cycle.completed",
@@ -282,7 +282,7 @@ def test_live_performance_report_filters_by_bot_exchange_and_user(tmp_path):
                 ts=2000,
                 exchange="okx",
                 user="okx_faisal",
-                data={"elapsed_ms": 2000},
+                data={"elapsed_ms": 2000, "debug_profile": "startup"},
             ),
             _monitor_row(
                 event_type="cycle.completed",
@@ -306,6 +306,7 @@ def test_live_performance_report_filters_by_bot_exchange_and_user(tmp_path):
         "bots": ["okx/okx_faisal"],
         "exchanges": [],
         "users": [],
+        "debug_profiles": [],
         "events_skipped": 2,
     }
     assert report["bots"] == [{"bot": "okx/okx_faisal", "events": 1}]
@@ -3106,7 +3107,7 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
                 ts=1000,
                 exchange="binance",
                 user="binance_01",
-                data={"elapsed_ms": 1000},
+                data={"elapsed_ms": 1000, "debug_profile": "state"},
             ),
             _monitor_row(
                 event_type="cycle.completed",
@@ -3114,7 +3115,7 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
                 ts=2000,
                 exchange="okx",
                 user="okx_faisal",
-                data={"elapsed_ms": 2000},
+                data={"elapsed_ms": 2000, "debug_profile": "startup"},
             ),
         ],
     )
@@ -3126,6 +3127,8 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
             "--compact",
             "--exchange",
             "okx",
+            "--debug-profile",
+            "startup",
             "--group-limit",
             "1",
         ]
@@ -3143,6 +3146,7 @@ def test_live_performance_report_cli_summary_and_filters(tmp_path, capsys):
         "scope_pruned": 0,
     }
     assert out["filters"]["exchanges"] == ["okx"]
+    assert out["filters"]["debug_profiles"] == ["startup"]
     assert out["filters"]["events_skipped"] == 1
     assert len(out["performance"]["groups"]) == 1
     assert "files" not in out

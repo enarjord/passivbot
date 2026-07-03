@@ -19,19 +19,19 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `87754dc2` after PR #1028, `Add live event query debug profile filter`.
+- `65a01d27` after PR #1029, `Add incident bundle debug profile filter`.
 
 Current logging-overhaul head:
 
-- `87754dc2` after PR #1028, `Add live event query debug profile filter`.
+- `65a01d27` after PR #1029, `Add incident bundle debug profile filter`.
 
 Current work:
 
-- Branch `codex/v8-incident-debug-profile-filter` extends the same read-only
-  `--debug-profile` query shortcut to `live-incident-bundle`, passing the filter
-  through embedded event, problem-event, and time-window reports plus manifest
-  metadata. It does not add event producers, exchange calls, monitor writes,
-  console routing, startup behavior, order/risk logic, or trading behavior.
+- Branch `codex/v8-performance-debug-profile-filter` extends the first-class
+  `--debug-profile` filter to `live-performance-report`, allowing timing and
+  readiness summaries to be scoped to events enriched by one debug profile. It
+  does not add event producers, exchange calls, monitor writes, console routing,
+  startup behavior, order/risk logic, or trading behavior.
 
 Current review gate:
 
@@ -61,6 +61,22 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1029 at `65a01d27`.
+- PR #1029 added `live-incident-bundle --debug-profile` and passed the filter
+  through embedded event, problem-event, and time-window reports plus manifest
+  metadata. It merged after Claude and Hermes approved with no findings and CI
+  was green; Cursor did not post before the degraded low-risk tooling gate was
+  used. VPS5 checkout was updated to `65a01d27` without restarting running bots
+  because the slice was read-only tooling. Post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state,
+  zero hard log/problem/process failures, and only known non-hard HSL
+  cooldown/status attention.
+- Repository pulled through PR #1028 at `87754dc2`.
+- PR #1028 added the read-only `live-event-query --debug-profile` filter. It
+  merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `87754dc2` without restarting running bots
+  because the slice was read-only tooling. Smoke stayed hard-green with all five
+  configured bots running and only known non-hard HSL cooldown/status attention.
 - Repository pulled through PR #1027 at `9c555384`.
 - PR #1027 added the opt-in `startup` debug profile for existing
   `bot.startup_timing` events. It merged after Claude and Hermes approved with
@@ -6473,6 +6489,23 @@ VPS5 deployment status:
 - Expected validation: focused incident-bundle CLI/API test, full
   `tests/test_live_incident_bundle.py`, `py_compile`, `git diff --check`, and
   the standard added-line silent-handling scan.
+
+### Draft Slice: Performance Report Debug Profile Filter
+
+- Branch: `codex/v8-performance-debug-profile-filter`.
+- Scope: read-only performance-report tooling.
+- Triggering evidence: `live-event-query` and `live-incident-bundle` can now
+  scope reports to one debug profile, but `live-performance-report` still
+  aggregates all events for timing/readiness summaries even when an operator is
+  investigating one enriched profile.
+- Intended result: add `passivbot tool live-performance-report --debug-profile`
+  and filter events at the same scan boundary as bot/exchange/user filters,
+  recording the selected profiles and skipped-event count in report metadata.
+  Do not add event producers, exchange calls, monitor writes, console routing,
+  startup behavior, order/risk logic, or trading behavior.
+- Expected validation: focused performance-report CLI filter test, full
+  `tests/test_live_performance_report.py`, `py_compile`, `git diff --check`,
+  and the standard added-line silent-handling scan.
 
 ## Current Next Steps
 
