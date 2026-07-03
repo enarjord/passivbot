@@ -70,9 +70,11 @@ Current profile behavior:
    data.
 3. `state` adds bounded state-refresh timing/progress shape metadata such as
    plan/pending counts, surface key lists, and slowest refreshed surface.
-4. `startup` is a reserved profile name for startup diagnostics. Startup
-   lifecycle events already surface which profiles are enabled, and live
-   performance reports can summarize them from existing monitor events.
+4. `startup` adds bounded phase/timing/details-shape metadata to existing
+   `bot.startup_timing` events. It does not duplicate raw startup details into
+   the debug block. Startup lifecycle events also surface which profiles are
+   enabled, and live performance reports can summarize them from existing
+   monitor events.
 
 Unknown profile names should fail visibly instead of being ignored silently.
 

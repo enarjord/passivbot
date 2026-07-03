@@ -1171,6 +1171,22 @@ def _best_effort_rust_output_order_debug_sample(
         return None
 
 
+def _startup_debug_payload(data: dict[str, Any], *, limit: int = 32) -> dict[str, Any]:
+    debug: dict[str, Any] = {"data_keys": _mapping_key_sample(data, limit=limit)}
+    phase = data.get("phase")
+    if phase is not None:
+        debug["phase"] = str(phase)
+    for key in ("elapsed_ms", "since_previous_ms"):
+        value = _safe_int(data.get(key))
+        if value is not None:
+            debug[key] = max(0, int(value))
+    if "details" in data:
+        details = str(data.get("details") or "")
+        debug["details_present"] = bool(details)
+        debug["details_len"] = len(details)
+    return debug
+
+
 def _emit_startup_timing_event_unchecked(
     bot: Any,
     *,
@@ -1190,6 +1206,9 @@ def _emit_startup_timing_event_unchecked(
     }
     if details:
         data["details"] = str(details)
+    if live_event_debug_profile_enabled(bot, "startup"):
+        data["debug_profile"] = "startup"
+        data["debug"] = _startup_debug_payload(data)
     _safe_emit(
         bot,
         EventTypes.BOT_STARTUP_TIMING,
