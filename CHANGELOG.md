@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes the bundle-level result
+  verdict in `manifest.json`, so archived incident bundles expose total
+  `ok`/`hard_failures` without opening the command output.
 - `passivbot tool live-incident-bundle` now includes top-level smoke verdict
   fields in `manifest.json`, making the bundle manifest self-contained for
   `ok`, `attention`, and smoke failure/count triage.

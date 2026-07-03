@@ -823,6 +823,25 @@ def _smoke_data_plane_result_summaries(
     }
 
 
+def _bundle_hard_failure_count(
+    *,
+    smoke_report: dict[str, Any],
+    event_report: dict[str, Any],
+    window_report: dict[str, Any],
+) -> int:
+    hard_failures = int(smoke_report["hard_failures"]) + int(
+        event_report["error_count"]
+    )
+    window_issues = window_report.get("issues")
+    issues = window_issues if isinstance(window_issues, list) else []
+    hard_failures += sum(
+        1
+        for issue in issues
+        if isinstance(issue, dict) and issue.get("severity") == "error"
+    )
+    return hard_failures
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -1175,6 +1194,12 @@ def build_live_incident_bundle(
     smoke_data_plane_summaries = _smoke_data_plane_result_summaries(
         smoke_brief_summary
     )
+    hard_failures = _bundle_hard_failure_count(
+        smoke_report=smoke_report,
+        event_report=event_report,
+        window_report=window_report,
+    )
+    bundle_ok = hard_failures == 0
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1217,6 +1242,10 @@ def build_live_incident_bundle(
         )
         metadata = {
             "bundle_version": BUNDLE_VERSION,
+            "result": {
+                "ok": bundle_ok,
+                "hard_failures": hard_failures,
+            },
             "monitor_root": str(monitor_path),
             "logs_root": str(logs_path) if logs_path is not None else None,
             "output_path": str(out_path),
@@ -1325,16 +1354,8 @@ def build_live_incident_bundle(
         _write_json(bundle_root / "event_segments_manifest.json", segment_manifest)
         _tar_directory(bundle_root, out_path)
 
-    hard_failures = int(smoke_report.get("hard_failures", 0)) + int(
-        event_report.get("error_count", 0)
-    )
-    hard_failures += sum(
-        1
-        for issue in window_report.get("issues", [])
-        if isinstance(issue, dict) and issue.get("severity") == "error"
-    )
     return {
-        "ok": hard_failures == 0,
+        "ok": bundle_ok,
         "bundle_path": str(out_path),
         "bundle_version": BUNDLE_VERSION,
         "hard_failures": hard_failures,
