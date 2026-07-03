@@ -158,6 +158,16 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--performance-section",
+        action="append",
+        default=[],
+        help=(
+            "Add one --performance-section value to the planned "
+            "live-incident-bundle --performance-report command. May be repeated; "
+            "validation happens when live-incident-bundle runs."
+        ),
+    )
+    parser.add_argument(
         "--pretty-smoke-report",
         action="store_true",
         help="Plan a pretty-printed live-smoke-report command instead of --compact.",
@@ -209,6 +219,7 @@ def main(argv: list[str] | None = None) -> int:
             ),
             summary_smoke_report=bool(args.summary_smoke_report),
             smoke_sections=args.smoke_section,
+            performance_sections=args.performance_section,
             execute=False,
         )
     except (NotImplementedError, ValueError) as exc:

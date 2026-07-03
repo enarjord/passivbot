@@ -162,6 +162,41 @@ def test_live_restart_smoke_plan_can_focus_smoke_sections(tmp_path):
     assert report["smoke_report"]["execute"] is False
 
 
+def test_live_restart_smoke_plan_can_focus_performance_sections(tmp_path):
+    supervisor_config = tmp_path / "bots_vps5.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    report = build_live_restart_smoke_plan(
+        supervisor_config,
+        performance_sections=["startup_readiness", "hsl_replay_profile"],
+    )
+
+    assert report["inputs"]["performance_sections"] == [
+        "startup_readiness",
+        "hsl_replay_profile",
+    ]
+    assert "--performance-report" in report["incident_bundle"]["command"]
+    assert (
+        "--performance-section startup_readiness"
+        in report["incident_bundle"]["command"]
+    )
+    assert (
+        "--performance-section hsl_replay_profile"
+        in report["incident_bundle"]["command"]
+    )
+    assert "--performance-section" not in report["smoke_report"]["command"]
+    assert report["incident_bundle"]["execute"] is False
+
+
 def test_live_restart_smoke_plan_deduplicates_config_preflight_commands(tmp_path):
     supervisor_config = tmp_path / "bots_vps5.yaml"
     _write_supervisor(
@@ -630,6 +665,50 @@ def test_live_restart_smoke_plan_cli_can_plan_smoke_sections(tmp_path, capsys):
     assert "--smoke-section hsl_replay" in report["incident_bundle"]["command"]
     assert "--restart-smoke-plan" in report["incident_bundle"]["command"]
     assert "--brief" in report["smoke_report"]["command"]
+
+
+def test_live_restart_smoke_plan_cli_can_plan_performance_sections(tmp_path, capsys):
+    supervisor_config = tmp_path / "bots.yaml"
+    _write_supervisor(
+        supervisor_config,
+        [
+            "session_name: passivbot",
+            "windows:",
+            "  - window_name: binance_01",
+            "    panes:",
+            "      - passivbot live configs/forager.json -u binance_01",
+        ],
+    )
+
+    assert (
+        live_restart_smoke_plan.main(
+            [
+                str(supervisor_config),
+                "--performance-section",
+                "startup_readiness",
+                "--performance-section",
+                "hsl_replay_profile",
+                "--compact",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["inputs"]["performance_sections"] == [
+        "startup_readiness",
+        "hsl_replay_profile",
+    ]
+    assert "--performance-report" in report["incident_bundle"]["command"]
+    assert (
+        "--performance-section startup_readiness"
+        in report["incident_bundle"]["command"]
+    )
+    assert (
+        "--performance-section hsl_replay_profile"
+        in report["incident_bundle"]["command"]
+    )
+    assert "--performance-section" not in report["smoke_report"]["command"]
 
 
 def test_live_restart_smoke_plan_cli_can_plan_log_window_unparsed_policy(
