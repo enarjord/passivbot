@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The `forager` live-event debug profile now enriches existing forager
+  selection and feature-unavailable events with bounded count/key-shape
+  metadata without changing default event payloads or console output.
 - `passivbot tool live-smoke-report --brief` now includes allowlisted
   `latest_data` for risk-event groups, exposing compact state such as HSL mode
   transitions and unstuck over-budget summaries while still excluding raw
