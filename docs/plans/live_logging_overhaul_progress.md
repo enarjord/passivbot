@@ -6243,6 +6243,25 @@ VPS5 deployment status:
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
 
+### Draft Slice: Event Query Rotation Warning
+
+- Branch: `codex/v8-event-query-rotation-warning`.
+- Scope: read-only `passivbot tool live-event-query` report output and docs.
+- Triggering evidence: a VPS5 Kucoin ASTER HSL RED/cooldown incident was
+  visible in text logs and recoverable from rotated monitor event segments with
+  `--include-rotated`, but a default filtered `live-event-query` scan over
+  `current.ndjson` returned zero matches after event rotation. The same query
+  also showed scan-order trace bounds when current segments were read before
+  older rotated files.
+- Intended result: keep current-only directory scans as the default for speed,
+  but emit a warning issue when a filtered query skips rotated event segments.
+  Also report trace-summary `first_ts`/`last_ts` as chronological min/max
+  timestamps rather than scan-order first/last. No event producers, monitor
+  writes, exchange calls, or trading behavior change.
+- Expected validation: focused `tests/test_live_event_query.py`, `py_compile`,
+  `git diff --check`, added-line silent-handling scan, and a read-only VPS5
+  rotated query proving the HSL incident is recoverable with `--include-rotated`.
+
 ## Current Next Steps
 
 1. Prioritize a separate trading-path PR for coin-HSL startup replay latency:
