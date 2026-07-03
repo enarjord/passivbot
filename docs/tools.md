@@ -149,8 +149,9 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   local replay inputs.
 - `passivbot tool live-event-query` validates and queries local structured monitor event
   segments. It is read-only and does not contact exchanges. Use `--event-type`,
-  `--level`, `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`, `--data-eq`, and
-  time-window filters to reconstruct incident slices. Use `--exchange EXCHANGE` and
+  `--level`, `--cycle-id`, ID filters, `--symbol`, `--pside`, `--tag`,
+  `--debug-profile`, `--data-eq`, and time-window filters to reconstruct
+  incident slices. Use `--exchange EXCHANGE` and
   `--user USER` to focus one monitor account and prune unrelated monitor paths before
   scanning; `--bot-id` remains available for event-envelope bot IDs. Directory scans
   read `current.ndjson` by default; add `--include-rotated` for complete history
