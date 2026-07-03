@@ -19,21 +19,20 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `9b83ca2a` after PR #1035, `Pass performance sections through restart smoke plans`.
+- `7c12497f` after PR #1036, `Propagate performance sections to embedded restart plans`.
 
 Current logging-overhaul head:
 
-- `9b83ca2a` after PR #1035, `Pass performance sections through restart smoke plans`.
+- `7c12497f` after PR #1036, `Propagate performance sections to embedded restart plans`.
 
 Current work:
 
-- Branch `codex/v8-incident-restart-performance-sections` lets
-  `live-incident-bundle --restart-smoke-plan` pass selected
-  `--performance-section` filters into the embedded restart plan's planned
-  failure-bundle command. This keeps direct incident-bundle performance
-  projections and restart-smoke follow-up plans aligned. It does not execute
-  restarts, contact exchanges, add event producers, write monitor events, alter
-  console routing, or change order/risk/trading behavior.
+- Branch `codex/v8-incident-restart-summary-filters` exposes the embedded
+  restart-smoke plan's selected smoke/performance sections in the returned
+  incident-bundle report and manifest summary. This lets operators verify the
+  projected restart follow-up scope without extracting `restart_smoke_plan.json`.
+  It does not execute restarts, contact exchanges, add event producers, write
+  monitor events, alter console routing, or change order/risk/trading behavior.
 
 Current review gate:
 
@@ -63,6 +62,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1036 at `7c12497f`.
+- PR #1036 made `live-incident-bundle --restart-smoke-plan` propagate selected
+  `--performance-section` filters into the embedded restart plan's planned
+  failure-bundle command. It merged after Claude and Hermes approved with no
+  findings and CI was green; Cursor was absent, so the low-risk read-only
+  tooling degraded gate was used. VPS5 checkout was updated to `7c12497f`
+  without restarting running bots because the slice was read-only tooling. A
+  focused VPS incident-bundle check proved embedded `restart_smoke_plan.json`
+  had `inputs.performance_sections=["startup_readiness"]` and the planned
+  incident-bundle command included `--performance-section startup_readiness`.
+  Bounded smoke reported `ok=true`, `hard_failures=0`, `matched_expected=5`,
+  clean tracked repository state, zero hard log matches, and only known
+  non-hard ZEC HSL cooldown plus EMA-readiness attention.
 - Repository pulled through PR #1035 at `9b83ca2a`.
 - PR #1035 made `live-restart-smoke-plan --performance-section` pass selected
   performance-report sections through to the planned failure

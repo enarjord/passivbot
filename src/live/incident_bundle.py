@@ -1014,11 +1014,20 @@ def _restart_smoke_plan_result_summary(
         }
     else:
         config_preflight_summary = None
+    inputs = summary.get("inputs")
+    if isinstance(inputs, dict):
+        filters = {
+            "smoke_sections": list(inputs.get("smoke_sections") or []),
+            "performance_sections": list(inputs.get("performance_sections") or []),
+        }
+    else:
+        filters = {"smoke_sections": [], "performance_sections": []}
     return {
         "enabled": True,
         "ok": summary.get("ok"),
         "bots": summary.get("bots"),
         "phases": summary.get("phases"),
+        "filters": filters,
         "config_preflight": config_preflight_summary,
     }
 
