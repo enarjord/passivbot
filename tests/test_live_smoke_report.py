@@ -5053,6 +5053,39 @@ def test_live_smoke_report_section_projection_keeps_common_metadata(tmp_path):
     assert "processes" not in projected
 
 
+def test_live_smoke_report_full_section_projection_accepts_brief_alias(tmp_path):
+    events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="fills.refresh_summary",
+                seq=1,
+                ts=1000,
+                status="succeeded",
+                reason_code="fills_refresh_succeeded",
+                data={
+                    "source": "cache",
+                    "refresh_mode": "startup",
+                    "history_scope": "all",
+                    "coverage_ready_after": True,
+                    "elapsed_ms": 25,
+                },
+            )
+        ],
+    )
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+
+    projected = project_live_smoke_report_sections(report, ["fill_refresh"])
+
+    assert projected["ok"] is True
+    assert projected["monitor"]["live_events"] == 1
+    assert projected["fill_refresh_health"]["total"] == 1
+    assert "fill_refresh" not in projected
+    assert "remote_call_health" not in projected
+    assert "processes" not in projected
+
+
 def test_live_smoke_report_cli_brief_section_filter(tmp_path, capsys):
     events_dir = tmp_path / "monitor" / "binance" / "binance_01" / "events"
     _write_ndjson(

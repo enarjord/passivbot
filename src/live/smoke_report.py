@@ -7167,6 +7167,18 @@ def available_live_smoke_report_sections(report: dict[str, Any]) -> list[str]:
     return sorted(key for key in report if key not in _SMOKE_REPORT_SECTION_BASE_KEYS)
 
 
+SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "account_critical_remote_calls": ("account_critical_remote_call_health",),
+    "ema_readiness": ("ema_readiness_health",),
+    "event_pipeline": ("event_pipeline_health",),
+    "exchange_config_refresh": ("exchange_config_refresh_health",),
+    "fill_refresh": ("fill_refresh_health",),
+    "hsl_replay": ("hsl_replay_health",),
+    "remote_calls": ("remote_call_health", "remote_call_timings"),
+    "staged_readiness": ("staged_readiness_health",),
+}
+
+
 def project_live_smoke_report_sections(
     report: dict[str, Any],
     sections: list[str] | tuple[str, ...] | set[str],
@@ -7181,7 +7193,17 @@ def project_live_smoke_report_sections(
 
     available = available_live_smoke_report_sections(report)
     available_set = set(available)
-    unknown = [section for section in requested if section not in available_set]
+    resolved = []
+    unknown = []
+    for section in requested:
+        targets = (section, *SMOKE_REPORT_SECTION_ALIASES.get(section, ()))
+        matched_targets = [target for target in targets if target in available_set]
+        if not matched_targets:
+            unknown.append(section)
+            continue
+        for target in matched_targets:
+            if target not in resolved:
+                resolved.append(target)
     if unknown:
         raise ValueError(
             "unknown --section value(s): "
@@ -7192,6 +7214,6 @@ def project_live_smoke_report_sections(
         )
 
     projected = {key: report[key] for key in _SMOKE_REPORT_SECTION_BASE_KEYS if key in report}
-    for section in requested:
+    for section in resolved:
         projected[section] = report[section]
     return projected
