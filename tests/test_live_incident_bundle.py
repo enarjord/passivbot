@@ -987,7 +987,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 component="ema.bundle",
                 side="buy",
                 tags=["ema"],
-                data={"scope": "other"},
+                data={"scope": "other", "debug_profile": "state"},
                 ids={
                     "cycle_id": "cy_1",
                     "remote_call_id": "rc_binance",
@@ -1013,7 +1013,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 symbol="ZEC/USDT:USDT",
                 side="sell",
                 tags=["order", "execution"],
-                data={"scope": "target"},
+                data={"scope": "target", "debug_profile": "startup"},
                 ids={
                     "cycle_id": "cy_2",
                     "remote_call_id": "rc_okx",
@@ -1046,6 +1046,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 "sell",
                 "--tag",
                 "order",
+                "--debug-profile",
+                "startup",
                 "--data-eq",
                 "scope=target",
                 "--remote-call-group-id",
@@ -1106,6 +1108,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
         "bot_ids": ["okx/okx_01"],
         "components": ["execution"],
         "data_eq": {"scope": ["target"]},
+        "debug_profiles": ["startup"],
         "exchanges": ["okx"],
         "levels": ["warning"],
         "remote_call_group_ids": ["group_target"],
@@ -1140,6 +1143,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     )
     assert manifest["filters"]["exchange"] == ["okx"]
     assert manifest["filters"]["bot_id"] == ["okx/okx_01"]
+    assert manifest["filters"]["debug_profile"] == ["startup"]
     assert manifest["filters"]["data_eq"] == ["scope=target"]
     assert manifest["filters"]["since_ms"] == 0
     assert manifest["filters"]["until_ms"] == 2000

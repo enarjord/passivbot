@@ -19,20 +19,19 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `9c555384` after PR #1027, `Add startup live event debug profile`.
+- `87754dc2` after PR #1028, `Add live event query debug profile filter`.
 
 Current logging-overhaul head:
 
-- `9c555384` after PR #1027, `Add startup live event debug profile`.
+- `87754dc2` after PR #1028, `Add live event query debug profile filter`.
 
 Current work:
 
-- Branch `codex/v8-event-query-debug-profile` adds a read-only
-  `live-event-query --debug-profile` filter so operators can query the now
-  complete debug-profile event surface without spelling it as a generic
-  `--data-eq debug_profile=...` predicate. It does not add event producers,
-  exchange calls, monitor writes, console routing, startup behavior, order/risk
-  logic, or trading behavior.
+- Branch `codex/v8-incident-debug-profile-filter` extends the same read-only
+  `--debug-profile` query shortcut to `live-incident-bundle`, passing the filter
+  through embedded event, problem-event, and time-window reports plus manifest
+  metadata. It does not add event producers, exchange calls, monitor writes,
+  console routing, startup behavior, order/risk logic, or trading behavior.
 
 Current review gate:
 
@@ -6458,6 +6457,22 @@ VPS5 deployment status:
 - Expected validation: focused API and CLI live-event-query tests, full
   `tests/test_live_event_query.py`, `py_compile`, `git diff --check`, and the
   standard added-line silent-handling scan.
+
+### Draft Slice: Incident Bundle Debug Profile Filter
+
+- Branch: `codex/v8-incident-debug-profile-filter`.
+- Scope: read-only incident-bundle tooling.
+- Triggering evidence: PR #1028 made `live-event-query --debug-profile` a
+  first-class filter, but incident bundles still require the generic
+  `--data-eq debug_profile=...` predicate to package the same focused evidence.
+- Intended result: add `passivbot tool live-incident-bundle --debug-profile`
+  and pass it through event reports, problem-event reports, time-window reports,
+  and manifest filter metadata. Keep existing `--data-eq` behavior unchanged.
+  Do not add event producers, exchange calls, monitor writes, console routing,
+  startup behavior, order/risk logic, or trading behavior.
+- Expected validation: focused incident-bundle CLI/API test, full
+  `tests/test_live_incident_bundle.py`, `py_compile`, `git diff --check`, and
+  the standard added-line silent-handling scan.
 
 ## Current Next Steps
 

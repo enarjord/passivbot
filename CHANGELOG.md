@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now supports `--debug-profile`, passing
+  the first-class debug-profile filter through its embedded event, problem-event,
+  and time-window reports plus the bundle manifest.
 - `passivbot tool live-event-query` now supports `--debug-profile`, a
   first-class filter for events whose structured data has a matching
   `debug_profile` value.
