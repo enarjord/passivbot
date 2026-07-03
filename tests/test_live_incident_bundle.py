@@ -1882,12 +1882,32 @@ def test_live_incident_bundle_includes_process_status_when_requested(
     assert report["smoke_report"]["processes"] == {
         "enabled": True,
         "ok": True,
+        "hard_failures": 0,
         "expected_total": 1,
+        "matched_expected": 1,
         "running_live_total": 1,
-        "missing_expected": 0,
+        "classification_source": "local_process_table_command_match",
+        "tmux_pane_ownership": "not_available_from_process_table",
+        "scan_error": None,
+        "missing_expected_count": 0,
+        "duplicate_configured_command_matches_count": 0,
+        "extra_passivbot_live_processes_count": 0,
+        "unexpected_running_count": 0,
+        "config_checks": {
+            "enabled": True,
+            "ok": True,
+            "checked": 1,
+            "skipped": 0,
+            "hard_failures": 0,
+            "issues_count": 1,
+        },
     }
     with tarfile.open(output, "r:gz") as tar:
         smoke_report = _read_tar_json(tar, "smoke_report.json")
+        manifest = _read_tar_json(tar, "manifest.json")
+    assert manifest["smoke_report"]["processes"] == report["smoke_report"][
+        "processes"
+    ]
     assert smoke_report["processes"]["expected_total"] == 1
     assert smoke_report["processes"]["matched_expected"] == 1
     assert smoke_report["processes"]["missing_expected"] == []

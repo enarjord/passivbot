@@ -757,6 +757,12 @@ def _smoke_problem_events_result_summary(
     return _smoke_brief_section_result_summary(smoke_brief_summary, "problem_events")
 
 
+def _smoke_process_result_summary(
+    smoke_brief_summary: dict[str, Any],
+) -> dict[str, Any]:
+    return _smoke_brief_section_result_summary(smoke_brief_summary, "processes")
+
+
 def _smoke_verdict_result_summary(
     smoke_brief_summary: dict[str, Any],
 ) -> dict[str, Any]:
@@ -1145,6 +1151,7 @@ def build_live_incident_bundle(
     smoke_problem_events_summary = _smoke_problem_events_result_summary(
         smoke_brief_summary
     )
+    smoke_process_summary = _smoke_process_result_summary(smoke_brief_summary)
     smoke_verdict_summary = _smoke_verdict_result_summary(smoke_brief_summary)
     smoke_operational_summaries = _smoke_operational_result_summaries(
         smoke_brief_summary
@@ -1257,6 +1264,7 @@ def build_live_incident_bundle(
                 "execution": smoke_execution_summary,
                 "risk_events": smoke_risk_summary,
                 "ema_readiness": smoke_ema_readiness_summary,
+                "processes": smoke_process_summary,
                 **smoke_operational_summaries,
                 **smoke_data_plane_summaries,
             },
@@ -1346,21 +1354,9 @@ def build_live_incident_bundle(
             "execution": smoke_execution_summary,
             "risk_events": smoke_risk_summary,
             "ema_readiness": smoke_ema_readiness_summary,
+            "processes": smoke_process_summary,
             **smoke_operational_summaries,
             **smoke_data_plane_summaries,
-            "processes": {
-                "enabled": smoke_report.get("processes", {}).get("enabled"),
-                "ok": smoke_report.get("processes", {}).get("ok"),
-                "expected_total": smoke_report.get("processes", {}).get(
-                    "expected_total"
-                ),
-                "running_live_total": smoke_report.get("processes", {}).get(
-                    "running_live_total"
-                ),
-                "missing_expected": len(
-                    smoke_report.get("processes", {}).get("missing_expected", [])
-                ),
-            },
         },
         "restart_smoke_plan": _restart_smoke_plan_result_summary(
             restart_smoke_plan_summary
