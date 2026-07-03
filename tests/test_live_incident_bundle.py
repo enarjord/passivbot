@@ -751,6 +751,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    assert manifest["smoke_report"]["event_window"] == report["smoke_report"][
+        "event_window"
+    ]
+    assert manifest["smoke_report"]["logs"] == report["smoke_report"]["logs"]
     for section in (
         "hard_failure_sources",
         "attention_sources",

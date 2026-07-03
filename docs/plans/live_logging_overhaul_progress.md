@@ -15,22 +15,22 @@ merge, live smoke evidence changes, or new gaps are discovered.
 
 ## Current Status
 
-Last updated: 2026-07-02.
+Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `f02d53a9` after PR #1015, `Include smoke source breakdown in incident bundles`.
+- `8d2499ad` after PR #1016, `Include process smoke summary in incident bundles`.
 
 Current logging-overhaul head:
 
-- `f02d53a9` after PR #1015, `Include smoke source breakdown in incident bundles`.
+- `8d2499ad` after PR #1016, `Include process smoke summary in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-process-summary` adds the bounded process smoke
-  summary to `live-incident-bundle` returned JSON and `manifest.json`, so
-  incident bundles can explain missing, duplicate, or unexpected live-bot
-  process smoke evidence without opening the embedded full smoke report.
+- Branch `codex/v8-incident-log-window-manifest` adds the bounded text-log and
+  event-window smoke summaries to `live-incident-bundle` `manifest.json`, so
+  manifest-level triage can explain log-sourced verdicts without opening the
+  embedded full smoke report.
 
 Current review gate:
 
@@ -60,6 +60,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1016 at `8d2499ad`.
+- PR #1016 added the bounded process smoke summary to `live-incident-bundle`
+  returned JSON and `manifest.json`. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `8d2499ad` without restarting running bots because the slice was
+  report-only. Recent-window smoke after the fast-forward reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state at
+  `repository.head=8d2499ad`, and no process hard failures. A focused
+  incident-bundle verification confirmed `manifest.json` included
+  `smoke_report.processes` with `expected_total=5`, `matched_expected=5`,
+  no missing/duplicate/unexpected processes, and zero config-check issues.
 - Repository pulled through PR #1015 at `f02d53a9`.
 - PR #1015 added smoke verdict source breakdowns and recovered problem-event
   counts to `live-incident-bundle` returned JSON and `manifest.json`. It
