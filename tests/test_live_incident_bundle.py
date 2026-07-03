@@ -2054,6 +2054,10 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert report["restart_smoke_plan"]["enabled"] is True
     assert report["restart_smoke_plan"]["ok"] is True
     assert report["restart_smoke_plan"]["bots"]["count"] == 1
+    assert report["restart_smoke_plan"]["filters"] == {
+        "smoke_sections": ["fill_refresh_health"],
+        "performance_sections": ["startup_readiness"],
+    }
     assert report["restart_smoke_plan"]["config_preflight"]["command_count"] == 1
     assert "commands" not in report["restart_smoke_plan"]["config_preflight"]
 
@@ -2068,6 +2072,10 @@ def test_live_incident_bundle_can_embed_restart_smoke_plan(
     assert manifest["filters"]["smoke_sections"] == ["fill_refresh_health"]
     assert manifest["filters"]["performance_sections"] == ["startup_readiness"]
     assert manifest["restart_smoke_plan"]["bots"]["count"] == 1
+    assert manifest["restart_smoke_plan"]["filters"] == {
+        "smoke_sections": ["fill_refresh_health"],
+        "performance_sections": ["startup_readiness"],
+    }
     assert "commands" not in manifest["restart_smoke_plan"]["config_preflight"]
     assert restart_plan["metadata"] == {
         "dry_run": True,
@@ -2163,6 +2171,10 @@ def test_live_incident_bundle_cli_can_embed_restart_smoke_plan(
     report = json.loads(capsys.readouterr().out)
     assert report["restart_smoke_plan"]["enabled"] is True
     assert report["restart_smoke_plan"]["bots"]["count"] == 1
+    assert report["restart_smoke_plan"]["filters"] == {
+        "smoke_sections": [],
+        "performance_sections": ["startup_readiness"],
+    }
     with tarfile.open(output, "r:gz") as tar:
         restart_plan = _read_tar_json(tar, "restart_smoke_plan.json")
     assert restart_plan["inputs"]["smoke_window_minutes"] == 9
