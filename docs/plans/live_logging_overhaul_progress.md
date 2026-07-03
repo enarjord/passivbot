@@ -19,17 +19,17 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `bc0eb4fe` after PR #1013, `Split smoke problem event type counts`.
+- `d5a9680f` after PR #1014, `Include problem event smoke summary in incident bundles`.
 
 Current logging-overhaul head:
 
-- `bc0eb4fe` after PR #1013, `Split smoke problem event type counts`.
+- `d5a9680f` after PR #1014, `Include problem event smoke summary in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-problem-event-summary` adds the bounded
-  `problem_events` smoke summary to `live-incident-bundle` returned JSON and
-  `manifest.json`, including hard and non-hard problem-event type histograms.
+- Branch `codex/v8-incident-smoke-source-breakdown` adds smoke verdict source
+  breakdowns and recovered problem-event counts to `live-incident-bundle`
+  returned JSON and `manifest.json`.
 
 Current review gate:
 
@@ -59,6 +59,19 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1014 at `d5a9680f`.
+- PR #1014 added the bounded `problem_events` smoke summary to
+  `live-incident-bundle` returned JSON and `manifest.json`, including hard and
+  non-hard problem-event type histograms. It merged after Claude and Hermes
+  approved with no findings and CI was green. VPS5 checkout was updated to
+  `d5a9680f` without restarting running bots because the slice was report-only.
+  Smoke after the fast-forward reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=d5a9680f`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, `fill_refresh.failed=0`, and no
+  hard log matches. A focused incident-bundle verification confirmed the
+  returned report and `manifest.json` both included the new `problem_events`
+  section with hard/non-hard event-type histogram keys.
 - Repository pulled through PR #1013 at `bc0eb4fe`.
 - PR #1013 split structured problem-event type histograms into hard and
   non-hard counts in `live-smoke-report --summary` and `--brief`, making mixed

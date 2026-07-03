@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes smoke verdict source
+  breakdowns and recovered problem-event counts in the returned report and
+  manifest, making red or attention incidents easier to attribute without
+  opening the embedded full smoke report.
 - `passivbot tool live-incident-bundle` now includes the bounded
   `problem_events` smoke summary in the returned report and manifest, including
   hard and non-hard problem-event type histograms for quicker incident triage.

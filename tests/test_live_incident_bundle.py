@@ -460,6 +460,25 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "dropped_unparsed_hard_matches": 0,
         },
     }
+    assert report["smoke_report"]["hard_failure_sources"] == {
+        "monitor_errors": 0,
+        "invalid_event_rows": 0,
+        "hard_problem_events": 0,
+        "log_hard_matches": 0,
+        "process_hard_failures": 0,
+        "total": 0,
+    }
+    assert report["smoke_report"]["attention_sources"] == {
+        "problem_events": 6,
+        "log_attention_matches": 1,
+        "dropped_unparsed_attention_matches": 0,
+        "total": 7,
+    }
+    assert report["smoke_report"]["recovered_problem_events"] == {
+        "total": 0,
+        "hard": 0,
+        "event_types": {},
+    }
     assert report["smoke_report"]["problem_events"] == {
         "total": 6,
         "hard": 0,
@@ -732,6 +751,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         )
 
     assert manifest["config_hashes"][0]["sha256"] == config_hashes[0]["sha256"]
+    for section in (
+        "hard_failure_sources",
+        "attention_sources",
+        "recovered_problem_events",
+    ):
+        assert manifest["smoke_report"][section] == report["smoke_report"][section]
     assert manifest["smoke_report"]["problem_events"] == report["smoke_report"][
         "problem_events"
     ]
