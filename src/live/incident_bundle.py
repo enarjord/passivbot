@@ -842,6 +842,35 @@ def _bundle_hard_failure_count(
     return hard_failures
 
 
+def _time_window_result_summary(window_report: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "enabled": window_report["enabled"],
+        "files_scanned": window_report["files_scanned"],
+        "file_discovery": window_report["file_discovery"],
+        "matched_events": window_report["matched_events"],
+        "events_truncated": window_report["events_truncated"],
+        "event_tail_lines": window_report.get("event_tail_lines"),
+        "event_tail_limited_files": window_report.get("event_tail_limited_files"),
+        "event_tail_skipped_lines": window_report.get("event_tail_skipped_lines"),
+        "event_tail_skipped_lines_exact": window_report.get(
+            "event_tail_skipped_lines_exact"
+        ),
+        "event_tail_skipped_bytes": window_report.get("event_tail_skipped_bytes"),
+        "event_tail_line_numbers_exact": window_report.get(
+            "event_tail_line_numbers_exact"
+        ),
+        "event_tail_methods": window_report.get("event_tail_methods"),
+        "max_event_files_per_bot": window_report.get("max_event_files_per_bot"),
+        "event_file_limit_scope": window_report.get("event_file_limit_scope"),
+        "event_file_limit_groups": window_report.get("event_file_limit_groups"),
+        "event_files_before_limit": window_report.get("event_files_before_limit"),
+        "event_files_skipped_by_limit": window_report.get(
+            "event_files_skipped_by_limit"
+        ),
+        "event_file_limit_order": window_report.get("event_file_limit_order"),
+    }
+
+
 def _copy_event_segments(
     *,
     monitor_root: str | Path,
@@ -1200,6 +1229,7 @@ def build_live_incident_bundle(
         window_report=window_report,
     )
     bundle_ok = hard_failures == 0
+    time_window_summary = _time_window_result_summary(window_report)
     restart_smoke_plan: dict[str, Any] | None = None
     restart_smoke_plan_summary: dict[str, Any] | None = None
     if include_restart_smoke_plan:
@@ -1303,6 +1333,7 @@ def build_live_incident_bundle(
             "config_hashes": config_hashes,
             "monitor_snapshots": snapshots,
             "event_segments": segment_manifest,
+            "time_window": time_window_summary,
             "smoke_report": {
                 "ok": smoke_report.get("ok"),
                 "attention": smoke_report.get("attention"),
@@ -1361,32 +1392,7 @@ def build_live_incident_bundle(
         "hard_failures": hard_failures,
         "event_report": _event_report_result_summary(event_report),
         "problem_event_report": _problem_report_result_summary(problem_report),
-        "time_window": {
-            "enabled": window_report.get("enabled"),
-            "files_scanned": window_report.get("files_scanned"),
-            "file_discovery": window_report.get("file_discovery") or {},
-            "matched_events": window_report.get("matched_events"),
-            "events_truncated": window_report.get("events_truncated"),
-            "event_tail_lines": window_report.get("event_tail_lines"),
-            "event_tail_limited_files": window_report.get("event_tail_limited_files"),
-            "event_tail_skipped_lines": window_report.get("event_tail_skipped_lines"),
-            "event_tail_skipped_lines_exact": window_report.get(
-                "event_tail_skipped_lines_exact"
-            ),
-            "event_tail_skipped_bytes": window_report.get("event_tail_skipped_bytes"),
-            "event_tail_line_numbers_exact": window_report.get(
-                "event_tail_line_numbers_exact"
-            ),
-            "event_tail_methods": window_report.get("event_tail_methods"),
-            "max_event_files_per_bot": window_report.get("max_event_files_per_bot"),
-            "event_file_limit_scope": window_report.get("event_file_limit_scope"),
-            "event_file_limit_groups": window_report.get("event_file_limit_groups"),
-            "event_files_before_limit": window_report.get("event_files_before_limit"),
-            "event_files_skipped_by_limit": window_report.get(
-                "event_files_skipped_by_limit"
-            ),
-            "event_file_limit_order": window_report.get("event_file_limit_order"),
-        },
+        "time_window": time_window_summary,
         "smoke_report": {
             "ok": smoke_report.get("ok"),
             "attention": smoke_report.get("attention"),

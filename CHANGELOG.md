@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle` now includes the compact time-window
+  query summary in `manifest.json`, so archived bundles expose matched-event,
+  truncation, and scan-bound evidence without opening `time_window_report.json`.
 - `passivbot tool live-incident-bundle` now includes the bundle-level result
   verdict in `manifest.json`, so archived incident bundles expose total
   `ok`/`hard_failures` without opening the command output.
