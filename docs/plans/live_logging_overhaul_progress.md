@@ -19,18 +19,17 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `9488f2ad` after PR #1018, `Include repository monitor summaries in incident bundles`.
+- `b741f49b` after PR #1019, `Include smoke verdict fields in incident manifests`.
 
 Current logging-overhaul head:
 
-- `9488f2ad` after PR #1018, `Include repository monitor summaries in incident bundles`.
+- `b741f49b` after PR #1019, `Include smoke verdict fields in incident manifests`.
 
 Current work:
 
-- Branch `codex/v8-incident-verdict-summary` adds top-level smoke verdict
-  fields to `live-incident-bundle` `manifest.json`, so the manifest can report
-  the same `ok`, `attention`, and smoke failure/count fields as the returned
-  report without opening the embedded full smoke report.
+- Branch `codex/v8-incident-bundle-result` adds the bundle-level result verdict
+  to `live-incident-bundle` `manifest.json`, so an archived bundle can expose
+  total `ok` and `hard_failures` without relying on command stdout.
 
 Current review gate:
 
@@ -60,6 +59,18 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1019 at `b741f49b`.
+- PR #1019 added top-level smoke verdict fields to `live-incident-bundle`
+  `manifest.json`: `ok`, `attention`, `hard_failures`, and `attention_count`.
+  It merged after Claude and Hermes approved with no findings and CI was green.
+  VPS5 checkout was updated to `b741f49b` without restarting running bots
+  because the slice was report-only. Recent-window smoke with stale unparsed
+  traceback fragments dropped reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=b741f49b`, no failed remote calls, no failed
+  account-critical remote calls, and no process hard failures. A focused
+  incident-bundle verification confirmed `manifest.json` included the four
+  smoke verdict fields and that they matched `smoke_report.json`.
 - Repository pulled through PR #1018 at `9488f2ad`.
 - PR #1018 added bounded repository and monitor smoke summaries to
   `live-incident-bundle` returned JSON and `manifest.json`, making checkout
