@@ -173,6 +173,14 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--debug-profile",
+        action="append",
+        help=(
+            "Return compact records whose event data has debug_profile=VALUE. "
+            "May be repeated or comma-separated."
+        ),
+    )
+    parser.add_argument(
         "--data-eq",
         action="append",
         help=(
@@ -330,6 +338,7 @@ def main(argv: list[str] | None = None) -> int:
             source=args.source,
             component=args.component,
             tag=args.tag,
+            debug_profile=args.debug_profile,
             data_eq=args.data_eq,
             problem_events=bool(args.problem_events),
             hard_problem_events=bool(args.hard_problem_events),

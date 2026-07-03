@@ -393,6 +393,7 @@ def _filter_report(
     sources: set[str],
     components: set[str],
     tags: set[str],
+    debug_profiles: set[str],
     data_eq_filters: dict[str, set[str]],
     problem_events: bool,
     hard_problem_events: bool,
@@ -444,6 +445,8 @@ def _filter_report(
         filters["components"] = sorted(components)
     if tags:
         filters["tags"] = sorted(tags)
+    if debug_profiles:
+        filters["debug_profiles"] = sorted(debug_profiles)
     if data_eq_filters:
         filters["data_eq"] = {
             key: sorted(values) for key, values in sorted(data_eq_filters.items())
@@ -477,6 +480,7 @@ def build_event_query_filters(
     source: str | Iterable[str] | None = None,
     component: str | Iterable[str] | None = None,
     tag: str | Iterable[str] | None = None,
+    debug_profile: str | Iterable[str] | None = None,
     data_eq: str | Iterable[str] | None = None,
     problem_events: bool = False,
     hard_problem_events: bool = False,
@@ -491,6 +495,7 @@ def build_event_query_filters(
         and since_filter > until_filter
     ):
         raise ValueError("since_ms must be <= until_ms")
+    debug_profiles = _normalize_filter_values(debug_profile)
     return {
         "cycle_id": str(cycle_id) if cycle_id is not None else None,
         "event_types": _normalize_filter_values(event_type),
@@ -512,6 +517,7 @@ def build_event_query_filters(
         "sources": _normalize_filter_values(source),
         "components": _normalize_filter_values(component),
         "tags": _normalize_filter_values(tag),
+        "debug_profiles": debug_profiles,
         "data_eq_filters": _normalize_data_eq_filters(data_eq),
         "problem_events": bool(problem_events),
         "hard_problem_events": bool(hard_problem_events),
@@ -542,6 +548,7 @@ def event_query_filter_report(filters: dict[str, Any]) -> dict[str, Any]:
         sources=filters["sources"],
         components=filters["components"],
         tags=filters["tags"],
+        debug_profiles=filters["debug_profiles"],
         data_eq_filters=filters["data_eq_filters"],
         problem_events=bool(filters["problem_events"]),
         hard_problem_events=bool(filters["hard_problem_events"]),
@@ -568,6 +575,9 @@ def event_matches_query_filters(
     record_source = live_event.get("source")
     record_component = live_event.get("component")
     record_tags = _event_tags(row, live_event)
+    record_data = (
+        live_event.get("data") if isinstance(live_event.get("data"), dict) else {}
+    )
     path_scope = _monitor_path_exchange_user(path)
     record_exchange = live_event.get("exchange") or row.get("exchange")
     record_user = live_event.get("user") or row.get("user")
@@ -620,6 +630,10 @@ def event_matches_query_filters(
     if not _filter_matches(record_component, filters["components"]):
         return False
     if filters["tags"] and not set(record_tags).intersection(filters["tags"]):
+        return False
+    if not _filter_matches(
+        record_data.get("debug_profile"), filters["debug_profiles"]
+    ):
         return False
     if not _data_filters_match(live_event, filters["data_eq_filters"]):
         return False
@@ -1312,6 +1326,7 @@ def build_event_report(
     component: str | Iterable[str] | None = None,
     tag: str | Iterable[str] | None = None,
     data_eq: str | Iterable[str] | None = None,
+    debug_profile: str | Iterable[str] | None = None,
     problem_events: bool = False,
     hard_problem_events: bool = False,
     since_ms: int | None = None,
@@ -1348,6 +1363,7 @@ def build_event_report(
         component=component,
         tag=tag,
         data_eq=data_eq,
+        debug_profile=debug_profile,
         problem_events=problem_events,
         hard_problem_events=hard_problem_events,
         since_ms=since_ms,
@@ -1455,6 +1471,7 @@ def build_event_report(
     source_filter = query_filters["sources"]
     component_filter = query_filters["components"]
     tag_filter = query_filters["tags"]
+    debug_profile_filter = query_filters["debug_profiles"]
     data_eq_filters = query_filters["data_eq_filters"]
     problem_event_filter = bool(query_filters["problem_events"])
     hard_problem_event_filter = bool(query_filters["hard_problem_events"])
@@ -1479,6 +1496,7 @@ def build_event_report(
             source_filter,
             component_filter,
             tag_filter,
+            debug_profile_filter,
             data_eq_filters,
             problem_event_filter,
             hard_problem_event_filter,
@@ -1764,6 +1782,7 @@ def build_event_report(
             components=component_filter,
             tags=tag_filter,
             data_eq_filters=data_eq_filters,
+            debug_profiles=debug_profile_filter,
             problem_events=problem_event_filter,
             hard_problem_events=hard_problem_event_filter,
             since_ms=since_filter,
@@ -1808,6 +1827,7 @@ def build_event_report(
             components=component_filter,
             tags=tag_filter,
             data_eq_filters=data_eq_filters,
+            debug_profiles=debug_profile_filter,
             problem_events=problem_event_filter,
             hard_problem_events=hard_problem_event_filter,
             since_ms=since_filter,

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-event-query` now supports `--debug-profile`, a
+  first-class filter for events whose structured data has a matching
+  `debug_profile` value.
 - The `startup` live-event debug profile now enriches existing startup timing
   events with bounded phase, timing, and details-shape metadata without
   changing default event payloads or console output.

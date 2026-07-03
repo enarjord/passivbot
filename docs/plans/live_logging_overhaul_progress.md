@@ -19,19 +19,20 @@ Last updated: 2026-07-03.
 
 Current `origin/v8` head:
 
-- `2de5a6af` after PR #1026, `Add state live event debug profile`.
+- `9c555384` after PR #1027, `Add startup live event debug profile`.
 
 Current logging-overhaul head:
 
-- `2de5a6af` after PR #1026, `Add state live event debug profile`.
+- `9c555384` after PR #1027, `Add startup live event debug profile`.
 
 Current work:
 
-- Branch `codex/v8-startup-debug-profile` adds opt-in bounded debug shape to
-  existing `bot.startup_timing` events when the `startup` debug profile is
-  enabled. It does not change default startup timing payloads, console output,
-  event routing, startup behavior, exchange calls, order/risk logic, or monitor
-  writes.
+- Branch `codex/v8-event-query-debug-profile` adds a read-only
+  `live-event-query --debug-profile` filter so operators can query the now
+  complete debug-profile event surface without spelling it as a generic
+  `--data-eq debug_profile=...` predicate. It does not add event producers,
+  exchange calls, monitor writes, console routing, startup behavior, order/risk
+  logic, or trading behavior.
 
 Current review gate:
 
@@ -61,6 +62,15 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1027 at `9c555384`.
+- PR #1027 added the opt-in `startup` debug profile for existing
+  `bot.startup_timing` events. It merged after Claude and Hermes approved with
+  no findings and CI was green. VPS5 checkout was updated to `9c555384`
+  without restarting running bots because default startup behavior and console
+  output are unchanged. Post-deploy smoke reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state,
+  zero event-pipeline drops/sink errors, and only known non-hard HSL
+  cooldown/status attention.
 - Repository pulled through PR #1026 at `2de5a6af`.
 - PR #1026 added the opt-in `state` debug profile for existing
   `state.refresh_timing` and `state.refresh_progress` events. It merged after
@@ -6425,6 +6435,29 @@ VPS5 deployment status:
   live-event debug-profile normalization test, broader live-event/monitor suite
   if review asks for it, `py_compile`, `git diff --check`, and the standard
   added-line silent-handling scan.
+- Result: PR #1027 was reviewed by Claude and Hermes, merged to `v8`, and
+  deployed to VPS5 at `9c555384` without restarting bots. A short post-deploy
+  smoke reported `ok=true`, `hard_failures=0`, clean tracked repository state,
+  five configured bots still running, no event-pipeline drops/sink errors, and
+  only known non-hard HSL cooldown/status attention.
+
+### Draft Slice: Event Query Debug Profile Filter
+
+- Branch: `codex/v8-event-query-debug-profile`.
+- Scope: read-only operator tooling for the completed live-event debug-profile
+  surface.
+- Triggering evidence: the documented debug-profile event surface is now
+  complete, but querying those events requires remembering the generic
+  `--data-eq debug_profile=...` predicate. A first-class filter reduces
+  operator friction during incident reconstruction.
+- Intended result: add `passivbot tool live-event-query --debug-profile` as a
+  shortcut for matching `event.data.debug_profile`, with query metadata
+  reporting the selected profile names. Keep existing `--data-eq` behavior
+  unchanged. Do not add event producers, exchange calls, monitor writes, console
+  routing, startup behavior, order/risk logic, or trading behavior.
+- Expected validation: focused API and CLI live-event-query tests, full
+  `tests/test_live_event_query.py`, `py_compile`, `git diff --check`, and the
+  standard added-line silent-handling scan.
 
 ## Current Next Steps
 

@@ -856,6 +856,48 @@ def test_event_query_filters_by_top_level_data_fields(tmp_path):
     assert event["data"]["stop_event_anchor_source"] == "current_time_fallback"
 
 
+def test_event_query_filters_by_debug_profile(tmp_path):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                data={"debug_profile": "startup", "phase": "hsl"},
+            ),
+            _monitor_row(
+                event_type="state.refresh_timing",
+                cycle_id="cy_2",
+                seq=2,
+                ts=1100,
+                data={"debug_profile": "state", "plan": ["positions"]},
+            ),
+            _monitor_row(
+                event_type="bot.startup_timing",
+                cycle_id="cy_3",
+                seq=3,
+                ts=1200,
+                data={"phase": "market"},
+            ),
+        ],
+    )
+
+    report = build_event_report(
+        tmp_path / "monitor",
+        debug_profile="startup",
+        include_data=True,
+    )
+
+    assert report["ok"] is True
+    assert report["query"]["filters"] == {"debug_profiles": ["startup"]}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["event_type"] == "bot.startup_timing"
+    assert report["query"]["events"][0]["data"]["debug_profile"] == "startup"
+
+
 def test_event_query_rejects_malformed_data_eq_filter(tmp_path):
     with pytest.raises(ValueError, match="key=value"):
         build_event_report(tmp_path, data_eq="missing_equals")
@@ -2142,6 +2184,46 @@ def test_live_event_query_cli_accepts_data_eq_filter(tmp_path, capsys):
     assert report["query"]["events"][0]["data"]["stop_event_anchor_source"] == (
         "current_time_fallback"
     )
+
+
+def test_live_event_query_cli_accepts_debug_profile_filter(tmp_path, capsys):
+    events_dir = tmp_path / "monitor" / "gateio" / "gateio_01" / "events"
+    _write_ndjson(
+        events_dir / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="bot.startup_timing",
+                cycle_id="cy_1",
+                seq=1,
+                ts=1000,
+                data={"debug_profile": "startup", "phase": "hsl"},
+            ),
+            _monitor_row(
+                event_type="state.refresh_timing",
+                cycle_id="cy_2",
+                seq=2,
+                ts=1100,
+                data={"debug_profile": "state", "plan": ["positions"]},
+            ),
+        ],
+    )
+
+    assert (
+        live_event_query.main(
+            [
+                str(tmp_path / "monitor"),
+                "--debug-profile",
+                "startup",
+                "--include-data",
+            ]
+        )
+        == 0
+    )
+
+    report = json.loads(capsys.readouterr().out)
+    assert report["query"]["filters"] == {"debug_profiles": ["startup"]}
+    assert report["query"]["matched_events"] == 1
+    assert report["query"]["events"][0]["data"]["debug_profile"] == "startup"
 
 
 def test_live_event_query_cli_rejects_malformed_data_eq_filter(tmp_path, capsys):
