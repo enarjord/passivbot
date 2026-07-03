@@ -587,6 +587,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "component": "risk.hsl",
             "count": 1,
             "latest_ts": 2200,
+            "latest_data": {
+                "signal_mode": "coin",
+                "tier": "red",
+                "cooldown_until_ms": 999999,
+                "cooldown_remaining_seconds": 123.4,
+            },
         }
     ]
     assert report["smoke_report"]["ema_readiness"] == {

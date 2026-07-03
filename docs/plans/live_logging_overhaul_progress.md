@@ -6290,6 +6290,40 @@ VPS5 deployment status:
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`, added-line
   silent-handling scan, and a read-only VPS5 smoke showing dropped samples when
   the condition is present.
+- Result: PR #1023 was reviewed by Hermes and Claude, merged to `v8`, and
+  deployed to VPS5 at `8aab137c`. A short post-deploy smoke reported
+  `ok=true`, `hard_failures=0`, clean tracked repository state, and five
+  configured live bots still running. The current VPS5 log window did not
+  contain dropped unparsed hard/attention matches after deployment, so the new
+  sample fields were absent as expected when the condition is not present.
+  The same smoke showed `unstuck.status` in brief `risk_events.latest_groups`,
+  but without compact `latest_data`; a follow-up event query showed the
+  underlying event had useful allowlisted state such as `changed`,
+  `status_counts`, and `over_budget_sides`.
+
+### Draft Slice: Brief Risk Latest Data
+
+- Branch: `codex/v8-smoke-risk-brief-latest-data`.
+- Scope: read-only `passivbot tool live-smoke-report --brief` projection over
+  existing summarized `risk_events.groups` and `risk_events.attention_groups`.
+- Triggering evidence: after PR #1023 deployment, VPS5 brief smoke exposed an
+  `unstuck.status` latest group for `hyperliquid/hyperliquid_tradfi`, but the
+  brief row did not explain whether the state changed, which status counts were
+  present, or whether any side was over budget. A focused `live-event-query`
+  showed the existing monitor event already contained safe compact fields:
+  `changed=true`, `status_counts`, and `over_budget_sides`, alongside raw
+  per-side allowance details that should remain out of brief smoke output.
+- Intended result: include only allowlisted `latest_data` keys in brief risk
+  groups, covering HSL mode/status/finalization context and unstuck status
+  summaries. Continue excluding raw balances, drawdown internals, price-distance
+  details, nested per-side allowance maps, and arbitrary event payload keys.
+  This changes only report output; it does not add event producers, exchange
+  calls, HSL behavior, order/risk logic, monitor writes, console routing, or
+  trading behavior.
+- Expected validation: focused risk-event smoke-report test, full
+  `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`,
+  added-line silent-handling scan, and a read-only VPS5 smoke after merge
+  proving the compact fields appear when the condition is present.
 
 ## Current Next Steps
 
