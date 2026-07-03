@@ -394,6 +394,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         since_ms=1500,
         until_ms=2500,
         include_data=False,
+        include_performance_report=True,
         max_event_segment_bytes=100_000,
         cwd=tmp_path,
     )
@@ -424,6 +425,16 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "scope_pruned": 0,
     }
     assert report["time_window"]["matched_events"] == 11
+    assert report["performance_report"]["ok"] is True
+    assert report["performance_report"]["event_window"] == {
+        "enabled": True,
+        "since_ms": 1500,
+        "until_ms": 2500,
+        "events_considered": 11,
+        "events_skipped_before": 3,
+        "events_skipped_after": 0,
+        "invalid_window_ts": 0,
+    }
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
@@ -737,6 +748,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         assert "problem_event_report.json" in names
         assert "time_window_report.json" in names
         assert "smoke_report.json" in names
+        assert "performance_report.json" in names
         assert "timeline.txt" in names
         assert "config_hashes.json" in names
         assert "binance/binance_01/state.latest.json" not in names
@@ -750,6 +762,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         window_report = _read_tar_json(tar, "time_window_report.json")
         smoke_report = _read_tar_json(tar, "smoke_report.json")
+        performance_report = _read_tar_json(tar, "performance_report.json")
         config_hashes = _read_tar_json(tar, "config_hashes.json")
         redacted_snapshot = _read_tar_json(
             tar,
@@ -763,6 +776,10 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     }
     assert manifest["time_window"] == report["time_window"]
     assert manifest["time_window"]["matched_events"] == window_report["matched_events"]
+    assert manifest["performance_report"] == report["performance_report"]
+    assert performance_report["event_window"] == report["performance_report"][
+        "event_window"
+    ]
     for section in ("ok", "attention", "hard_failures", "attention_count"):
         assert manifest["smoke_report"][section] == report["smoke_report"][section]
     assert manifest["smoke_report"]["event_window"] == report["smoke_report"][
@@ -824,6 +841,7 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert manifest["filters"]["log_tail_lines"] == 500
     assert manifest["filters"]["max_log_matches"] == 100
     assert manifest["filters"]["log_window_unparsed_policy"] == "keep"
+    assert manifest["filters"]["include_performance_report"] is True
     assert manifest["event_segments"]["file_discovery"] == report["event_segments"][
         "file_discovery"
     ]
@@ -1058,6 +1076,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
                 "2000",
                 "--include-data",
                 "--no-event-segments",
+                "--performance-report",
                 "--output",
                 str(output),
                 "--compact",
@@ -1070,6 +1089,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert report["ok"] is True
     assert report["event_report"]["query_matched_events"] == 1
     assert report["problem_event_report"]["matched_events"] == 1
+    assert report["performance_report"]["ok"] is True
+    assert report["performance_report"]["filters"]["debug_profiles"] == ["startup"]
     assert report["event_report"]["file_discovery"] == {
         "bot_path_pruning_applied": True,
         "candidate_files": 2,
@@ -1100,6 +1121,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
         event_report = _read_tar_json(tar, "event_report.json")
         problem_event_report = _read_tar_json(tar, "problem_event_report.json")
         time_window_report = _read_tar_json(tar, "time_window_report.json")
+        performance_report = _read_tar_json(tar, "performance_report.json")
         timeline_text = tar.extractfile("timeline.txt").read().decode("utf-8")
         event_segments_manifest = _read_tar_json(tar, "event_segments_manifest.json")
         manifest = _read_tar_json(tar, "manifest.json")
@@ -1130,6 +1152,8 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
         "until_ms": 2000,
     }
     assert time_window_report["matched_events"] == 1
+    assert performance_report["filters"]["debug_profiles"] == ["startup"]
+    assert manifest["performance_report"] == report["performance_report"]
     assert event_report["query"]["events"][0]["exchange"] == "okx"
     assert event_report["query"]["events"][0]["user"] == "okx_01"
     assert event_report["query"]["events"][0]["side"] == "sell"
@@ -1144,6 +1168,7 @@ def test_live_incident_bundle_cli_filters_event_reports_by_query_scopes(
     assert manifest["filters"]["exchange"] == ["okx"]
     assert manifest["filters"]["bot_id"] == ["okx/okx_01"]
     assert manifest["filters"]["debug_profile"] == ["startup"]
+    assert manifest["filters"]["include_performance_report"] is True
     assert manifest["filters"]["data_eq"] == ["scope=target"]
     assert manifest["filters"]["since_ms"] == 0
     assert manifest["filters"]["until_ms"] == 2000

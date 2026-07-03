@@ -25,6 +25,10 @@ from live.event_query import (
     event_matches_query_filters,
     event_query_filter_report,
 )
+from live.performance_report import (
+    build_live_performance_report,
+    summarize_live_performance_report,
+)
 from live.restart_smoke_plan import (
     DEFAULT_SMOKE_EVENT_TAIL_LINES as DEFAULT_RESTART_SMOKE_EVENT_TAIL_LINES,
     DEFAULT_SMOKE_LOG_TAIL_LINES as DEFAULT_RESTART_SMOKE_LOG_TAIL_LINES,
@@ -1051,6 +1055,7 @@ def build_live_incident_bundle(
     include_data: bool = False,
     include_trace_report: bool = True,
     include_problem_report: bool = True,
+    include_performance_report: bool = False,
     include_rotated: bool = False,
     include_event_segments: bool = True,
     max_events: int = 500,
@@ -1229,6 +1234,26 @@ def build_live_incident_bundle(
     smoke_data_plane_summaries = _smoke_data_plane_result_summaries(
         smoke_brief_summary
     )
+    performance_report: dict[str, Any] | None = None
+    performance_report_summary: dict[str, Any] | None = None
+    if include_performance_report:
+        performance_report = build_live_performance_report(
+            monitor_path,
+            since_ms=since_ms,
+            until_ms=until_ms,
+            include_rotated=include_rotated,
+            event_tail_lines=event_tail_lines,
+            max_event_files_per_bot=max_event_files_per_bot,
+            group_limit=max_events,
+            bot_filters=bot_id,
+            exchange_filters=exchange,
+            user_filters=user,
+            debug_profile_filters=debug_profile,
+        )
+        performance_report_summary = summarize_live_performance_report(
+            performance_report,
+            group_limit=max_events,
+        )
     hard_failures = _bundle_hard_failure_count(
         smoke_report=smoke_report,
         event_report=event_report,
@@ -1326,6 +1351,7 @@ def build_live_incident_bundle(
                     "include_data": include_data,
                     "include_trace_report": include_trace_report,
                     "include_problem_report": include_problem_report,
+                    "include_performance_report": include_performance_report,
                     "include_processes": include_processes,
                     "supervisor_config": str(supervisor_config)
                     if supervisor_config is not None
@@ -1360,6 +1386,8 @@ def build_live_incident_bundle(
                 **smoke_data_plane_summaries,
             },
         }
+        if performance_report_summary is not None:
+            metadata["performance_report"] = performance_report_summary
         if restart_smoke_plan_summary is not None:
             metadata["restart_smoke_plan"] = _restart_smoke_plan_result_summary(
                 restart_smoke_plan_summary
@@ -1371,6 +1399,8 @@ def build_live_incident_bundle(
             _write_json(bundle_root / "problem_event_report.json", problem_report)
         _write_json(bundle_root / "time_window_report.json", window_report)
         _write_json(bundle_root / "smoke_report.json", embedded_smoke_report)
+        if performance_report is not None:
+            _write_json(bundle_root / "performance_report.json", performance_report)
         if restart_smoke_plan is not None:
             _write_json(bundle_root / "restart_smoke_plan.json", restart_smoke_plan)
         timeline_lines: list[str] = []
@@ -1421,6 +1451,7 @@ def build_live_incident_bundle(
         "restart_smoke_plan": _restart_smoke_plan_result_summary(
             restart_smoke_plan_summary
         ),
+        "performance_report": performance_report_summary,
         "config_hashes": len(config_hashes),
         "monitor_snapshots": len(metadata["monitor_snapshots"]),
         "event_segments": {
