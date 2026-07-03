@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-incident-bundle --performance-report` now embeds an
+  opt-in `live-performance-report` artifact and compact manifest summary using
+  compatible bundle time, bot/exchange/user, debug-profile, and event-file
+  bounds.
 - `passivbot tool live-performance-report` now supports `--debug-profile`, so
   performance summaries can be scoped to events enriched by one live-event
   debug profile.

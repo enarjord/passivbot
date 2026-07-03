@@ -219,6 +219,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--performance-report",
+        action="store_true",
+        help=(
+            "Embed a read-only live-performance-report JSON artifact and compact "
+            "summary using the bundle's compatible time, bot/exchange/user, "
+            "debug-profile, rotated, tail-line, and per-bot file bounds."
+        ),
+    )
+    parser.add_argument(
         "--include-rotated",
         action="store_true",
         help="Also scan rotated/compressed monitor event segments.",
@@ -379,6 +388,7 @@ def main(argv: list[str] | None = None) -> int:
             include_data=bool(args.include_data),
             include_trace_report=not bool(args.no_trace_report),
             include_problem_report=not bool(args.no_problem_report),
+            include_performance_report=bool(args.performance_report),
             include_rotated=bool(args.include_rotated),
             event_tail_lines=int(args.event_tail_lines),
             max_event_files_per_bot=int(args.max_event_files_per_bot),
