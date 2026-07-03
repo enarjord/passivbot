@@ -190,6 +190,10 @@ Monitor commands are documented in detail in [monitor.md](monitor.md). The CLI s
   Existing structured execution/order-wave events are summarized as
   `execution_health` in full/summary output and `execution` in brief output,
   including create/cancel/confirmation outcome counters and bounded write/confirmation groups.
+  Existing structured cache events are summarized as `cache_health` in
+  full/summary output and `cache` in brief output, including warm-cache reuse,
+  cold-path, cache load, and cache flush counters without exposing raw cache
+  paths or payloads.
   Existing structured shutdown events are also summarized as `shutdown_events`,
   so recent Ctrl+C/restart behavior can be inspected from the same smoke output.
   With `--supervisor-config`, the read-only process section compares configured

@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report` now summarizes existing cache load, flush,
+  and warmup-decision events as `cache_health` in full/summary output and
+  `cache` in brief output.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.

@@ -8,6 +8,7 @@ import pytest
 import live.event_file_rows as event_file_rows_module
 import live.smoke_report as smoke_report_module
 from live.smoke_report import (
+    available_live_smoke_report_sections,
     build_live_smoke_report,
     default_logs_root_for_monitor,
     project_live_smoke_report_sections,
@@ -3847,6 +3848,105 @@ def test_live_smoke_report_summarizes_hsl_raw_red_pending(tmp_path):
     assert "98765.43" not in rendered
     assert "pending-secret" not in rendered
     assert "new-pending-secret" not in rendered
+
+
+def test_live_smoke_report_summarizes_cache_health(tmp_path):
+    _write_ndjson(
+        tmp_path
+        / "monitor"
+        / "binance"
+        / "binance_01"
+        / "events"
+        / "current.ndjson",
+        [
+            _monitor_row(
+                event_type="cache.warmup_decision",
+                seq=1,
+                ts=1000,
+                reason_code="warmup_cache_decision",
+                data={
+                    "context": "startup_trading_ready",
+                    "timeframe": "1m",
+                    "symbol_count": 5,
+                    "reused_count": 3,
+                    "cold_count": 2,
+                    "cold_path_required": True,
+                    "reason_counts": {"warm_cache_accepted": 3, "missing_coverage": 2},
+                    "elapsed_ms": 123,
+                    "cache_path": "/root/passivbot/private-cache",
+                },
+            ),
+            _monitor_row(
+                event_type="cache.load.completed",
+                seq=2,
+                ts=2000,
+                reason_code="candle_disk_load_completed",
+                symbol="XLM/USDT:USDT",
+                data={
+                    "timeframe": "1m",
+                    "loaded_rows": 120,
+                    "source_days": {"primary": 1, "legacy": 1},
+                    "elapsed_ms": 45,
+                    "raw_payload": {"leak_marker": "raw-cache-row"},
+                },
+            ),
+            _monitor_row(
+                event_type="cache.flush.completed",
+                seq=3,
+                ts=3000,
+                reason_code="candle_disk_flush_completed",
+                symbol="XLM/USDT:USDT",
+                data={
+                    "timeframe": "1m",
+                    "persisted_rows": 80,
+                    "suppressed_count": 1,
+                    "suppressed_rows": 4,
+                },
+            ),
+        ],
+    )
+
+    report = build_live_smoke_report(tmp_path / "monitor", logs_root=None)
+    cache = report["cache_health"]
+    group = cache["groups"][0]
+    summary = summarize_live_smoke_report(report)
+    brief = summarize_live_smoke_report_brief(report)
+    section = project_live_smoke_report_sections(report, ["cache"])
+
+    assert cache["total"] == 3
+    assert cache["bots"] == 1
+    assert cache["event_types"] == {
+        "cache.flush.completed": 1,
+        "cache.load.completed": 1,
+        "cache.warmup_decision": 1,
+    }
+    assert cache["cold_path_decisions"] == 1
+    assert cache["loaded_rows"] == 120
+    assert cache["persisted_rows"] == 80
+    assert cache["reason_counts"] == {"missing_coverage": 2, "warm_cache_accepted": 3}
+    assert cache["source_days"] == {"legacy": 1, "primary": 1}
+    assert group["bot"] == "binance/binance_01"
+    assert group["warmup_contexts"] == {"startup_trading_ready": 1}
+    assert group["symbols"] == {"count": 1, "sample": ["XLM/USDT:USDT"], "truncated": 0}
+    assert group["elapsed_ms"]["max_ms"] == 123
+    assert group["latest_event_type"] == "cache.flush.completed"
+    assert group["latest_data"] == {
+        "timeframe": "1m",
+        "persisted_rows": 80,
+        "suppressed_count": 1,
+        "suppressed_rows": 4,
+    }
+    assert summary["cache_health"]["cold_path_decisions"] == 1
+    assert summary["cache_health"]["groups"][0]["latest_event_type"] == (
+        "cache.flush.completed"
+    )
+    assert brief["cache"]["cold_path_decisions"] == 1
+    assert brief["cache"]["groups"][0]["latest_data"] == group["latest_data"]
+    assert "cache_health" in section
+    assert "cache_health" in available_live_smoke_report_sections(report)
+    rendered = json.dumps(report["cache_health"], sort_keys=True)
+    assert "private-cache" not in rendered
+    assert "raw-cache-row" not in rendered
 
 
 def test_live_smoke_report_summarizes_hsl_replay_health(tmp_path, monkeypatch):

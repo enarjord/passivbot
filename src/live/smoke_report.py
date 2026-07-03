@@ -59,6 +59,8 @@ REMOTE_CALL_TIMING_GROUP_LIMIT = 20
 REMOTE_CALL_HEALTH_VALUE_LIMIT = 8
 FILL_REFRESH_HEALTH_GROUP_LIMIT = 20
 FILL_REFRESH_HEALTH_VALUE_LIMIT = 8
+CACHE_HEALTH_GROUP_LIMIT = 20
+CACHE_HEALTH_VALUE_LIMIT = 8
 EXECUTION_HEALTH_GROUP_LIMIT = 20
 EXECUTION_HEALTH_VALUE_LIMIT = 8
 SMOKE_REPORT_SUMMARY_GROUP_LIMIT = 8
@@ -127,6 +129,11 @@ HSL_REPLAY_EVENT_TYPES = {
     EventTypes.HSL_REPLAY_PROGRESS,
     EventTypes.HSL_REPLAY_COMPLETED,
     EventTypes.HSL_REPLAY_FAILED,
+}
+CACHE_HEALTH_EVENT_TYPES = {
+    EventTypes.CACHE_LOAD_COMPLETED,
+    EventTypes.CACHE_FLUSH_COMPLETED,
+    EventTypes.CACHE_WARMUP_DECISION,
 }
 REMOTE_CALL_TIMING_EVENT_TYPES = {
     EventTypes.REMOTE_CALL_SUCCEEDED,
@@ -1173,6 +1180,296 @@ def _summarize_execution_health(
             limit=EXECUTION_HEALTH_VALUE_LIMIT,
         ),
         "groups_truncated": len(ordered) > EXECUTION_HEALTH_GROUP_LIMIT,
+        "groups": compact_groups,
+    }
+
+
+def _compact_cache_latest_data(data: Any) -> dict[str, Any]:
+    if not isinstance(data, dict):
+        return {}
+    out: dict[str, Any] = {}
+    for key in ("context", "timeframe"):
+        value = data.get(key)
+        if value not in (None, ""):
+            out[key] = _redact_log_text(str(value), max_len=120)
+    for key in (
+        "symbol_count",
+        "reused_count",
+        "cold_count",
+        "loaded_rows",
+        "persisted_rows",
+        "suppressed_count",
+        "suppressed_rows",
+        "elapsed_ms",
+    ):
+        value = _non_negative_int(data.get(key))
+        if value is not None:
+            out[key] = int(value)
+    if isinstance(data.get("cold_path_required"), bool):
+        out["cold_path_required"] = bool(data["cold_path_required"])
+    for key in ("reason_counts", "source_days"):
+        value = data.get(key)
+        if isinstance(value, dict):
+            counts = Counter()
+            for item_key, item_value in value.items():
+                count = _non_negative_int(item_value)
+                if count is not None:
+                    counts[str(item_key)] += int(count)
+            if counts:
+                out[key] = _top_counter_values(
+                    counts,
+                    limit=CACHE_HEALTH_VALUE_LIMIT,
+                )
+    return out
+
+
+def _cache_health_group(
+    *,
+    bot_key: str,
+    row: dict[str, Any],
+    live_event: dict[str, Any],
+    path: Path,
+    line_no: int,
+) -> dict[str, Any]:
+    data = live_event.get("data")
+    payload = data if isinstance(data, dict) else {}
+    event_type = str(live_event.get("event_type") or row.get("kind") or "")
+    ids = _event_ids(live_event)
+    symbol = live_event.get("symbol") or row.get("symbol")
+    timeframe = payload.get("timeframe")
+    context = payload.get("context")
+    elapsed_ms = _non_negative_int(payload.get("elapsed_ms"))
+    latest_data = _compact_cache_latest_data(payload)
+    return {
+        "bot": bot_key,
+        "count": 1,
+        "event_types": Counter([event_type]) if event_type else Counter(),
+        "symbols": Counter([str(symbol)]) if symbol not in (None, "") else Counter(),
+        "timeframes": Counter([str(timeframe)])
+        if timeframe not in (None, "")
+        else Counter(),
+        "warmup_contexts": Counter([str(context)])
+        if context not in (None, "")
+        else Counter(),
+        "reason_counts": Counter(latest_data.get("reason_counts") or {}),
+        "source_days": Counter(latest_data.get("source_days") or {}),
+        "elapsed_values": [elapsed_ms] if elapsed_ms is not None else [],
+        "symbol_count": _non_negative_int(payload.get("symbol_count")) or 0,
+        "reused_count": _non_negative_int(payload.get("reused_count")) or 0,
+        "cold_count": _non_negative_int(payload.get("cold_count")) or 0,
+        "cold_path_decisions": 1 if bool(payload.get("cold_path_required")) else 0,
+        "loaded_rows": _non_negative_int(payload.get("loaded_rows")) or 0,
+        "persisted_rows": _non_negative_int(payload.get("persisted_rows")) or 0,
+        "suppressed_load_events": (
+            _non_negative_int(payload.get("suppressed_count")) or 0
+            if event_type == EventTypes.CACHE_LOAD_COMPLETED
+            else 0
+        ),
+        "suppressed_flush_events": (
+            _non_negative_int(payload.get("suppressed_count")) or 0
+            if event_type == EventTypes.CACHE_FLUSH_COMPLETED
+            else 0
+        ),
+        "suppressed_flush_rows": _non_negative_int(payload.get("suppressed_rows")) or 0,
+        "latest_ts": row.get("ts"),
+        "latest_seq": row.get("seq"),
+        "latest_path": str(path),
+        "latest_line": int(line_no),
+        "latest_event_type": event_type,
+        "latest_status": live_event.get("status"),
+        "latest_reason_code": live_event.get("reason_code"),
+        "latest_symbol": str(symbol) if symbol not in (None, "") else None,
+        "latest_timeframe": str(timeframe) if timeframe not in (None, "") else None,
+        "latest_context": str(context) if context not in (None, "") else None,
+        "latest_elapsed_ms": elapsed_ms,
+        "latest_data": latest_data,
+        "latest_ids": {
+            key: ids.get(key)
+            for key in ("cycle_id",)
+            if ids.get(key) is not None
+        },
+    }
+
+
+def _merge_cache_health_group(
+    groups: dict[tuple[Any, ...], dict[str, Any]],
+    group: dict[str, Any],
+) -> None:
+    key = (group.get("bot"),)
+    existing = groups.get(key)
+    if existing is None:
+        groups[key] = group
+        return
+    existing["count"] = int(existing.get("count") or 0) + 1
+    for field in (
+        "event_types",
+        "symbols",
+        "timeframes",
+        "warmup_contexts",
+        "reason_counts",
+        "source_days",
+    ):
+        counter = existing.setdefault(field, Counter())
+        counter.update(group.get(field) or Counter())
+    existing.setdefault("elapsed_values", []).extend(group.get("elapsed_values") or [])
+    for field in (
+        "symbol_count",
+        "reused_count",
+        "cold_count",
+        "cold_path_decisions",
+        "loaded_rows",
+        "persisted_rows",
+        "suppressed_load_events",
+        "suppressed_flush_events",
+        "suppressed_flush_rows",
+    ):
+        existing[field] = int(existing.get(field) or 0) + int(group.get(field) or 0)
+    current_key = _sort_event_position_key(
+        ts=group.get("latest_ts"),
+        seq=group.get("latest_seq"),
+        path=group.get("latest_path") or "",
+        line_no=int(group.get("latest_line") or 0),
+    )
+    existing_key = _sort_event_position_key(
+        ts=existing.get("latest_ts"),
+        seq=existing.get("latest_seq"),
+        path=existing.get("latest_path") or "",
+        line_no=int(existing.get("latest_line") or 0),
+    )
+    if current_key > existing_key:
+        for field in (
+            "latest_ts",
+            "latest_seq",
+            "latest_path",
+            "latest_line",
+            "latest_event_type",
+            "latest_status",
+            "latest_reason_code",
+            "latest_symbol",
+            "latest_timeframe",
+            "latest_context",
+            "latest_elapsed_ms",
+            "latest_data",
+            "latest_ids",
+        ):
+            existing[field] = group.get(field)
+
+
+def _cache_health_sort_key(group: dict[str, Any]) -> tuple[int, int, str]:
+    elapsed = _ms_summary(
+        [
+            int(value)
+            for value in (group.get("elapsed_values") or [])
+            if _non_negative_int(value) is not None
+        ]
+    )
+    return (
+        -int(group.get("cold_path_decisions") or 0),
+        -int(elapsed.get("max_ms") or 0),
+        str(group.get("bot") or ""),
+    )
+
+
+def _summarize_cache_health(
+    groups: dict[tuple[Any, ...], dict[str, Any]]
+) -> dict[str, Any]:
+    ordered = sorted(groups.values(), key=_cache_health_sort_key)
+    event_types: Counter[str] = Counter()
+    reason_counts: Counter[str] = Counter()
+    source_days: Counter[str] = Counter()
+    bots: set[str] = set()
+    total = 0
+    cold_path_decisions = 0
+    loaded_rows = 0
+    persisted_rows = 0
+    for group in groups.values():
+        total += int(group.get("count") or 0)
+        bot = group.get("bot")
+        if bot not in (None, ""):
+            bots.add(str(bot))
+        event_types.update(group.get("event_types") or Counter())
+        reason_counts.update(group.get("reason_counts") or Counter())
+        source_days.update(group.get("source_days") or Counter())
+        cold_path_decisions += int(group.get("cold_path_decisions") or 0)
+        loaded_rows += int(group.get("loaded_rows") or 0)
+        persisted_rows += int(group.get("persisted_rows") or 0)
+    compact_groups: list[dict[str, Any]] = []
+    for group in ordered[:CACHE_HEALTH_GROUP_LIMIT]:
+        compact = {
+            "bot": group.get("bot"),
+            "count": int(group.get("count") or 0),
+            "event_types": _top_counter_values(
+                group.get("event_types") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "timeframes": _top_counter_values(
+                group.get("timeframes") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "symbols": _symbol_sample(
+                group.get("symbols") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "warmup_contexts": _top_counter_values(
+                group.get("warmup_contexts") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "reason_counts": _top_counter_values(
+                group.get("reason_counts") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "source_days": _top_counter_values(
+                group.get("source_days") or Counter(),
+                limit=CACHE_HEALTH_VALUE_LIMIT,
+            ),
+            "elapsed_ms": _ms_summary(
+                [
+                    int(value)
+                    for value in (group.get("elapsed_values") or [])
+                    if _non_negative_int(value) is not None
+                ]
+            ),
+            "symbol_count": int(group.get("symbol_count") or 0),
+            "reused_count": int(group.get("reused_count") or 0),
+            "cold_count": int(group.get("cold_count") or 0),
+            "cold_path_decisions": int(group.get("cold_path_decisions") or 0),
+            "loaded_rows": int(group.get("loaded_rows") or 0),
+            "persisted_rows": int(group.get("persisted_rows") or 0),
+            "suppressed_load_events": int(group.get("suppressed_load_events") or 0),
+            "suppressed_flush_events": int(group.get("suppressed_flush_events") or 0),
+            "suppressed_flush_rows": int(group.get("suppressed_flush_rows") or 0),
+            "latest_ts": group.get("latest_ts"),
+            "latest_event_type": group.get("latest_event_type"),
+            "latest_status": group.get("latest_status"),
+            "latest_reason_code": group.get("latest_reason_code"),
+            "latest_symbol": group.get("latest_symbol"),
+            "latest_timeframe": group.get("latest_timeframe"),
+            "latest_context": group.get("latest_context"),
+            "latest_elapsed_ms": group.get("latest_elapsed_ms"),
+            "latest_data": group.get("latest_data"),
+            "latest_ids": group.get("latest_ids"),
+        }
+        compact_groups.append(
+            {
+                key: value
+                for key, value in compact.items()
+                if key not in {"latest_path", "latest_line", "latest_seq"}
+                and value not in (None, {}, [])
+            }
+        )
+    return {
+        "total": total,
+        "bots": len(bots),
+        "event_types": _top_counter_values(event_types, limit=CACHE_HEALTH_VALUE_LIMIT),
+        "cold_path_decisions": cold_path_decisions,
+        "loaded_rows": loaded_rows,
+        "persisted_rows": persisted_rows,
+        "reason_counts": _top_counter_values(
+            reason_counts,
+            limit=CACHE_HEALTH_VALUE_LIMIT,
+        ),
+        "source_days": _top_counter_values(source_days, limit=CACHE_HEALTH_VALUE_LIMIT),
+        "groups_truncated": len(ordered) > CACHE_HEALTH_GROUP_LIMIT,
         "groups": compact_groups,
     }
 
@@ -5028,6 +5325,7 @@ def _scan_events(
     remote_call_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     remote_call_timing_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     execution_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
+    cache_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     fill_refresh_health_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_groups: dict[tuple[Any, ...], dict[str, Any]] = {}
     ema_readiness_event_type_counts: Counter[str] = Counter()
@@ -5222,6 +5520,17 @@ def _scan_events(
                         _merge_execution_health_group(
                             execution_health_groups,
                             _execution_health_group(
+                                bot_key=bot_key,
+                                row=row,
+                                live_event=live_event,
+                                path=path,
+                                line_no=line_no,
+                            ),
+                        )
+                    if event_type in CACHE_HEALTH_EVENT_TYPES:
+                        _merge_cache_health_group(
+                            cache_health_groups,
+                            _cache_health_group(
                                 bot_key=bot_key,
                                 row=row,
                                 live_event=live_event,
@@ -5442,6 +5751,7 @@ def _scan_events(
         ),
         "remote_call_timings": _summarize_remote_call_timings(remote_call_timing_groups),
         "execution_health": _summarize_execution_health(execution_health_groups),
+        "cache_health": _summarize_cache_health(cache_health_groups),
         "fill_refresh_health": _summarize_fill_refresh_health(
             fill_refresh_health_groups
         ),
@@ -5883,6 +6193,7 @@ def build_live_smoke_report(
         ],
         "remote_call_timings": event_scan["remote_call_timings"],
         "execution_health": event_scan["execution_health"],
+        "cache_health": event_scan["cache_health"],
         "fill_refresh_health": event_scan["fill_refresh_health"],
         "ema_readiness_health": event_scan["ema_readiness_health"],
         "exchange_config_refresh_health": event_scan[
@@ -5949,6 +6260,11 @@ def _summary_limited_groups(
             "latest_failed_bots": summary.get("latest_failed_bots"),
             "failed_attention_bots": summary.get("failed_attention_bots"),
             "recovered_groups": summary.get("recovered_groups"),
+            "cold_path_decisions": summary.get("cold_path_decisions"),
+            "loaded_rows": summary.get("loaded_rows"),
+            "persisted_rows": summary.get("persisted_rows"),
+            "reason_counts": summary.get("reason_counts") or None,
+            "source_days": summary.get("source_days") or None,
             "latest_candidate_unavailable_total": summary.get(
                 "latest_candidate_unavailable_total"
             ),
@@ -6152,10 +6468,16 @@ def summarize_live_smoke_report(
         if isinstance(report.get("fill_refresh_health"), dict)
         else {}
     )
+    cache_health = (
+        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
+    )
     execution_health = (
         report.get("execution_health")
         if isinstance(report.get("execution_health"), dict)
         else {}
+    )
+    cache_health = (
+        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
     )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
@@ -6324,6 +6646,10 @@ def summarize_live_smoke_report(
         ),
         "execution_health": _summary_limited_groups(
             execution_health,
+            limit=max_groups,
+        ),
+        "cache_health": _summary_limited_groups(
+            cache_health,
             limit=max_groups,
         ),
         "fill_refresh_health": _summary_limited_groups(
@@ -6580,6 +6906,56 @@ def _brief_execution_health(summary: Any) -> dict[str, Any]:
         }.items()
         if value is not None
     }
+
+
+def _brief_cache_health(summary: Any) -> dict[str, Any]:
+    if not isinstance(summary, dict):
+        summary = {}
+    out = {
+        key: value
+        for key, value in {
+            "total": _count_value(summary.get("total")),
+            "bots": _count_value(summary.get("bots")),
+            "cold_path_decisions": _count_value(summary.get("cold_path_decisions")),
+            "loaded_rows": _count_value(summary.get("loaded_rows")),
+            "persisted_rows": _count_value(summary.get("persisted_rows")),
+            "event_types": summary.get("event_types") or {},
+            "reason_counts": summary.get("reason_counts") or {},
+            "source_days": summary.get("source_days") or {},
+        }.items()
+        if value not in (None, {}, [])
+    }
+    groups = summary.get("groups") if isinstance(summary.get("groups"), list) else []
+    compact_groups: list[dict[str, Any]] = []
+    for group in groups[:SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT]:
+        if not isinstance(group, dict):
+            continue
+        compact = {
+            key: group.get(key)
+            for key in (
+                "bot",
+                "count",
+                "event_types",
+                "cold_path_decisions",
+                "loaded_rows",
+                "persisted_rows",
+                "latest_ts",
+                "latest_event_type",
+                "latest_symbol",
+                "latest_timeframe",
+                "latest_context",
+                "latest_data",
+            )
+            if group.get(key) not in (None, "", {}, [])
+        }
+        if compact:
+            compact_groups.append(compact)
+    if compact_groups:
+        out["groups"] = compact_groups
+        out["groups_truncated"] = bool(summary.get("groups_truncated")) or len(
+            groups
+        ) > SMOKE_REPORT_BRIEF_PROBLEM_GROUP_LIMIT
+    return out
 
 
 def _brief_problem_event_groups(summary: Any) -> dict[str, Any]:
@@ -6968,6 +7344,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(report.get("execution_health"), dict)
         else {}
     )
+    cache_health = (
+        report.get("cache_health") if isinstance(report.get("cache_health"), dict) else {}
+    )
     exchange_config_refresh_health = (
         report.get("exchange_config_refresh_health")
         if isinstance(report.get("exchange_config_refresh_health"), dict)
@@ -7213,6 +7592,7 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "startup_timings": _brief_startup_timings(report.get("startup_timings")),
         "execution": _brief_execution_health(execution_health),
+        "cache": _brief_cache_health(cache_health),
         "fill_refresh": _brief_fill_refresh_health(fill_refresh_health),
         "ema_readiness": ema_readiness_brief,
         "exchange_config_refresh": {
@@ -7283,6 +7663,7 @@ SMOKE_REPORT_SECTION_BASE_SELECTORS = frozenset(
 
 SMOKE_REPORT_SECTION_ALIASES: dict[str, tuple[str, ...]] = {
     "account_critical_remote_calls": ("account_critical_remote_call_health",),
+    "cache": ("cache_health",),
     "ema_readiness": ("ema_readiness_health",),
     "event_pipeline": ("event_pipeline_health",),
     "exchange_config_refresh": ("exchange_config_refresh_health",),
