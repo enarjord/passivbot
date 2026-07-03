@@ -1127,6 +1127,112 @@ def test_state_refresh_progress_event_emitter_records_payload():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_state_debug_profile_adds_bounded_refresh_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+        _emit_state_refresh_timing_event = (
+            pb_mod.Passivbot._emit_state_refresh_timing_event
+        )
+        _emit_state_refresh_timing_summary_event = (
+            pb_mod.Passivbot._emit_state_refresh_timing_summary_event
+        )
+        _emit_state_refresh_progress_event = (
+            pb_mod.Passivbot._emit_state_refresh_progress_event
+        )
+
+        def __init__(self):
+            self.live_event_debug_profiles = ("state",)
+            self._live_event_current_cycle_id = "cy_state_debug"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_state_refresh_timing_event(
+        plan={"open_orders", "balance", "positions"},
+        timings_ms={"balance": 25, "open_orders": 40, "positions": 15},
+        wall_ms=45,
+        sum_ms=80,
+        max_surface_ms=40,
+        residual_ms=5,
+        pending_confirmations=True,
+        meaningful_change=True,
+        unusual_plan=False,
+        epoch_changed={"open_orders", "balance"},
+        level="info",
+    )
+    bot._emit_state_refresh_timing_summary_event(
+        plan={"open_orders", "balance"},
+        count=3,
+        since_ms=60_000,
+        wall={"count": 3, "sum": 150, "min": 40, "max": 60},
+        surface_sum={"count": 3, "sum": 250, "min": 60, "max": 100},
+        surface_max={"count": 3, "sum": 120, "min": 30, "max": 50},
+        residual={"count": 3, "sum": 15, "min": 2, "max": 8},
+        surfaces={
+            "balance": {"count": 3, "sum": 75, "min": 20, "max": 30},
+            "open_orders": {"count": 3, "sum": 120, "min": 35, "max": 50},
+        },
+    )
+    bot._emit_state_refresh_progress_event(
+        plan={"balance", "positions", "open_orders"},
+        pending=("positions", "open_orders"),
+        elapsed_ms=12_500,
+        completed_timings_ms={"balance": 120},
+        threshold_s=10.0,
+        repeated=True,
+        level="debug",
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    timing, summary, progress = sink.events
+    assert timing.data["debug_profile"] == "state"
+    assert timing.data["debug"]["data_keys"] == [
+        "epoch_changed",
+        "meaningful_change",
+        "parallel",
+        "pending_confirmations",
+        "plan",
+        "residual_ms",
+        "surface_max_ms",
+        "surface_sum_ms",
+        "timings_ms",
+        "unusual_plan",
+        "wall_ms",
+    ]
+    assert timing.data["debug"]["plan_count"] == 3
+    assert timing.data["debug"]["timings_ms_count"] == 3
+    assert timing.data["debug"]["timings_ms_slowest"] == {
+        "surface": "open_orders",
+        "elapsed_ms": 40,
+    }
+    assert timing.data["debug"]["epoch_changed_count"] == 2
+    assert timing.data["debug"]["pending_confirmations"] is True
+    assert timing.data["debug"]["wall_ms"] == 45
+    assert summary.data["debug_profile"] == "state"
+    assert summary.data["debug"]["summary"] is True
+    assert summary.data["debug"]["surfaces_ms_count"] == 2
+    assert summary.data["debug"]["surfaces_ms_keys"] == ["balance", "open_orders"]
+    assert summary.data["debug"]["count"] == 3
+    assert progress.data["debug_profile"] == "state"
+    assert progress.data["debug"]["pending_count"] == 2
+    assert progress.data["debug"]["completed_timings_ms_count"] == 1
+    assert progress.data["debug"]["completed_timings_ms_slowest"] == {
+        "surface": "balance",
+        "elapsed_ms": 120,
+    }
+    assert progress.data["debug"]["elapsed_ms"] == 12_500
+    assert progress.data["debug"]["threshold_s"] == 10.0
+    assert progress.data["debug"]["repeated"] is True
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_build_health_summary_payload_includes_resource_pressure(monkeypatch):
     import passivbot as pb_mod
 
