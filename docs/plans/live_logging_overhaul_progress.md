@@ -19,18 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `68c3fe22` after PR #1006, `Show brief smoke risk attention groups`.
+- `9d3b4051` after PR #1007, `Summarize risk smoke in incident bundles`.
 
 Current logging-overhaul head:
 
-- `68c3fe22` after PR #1006, `Show brief smoke risk attention groups`.
+- `9d3b4051` after PR #1007, `Summarize risk smoke in incident bundles`.
 
 Current work:
 
-- Branch `codex/v8-incident-risk-smoke-summary` adds the existing value-safe
-  smoke risk-event summary to `live-incident-bundle` result and manifest
-  metadata, so incident bundles expose HSL RED/cooldown/raw-red context without
-  opening the full embedded smoke report.
+- Branch `codex/v8-incident-ema-smoke-summary` adds the existing value-safe
+  smoke EMA-readiness summary to `live-incident-bundle` result and manifest
+  metadata, so incident bundles expose current EMA unavailable reason counts
+  without opening the full embedded smoke report.
 
 Current review gate:
 
@@ -60,6 +60,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1007 at `9d3b4051`.
+- PR #1007 added the bounded `risk_events` brief smoke projection to
+  `live-incident-bundle` returned JSON and `manifest.json`, reusing the same
+  safe risk-event summary surfaced by brief smoke reports. It merged after
+  Claude and Hermes approved with no findings and CI was green. VPS5 checkout
+  was updated to `9d3b4051` without restarting running bots because the slice
+  was report-only. Smoke after the fast-forward reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state,
+  `remote_calls.failed=0`, `account_critical_remote_calls.failed=0`, and
+  `fill_refresh.failed=0`. A focused incident-bundle verification confirmed
+  `manifest.smoke_report.risk_events` was present.
 - Repository pulled through PR #1006 at `68c3fe22`.
 - PR #1006 added bounded `risk_events.attention_groups` to
   `live-smoke-report --brief`, prioritizing HSL RED/cooldown/raw-red and

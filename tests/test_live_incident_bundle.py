@@ -165,6 +165,52 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
                     "secret_marker": "risk-secret",
                 },
             ),
+            _monitor_row(
+                event_type="ema.unavailable",
+                seq=7,
+                ts=2300,
+                status="degraded",
+                level="warning",
+                reason_code="required_ema_unavailable",
+                component="ema.bundle",
+                symbol="BTC/USDT:USDT",
+                ids={"cycle_id": "cy_ema_1"},
+                data={
+                    "candidate_unavailable": {
+                        "count": 1,
+                        "sample": ["BTC/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "unavailable": {
+                        "count": 2,
+                        "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                        "truncated": 0,
+                    },
+                    "candidate_unavailable_groups": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 1,
+                                "sample": ["BTC/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                            "error_types": ["MissingCloseEma"],
+                            "example_error": "ema-secret-marker",
+                        }
+                    ],
+                    "unavailable_reasons": [
+                        {
+                            "reason": "cache_only_fetch_failed",
+                            "symbols": {
+                                "count": 2,
+                                "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                                "truncated": 0,
+                            },
+                        }
+                    ],
+                    "raw_exchange_payload": {"api_key": "EMA_SECRET"},
+                },
+            ),
         ],
     )
     (events_dir / "20260629.ndjson.gz").write_bytes(b"")
@@ -235,12 +281,12 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
         "rotated_skipped": 1,
         "scope_pruned": 0,
     }
-    assert report["time_window"]["matched_events"] == 3
+    assert report["time_window"]["matched_events"] == 4
     assert report["smoke_report"]["event_window"] == {
         "enabled": True,
         "since_ms": 1500,
         "until_ms": 2500,
-        "events_considered": 3,
+        "events_considered": 4,
         "events_skipped_before": 3,
         "events_skipped_after": 0,
         "invalid_window_ts": 0,
@@ -298,6 +344,31 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
             "latest_ts": 2200,
         }
     ]
+    assert report["smoke_report"]["ema_readiness"] == {
+        "total": 1,
+        "bots": 1,
+        "latest_candidate_unavailable_total": 1,
+        "latest_unavailable_total": 2,
+        "latest_optional_drop_total": 0,
+        "event_types": {"ema.unavailable": 1},
+        "latest_candidate_reason_counts": {"cache_only_fetch_failed": 1},
+        "latest_unavailable_reason_counts": {"cache_only_fetch_failed": 2},
+        "latest_candidate_reason_symbols": {
+            "cache_only_fetch_failed": {
+                "count": 1,
+                "sample": ["BTC/USDT:USDT"],
+                "truncated": 0,
+            }
+        },
+        "latest_unavailable_reason_symbols": {
+            "cache_only_fetch_failed": {
+                "count": 2,
+                "sample": ["BTC/USDT:USDT", "ETH/USDT:USDT"],
+                "truncated": 0,
+            }
+        },
+        "latest_candidate_error_type_counts": {"MissingCloseEma": 1},
+    }
     assert report["config_hashes"] == 1
     assert report["monitor_snapshots"] == 1
     assert report["event_segments"]["included"] == 1
@@ -343,10 +414,15 @@ def test_live_incident_bundle_collects_hashes_snapshots_events_and_window(tmp_pa
     assert manifest["smoke_report"]["risk_events"] == report["smoke_report"][
         "risk_events"
     ]
+    assert manifest["smoke_report"]["ema_readiness"] == report["smoke_report"][
+        "ema_readiness"
+    ]
     manifest_dump = json.dumps(manifest, sort_keys=True)
     assert "raw_order_id_should_not_summarize" not in manifest_dump
     assert "raw_client_id_should_not_summarize" not in manifest_dump
     assert "risk-secret" not in manifest_dump
+    assert "ema-secret-marker" not in manifest_dump
+    assert "EMA_SECRET" not in manifest_dump
     assert "12345.67" not in manifest_dump
     assert "0.42" not in manifest_dump
     assert '"price"' not in manifest_dump
