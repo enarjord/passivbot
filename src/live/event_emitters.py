@@ -1336,6 +1336,69 @@ def _forager_debug_payload(data: dict[str, Any], *, limit: int = 32) -> dict[str
     return debug
 
 
+def _state_refresh_debug_payload(
+    data: dict[str, Any], *, limit: int = 32
+) -> dict[str, Any]:
+    debug: dict[str, Any] = {"data_keys": _mapping_key_sample(data, limit=limit)}
+    plan = data.get("plan")
+    if isinstance(plan, list):
+        debug["plan_count"] = len(plan)
+        debug["plan_sample"] = [str(item) for item in plan[:limit]]
+    pending = data.get("pending")
+    if isinstance(pending, list):
+        debug["pending_count"] = len(pending)
+        debug["pending_sample"] = [str(item) for item in pending[:limit]]
+    epoch_changed = data.get("epoch_changed")
+    if isinstance(epoch_changed, list):
+        debug["epoch_changed_count"] = len(epoch_changed)
+        debug["epoch_changed_sample"] = [str(item) for item in epoch_changed[:limit]]
+    for key in (
+        "timings_ms",
+        "completed_timings_ms",
+        "surfaces_ms",
+    ):
+        value = data.get(key)
+        if isinstance(value, dict):
+            keys = _mapping_key_sample(value, limit=limit)
+            debug[f"{key}_count"] = len(value)
+            debug[f"{key}_keys"] = keys
+            if key in {"timings_ms", "completed_timings_ms"} and value:
+                slowest_key, slowest_value = max(
+                    value.items(),
+                    key=lambda item: int(_safe_int(item[1]) or 0),
+                )
+                debug[f"{key}_slowest"] = {
+                    "surface": str(slowest_key),
+                    "elapsed_ms": max(0, int(_safe_int(slowest_value) or 0)),
+                }
+    for key in (
+        "wall_ms",
+        "surface_sum_ms",
+        "surface_max_ms",
+        "residual_ms",
+        "elapsed_ms",
+        "count",
+        "since_ms",
+    ):
+        value = _safe_int(data.get(key))
+        if value is not None:
+            debug[key] = max(0, int(value))
+    threshold = _safe_float(data.get("threshold_s"))
+    if threshold is not None:
+        debug["threshold_s"] = max(0.0, float(threshold))
+    for key in (
+        "parallel",
+        "pending_confirmations",
+        "meaningful_change",
+        "unusual_plan",
+        "repeated",
+        "summary",
+    ):
+        if key in data:
+            debug[key] = bool(data.get(key))
+    return debug
+
+
 def _emit_state_refresh_timing_event_unchecked(
     bot: Any,
     *,
@@ -1364,6 +1427,9 @@ def _emit_state_refresh_timing_event_unchecked(
         "unusual_plan": bool(unusual_plan),
         "epoch_changed": _sorted_str_list(epoch_changed or []),
     }
+    if live_event_debug_profile_enabled(bot, "state"):
+        data["debug"] = _state_refresh_debug_payload(data)
+        data["debug_profile"] = "state"
     _safe_emit(
         bot,
         EventTypes.STATE_REFRESH_TIMING,
@@ -1426,6 +1492,9 @@ def _emit_state_refresh_timing_summary_event_unchecked(
             )
         },
     }
+    if live_event_debug_profile_enabled(bot, "state"):
+        data["debug"] = _state_refresh_debug_payload(data)
+        data["debug_profile"] = "state"
     _safe_emit(
         bot,
         EventTypes.STATE_REFRESH_TIMING,
@@ -1471,6 +1540,9 @@ def _emit_state_refresh_progress_event_unchecked(
     threshold = _safe_float(threshold_s)
     if threshold is not None:
         data["threshold_s"] = max(0.0, float(threshold))
+    if live_event_debug_profile_enabled(bot, "state"):
+        data["debug"] = _state_refresh_debug_payload(data)
+        data["debug_profile"] = "state"
     _safe_emit(
         bot,
         EventTypes.STATE_REFRESH_PROGRESS,

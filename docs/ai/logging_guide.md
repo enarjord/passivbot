@@ -68,10 +68,11 @@ Current profile behavior:
    reason/sample counts, correlation ids, and shape metadata. These summaries
    must not copy raw exchange/account payloads, credentials, or unbounded row
    data.
-3. `startup` and `state` are reserved profile names for startup/state
-   diagnostics. Startup lifecycle events already surface which profiles are
-   enabled, and live performance reports can summarize them from existing
-   monitor events.
+3. `state` adds bounded state-refresh timing/progress shape metadata such as
+   plan/pending counts, surface key lists, and slowest refreshed surface.
+4. `startup` is a reserved profile name for startup diagnostics. Startup
+   lifecycle events already surface which profiles are enabled, and live
+   performance reports can summarize them from existing monitor events.
 
 Unknown profile names should fail visibly instead of being ignored silently.
 

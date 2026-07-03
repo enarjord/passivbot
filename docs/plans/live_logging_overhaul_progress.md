@@ -6352,6 +6352,32 @@ VPS5 deployment status:
   live-event debug-profile normalization test, broader live-event/monitor suite
   if review asks for it, `py_compile`, `git diff --check`, and the standard
   added-line silent-handling scan.
+- Result: PR #1025 was reviewed by Claude and Hermes, merged to `v8`, and
+  deployed to VPS5 at `7f8a1942` without restarting bots. A short post-deploy
+  smoke reported `ok=true`, `hard_failures=0`, clean tracked repository state,
+  five configured bots still running, no event-pipeline drops/sink errors, and
+  only known non-hard HSL cooldown/status attention.
+
+### Draft Slice: State Debug Profile
+
+- Branch: `codex/v8-state-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment for existing
+  `state.refresh_timing` and `state.refresh_progress` events.
+- Triggering evidence: `state` is part of the documented
+  `logging.live_event_debug_profiles` / `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES`
+  surface, but only startup events and live performance reports exposed profile
+  state. Existing state-refresh events did not add profile-specific debug shape
+  when the profile was enabled.
+- Intended result: when `state` debug is enabled, add bounded plan/pending
+  counts, surface key lists, slowest refreshed surface, and timing scalar
+  summaries to existing state refresh timing/progress events. Do not add raw
+  account payloads, exchange responses, credentials, event routes, console
+  output, refresh behavior, exchange calls, order/risk logic, monitor writes,
+  or trading behavior.
+- Expected validation: focused state debug-profile monitor test,
+  live-event debug-profile normalization test, broader live-event/monitor suite
+  if review asks for it, `py_compile`, `git diff --check`, and the standard
+  added-line silent-handling scan.
 
 ## Current Next Steps
 
