@@ -1566,6 +1566,103 @@ def test_forager_and_ema_summary_emitters_emit_structured_events():
     assert bot._live_event_pipeline.close(timeout=2.0) is True
 
 
+def test_forager_debug_profile_adds_bounded_selection_shape():
+    import passivbot as pb_mod
+
+    sink = ListEventSink()
+
+    class FakeBot:
+        _current_live_event_cycle_id = pb_mod.Passivbot._current_live_event_cycle_id
+        _emit_forager_feature_unavailable_event = (
+            pb_mod.Passivbot._emit_forager_feature_unavailable_event
+        )
+        _emit_forager_selection_event = pb_mod.Passivbot._emit_forager_selection_event
+        _emit_live_event = pb_mod.Passivbot._emit_live_event
+
+        def __init__(self):
+            self.exchange = "gateio"
+            self.user = "gateio_01"
+            self.bot_id = "bot_1"
+            self.live_event_debug_profiles = ("forager",)
+            self._live_event_current_cycle_id = "cy_forager"
+            self._live_event_pipeline = LiveEventPipeline(
+                structured_sinks=[sink],
+                monitor_sinks=[],
+            )
+
+    bot = FakeBot()
+    bot._emit_forager_feature_unavailable_event(
+        pside="long",
+        symbols=["ETH/USDT:USDT", "BTC/USDT:USDT", "SOL/USDT:USDT"],
+        candidate_count=5,
+        volume_count=2,
+        log_range_count=1,
+        max_age_ms=300_000,
+        fetch_budget=2,
+    )
+    bot._emit_forager_selection_event(
+        pside="long",
+        candidate_count=5,
+        eligible_count=3,
+        selected_symbols=["BTC/USDT:USDT"],
+        slots_open=True,
+        max_n_positions=4,
+        clip_pct=0.1,
+        volatility_drop_pct=0.25,
+        max_age_ms=300_000,
+        fetch_budget=2,
+        incumbent_symbols=["ETH/USDT:USDT"],
+        slots_to_fill=1,
+        score_hysteresis_pct=0.03,
+        top_scores=[
+            {
+                "symbol": "BTC/USDT:USDT",
+                "score": 0.987654321,
+                "volume": 123456.0,
+                "log_range": 0.0123,
+            }
+        ],
+        hysteresis_event_count=1,
+        feature_unavailable_count=2,
+        volatility_dropped_count=1,
+    )
+
+    assert bot._live_event_pipeline.flush(timeout=2.0) is True
+    feature_unavailable, selection = sink.events
+    assert feature_unavailable.data["debug_profile"] == "forager"
+    assert selection.data["debug_profile"] == "forager"
+    assert feature_unavailable.data["debug"] == {
+        "data_keys": [
+            "candidate_count",
+            "fetch_budget",
+            "log_range_count",
+            "max_age_ms",
+            "unavailable",
+            "volume_count",
+        ],
+        "candidate_count": 5,
+        "fetch_budget": 2,
+        "unavailable_count": 3,
+        "unavailable_sample_count": 3,
+        "unavailable_truncated": False,
+    }
+    assert selection.data["debug"]["candidate_count"] == 5
+    assert selection.data["debug"]["eligible_count"] == 3
+    assert selection.data["debug"]["selected_count"] == 1
+    assert selection.data["debug"]["incumbent_count"] == 1
+    assert selection.data["debug"]["slots_to_fill"] == 1
+    assert selection.data["debug"]["top_scores_count"] == 1
+    assert selection.data["debug"]["top_score_keys"] == [
+        "incumbent",
+        "score",
+        "selected",
+        "symbol",
+    ]
+    assert selection.data["debug"]["slots_open"] is True
+    assert "0.987654321" not in str(selection.data["debug"])
+    assert bot._live_event_pipeline.close(timeout=2.0) is True
+
+
 def test_candle_events_debug_profile_adds_bounded_tail_and_coverage_shape():
     import passivbot as pb_mod
 

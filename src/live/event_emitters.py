@@ -1295,6 +1295,47 @@ def _sorted_str_list(value: Any) -> list[str]:
         return []
 
 
+def _forager_debug_payload(data: dict[str, Any], *, limit: int = 32) -> dict[str, Any]:
+    debug: dict[str, Any] = {"data_keys": _mapping_key_sample(data, limit=limit)}
+    for key in (
+        "candidate_count",
+        "eligible_count",
+        "selected_count",
+        "incumbent_count",
+        "max_n_positions",
+        "slots_to_fill",
+        "feature_unavailable_count",
+        "volatility_dropped_count",
+        "hysteresis_event_count",
+        "fetch_budget",
+    ):
+        value = _safe_int(data.get(key))
+        if value is not None:
+            debug[key] = max(0, int(value))
+    for key in ("slots_open",):
+        if key in data:
+            debug[key] = bool(data.get(key))
+    unavailable = data.get("unavailable")
+    if isinstance(unavailable, dict):
+        unavailable_count = _safe_int(unavailable.get("count"))
+        sample = unavailable.get("sample")
+        debug["unavailable_count"] = max(
+            0, int(unavailable_count) if unavailable_count is not None else 0
+        )
+        debug["unavailable_sample_count"] = len(sample) if isinstance(sample, list) else 0
+        debug["unavailable_truncated"] = bool(unavailable.get("truncated"))
+    top_scores = data.get("top_scores")
+    if isinstance(top_scores, list):
+        debug["top_scores_count"] = len(top_scores)
+        score_keys: set[str] = set()
+        for item in top_scores[:limit]:
+            if isinstance(item, dict):
+                score_keys.update(str(key) for key in item)
+        if score_keys:
+            debug["top_score_keys"] = sorted(score_keys)[:limit]
+    return debug
+
+
 def _emit_state_refresh_timing_event_unchecked(
     bot: Any,
     *,
@@ -1894,6 +1935,17 @@ def _emit_forager_feature_unavailable_event_unchecked(
 ) -> None:
     if not symbols:
         return
+    data: dict[str, Any] = {
+        "candidate_count": int(candidate_count),
+        "unavailable": _symbol_sample(symbols),
+        "volume_count": int(volume_count),
+        "log_range_count": int(log_range_count),
+        "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
+        "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
+    }
+    if live_event_debug_profile_enabled(bot, "forager"):
+        data["debug"] = _forager_debug_payload(data)
+        data["debug_profile"] = "forager"
     _safe_emit(
         bot,
         EventTypes.FORAGER_FEATURE_UNAVAILABLE,
@@ -1904,14 +1956,7 @@ def _emit_forager_feature_unavailable_event_unchecked(
         pside=str(pside),
         status="skipped",
         reason_code=ReasonCodes.RANKING_FEATURES_UNAVAILABLE,
-        data={
-            "candidate_count": int(candidate_count),
-            "unavailable": _symbol_sample(symbols),
-            "volume_count": int(volume_count),
-            "log_range_count": int(log_range_count),
-            "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
-            "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
-        },
+        data=data,
     )
 
 
@@ -1952,6 +1997,38 @@ def _emit_forager_selection_event_unchecked(
 ) -> None:
     selected = [str(symbol) for symbol in selected_symbols or []]
     incumbent = [str(symbol) for symbol in incumbent_symbols or []]
+    data: dict[str, Any] = {
+        "candidate_count": int(candidate_count),
+        "eligible_count": int(eligible_count),
+        "selected_count": len(selected),
+        "selected_symbols": selected[:12],
+        "incumbent_count": len(incumbent),
+        "incumbent_symbols": incumbent[:12],
+        "slots_open": bool(slots_open),
+        "max_n_positions": int(max_n_positions) if max_n_positions is not None else None,
+        "slots_to_fill": int(slots_to_fill) if slots_to_fill is not None else None,
+        "clip_pct": float(clip_pct) if clip_pct is not None else None,
+        "volatility_drop_pct": (
+            float(volatility_drop_pct)
+            if volatility_drop_pct is not None
+            else None
+        ),
+        "score_hysteresis_pct": (
+            float(score_hysteresis_pct)
+            if score_hysteresis_pct is not None
+            else None
+        ),
+        "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
+        "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
+        "source": str(source),
+        "feature_unavailable_count": int(feature_unavailable_count),
+        "volatility_dropped_count": int(volatility_dropped_count),
+        "hysteresis_event_count": int(hysteresis_event_count),
+        "top_scores": _forager_top_score_sample(top_scores),
+    }
+    if live_event_debug_profile_enabled(bot, "forager"):
+        data["debug"] = _forager_debug_payload(data)
+        data["debug_profile"] = "forager"
     _safe_emit(
         bot,
         EventTypes.FORAGER_SELECTION,
@@ -1962,35 +2039,7 @@ def _emit_forager_selection_event_unchecked(
         pside=str(pside),
         status=status,
         reason_code=reason_code,
-        data={
-            "candidate_count": int(candidate_count),
-            "eligible_count": int(eligible_count),
-            "selected_count": len(selected),
-            "selected_symbols": selected[:12],
-            "incumbent_count": len(incumbent),
-            "incumbent_symbols": incumbent[:12],
-            "slots_open": bool(slots_open),
-            "max_n_positions": int(max_n_positions) if max_n_positions is not None else None,
-            "slots_to_fill": int(slots_to_fill) if slots_to_fill is not None else None,
-            "clip_pct": float(clip_pct) if clip_pct is not None else None,
-            "volatility_drop_pct": (
-                float(volatility_drop_pct)
-                if volatility_drop_pct is not None
-                else None
-            ),
-            "score_hysteresis_pct": (
-                float(score_hysteresis_pct)
-                if score_hysteresis_pct is not None
-                else None
-            ),
-            "max_age_ms": int(max_age_ms) if max_age_ms is not None else None,
-            "fetch_budget": int(fetch_budget) if fetch_budget is not None else None,
-            "source": str(source),
-            "feature_unavailable_count": int(feature_unavailable_count),
-            "volatility_dropped_count": int(volatility_dropped_count),
-            "hysteresis_event_count": int(hysteresis_event_count),
-            "top_scores": _forager_top_score_sample(top_scores),
-        },
+        data=data,
     )
 
 

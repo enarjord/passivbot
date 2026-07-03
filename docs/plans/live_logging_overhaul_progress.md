@@ -6324,6 +6324,34 @@ VPS5 deployment status:
   `tests/test_live_smoke_report.py`, `py_compile`, `git diff --check`,
   added-line silent-handling scan, and a read-only VPS5 smoke after merge
   proving the compact fields appear when the condition is present.
+- Result: PR #1024 was reviewed by Claude and Hermes, merged to `v8`, and
+  deployed to VPS5 at `59c36ada` without restarting bots. A short post-deploy
+  smoke reported `ok=true`, `hard_failures=0`, clean tracked repository state,
+  and five configured bots still running. The deployed brief `risk_events`
+  output now includes allowlisted `latest_data` for HSL cooldown and green
+  status rows, proving the compact state projection is active while keeping raw
+  drawdown/balance/allowance details out of brief output.
+
+### Draft Slice: Forager Debug Profile
+
+- Branch: `codex/v8-forager-debug-profile`.
+- Scope: Phase 5/6 opt-in structured debug enrichment for existing
+  `forager.selection` and `forager.feature_unavailable` events.
+- Triggering evidence: `forager` is already part of the documented
+  `logging.live_event_debug_profiles` / `PASSIVBOT_LIVE_EVENT_DEBUG_PROFILES`
+  surface, but the existing forager event emitters did not add any
+  profile-specific debug shape when that profile was enabled.
+- Intended result: when `forager` debug is enabled, add bounded count and
+  key-shape metadata to existing forager events: candidate/eligible/selected
+  counts, unavailable sample counts, top-score key shape, slot state, and
+  related decision counters. Do not add raw score values beyond the existing
+  default bounded top-score sample, do not change default forager events, and do
+  not change console output, event routing, selection behavior, exchange calls,
+  order/risk logic, monitor writes, or trading behavior.
+- Expected validation: focused forager debug-profile monitor test,
+  live-event debug-profile normalization test, broader live-event/monitor suite
+  if review asks for it, `py_compile`, `git diff --check`, and the standard
+  added-line silent-handling scan.
 
 ## Current Next Steps
 
