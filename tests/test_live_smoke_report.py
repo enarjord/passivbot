@@ -3165,6 +3165,32 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
             ],
             "closest_to_red_truncated": 0,
         },
+        "attention_groups": [
+            {
+                "bot": "binance/binance_01",
+                "event_type": "hsl.red_finalized_without_order",
+                "reason_code": "hsl_red_finalized_without_exchange_order",
+                "status": "succeeded",
+                "level": "info",
+                "symbol": "ZEC/USDT:USDT",
+                "pside": "long",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 4500,
+            },
+            {
+                "bot": "binance/binance_01",
+                "event_type": "risk.mode_changed",
+                "reason_code": "hsl_runtime_forced_modes",
+                "status": "succeeded",
+                "level": "info",
+                "pside": "long",
+                "component": "test",
+                "count": 1,
+                "latest_ts": 4000,
+            },
+        ],
+        "attention_groups_truncated": False,
         "groups": [
             {
                 "bot": "binance/binance_01",
@@ -3367,6 +3393,32 @@ def test_live_smoke_report_summarizes_recent_risk_events(tmp_path):
         },
     ]
     assert brief["risk_events"]["latest_groups_truncated"] is False
+    assert brief["risk_events"]["attention_groups"] == [
+        {
+            "bot": "binance/binance_01",
+            "event_type": "hsl.red_finalized_without_order",
+            "reason_code": "hsl_red_finalized_without_exchange_order",
+            "status": "succeeded",
+            "level": "info",
+            "symbol": "ZEC/USDT:USDT",
+            "pside": "long",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 4500,
+        },
+        {
+            "bot": "binance/binance_01",
+            "event_type": "risk.mode_changed",
+            "reason_code": "hsl_runtime_forced_modes",
+            "status": "succeeded",
+            "level": "info",
+            "pside": "long",
+            "component": "test",
+            "count": 1,
+            "latest_ts": 4000,
+        },
+    ]
+    assert brief["risk_events"]["attention_groups_truncated"] is False
     assert "red_proximity_pct" in json.dumps(summary["risk_events"]["hsl_status"])
     assert "dist_to_red" not in json.dumps(summary["risk_events"]["hsl_status"])
     assert "red_threshold" not in json.dumps(brief["risk_events"]["hsl_status"])

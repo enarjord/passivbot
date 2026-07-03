@@ -19,18 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `947b75b1` after PR #985, `Project low-balance create skips to event console`.
+- `f54dae3e` after PR #1005, `Show brief smoke risk event samples`.
 
 Current logging-overhaul head:
 
-- `947b75b1` after PR #985, `Project low-balance create skips to event console`.
+- `f54dae3e` after PR #1005, `Show brief smoke risk event samples`.
 
 Current work:
 
-- Branch `codex/v8-defensive-event-console-gates` makes previously merged
-  passivbot.py console-dedup gates robust for borrowed-method FakeBot callers by
-  using the class helper directly. This is production-behavior neutral and
-  restores executor-path test coverage broken by #983/#984.
+- Branch `codex/v8-smoke-risk-attention-groups` adds bounded
+  `risk_events.attention_groups` to `live-smoke-report --brief`, so HSL RED,
+  cooldown, raw-red-pending, and panic-mode risk context stays visible even
+  when newer routine green/status events dominate latest-event ordering.
 
 Current review gate:
 
@@ -60,6 +60,17 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1005 at `f54dae3e`.
+- PR #1005 added bounded `risk_events.latest_groups` to
+  `live-smoke-report --brief`, sourced from existing structured risk events and
+  limited to safe metadata fields. VPS5 smoke after deploy reported `ok=true`,
+  `hard_failures=0`, `matched_expected=5`, clean tracked repository state at
+  `repository.head=f54dae3e`, `remote_calls.failed=0`,
+  `account_critical_remote_calls.failed=0`, and `fill_refresh.failed=0`. The
+  new field was visible in smoke output. A wider risk-events-only smoke
+  confirmed current HSL cooldown/raw-red evidence, but also showed that
+  latest-time ordering can bury older RED/cooldown context behind newer routine
+  green HSL status groups, motivating the current attention-groups follow-up.
 - Repository pulled through PR #985 at `947b75b1`.
 - PR #985 projected existing `execution.create_skipped` low-balance create-skip
   events into the structured console/text sinks and made the legacy
