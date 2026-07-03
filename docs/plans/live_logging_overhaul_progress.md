@@ -19,20 +19,18 @@ Last updated: 2026-07-02.
 
 Current `origin/v8` head:
 
-- `2f91372a` after PR #1010, `Summarize data-plane smoke in incident bundles`.
+- `57a52e80` after PR #1011, `Accept brief smoke section aliases`.
 
 Current logging-overhaul head:
 
-- `2f91372a` after PR #1010, `Summarize data-plane smoke in incident bundles`.
+- `57a52e80` after PR #1011, `Accept brief smoke section aliases`.
 
 Current work:
 
-- Branch `codex/v8-incident-smoke-section-aliases` adds CLI smoke-section
-  aliases so brief smoke-summary names such as `fill_refresh`, `hsl_replay`,
-  `remote_calls`, `account_critical_remote_calls`, `ema_readiness`, and
-  operational brief keys resolve to their embedded full-report sections when
-  using `live-smoke-report --section` or
-  `live-incident-bundle --smoke-section`.
+- Branch `codex/v8-smoke-problem-non-hard-count` adds a bounded
+  `problem_events.non_hard` count to `live-smoke-report --summary` and
+  `--brief`, making non-fatal structured attention easier to distinguish from
+  hard problem events without changing smoke verdict policy.
 
 Current review gate:
 
@@ -62,6 +60,21 @@ Retuned goal boundary:
 
 VPS5 deployment status:
 
+- Repository pulled through PR #1011 at `57a52e80`.
+- PR #1011 added CLI smoke-section aliases so brief names such as
+  `fill_refresh`, `hsl_replay`, and `remote_calls` resolve to their embedded
+  full-report smoke sections. It merged after Claude and Hermes approved with
+  no findings and CI was green. VPS5 checkout was updated to `57a52e80`
+  without restarting running bots because the slice was report-only/tooling
+  only. Smoke after the fast-forward reported `ok=true`, `hard_failures=0`,
+  `matched_expected=5`, clean tracked repository state at
+  `repository.head=57a52e80`, no failed remote calls, no failed
+  account-critical remote calls, `fill_refresh.failed=0`, and no hard log
+  matches. Remaining attention came from known non-hard EMA readiness and ZEC
+  HSL cooldown status. A focused incident-bundle verification confirmed
+  `--smoke-section fill_refresh` selected embedded `fill_refresh_health`,
+  omitted unrelated embedded full sections, and preserved
+  `manifest.filters.smoke_sections=["fill_refresh"]`.
 - Repository pulled through PR #1010 at `2f91372a`.
 - PR #1010 added bounded data-plane smoke projections to
   `live-incident-bundle` returned JSON and `manifest.json`: remote calls,
