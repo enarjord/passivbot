@@ -1202,6 +1202,7 @@ def test_live_smoke_report_summary_projects_high_signal_fields(tmp_path):
     assert len(summary["logs"]["matches"]) == 1
     assert summary["problem_events"]["total"] == 2
     assert summary["problem_events"]["hard"] == 0
+    assert summary["problem_events"]["non_hard"] == 2
     assert summary["problem_events"]["groups_truncated"] is True
     assert len(summary["problem_events"]["groups"]) == 1
     assert summary["problem_events"]["groups"][0]["event_type"] in {
@@ -1331,6 +1332,7 @@ def test_live_smoke_report_brief_summary_projects_top_level_counters(tmp_path):
     }
     assert brief["problem_events"]["total"] == 2
     assert brief["problem_events"]["hard"] == 0
+    assert brief["problem_events"]["non_hard"] == 2
     assert brief["problem_events"]["groups_truncated"] is False
     assert brief["problem_events"]["event_types_truncated"] is False
     assert brief["problem_events"]["event_types"] == {
@@ -1449,6 +1451,7 @@ def test_live_smoke_report_brief_bounds_problem_event_types(tmp_path):
 
     assert brief["problem_events"]["total"] == limit + 1
     assert brief["problem_events"]["hard"] == 0
+    assert brief["problem_events"]["non_hard"] == limit + 1
     assert brief["problem_events"]["groups_truncated"] is True
     assert brief["problem_events"]["event_types_truncated"] is True
     assert len(brief["problem_events"]["groups"]) == limit
@@ -4995,6 +4998,7 @@ def test_live_smoke_report_cli_can_emit_brief_summary(tmp_path, capsys):
     assert summary["logs"]["attention_matches"] == 1
     assert summary["problem_events"]["hard"] == 0
     assert summary["problem_events"]["total"] == 1
+    assert summary["problem_events"]["non_hard"] == 1
     assert summary["problem_events"]["event_types"] == {"remote_call.failed": 1}
     assert summary["problem_events"]["event_types_truncated"] is False
     assert summary["problem_events"]["groups"] == [

@@ -6147,6 +6147,8 @@ def summarize_live_smoke_report(
         if isinstance(report.get("shutdown_events"), dict)
         else {}
     )
+    problem_event_count = int(report.get("problem_event_count") or 0)
+    hard_problem_event_count = int(report.get("hard_problem_event_count") or 0)
 
     return {
         "ok": bool(report.get("ok", False)),
@@ -6256,8 +6258,9 @@ def summarize_live_smoke_report(
             "window": logs.get("window"),
         },
         "problem_events": {
-            "total": int(report.get("problem_event_count") or 0),
-            "hard": int(report.get("hard_problem_event_count") or 0),
+            "total": problem_event_count,
+            "hard": hard_problem_event_count,
+            "non_hard": max(0, problem_event_count - hard_problem_event_count),
             "groups_truncated": bool(problem_groups.get("groups_truncated"))
             or len(problem_group_rows) > max_groups,
             "groups": problem_group_rows[:max_groups],
@@ -6899,6 +6902,8 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
     event_window = (
         report.get("event_window") if isinstance(report.get("event_window"), dict) else {}
     )
+    problem_event_count = _count_value(report.get("problem_event_count"))
+    hard_problem_event_count = _count_value(report.get("hard_problem_event_count"))
     ema_readiness_brief = {
         "total": _count_value(ema_readiness_health.get("total")),
         "bots": _count_value(ema_readiness_health.get("bots")),
@@ -7102,8 +7107,9 @@ def summarize_live_smoke_report_brief(report: dict[str, Any]) -> dict[str, Any]:
         }
         | _brief_log_match_samples(logs),
         "problem_events": {
-            "total": _count_value(report.get("problem_event_count")),
-            "hard": _count_value(report.get("hard_problem_event_count")),
+            "total": problem_event_count,
+            "hard": hard_problem_event_count,
+            "non_hard": max(0, problem_event_count - hard_problem_event_count),
         }
         | _brief_problem_event_groups(report.get("problem_event_groups")),
         "remote_calls": _brief_remote_call_health(report.get("remote_call_health")),

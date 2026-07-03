@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- `passivbot tool live-smoke-report --summary` and `--brief` now include
+  `problem_events.non_hard`, making non-fatal structured attention easier to
+  distinguish from hard problem events at a glance.
 - `passivbot tool live-smoke-report --section` and
   `passivbot tool live-incident-bundle --smoke-section` now accept the brief
   smoke-summary names such as `fill_refresh`, `hsl_replay`, and
