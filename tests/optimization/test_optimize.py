@@ -3028,9 +3028,13 @@ class TestResultRecorder:
         config = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
         bounds = extract_bounds_tuple_list_from_config(config)
         individual = Candidate(config_to_individual(config, bounds, sig_digits=6))
+        scoring_keys = config["optimize"]["scoring"]
+        objectives = {
+            item["metric"] if isinstance(item, dict) else item: 0.5 for item in scoring_keys
+        }
 
         individual.evaluation_metrics = {
-            "objectives": {"metric1": 0.5},
+            "objectives": objectives,
             "constraint_violation": 0.0,
         }
 
@@ -3039,7 +3043,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=scoring_keys,
                 compress=False,
                 write_all_results=False,
                 bounds=None,
@@ -3072,10 +3076,14 @@ class TestResultRecorder:
         template = load_prepared_config("configs/examples/ema_anchor.json", verbose=False)
         bounds = extract_bounds_tuple_list_from_config(template)
         vector = config_to_individual(template, bounds, sig_digits=6)
+        scoring_keys = template["optimize"]["scoring"]
+        objectives = {
+            item["metric"] if isinstance(item, dict) else item: 0.5 for item in scoring_keys
+        }
 
         entry = build_pymoo_record_entry(
             vector=vector,
-            metrics={"objectives": {"metric1": 0.5}, "constraint_violation": 0.0},
+            metrics={"objectives": objectives, "constraint_violation": 0.0},
             template=template,
             build_config_fn=individual_to_config,
             overrides_fn=optimize.optimizer_overrides,
@@ -3087,7 +3095,7 @@ class TestResultRecorder:
                 results_dir=tmpdir,
                 sig_digits=6,
                 flush_interval=60,
-                scoring_keys=["metric1"],
+                scoring_keys=scoring_keys,
                 compress=False,
                 write_all_results=False,
                 bounds=bounds,
