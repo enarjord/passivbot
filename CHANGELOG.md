@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Suite scenarios now reject unknown scenario fields before running, catching
+  typos such as `coin` instead of silently ignoring them.
 - Optimizer overrides now reject unknown `optimize.enable_overrides` names before
   the run starts, and `forward_tp_grid` / `backward_tp_grid` now reorder
   `trailing_grid_v7` close-grid markup bounds as intended.
