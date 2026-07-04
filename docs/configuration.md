@@ -641,7 +641,7 @@ Any metric listed above can be used when defining limits. Currency-specific metr
 - `value`: numeric threshold for `<`/`>` modes.
 - `range`: two-value list `[low, high]` for the range modes.
 - Optional `enabled`: set to `false` to disable a default limit without deleting it. This prevents config normalization from re-adding that metric's default limit later.
-- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). The default is `_max` for `>` checks, `_min` for `<` checks, and `_mean` for range checks.
+- Optional `stat`: when you want to compare against a specific statistic (`min`, `max`, `mean`, `std`). If omitted, Passivbot uses the metric's `backtest.aggregate` rule, then `backtest.aggregate.default`, then `mean`.
 
 #### Format
 
