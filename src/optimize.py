@@ -2534,9 +2534,6 @@ def extract_configs(path):
 def iter_extract_configs(path):
     if not os.path.exists(path):
         return
-    if path.endswith("_all_results.bin"):
-        logging.info(f"Skipping {path}")
-        return
     if path.endswith(".json"):
         try:
             raw = load_hjson_config(path, log_errors=False)
