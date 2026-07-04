@@ -91,6 +91,7 @@ from config.coerce import (
     normalize_hsl_cooldown_position_policy,
     normalize_hsl_signal_mode,
 )
+from config.bot import normalize_twel_enforcer_policy
 from config.strategy import (
     build_runtime_strategy_side,
     get_active_strategy_side,
@@ -13775,6 +13776,7 @@ class Passivbot:
             "n_positions",
             "total_wallet_exposure_limit",
             "risk_twel_enforcer_enabled",
+            "risk_twel_enforcer_policy",
             "risk_twel_enforcer_threshold",
         }
         bool_keys = {
@@ -13785,6 +13787,7 @@ class Passivbot:
             "unstuck_ema_gating_enabled",
         }
         string_keys = {
+            "risk_twel_enforcer_policy",
             "risk_we_excess_allowance_mode",
         }
         strategy_keys = {
@@ -13840,6 +13843,7 @@ class Passivbot:
             "risk_wel_enforcer_enabled",
             "risk_wel_enforcer_threshold",
             "risk_twel_enforcer_enabled",
+            "risk_twel_enforcer_policy",
             "risk_twel_entry_gate_enabled",
             "risk_twel_enforcer_threshold",
             "risk_we_excess_allowance_pct",
@@ -13890,10 +13894,16 @@ class Passivbot:
             elif key in bool_keys:
                 out[out_key] = bool(val)
             elif key in string_keys:
-                out[out_key] = normalize_we_excess_allowance_mode(
-                    val,
-                    path=f"bot.{pside}.risk.we_excess_allowance_mode",
-                )
+                if key == "risk_twel_enforcer_policy":
+                    out[out_key] = normalize_twel_enforcer_policy(
+                        val,
+                        path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
+                    )
+                else:
+                    out[out_key] = normalize_we_excess_allowance_mode(
+                        val,
+                        path=f"bot.{pside}.risk.we_excess_allowance_mode",
+                    )
             else:
                 out[out_key] = float(val or 0.0)
         out.update(
