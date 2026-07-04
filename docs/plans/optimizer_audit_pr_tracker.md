@@ -48,6 +48,7 @@ approval, and merge only after both reviewers approve the same head.
 - [x] #1074 - Bound DEAP pending offspring evaluations.
 - [x] #1075 - Remove unused opt_utils helpers.
 - [x] #1076 - Correct optimizer limit stat docs.
+- [x] #1080 - Remove unused all_results seed skip branch.
 
 ## Open PRs
 
@@ -65,11 +66,6 @@ approval, and merge only after both reviewers approve the same head.
   - Gate: rebased onto current `v8` after #1074-#1076 merged; waiting for fresh
     Claude and Hermes review on head
     `f35daa3a93ca54fc85d00a323eabe2e400327f4e`.
-- [ ] #1080 - Remove unused all_results seed skip branch.
-  - Status: mergeable.
-  - Gate: waiting for Claude and Hermes review on head
-    `1826e53bc1ca6f5bf6333a282545defcc6c59c13`.
-
 ## Remaining Or Paused Audit Items
 
 - [ ] ParetoStore add-entry performance.
