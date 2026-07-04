@@ -18,8 +18,6 @@ from config.scoring import extract_objective_specs
 from pure_funcs import calc_hash
 from utils import json_dumps_streamlined
 from metrics_schema import flatten_metric_stats
-from optimization.bounds import Bound
-from optimization.config_adapter import get_optimization_key_paths
 from pareto_core import (
     compute_ideal,
     crowding_distances,
@@ -140,41 +138,6 @@ def _suite_metrics_to_stats(
     return stats_flat, aggregated_values
 
 
-def _quantize_entry_params_with_bounds(
-    entry: dict, bounds: Sequence[Bound], log: logging.Logger
-) -> dict:
-    if not isinstance(entry, dict):
-        return entry
-
-    key_paths = get_optimization_key_paths(entry)
-    if len(key_paths) != len(bounds):
-        log.warning(
-            "ParetoStore bounds length mismatch: bounds has %d entries but optimization key list has %d params",
-            len(bounds),
-            len(key_paths),
-        )
-    for idx, (_, path) in enumerate(key_paths):
-        if idx >= len(bounds):
-            return entry
-        target = entry
-        for part in path[:-1]:
-            if not isinstance(target, dict) or part not in target:
-                target = None
-                break
-            target = target[part]
-        if not isinstance(target, dict) or path[-1] not in target:
-            continue
-        bound = bounds[idx]
-        value = target[path[-1]]
-        if bound.is_stepped:
-            target[path[-1]] = bound.quantize(value)
-        else:
-            target[path[-1]] = (
-                bound.high if value > bound.high else bound.low if value < bound.low else value
-            )
-    return entry
-
-
 def _evaluate_limits(
     specs: Sequence[LimitSpec],
     stats_flat: Dict[str, float],
@@ -202,7 +165,6 @@ class ParetoStore:
         self,
         directory: str,
         sig_digits: int = 6,
-        bounds: Optional[Sequence[Bound]] = None,
         flush_interval: int = 60,
         log_name: str | None = None,
         max_size: int = 300,
@@ -211,7 +173,6 @@ class ParetoStore:
         self.directory = directory
         self.pareto_dir = os.path.join(self.directory, "pareto")
         self.sig_digits = sig_digits
-        self.bounds = bounds
         self.flush_interval = flush_interval  # seconds
         self.max_size = max(1, int(max_size))
         os.makedirs(os.path.join(self.directory, "pareto"), exist_ok=True)
