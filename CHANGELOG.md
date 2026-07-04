@@ -7,6 +7,8 @@ All notable user-facing changes will be documented in this file.
 - Optimizer overrides now reject unknown `optimize.enable_overrides` names before
   the run starts, and `forward_tp_grid` / `backward_tp_grid` now reorder
   `trailing_grid_v7` close-grid markup bounds as intended.
+- Anchored fine-tune optimizer seed conversion now preserves each anchor's
+  original id when an earlier starting seed is skipped.
 - Optimizer stepped bounds now stay on the configured grid for fractional steps
   such as `0.25`, `0.125`, and `0.0025`, avoiding off-grid candidate values in
   DEAP, pymoo repair, seed conversion, and result hashing.
