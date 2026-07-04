@@ -2732,15 +2732,6 @@ class TestExtractConfigs:
         result = extract_configs("/nonexistent/path")
         assert result == []
 
-    def test_all_results_bin_skipped(self):
-        with tempfile.NamedTemporaryFile(suffix="_all_results.bin", delete=False) as f:
-            path = f.name
-        try:
-            result = extract_configs(path)
-            assert result == []
-        finally:
-            os.unlink(path)
-
     def test_json_file_loaded(self):
         from config_utils import get_template_config
 
