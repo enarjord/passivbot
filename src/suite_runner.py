@@ -611,7 +611,6 @@ def filter_coins_by_exchange_assignment(
 
 
 @dataclass
-@dataclass
 class ExchangeDataset:
     exchange: str
     coins: List[str]
@@ -623,8 +622,6 @@ class ExchangeDataset:
     btc_usd_prices: np.ndarray
     timestamps: Optional[np.ndarray]
     cache_dir: str
-    hlcvs_spec: Optional[SharedArraySpec] = None
-    btc_spec: Optional[SharedArraySpec] = None
     hlcvs_spec: Optional[SharedArraySpec] = None
     btc_spec: Optional[SharedArraySpec] = None
 
