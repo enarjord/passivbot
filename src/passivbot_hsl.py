@@ -1258,13 +1258,14 @@ def _equity_hard_stop_apply_coin_metrics_sample(
         raise ValueError(
             f"coin HSL n_positions must round to > 0 for {symbol} {pside}, got {n_positions_raw}"
         )
-    total_wallet_exposure_limit = float(self.bot_value(pside, "total_wallet_exposure_limit"))
-    slot_budget = float(balance) * total_wallet_exposure_limit / n_positions
+    # HSL is a drawdown stop, not an exposure scaler. Keep coin-mode live HSL
+    # sensitivity anchored to the configured slot count; TWEL/excess allowance
+    # must not make the RED threshold tolerate a larger percentage drawdown.
+    slot_budget = float(balance) / n_positions
     if not math.isfinite(slot_budget) or slot_budget <= 0.0:
         raise ValueError(
             f"coin HSL slot_budget must be finite and > 0 for {symbol} {pside}, "
-            f"got balance={balance} total_wallet_exposure_limit={total_wallet_exposure_limit} "
-            f"n_positions={n_positions}"
+            f"got balance={balance} n_positions={n_positions}"
         )
     drawdown_usd = max(0.0, float(peak_realized) - (float(last_realized) + float(current_upnl)))
     drawdown_ratio = drawdown_usd / max(slot_budget, 1e-12)

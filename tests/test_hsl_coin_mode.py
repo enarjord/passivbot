@@ -641,6 +641,44 @@ def test_coin_hsl_active_side_rejects_invalid_budget_config(
         bot._equity_hard_stop_coin_active_pside("long")
 
 
+@pytest.mark.parametrize("total_wallet_exposure_limit", [0.5, 1.0, 5.0])
+def test_coin_hsl_live_slot_budget_ignores_twel(total_wallet_exposure_limit):
+    bot = make_coin_bot()
+    symbol = "A"
+
+    def bot_value(pside, key):
+        values = {
+            "n_positions": 2,
+            "total_wallet_exposure_limit": total_wallet_exposure_limit,
+        }
+        return values[key]
+
+    bot.bot_value = bot_value
+
+    bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long",
+        symbol,
+        0,
+        100.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    metrics = bot._equity_hard_stop_apply_coin_metrics_sample(
+        "long",
+        symbol,
+        60_000,
+        100.0,
+        0.0,
+        -25.0,
+        0.0,
+    )
+
+    assert metrics["slot_budget"] == pytest.approx(50.0)
+    assert metrics["drawdown_usd"] == pytest.approx(25.0)
+    assert metrics["drawdown_raw"] == pytest.approx(0.5)
+
+
 @pytest.mark.asyncio
 async def test_coin_hsl_history_replay_does_not_latch_recovered_red_without_panic_marker():
     bot = make_coin_bot()
@@ -942,6 +980,7 @@ async def test_coin_hsl_finalize_does_not_duplicate_prior_red_trigger_event():
 async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points():
     bot = make_coin_bot()
     symbol = "A"
+    bot.hsl["long"]["red_threshold"] = 0.9
     bot.config["live"]["pnls_max_lookback_days"] = 1.0 / 1440.0
     bot.get_exchange_time = lambda: 240_000
     fill_events = [
@@ -986,7 +1025,7 @@ async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points()
     state = bot._hsl_coin_state("long", symbol)
     assert state["runtime"].red_latched() is False
     assert state["last_metrics"]["realized_pnl"] == pytest.approx(-35.0)
-    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.35)
+    assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.70)
 
 
 @pytest.mark.asyncio
@@ -1039,7 +1078,7 @@ async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
     assert state["halted"] is True
     assert state["no_restart_latched"] is True
     assert state["cooldown_until_ms"] is None
-    assert state["last_stop_event"]["drawdown_raw"] == pytest.approx(0.8)
+    assert state["last_stop_event"]["drawdown_raw"] == pytest.approx(1.0)
 
 
 @pytest.mark.asyncio
@@ -1659,7 +1698,7 @@ async def test_coin_hsl_check_tp_only_orange_skips_flat_symbols():
     }
 
     async def calc_upnl(pside=None, symbol=None):
-        return -40.0
+        return -20.0
 
     bot._calc_upnl_sum_strict = calc_upnl
     bot._equity_hard_stop_prime_coin_runtime_for_replay("long", open_symbol, 180_000)

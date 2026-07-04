@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live coin-mode HSL now computes slot drawdown from configured
+  `n_positions` and current raw balance only, so TWEL or excess allowance no
+  longer makes the configured RED drawdown threshold tolerate a larger
+  percentage loss.
 - DEAP optimizer generation evaluations now honor
   `optimize.max_pending_starting_evals_per_cpu`, bounding queued offspring
   evaluations with the same memory-control cap used for starting seeds.
