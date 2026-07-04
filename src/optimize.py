@@ -61,7 +61,6 @@ from backtest import (
     get_backtest_execution_settings,
 )
 import asyncio
-import mmap
 import multiprocessing
 import random
 import time
@@ -791,29 +790,30 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
     previous_evals = 0
     try:
         with open(results_filename, "rb") as f:
-            with mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ) as raw:
-                for entry in _iter_strict_msgpack_objects(raw, results_filename):
-                    previous_evals += 1
-                    if not isinstance(entry, dict):
-                        if previous_evals == 1:
-                            raise ValueError(
-                                f"Cannot resume: first all_results.bin entry is not a config object: "
-                                f"{results_filename}"
-                            )
+            for entry in _iter_strict_msgpack_objects(
+                f, results_filename, os.path.getsize(results_filename)
+            ):
+                previous_evals += 1
+                if not isinstance(entry, dict):
+                    if previous_evals == 1:
                         raise ValueError(
-                            f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
+                            f"Cannot resume: first all_results.bin entry is not a config object: "
                             f"{results_filename}"
                         )
-                    if previous_evals == 1:
-                        mismatches = _resume_config_mismatches(entry, config)
-                        if mismatches:
-                            mismatch_str = "\n".join(mismatches)
-                            raise ValueError(
-                                f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
-                                f"Mismatches detected:\n{mismatch_str}\n\n"
-                                f"Resuming with a changed configuration would corrupt optimization scores.\n"
-                                f"Please restore the original config or start a fresh run.\n"
-                            )
+                    raise ValueError(
+                        f"Cannot resume: all_results.bin entry {previous_evals} is not a result object: "
+                        f"{results_filename}"
+                    )
+                if previous_evals == 1:
+                    mismatches = _resume_config_mismatches(entry, config)
+                    if mismatches:
+                        mismatch_str = "\n".join(mismatches)
+                        raise ValueError(
+                            f"\n\nERROR: Cannot resume because critical parameters have changed!\n"
+                            f"Mismatches detected:\n{mismatch_str}\n\n"
+                            f"Resuming with a changed configuration would corrupt optimization scores.\n"
+                            f"Please restore the original config or start a fresh run.\n"
+                        )
     except msgpack.exceptions.UnpackException as exc:
         raise ValueError(f"Cannot resume: failed to read all_results.bin: {results_filename}") from exc
     except ValueError:
@@ -827,114 +827,26 @@ def _validate_resume_results(results_dir: str, config: dict) -> int:
     return previous_evals
 
 
-def _iter_strict_msgpack_objects(raw: bytes, filename: str):
-    offset = 0
-    while offset < len(raw):
-        next_offset = _skip_msgpack_object(raw, offset, filename)
+def _iter_strict_msgpack_objects(file_obj, filename: str, file_size: int):
+    unpacker = msgpack.Unpacker(file_obj, raw=False, strict_map_key=False)
+    last_successful_offset = 0
+    while True:
         try:
-            yield msgpack.unpackb(raw[offset:next_offset], raw=False, strict_map_key=False)
+            entry = unpacker.unpack()
+        except msgpack.exceptions.OutOfData as exc:
+            if last_successful_offset != file_size:
+                raise ValueError(
+                    f"Cannot resume: all_results.bin has truncated msgpack data: {filename}"
+                ) from exc
+            return
+        except msgpack.exceptions.FormatError as exc:
+            raise ValueError(
+                f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}"
+            ) from exc
         except Exception as exc:
             raise ValueError(f"Cannot resume: failed to decode all_results.bin: {filename}") from exc
-        offset = next_offset
-
-
-def _skip_msgpack_object(raw: bytes, offset: int, filename: str, depth: int = 0) -> int:
-    if depth > 512:
-        raise ValueError(f"Cannot resume: all_results.bin nesting is too deep: {filename}")
-    if offset >= len(raw):
-        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
-    marker = raw[offset]
-    offset += 1
-
-    if marker <= 0x7F or marker >= 0xE0:
-        return offset
-    if 0x80 <= marker <= 0x8F:
-        return _skip_msgpack_map(raw, offset, marker & 0x0F, filename, depth)
-    if 0x90 <= marker <= 0x9F:
-        return _skip_msgpack_array(raw, offset, marker & 0x0F, filename, depth)
-    if 0xA0 <= marker <= 0xBF:
-        return _require_msgpack_bytes(raw, offset, marker & 0x1F, filename)
-
-    fixed_size = {
-        0xC0: 0,
-        0xC2: 0,
-        0xC3: 0,
-        0xCA: 4,
-        0xCB: 8,
-        0xCC: 1,
-        0xCD: 2,
-        0xCE: 4,
-        0xCF: 8,
-        0xD0: 1,
-        0xD1: 2,
-        0xD2: 4,
-        0xD3: 8,
-        0xD4: 2,
-        0xD5: 3,
-        0xD6: 5,
-        0xD7: 9,
-        0xD8: 17,
-    }
-    if marker in fixed_size:
-        return _require_msgpack_bytes(raw, offset, fixed_size[marker], filename)
-    if marker == 0xC1:
-        raise ValueError(f"Cannot resume: all_results.bin contains invalid msgpack marker: {filename}")
-    if marker in (0xC4, 0xD9):
-        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker in (0xC5, 0xDA):
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker in (0xC6, 0xDB):
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _require_msgpack_bytes(raw, offset, size, filename)
-    if marker == 0xC7:
-        size, offset = _read_msgpack_uint(raw, offset, 1, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xC8:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xC9:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _require_msgpack_bytes(raw, offset, size + 1, filename)
-    if marker == 0xDC:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _skip_msgpack_array(raw, offset, size, filename, depth)
-    if marker == 0xDD:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _skip_msgpack_array(raw, offset, size, filename, depth)
-    if marker == 0xDE:
-        size, offset = _read_msgpack_uint(raw, offset, 2, filename)
-        return _skip_msgpack_map(raw, offset, size, filename, depth)
-    if marker == 0xDF:
-        size, offset = _read_msgpack_uint(raw, offset, 4, filename)
-        return _skip_msgpack_map(raw, offset, size, filename, depth)
-    raise ValueError(f"Cannot resume: all_results.bin contains unknown msgpack marker: {filename}")
-
-
-def _skip_msgpack_array(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
-    for _ in range(size):
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-    return offset
-
-
-def _skip_msgpack_map(raw: bytes, offset: int, size: int, filename: str, depth: int) -> int:
-    for _ in range(size):
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-        offset = _skip_msgpack_object(raw, offset, filename, depth + 1)
-    return offset
-
-
-def _read_msgpack_uint(raw: bytes, offset: int, size: int, filename: str) -> tuple[int, int]:
-    end = _require_msgpack_bytes(raw, offset, size, filename)
-    return int.from_bytes(raw[offset:end], "big"), end
-
-
-def _require_msgpack_bytes(raw: bytes, offset: int, size: int, filename: str) -> int:
-    end = offset + size
-    if end > len(raw):
-        raise ValueError(f"Cannot resume: all_results.bin has truncated msgpack data: {filename}")
-    return end
+        last_successful_offset = unpacker.tell()
+        yield entry
 
 
 def ea_mu_plus_lambda_stream(
