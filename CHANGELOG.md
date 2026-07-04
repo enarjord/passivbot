@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Compressed `all_results.bin` optimizer history now preserves deleted keys
+  during replay, preventing stale fields such as prior candidate errors from
+  leaking into later entries.
 - Suite scenarios now reject unknown scenario fields before running, catching
   typos such as `coin` instead of silently ignoring them.
 - Resumed pymoo optimizer checkpoints now refresh the active problem,
