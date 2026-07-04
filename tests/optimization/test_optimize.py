@@ -33,6 +33,7 @@ from optimize import (
     _resolve_cli_limits_override,
     _set_candidate_metrics,
     _terminate_optimizer_pool,
+    _suite_config_implies_suite_mode,
     _format_objectives,
     individual_to_config,
     config_to_individual,
@@ -95,6 +96,38 @@ def test_terminate_optimizer_pool_terminates_active_pool():
 
     assert _terminate_optimizer_pool(pool, False) is True
     pool.terminate.assert_called_once_with()
+
+
+def test_suite_config_implies_suite_mode_when_suite_flag_omitted():
+    args = argparse.Namespace(suite_config="suite.json", suite=None)
+
+    assert _suite_config_implies_suite_mode(args) is True
+
+
+@pytest.mark.parametrize("suite_value", [False, True])
+def test_suite_config_does_not_override_explicit_suite_flag(suite_value):
+    args = argparse.Namespace(suite_config="suite.json", suite=suite_value)
+
+    assert _suite_config_implies_suite_mode(args) is False
+
+
+def test_missing_suite_config_does_not_imply_suite_mode():
+    args = argparse.Namespace(suite_config=None, suite=None)
+
+    assert _suite_config_implies_suite_mode(args) is False
+
+
+def test_suite_config_activation_enables_extracted_suite_config():
+    args = argparse.Namespace(suite_config="suite.json", suite=None)
+    config = get_template_config()
+    suite_override = {"scenarios": [{"label": "stress"}]}
+
+    if _suite_config_implies_suite_mode(args):
+        optimize.recursive_config_update(config, "backtest.suite_enabled", True, verbose=False)
+    suite_cfg = optimize.extract_suite_config(config, suite_override)
+
+    assert suite_cfg["enabled"] is True
+    assert suite_cfg["scenarios"] == [{"label": "stress"}]
 
 
 def test_candidate_metrics_sidecars_only_attach_to_objects():

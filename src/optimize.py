@@ -583,6 +583,10 @@ def _terminate_optimizer_pool(pool, pool_terminated: bool) -> bool:
     return True
 
 
+def _suite_config_implies_suite_mode(args) -> bool:
+    return bool(getattr(args, "suite_config", None)) and getattr(args, "suite", None) is None
+
+
 def _build_invalid_candidate_metrics(
     scoring_keys: Sequence[str],
     error: str,
@@ -2917,6 +2921,8 @@ async def main():
     if args.suite_config:
         logging.info("loading suite config %s", args.suite_config)
         suite_override = load_suite_override_config(args.suite_config)
+        if _suite_config_implies_suite_mode(args):
+            recursive_config_update(config, "backtest.suite_enabled", True, verbose=True)
     suite_cfg = extract_suite_config(config, suite_override)
 
     # Handle --scenarios filter (implies --suite y)
