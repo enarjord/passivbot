@@ -22,6 +22,9 @@ All notable user-facing changes will be documented in this file.
   population and worker RNGs, including replacing pymoo's previous fixed
   default seed, while an integer seed opts into deterministic seeding for
   diagnostics.
+- Optimizer Pareto recording now fails loudly on corrupt existing Pareto files
+  or invalid objective payloads instead of silently skipping store errors or
+  pruning files that were never loaded.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.

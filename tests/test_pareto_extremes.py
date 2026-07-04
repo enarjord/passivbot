@@ -21,7 +21,7 @@ def _make_candidate(w_values, violation=0.0):
 
 
 @pytest.mark.parametrize("sig_digits", [6])
-def test_pareto_front_retains_per_metric_extremes(sig_digits):
+def test_pareto_front_retains_per_metric_extremes(sig_digits, tmp_path):
     random.seed(42)
 
     # Build a synthetic candidate set with 3 objectives and some violating entries.
@@ -49,7 +49,7 @@ def test_pareto_front_retains_per_metric_extremes(sig_digits):
 
     # Build Pareto front with pruning (max_size << total candidates).
     store = ParetoStore(
-        directory="/tmp",
+        directory=str(tmp_path),
         sig_digits=sig_digits,
         flush_interval=10_000,
         max_size=50,  # force pruning to check extreme preservation
@@ -104,3 +104,39 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     saved = json.loads(saved_files[0].read_text())
 
     assert saved["bot"]["long"]["entry_we_weight"] == 1.384
+
+
+def test_pareto_store_bootstrap_failure_raises_and_preserves_files(tmp_path):
+    pareto_dir = tmp_path / "pareto"
+    pareto_dir.mkdir()
+    corrupt = pareto_dir / "corrupt.json"
+    corrupt.write_text("{not json", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="failed to load 1 existing Pareto file"):
+        ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    assert corrupt.exists()
+
+
+def test_pareto_store_flush_does_not_delete_files_that_were_never_loaded(tmp_path):
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+    unknown = tmp_path / "pareto" / "unknown.json"
+    unknown.write_text(json.dumps(_make_candidate({"metric1": 1.0})), encoding="utf-8")
+
+    store.flush_now()
+
+    assert unknown.exists()
+
+
+def test_pareto_store_rejects_missing_objective_values(tmp_path):
+    entry = {
+        "metrics": {
+            "objectives": {"metric1": None},
+            "constraint_violation": 0.0,
+        },
+        "optimize": {"scoring": ["metric1"]},
+    }
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    with pytest.raises(ValueError, match="missing or non-numeric"):
+        store.add_entry(entry)

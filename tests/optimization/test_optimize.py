@@ -3095,6 +3095,30 @@ class TestResultRecorder:
 
             recorder.close()
 
+    def test_record_raises_when_pareto_store_fails(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            recorder = ResultRecorder(
+                results_dir=tmpdir,
+                sig_digits=6,
+                flush_interval=60,
+                scoring_keys=["metric1"],
+                compress=False,
+                write_all_results=False,
+                bounds=None,
+            )
+            data = {
+                "bot": {"long": {}, "short": {}},
+                "metrics": {
+                    "objectives": {"metric1": None},
+                    "constraint_violation": 0.0,
+                },
+            }
+
+            with pytest.raises(RuntimeError, match="Error updating Pareto store"):
+                recorder.record(data)
+
+            recorder.close()
+
     def test_flush_and_close(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             bounds = [(0.0, 1.0, 0.0)] * 4
