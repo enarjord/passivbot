@@ -4,6 +4,8 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Optimizer vector-shape extraction now rejects empty `config.optimize.bounds`
+  instead of generating key paths that fail later without matching bounds.
 - Compressed `all_results.bin` optimizer history now preserves deleted keys
   during replay, preventing stale fields such as prior candidate errors from
   leaking into later entries.

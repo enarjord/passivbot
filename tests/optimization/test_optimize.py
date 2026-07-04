@@ -69,6 +69,10 @@ from config.parse import load_raw_config
 from config.schema import get_template_config
 
 
+def _toy_optimize_bounds(*keys):
+    return {"bounds": {key: [0.0, 1000.0] for key in keys}}
+
+
 def test_worker_initializer_is_pickleable_for_spawn():
     ForkingPickler.dumps(ignore_sigint_in_worker)
 
@@ -737,7 +741,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"param1": 0.0, "param2": 0.0},
                 "short": {"param1": 0.0, "param2": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -756,7 +766,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"z_param": 0.0, "a_param": 0.0},
                 "short": {"z_param": 0.0, "a_param": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         overrides_list = []
         mock_overrides = lambda x, y, z: y
@@ -776,7 +792,12 @@ class TestIndividualToConfig:
                 "long": {"param1": 99.0, "param2": 99.0},
                 "short": {"param1": 99.0, "param2": 99.0},
             },
-            "optimize": {"bounds": {}},
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         original_template = deepcopy(template)
         overrides_list = []
@@ -1204,7 +1225,13 @@ class TestIndividualToConfig:
             "bot": {
                 "long": {"z_param": 0.0, "a_param": 0.0},
                 "short": {"z_param": 0.0, "a_param": 0.0},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         key_paths = get_optimization_key_paths(template)
 
@@ -1434,7 +1461,13 @@ class TestConfigToIndividual:
             "bot": {
                 "long": {"param1": 1.5, "param2": 2.5},
                 "short": {"param1": 3.5, "param2": 4.5},
-            }
+            },
+            "optimize": _toy_optimize_bounds(
+                "long_param1",
+                "long_param2",
+                "short_param1",
+                "short_param2",
+            ),
         }
         bounds = [Bound(0.0, 10.0) for _ in range(4)]
         sig_digits = 6
@@ -1454,7 +1487,12 @@ class TestConfigToIndividual:
                 "long": {"z_param": 100.0, "a_param": 200.0},
                 "short": {"z_param": 300.0, "a_param": 400.0},
             },
-            "optimize": {"bounds": {}},
+            "optimize": _toy_optimize_bounds(
+                "long_a_param",
+                "long_z_param",
+                "short_a_param",
+                "short_z_param",
+            ),
         }
         bounds = [Bound(0.0, 1000.0)] * 4
         sig_digits = 6
