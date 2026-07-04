@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Optimizer stepped bounds now stay on the configured grid for fractional steps
+  such as `0.25`, `0.125`, and `0.0025`, avoiding off-grid candidate values in
+  DEAP, pymoo repair, seed conversion, and result hashing.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.

@@ -49,6 +49,27 @@ class TestBound:
         assert b.quantize(1.1) == 1.0
         assert b.quantize(0.5) == pytest.approx(0.5)
 
+    @pytest.mark.parametrize(
+        ("step", "expected"),
+        [
+            (0.25, [0.25, 0.5, 0.75]),
+            (0.125, [0.125, 0.25, 0.375]),
+            (0.0025, [0.0025, 0.005, 0.0075]),
+        ],
+    )
+    def test_quantize_preserves_non_power_of_ten_step_grid(self, step, expected):
+        b = Bound(0.0, 1.0, step)
+
+        assert [b.quantize(step * idx) for idx in range(1, 4)] == pytest.approx(expected)
+
+    def test_quantize_preserves_nonzero_low_step_grid(self):
+        b = Bound(1.125, 2.125, 0.25)
+
+        assert b.quantize(1.37) == pytest.approx(1.375)
+        assert b.quantize(1.62) == pytest.approx(1.625)
+        assert b.quantize(0.0) == pytest.approx(1.125)
+        assert b.quantize(9.0) == pytest.approx(2.125)
+
     def test_random_on_grid_continuous(self):
         b = Bound(0.0, 10.0)
         val = b.random_on_grid()
@@ -79,6 +100,10 @@ class TestBound:
         assert b_step.index_to_value(3.0) == pytest.approx(1.3)
         assert b_step.index_to_value(3.4) == pytest.approx(1.3)
         assert b_step.index_to_value(3.6) == pytest.approx(1.4)
+
+        b_quarter = Bound(0.0, 1.0, 0.25)
+        assert b_quarter.index_to_value(1.0) == pytest.approx(0.25)
+        assert b_quarter.index_to_value(3.0) == pytest.approx(0.75)
 
     def test_get_index_bounds(self):
         b_cont = Bound(1.0, 5.0)
@@ -158,6 +183,14 @@ class TestBoundUtils:
         result = enforce_bounds(values, bounds)
         assert result[0] == 1.0
         assert result[1] == pytest.approx(1.3)
+
+    def test_enforce_bounds_preserves_step_grid_over_sig_digits(self):
+        bounds = [Bound(0.0, 1.0, 0.25), Bound(0.0, 0.01, 0.0025)]
+        values = [0.76, 0.0076]
+
+        result = enforce_bounds(values, bounds, sig_digits=1)
+
+        assert result == pytest.approx([0.75, 0.0075])
 
     def test_enforce_bounds_with_sig_digits(self):
         bounds = [Bound(0.0, 1.0), Bound(1.0, 2.0)]
