@@ -583,6 +583,19 @@ def _terminate_optimizer_pool(pool, pool_terminated: bool) -> bool:
     return True
 
 
+def _close_evaluator_for_pool(evaluator_for_pool) -> bool:
+    close = getattr(evaluator_for_pool, "close", None)
+    if not callable(close):
+        return False
+    logging.info("Closing evaluator resources...")
+    try:
+        close()
+    except Exception:
+        logging.exception("Failed to close evaluator resources")
+        return False
+    return True
+
+
 def _suite_config_implies_suite_mode(args) -> bool:
     return bool(getattr(args, "suite_config", None)) and getattr(args, "suite", None) is None
 
@@ -2140,17 +2153,27 @@ class SuiteEvaluator:
         return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def __del__(self):
-        for ctx in self.contexts:
-            for attachment in ctx.attachments.get("hlcvs", {}).values():
+        self.close()
+
+    def close(self):
+        for ctx in getattr(self, "contexts", []):
+            attachments = getattr(ctx, "attachments", {}) or {}
+            for attachment_map in attachments.values():
+                for attachment in attachment_map.values():
+                    try:
+                        attachment.close()
+                    except Exception:
+                        pass
+                attachment_map.clear()
+        for attachment_map in getattr(self, "_master_attachments", {}).values():
+            for attachment in attachment_map.values():
                 try:
                     attachment.close()
                 except Exception:
                     pass
-            for attachment in ctx.attachments.get("btc", {}).values():
-                try:
-                    attachment.close()
-                except Exception:
-                    pass
+            attachment_map.clear()
+        for array_map in getattr(self, "_master_arrays", {}).values():
+            array_map.clear()
 
 
 def add_extra_options(parser, *, help_all: bool):
@@ -3208,6 +3231,8 @@ async def main():
                 manager.shutdown()
             except Exception:
                 logging.exception("Failed to shut down multiprocessing manager")
+        if "evaluator_for_pool" in locals():
+            _close_evaluator_for_pool(evaluator_for_pool)
         if "array_manager" in locals():
             logging.info("Releasing shared memory...")
             try:

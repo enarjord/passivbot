@@ -26,6 +26,7 @@ from optimize import (
     _analysis_indicates_liquidation,
     _canonicalize_optimizer_individual,
     _clear_candidate_metrics,
+    _close_evaluator_for_pool,
     _looks_like_bool_token,
     _normalize_optional_bool_flag,
     _optimizer_exit_code,
@@ -96,6 +97,19 @@ def test_terminate_optimizer_pool_terminates_active_pool():
 
     assert _terminate_optimizer_pool(pool, False) is True
     pool.terminate.assert_called_once_with()
+
+
+def test_close_evaluator_for_pool_calls_close_when_available():
+    evaluator = MagicMock()
+
+    assert _close_evaluator_for_pool(evaluator) is True
+    evaluator.close.assert_called_once_with()
+
+
+def test_close_evaluator_for_pool_skips_plain_evaluator():
+    evaluator = object()
+
+    assert _close_evaluator_for_pool(evaluator) is False
 
 
 def test_suite_config_implies_suite_mode_when_suite_flag_omitted():
