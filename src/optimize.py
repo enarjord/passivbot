@@ -376,6 +376,8 @@ class ResultRecorder:
         bounds: Optional[Sequence[Bound]] = None,
         starting_iters: int = 0,
     ):
+        self.scoring_specs = extract_objective_specs(scoring_keys)
+        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
@@ -384,6 +386,8 @@ class ResultRecorder:
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
         )
+        self.store.scoring_specs = self.scoring_specs
+        self.store.scoring_keys = self.scoring_keys
         self.store.n_iters = starting_iters
         self.write_all = write_all_results
         self.compress = compress
@@ -395,8 +399,6 @@ class ResultRecorder:
             self.packer = msgpack.Packer(use_bin_type=True)
         self.prev_data = None
         self.counter = 0
-        self.scoring_specs = extract_objective_specs(scoring_keys)
-        self.scoring_keys = [spec.metric for spec in self.scoring_specs]
 
     def record(self, data: dict) -> None:
         if self.write_all and self.results_file:
@@ -420,7 +422,7 @@ class ResultRecorder:
         try:
             updated = self.store.add_entry(data)
         except Exception as exc:
-            logging.error(f"ParetoStore error: {exc}")
+            raise RuntimeError("Error updating Pareto store") from exc
         else:
             if updated:
                 objectives_block = metrics_block.get("objectives", {})

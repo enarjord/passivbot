@@ -193,6 +193,8 @@ class ParetoStore:
         self._violations: dict[str, float] = {}  # hash -> constraint violation
         self._front: list[str] = []  # list of hashes (Pareto set)
         self._objective_lookup: dict[tuple, str] = {}  # objective vector ➜ hash
+        self._loaded_files: set[str] = set()
+        self._unloaded_files: set[str] = set()
         # ------------------------------------------------------------------
         self.n_iters = 0
         self._last_flush_ts = time.time()
@@ -222,7 +224,10 @@ class ParetoStore:
             obj, _ = extract_objectives(
                 entry, scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring")
             )
+            obj = self._validate_objective_vector(obj)
             violation = extract_violation(entry)
+            if not math.isfinite(violation):
+                raise ValueError(f"Pareto entry has non-finite constraint violation: {violation!r}")
 
             # ───────────── NEW: dedupe on the objective vector ──────────────
             existing_hash = self._objective_lookup.get(obj)
@@ -313,34 +318,84 @@ class ParetoStore:
             self._last_flush_ts = time.time()
 
     def _write_all_to_disk(self) -> None:
-        if not self._front:
-            for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
-                try:
-                    os.remove(fp)
-                except OSError:
-                    pass
-            return
+        if self._unloaded_files:
+            paths = ", ".join(sorted(self._unloaded_files))
+            raise RuntimeError(
+                "Refusing to prune Pareto files because existing files failed to load: "
+                f"{paths}"
+            )
 
         live_files = set(self._entries.values())
-        for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
+        for fp in sorted(self._loaded_files):
             if fp not in live_files:
                 try:
                     os.remove(fp)
                 except OSError as e:
                     self._log.warning("Could not remove obsolete Pareto file %s: %s", fp, e)
+                else:
+                    self._loaded_files.discard(fp)
 
     def _bootstrap_from_disk(self) -> None:
         """
         Read existing *.json files once at start so we don’t lose old results
         when the new optimizer run appends.
         """
+        errors: list[str] = []
+        entries: list[tuple[str, dict[str, Any]]] = []
         for fp in glob.glob(os.path.join(self.pareto_dir, "*.json")):
             try:
                 with open(fp) as f:
                     entry = json.load(f)
-                self.add_entry(entry, source_path=fp)
             except Exception as e:
-                print(f"bootstrap skip {fp}: {e}")
+                self._unloaded_files.add(fp)
+                errors.append(f"{fp}: {e}")
+                self._log.error("Could not load existing Pareto file %s: %s", fp, e)
+            else:
+                entries.append((fp, entry))
+        bootstrap_specs = None
+        for fp, entry in entries:
+            if bootstrap_specs is None:
+                bootstrap_specs = extract_objective_specs(entry)
+            try:
+                obj, _ = extract_objectives(
+                    entry, scoring_keys=bootstrap_specs or entry.get("optimize", {}).get("scoring")
+                )
+                self._validate_objective_vector(obj)
+                violation = extract_violation(entry)
+                if not math.isfinite(violation):
+                    raise ValueError(
+                        f"Pareto entry has non-finite constraint violation: {violation!r}"
+                    )
+            except Exception as e:
+                self._unloaded_files.add(fp)
+                errors.append(f"{fp}: {e}")
+                self._log.error("Could not load existing Pareto file %s: %s", fp, e)
+        if errors:
+            joined = "; ".join(errors)
+            raise RuntimeError(
+                f"failed to load {len(errors)} existing Pareto file(s); "
+                f"fix or move them before optimizing: {joined}"
+            )
+        for fp, entry in entries:
+            self._loaded_files.add(fp)
+            self.add_entry(entry, source_path=fp)
+
+    @staticmethod
+    def _validate_objective_vector(obj: Sequence[Any]) -> tuple[float, ...]:
+        if not obj:
+            raise ValueError("Pareto entry has no objective values")
+        values: list[float] = []
+        for idx, value in enumerate(obj):
+            try:
+                numeric = float(value)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    f"Pareto objective at index {idx} is missing or non-numeric: {value!r}"
+                ) from exc
+            if not math.isfinite(numeric):
+                raise ValueError(f"Pareto objective at index {idx} is non-finite: {value!r}")
+            values.append(numeric)
+        return tuple(values)
 
     def _log_front_state(self, *, added: int, removed: int) -> None:
         """Emit a compact one‑liner with min / max / spread per objective."""
@@ -420,6 +475,7 @@ class ParetoStore:
                     )
                 os.replace(tmp, path)
         self._entries[hash_id] = path
+        self._loaded_files.add(path)
 
     def _delete_entry_file(self, hash_id: str) -> None:
         path = self._entries.pop(hash_id, None)
@@ -428,6 +484,8 @@ class ParetoStore:
                 os.remove(path)
             except OSError:
                 pass
+            else:
+                self._loaded_files.discard(path)
 
 
 def comma_separated_values_float(x):

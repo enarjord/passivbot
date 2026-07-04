@@ -28,6 +28,13 @@ def test_extract_objectives_respects_scoring_order():
     assert keys == ["m0", "m1", "m2"]
 
 
+def test_extract_objectives_resolves_canonical_metric_alias_keys():
+    entry = {"metrics": {"objectives": {"adg": 0.1}}}
+    obj, keys = extract_objectives(entry, scoring_keys=["adg"])
+    assert obj == (0.1,)
+    assert keys == ["adg_usd"]
+
+
 def test_prune_preserves_extremes_and_uses_crowding():
     front = ["a", "b", "c", "d", "e"]
     objectives = {
