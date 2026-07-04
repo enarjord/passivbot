@@ -222,6 +222,16 @@ def test_filter_candidates_with_cli_keep_condition(sample_pareto_dir: Path):
     assert sorted(candidate.path.stem for candidate in filtered) == ["a_extreme", "balanced"]
 
 
+def test_filter_candidates_raises_when_limit_metric_is_missing(sample_pareto_dir: Path):
+    _pareto_dir, candidates, _specs = load_candidates(sample_pareto_dir)
+    with pytest.raises(ValueError, match="Limit metric 'missing_metric' could not be resolved"):
+        filter_candidates(
+            candidates,
+            limits_payload=None,
+            limit_entries=["missing_metric>0.0"],
+        )
+
+
 def test_filter_candidates_uses_suite_aggregate_defaults_for_omitted_stat(tmp_path: Path):
     pareto_dir = tmp_path / "run" / "pareto"
     pareto_dir.mkdir(parents=True)
