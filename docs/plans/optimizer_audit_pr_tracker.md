@@ -68,12 +68,18 @@ approval, and merge only after both reviewers approve the same head.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on head
     `1a288908a02041eac8f4997b122087f2f7105aba`.
+- [ ] #1079 - Check Pareto dominance in one pass.
+  - Status: mergeable.
+  - Gate: waiting for Claude and Hermes review on head
+    `ffceb19407b1641fdc63336becc0fb9d07fa8fa1`.
 
 ## Remaining Or Paused Audit Items
 
 - [ ] ParetoStore add-entry performance.
-  - Current note: exact objective-vector lookup is already in place. Remaining
-    loops are dominance/crowding behavior and need profiling before changing.
+  - Current note: exact objective-vector lookup is already in place, and #1079
+    covers the safe dominance-pass cleanup. Remaining heavier work is
+    synchronous JSON write/profiling-driven behavior and should not be changed
+    without measurement.
 - [ ] Unreachable all_results skip branch cleanup.
   - Current note: lower-value cleanup in `src/optimize.py`; avoid while #1074
     touches adjacent optimizer streaming code.
