@@ -573,6 +573,14 @@ def _optimizer_exit_code(*, interrupted: bool, failed: bool) -> int:
     return 0
 
 
+def _terminate_optimizer_pool(pool, pool_terminated: bool) -> bool:
+    if pool is None or pool_terminated:
+        return pool_terminated
+    logging.info("Terminating worker pool...")
+    pool.terminate()
+    return True
+
+
 def _build_invalid_candidate_metrics(
     scoring_keys: Sequence[str],
     error: str,
@@ -3160,14 +3168,7 @@ async def main():
     except KeyboardInterrupt:
         interrupted = True
         logging.info("SIGINT received; starting graceful shutdown")
-        if "pool" in locals():
-            already = pool_state["terminated"] if "pool_state" in locals() else pool_terminated
-            if not already:
-                logging.info("Terminating worker pool...")
-                pool.terminate()
-                pool_terminated = True
-                if "pool_state" in locals():
-                    pool_state["terminated"] = True
+        pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
     except Exception as e:
         failed = True
         logging.error(f"An error occurred: {e}")
@@ -3183,9 +3184,7 @@ async def main():
             recorder.close()
         if "pool" in locals() and pool is not None:
             if interrupted and not pool_terminated:
-                logging.info("Terminating worker pool...")
-                pool.terminate()
-                pool_terminated = True
+                pool_terminated = _terminate_optimizer_pool(pool, pool_terminated)
             if pool_terminated or interrupted:
                 logging.info("Joining terminated worker pool...")
             else:
