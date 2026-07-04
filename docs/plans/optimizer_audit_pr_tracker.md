@@ -66,15 +66,18 @@ approval, and merge only after both reviewers approve the same head.
   - Status: mergeable.
   - Gate: Hermes approved older head
     `3a87beb82ac9076307ab7cc91128a0e9fc6a711f`; waiting for Claude and fresh
-    Hermes review on the current PR head after tracker updates.
+    Hermes review on current head `9288b038ecc8babba4afc5e99ba7bc9a0c83e093`
+    after tracker updates.
 - [ ] #1078 - Reuse pymoo starting seed evaluations.
   - Status: mergeable.
-  - Gate: waiting for Claude and Hermes review on head
-    `1a288908a02041eac8f4997b122087f2f7105aba`.
+  - Gate: Hermes approved head
+    `1a288908a02041eac8f4997b122087f2f7105aba`; waiting for Claude approval on
+    that same head.
 - [ ] #1079 - Check Pareto dominance in one pass.
   - Status: mergeable.
-  - Gate: waiting for Claude and Hermes review on head
-    `ffceb19407b1641fdc63336becc0fb9d07fa8fa1`.
+  - Gate: Hermes approved head
+    `ffceb19407b1641fdc63336becc0fb9d07fa8fa1`; waiting for Claude approval on
+    that same head.
 - [ ] #1080 - Remove unused all_results seed skip branch.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on head
