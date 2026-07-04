@@ -18,6 +18,8 @@ All notable user-facing changes will be documented in this file.
   terminates an active pool without referencing backend-local shutdown state.
 - `passivbot optimize --suite-config` now enables suite mode when `--suite` is
   omitted, while explicit `--suite n` still disables suite mode.
+- Partial suite override files that define scenarios without `aggregate` now
+  preserve the base config's `backtest.aggregate` instead of resetting to mean.
 - Optimizer stepped bounds now stay on the configured grid for fractional steps
   such as `0.25`, `0.125`, and `0.0025`, avoiding off-grid candidate values in
   DEAP, pymoo repair, seed conversion, and result hashing.
