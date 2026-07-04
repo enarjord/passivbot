@@ -53,6 +53,11 @@ from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 from optimization.config_adapter import extract_bounds_tuple_list_from_config
 from optimization.config_adapter import get_optimization_key_paths
+from optimization.evaluation_payload import (
+    apply_evaluation_payload,
+    build_evaluation_payload,
+    unpack_evaluation_payload,
+)
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY
 from optimization.shape import build_optimization_shape
 from optimization.warmup import build_optimizer_max_config
@@ -88,6 +93,54 @@ def test_candidate_metrics_sidecars_only_attach_to_objects():
     assert not hasattr(plain_vector, "evaluation_metrics")
     _clear_candidate_metrics(plain_vector)
     assert plain_vector == [1.0, 2.0]
+
+
+def test_deap_evaluation_payload_applies_evaluated_vector_to_parent_individual():
+    class Fitness:
+        values = ()
+        constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+    payload = build_evaluation_payload(
+        (0.1, 0.2),
+        3.0,
+        {"liquidated": False},
+        [4.0, 5.0],
+    )
+
+    metrics = apply_evaluation_payload(individual, payload)
+
+    assert individual == [4.0, 5.0]
+    assert individual.fitness.values == (0.1, 0.2)
+    assert individual.fitness.constraint_violation == 3.0
+    assert individual.constraint_violation == 3.0
+    assert metrics == {"liquidated": False}
+
+
+def test_deap_evaluation_payload_accepts_legacy_tuple_payload_without_mutating_vector():
+    class Fitness:
+        values = ()
+        constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+
+    metrics = apply_evaluation_payload(individual, ((0.1,), 2.0, None))
+
+    assert individual == [1.0, 2.0]
+    assert individual.fitness.values == (0.1,)
+    assert individual.fitness.constraint_violation == 2.0
+    assert individual.constraint_violation == 2.0
+    assert metrics is None
 
 
 class TestApplyConfigOverrides:
@@ -3232,7 +3285,9 @@ class TestEvaluator:
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0, 0.0)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -3274,7 +3329,9 @@ class TestEvaluator:
                 "pside 1: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0, 0.0)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -3435,7 +3492,9 @@ class TestEvaluator:
                 "hard-stop evaluation failed at k 1 ts 2 equity -1 peak_strategy_equity 10: equity must be finite and > 0"
             ),
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (0.0,)
         assert penalty == INVALID_BACKTEST_CANDIDATE_PENALTY
@@ -3501,7 +3560,9 @@ class TestEvaluator:
             "tools.iterative_backtester.combine_analyses",
             return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (-0.1,)
         assert penalty == 0.0
@@ -3568,7 +3629,9 @@ class TestEvaluator:
             "tools.iterative_backtester.combine_analyses",
             return_value={"stats": {"adg_pnl_w": {"mean": 0.1}}},
         ):
-            objectives, penalty, metrics = evaluator.evaluate(individual, [])
+            objectives, penalty, metrics, _ = unpack_evaluation_payload(
+                evaluator.evaluate(individual, [])
+            )
 
         assert objectives == (-0.1,)
         assert penalty == 0.0

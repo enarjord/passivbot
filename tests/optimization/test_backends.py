@@ -13,10 +13,12 @@ from config_utils import (
 from optimization.backends import get_backend_runner
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
+    _clone_evaluated_individual,
     _resolve_deap_population_size,
 )
 from optimization.backends.deap_backend import run_backend as run_deap_backend
 from optimization.backends.pymoo_backend import run_backend as run_pymoo_backend
+from optimization.evaluation_payload import apply_evaluation_payload
 
 
 def _optimize_parser():
@@ -127,6 +129,64 @@ def test_format_config_preserves_null_population_size_for_pymoo():
 
 def test_resolve_deap_population_size_uses_fallback_for_null():
     assert _resolve_deap_population_size({"optimize": {"population_size": None}}) == DEFAULT_DEAP_POPULATION_SIZE
+
+
+def test_deap_backend_apply_payload_uses_worker_evaluation_vector():
+    class Fitness:
+        values = ()
+        constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+    payload = {
+        "fitness": (0.3,),
+        "constraint_violation": 4.0,
+        "metrics": {"objective": 1.0},
+        "evaluation_vector": [5.0, 6.0],
+    }
+
+    metrics = apply_evaluation_payload(individual, payload)
+
+    assert individual == [5.0, 6.0]
+    assert individual.fitness.values == (0.3,)
+    assert individual.fitness.constraint_violation == 4.0
+    assert individual.constraint_violation == 4.0
+    assert metrics == {"objective": 1.0}
+
+
+def test_clone_evaluated_individual_preserves_fitness_and_metrics():
+    class Fitness:
+        def __init__(self):
+            self.values = ()
+            self.valid = False
+            self.constraint_violation = None
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    individual = Candidate([1.0, 2.0])
+    individual.fitness.values = (0.7,)
+    individual.fitness.valid = True
+    individual.fitness.constraint_violation = 1.5
+    individual.constraint_violation = 1.5
+    individual.evaluation_metrics = {"nested": {"value": 1}}
+
+    clone = _clone_evaluated_individual(individual)
+
+    assert clone is not individual
+    assert clone == [1.0, 2.0]
+    assert clone.fitness.values == (0.7,)
+    assert clone.fitness.constraint_violation == 1.5
+    assert clone.constraint_violation == 1.5
+    assert clone.evaluation_metrics == {"nested": {"value": 1}}
+    individual.evaluation_metrics["nested"]["value"] = 2
+    assert clone.evaluation_metrics == {"nested": {"value": 1}}
 
 
 def test_get_backend_runner_resolves_supported_backends():

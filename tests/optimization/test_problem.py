@@ -40,6 +40,18 @@ class SingleObjectiveEvaluator:
         )
 
 
+class PayloadEvaluator:
+    limit_checks = []
+
+    def evaluate(self, vector, overrides_list):
+        return {
+            "fitness": (-2.0,),
+            "constraint_violation": 0.0,
+            "metrics": {"objectives": {"w_0": -2.0}},
+            "evaluation_vector": [0.42, float(vector[1])],
+        }
+
+
 class FakeAsyncResult:
     def __init__(self, value):
         self._value = value
@@ -95,6 +107,21 @@ def test_problem_without_constraints_omits_g():
 
     assert "G" not in out
     assert out["F"].tolist() == [-1.5]
+
+
+def test_problem_accepts_shared_evaluation_payload_vector():
+    adapter = PymooEvaluatorAdapter(PayloadEvaluator())
+    problem = PassivbotProblem(
+        bounds=[Bound(0.0, 1.0), Bound(0.0, 2.0)],
+        scoring_keys=["adg"],
+        evaluator_adapter=adapter,
+    )
+
+    out = {}
+    problem._evaluate(np.asarray([0.7, 1.1]), out)
+
+    assert out["F"].tolist() == [-2.0]
+    assert out["evaluation_vector"].tolist() == [0.42, 1.1]
 
 
 def test_async_recording_runner_records_and_strips_metrics():
