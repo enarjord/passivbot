@@ -120,6 +120,18 @@ def test_pareto_store_persists_candidate_without_extra_rounding(tmp_path):
     assert saved["bot"]["long"]["entry_we_weight"] == 1.384
 
 
+def test_pareto_store_single_pass_drops_and_removes_dominated_entries(tmp_path):
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    assert store.add_entry(_make_candidate({"metric1": 1.0}))
+    assert not store.add_entry(_make_candidate({"metric1": 2.0}))
+    assert store.add_entry(_make_candidate({"metric1": 0.5}))
+
+    front = store.get_front()
+    assert len(front) == 1
+    assert front[0]["metrics"]["objectives"]["metric1"] == 0.5
+
+
 def test_pareto_store_bootstrap_failure_raises_and_preserves_files(tmp_path):
     pareto_dir = tmp_path / "pareto"
     pareto_dir.mkdir()
