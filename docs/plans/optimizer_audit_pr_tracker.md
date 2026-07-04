@@ -75,6 +75,10 @@ approval, and merge only after both reviewers approve the same head.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on head
     `ffceb19407b1641fdc63336becc0fb9d07fa8fa1`.
+- [ ] #1080 - Remove unused all_results seed skip branch.
+  - Status: mergeable.
+  - Gate: waiting for Claude and Hermes review on head
+    `1826e53bc1ca6f5bf6333a282545defcc6c59c13`.
 
 ## Remaining Or Paused Audit Items
 
@@ -83,9 +87,6 @@ approval, and merge only after both reviewers approve the same head.
     covers the safe dominance-pass cleanup. Remaining heavier work is
     synchronous JSON write/profiling-driven behavior and should not be changed
     without measurement.
-- [ ] Unreachable all_results skip branch cleanup.
-  - Current note: lower-value cleanup in `src/optimize.py`; avoid while #1074
-    touches adjacent optimizer streaming code.
 - [ ] ParetoStore.get_front deletion claim.
   - Current note: tests still exercise the method; not treated as dead without
     either removing test need or finding production replacement.
