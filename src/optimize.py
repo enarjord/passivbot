@@ -183,6 +183,7 @@ from optimization.bounds import (
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
 from optimization.backend_shared import cancel_pending_async_results, drain_async_results
 from optimization.backends import get_backend_runner
+from optimization.random_seed import seed_rngs
 from optimization.config_adapter import (
     extract_bounds_tuple_list_from_config,
     get_optimization_key_paths,
@@ -3086,6 +3087,7 @@ async def main():
         if checkpoint_path is None:
             checkpoint_path = os.path.join(results_dir, "checkpoint.pkl")
         overrides_list = config.get("optimize", {}).get("enable_overrides", [])
+        seed_rngs(config.get("optimize", {}).get("seed"), context="optimizer")
 
         # Shared state used by workers for duplicate detection
         manager = multiprocessing.Manager()

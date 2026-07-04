@@ -541,7 +541,8 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
     captured = {}
 
     def _fake_minimize(problem, algorithm, termination, seed, verbose, **kwargs):
-        del problem, termination, seed, verbose
+        del problem, termination, verbose
+        captured["seed"] = seed
         captured["sampling"] = np.asarray(algorithm.initialization.sampling, dtype=np.float64)
         return None
 
@@ -556,6 +557,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
                 "population_size": 4,
                 "iters": 8,
                 "n_cpus": 1,
+                "seed": 123,
                 "max_pending_starting_evals_per_cpu": 1,
                 "round_to_n_significant_digits": 4,
                 "scoring": ["adg", "drawdown_worst"],
@@ -589,6 +591,7 @@ def test_run_backend_evaluates_all_starting_configs_before_trim(monkeypatch):
 
     assert result["pool_terminated"] is False
     assert len(recorder.entries) == 6
+    assert captured["seed"] == 123
     assert captured["sampling"].shape == (4, 2)
 
 

@@ -16,6 +16,10 @@ All notable user-facing changes will be documented in this file.
 - Suite optimizer context preparation now matches suite-runner exchange and
   coin-universe setup, and fails loudly when a scenario cannot be prepared
   instead of silently dropping scenarios or falling back to other exchanges.
+- Added optional `optimize.seed`; the default `null` randomizes optimizer
+  population and worker RNGs, including replacing pymoo's previous fixed
+  default seed, while an integer seed opts into deterministic seeding for
+  diagnostics.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.

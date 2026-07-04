@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import functools
 import logging
 import multiprocessing
 import os
@@ -28,6 +29,7 @@ from optimization.deap_adapters import (
     cxSimulatedBinaryBoundedWrapper,
     mutPolynomialBoundedWrapper,
 )
+from optimization.random_seed import seed_worker_rngs
 from config.scoring import engine_space_fitness_weights
 
 DEFAULT_DEAP_POPULATION_SIZE = 500
@@ -58,6 +60,12 @@ def _clone_evaluated_individual(individual):
     if hasattr(individual, "evaluation_metrics"):
         clone.evaluation_metrics = deepcopy(individual.evaluation_metrics)
     return clone
+
+
+def _initialize_deap_worker(rng_seed, ignore_sigint_in_worker=None):
+    seed_worker_rngs(rng_seed, context="DEAP optimizer")
+    if ignore_sigint_in_worker is not None:
+        ignore_sigint_in_worker()
 
 
 def run_backend(
@@ -141,9 +149,14 @@ def run_backend(
         toolbox.register("evaluate", evaluator_for_pool.evaluate, overrides_list=overrides_list)
 
         logging.info("Initializing multiprocessing pool. N cpus: %s", config["optimize"]["n_cpus"])
+        worker_initializer = functools.partial(
+            _initialize_deap_worker,
+            config["optimize"].get("seed"),
+            ignore_sigint_in_worker,
+        )
         pool = multiprocessing.Pool(
             processes=config["optimize"]["n_cpus"],
-            initializer=ignore_sigint_in_worker,
+            initializer=worker_initializer,
         )
         toolbox.register("map", pool.map)
         logging.info("Finished initializing multiprocessing pool.")

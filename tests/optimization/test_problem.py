@@ -151,6 +151,35 @@ def test_async_recording_runner_records_and_strips_metrics():
     assert recorder.record.call_count == 2
 
 
+def test_async_recording_runner_does_not_reseed_parent_numpy_rng():
+    evaluator = FakeEvaluator(has_constraints=True)
+    recorder = MagicMock()
+    runner = PymooAsyncRecordingRunner(
+        evaluator=evaluator,
+        has_constraints=True,
+        n_obj=2,
+        pool=FakeAsyncPool(),
+        recorder=recorder,
+        template={"optimize": {"backend": "pymoo"}},
+        build_config_fn=lambda vector, overrides_fn, overrides_list, template: {
+            "bot": {"long": {"a": float(vector[0])}},
+            "backtest": {"coins": {"binance": ["BTC/USDT:USDT"]}},
+            **template,
+        },
+        overrides_fn=object(),
+        overrides_list=["x"],
+    )
+    np.random.seed(42)
+    before = np.random.get_state()
+
+    runner(object(), [np.asarray([0.25])])
+
+    after = np.random.get_state()
+    assert before[0] == after[0]
+    assert np.array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
+
+
 def test_async_recording_runner_profiles_record_result_when_enabled(monkeypatch, caplog):
     evaluator = FakeEvaluator(has_constraints=True)
     recorder = MagicMock()

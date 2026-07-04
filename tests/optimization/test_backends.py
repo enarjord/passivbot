@@ -1,5 +1,7 @@
 import argparse
 import copy
+import functools
+from multiprocessing.reduction import ForkingPickler
 
 import pytest
 
@@ -14,6 +16,7 @@ from optimization.backends import get_backend_runner
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
     _clone_evaluated_individual,
+    _initialize_deap_worker,
     _resolve_deap_population_size,
 )
 from optimization.backends.deap_backend import run_backend as run_deap_backend
@@ -115,6 +118,7 @@ def test_template_defaults_use_null_population_and_pareto_1000():
     assert current["optimize"]["backend"] == "pymoo"
     assert current["optimize"]["population_size"] is None
     assert current["optimize"]["pareto_max_size"] == 1000
+    assert current["optimize"]["seed"] is None
 
 
 def test_format_config_preserves_null_population_size_for_pymoo():
@@ -125,6 +129,27 @@ def test_format_config_preserves_null_population_size_for_pymoo():
     out = format_config(current, verbose=False)
 
     assert out["optimize"]["population_size"] is None
+
+
+def test_format_config_normalizes_optional_optimizer_seed():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["seed"] = "123"
+
+    out = format_config(current, verbose=False)
+
+    assert out["optimize"]["seed"] == 123
+
+    current["optimize"]["seed"] = "random"
+    out = format_config(current, verbose=False)
+    assert out["optimize"]["seed"] is None
+
+
+def test_format_config_rejects_negative_optimizer_seed():
+    current = copy.deepcopy(get_template_config())
+    current["optimize"]["seed"] = -1
+
+    with pytest.raises(ValueError, match="optimize.seed must be null"):
+        format_config(current, verbose=False)
 
 
 def test_resolve_deap_population_size_uses_fallback_for_null():
@@ -187,6 +212,10 @@ def test_clone_evaluated_individual_preserves_fitness_and_metrics():
     assert clone.evaluation_metrics == {"nested": {"value": 1}}
     individual.evaluation_metrics["nested"]["value"] = 2
     assert clone.evaluation_metrics == {"nested": {"value": 1}}
+
+
+def test_deap_worker_seed_initializer_is_pickleable():
+    ForkingPickler.dumps(functools.partial(_initialize_deap_worker, None, None))
 
 
 def test_get_backend_runner_resolves_supported_backends():

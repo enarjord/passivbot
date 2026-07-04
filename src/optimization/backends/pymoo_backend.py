@@ -95,6 +95,7 @@ def _reduce_starting_population(
     payloads: list[dict[str, Any]],
     population_size: int,
     bounds,
+    rng_seed: int | None,
 ) -> np.ndarray:
     if not starting_individuals:
         return _build_random_sampling(bounds, population_size)
@@ -118,7 +119,7 @@ def _reduce_starting_population(
         pop,
         n_survive=population_size,
         algorithm=algorithm,
-        seed=1,
+        seed=rng_seed,
     )
     logging.info(
         "Trimmed starting configs to population size via pymoo %s survival (kept %d)",
@@ -575,6 +576,7 @@ def run_backend(
     try:
         bounds = base_evaluator.bounds
         sig_digits = config["optimize"]["round_to_n_significant_digits"]
+        rng_seed = config["optimize"].get("seed")
         population_plan = _resolve_pymoo_population_plan(
             config,
             n_obj=len(config["optimize"]["scoring"]),
@@ -607,6 +609,7 @@ def run_backend(
             overrides_list,
             len(config["optimize"]["scoring"]),
             evaluator_adapter.has_constraints,
+            rng_seed,
             ignore_sigint_in_worker,
         )
         pool = multiprocessing.Pool(
@@ -683,12 +686,13 @@ def run_backend(
                     payloads=seed_payloads,
                     population_size=population_size,
                     bounds=bounds,
+                    rng_seed=rng_seed,
                 )
         ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
 
         minimize_kwargs = {
-            "seed": 1,
+            "seed": rng_seed,
             "verbose": False,
             "copy_algorithm": False,
         }

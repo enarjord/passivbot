@@ -483,6 +483,7 @@ def get_template_config():
                     "offspring_multiplier": 1,
                     "pareto_max_size": 1000,
                     "population_size": None,
+                    "seed": None,
                     "pymoo": {
                         "algorithm": "auto",
                         "algorithms": {
