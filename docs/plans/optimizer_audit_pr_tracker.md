@@ -49,6 +49,7 @@ approval, and merge only after both reviewers approve the same head.
 - [x] #1075 - Remove unused opt_utils helpers.
 - [x] #1076 - Correct optimizer limit stat docs.
 - [x] #1078 - Reuse pymoo starting seed evaluations.
+- [x] #1079 - Check Pareto dominance in one pass.
 - [x] #1080 - Remove unused all_results seed skip branch.
 
 ## Open PRs
@@ -57,17 +58,12 @@ approval, and merge only after both reviewers approve the same head.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on the current PR head after
     tracker updates.
-- [ ] #1079 - Check Pareto dominance in one pass.
-  - Status: mergeable.
-  - Gate: rebased onto current `v8` after #1078 merged; waiting for fresh
-    Claude and Hermes review on head
-    `475cb29a13d058ade04c9d83a54228f9a2522d06`.
 
 ## Remaining Or Paused Audit Items
 
 - [ ] ParetoStore add-entry performance.
-  - Current note: exact objective-vector lookup is already in place, and #1079
-    covers the safe dominance-pass cleanup. Remaining heavier work is
+  - Current note: exact objective-vector lookup is already in place, and merged
+    #1079 covers the safe dominance-pass cleanup. Remaining heavier work is
     synchronous JSON write/profiling-driven behavior and should not be changed
     without measurement.
 - [ ] ParetoStore.get_front deletion claim.
