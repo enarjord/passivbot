@@ -8,7 +8,9 @@ approval, and merge only after both reviewers approve the same head.
 
 - Claude approval must mention the PR's current head SHA.
 - Hermes approval must mention the PR's current head SHA.
-- Reviewer findings are addressed on the same PR before merge.
+- Reviewer findings are addressed on the same PR before merge, and the follow-up
+  fix delta must itself receive current-head Claude and Hermes greenlight before
+  merging.
 - Orthogonal follow-up PRs may proceed while earlier PRs wait for reviews.
 
 ## Merged
