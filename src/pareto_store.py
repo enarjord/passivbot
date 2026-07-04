@@ -277,31 +277,26 @@ class ParetoStore:
                     self._remove_from_front(existing_hash)
             # ────────────────────────────────────────────────────────────────
 
-            # discard if dominated by current front
-            if any(
-                dominates_with_violation(
-                    self._objectives[idx],
-                    self._violations.get(idx, 0.0),
+            dominated = []
+            for idx in self._front:
+                front_obj = self._objectives[idx]
+                front_violation = self._violations.get(idx, 0.0)
+                if dominates_with_violation(
+                    front_obj,
+                    front_violation,
                     obj,
                     violation,
                     objective_specs=self.scoring_specs,
-                )
-                for idx in self._front
-            ):
-                return False
-
-            # remove dominated members
-            dominated = [
-                idx
-                for idx in self._front
+                ):
+                    return False
                 if dominates_with_violation(
                     obj,
                     violation,
-                    self._objectives[idx],
-                    self._violations.get(idx, 0.0),
+                    front_obj,
+                    front_violation,
                     objective_specs=self.scoring_specs,
-                )
-            ]
+                ):
+                    dominated.append(idx)
             for idx in dominated:
                 self._remove_from_front(idx)
 
