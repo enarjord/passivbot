@@ -33,6 +33,10 @@ from pareto_core import (
 STAT_FIELDS = {"mean", "min", "max", "std"}
 
 
+class LimitMetricError(ValueError):
+    pass
+
+
 def _resolve_aggregate_mode(metric: str, aggregate_cfg: Optional[Dict[str, str]]) -> str:
     return resolve_aggregate_mode(metric, aggregate_cfg)
 
@@ -84,6 +88,24 @@ def _resolve_limit_value(
         field = "mean"
     key = f"{resolved_metric.replace('.', '_')}_{field}"
     return resolve_metric_value(stats_flat, key)
+
+
+def _format_available_limit_metrics(
+    stats_flat: Dict[str, float],
+    aggregated_values: Dict[str, float],
+    objectives: Dict[str, float],
+    metric_map: Dict[str, str],
+) -> str:
+    available = sorted(
+        {
+            *stats_flat.keys(),
+            *aggregated_values.keys(),
+            *objectives.keys(),
+            *metric_map.keys(),
+            *metric_map.values(),
+        }
+    )
+    return ", ".join(available) if available else "<none>"
 
 
 def _suite_metrics_to_stats(
@@ -163,7 +185,13 @@ def _evaluate_limits(
     for spec in specs:
         value = _resolve_limit_value(spec, stats_flat, aggregated_values, objectives, metric_map)
         if value is None:
-            continue
+            available = _format_available_limit_metrics(
+                stats_flat, aggregated_values, objectives, metric_map
+            )
+            raise LimitMetricError(
+                f"Limit metric {spec.metric!r} could not be resolved. "
+                f"Available metrics: {available}"
+            )
         if not spec.op(value, spec.value):
             return False
     return True
@@ -697,6 +725,8 @@ def main():
             if all(v is not None for v in values):
                 points.append((*values, h))
                 filenames[h] = os.path.split(entry_path)[-1]
+        except LimitMetricError:
+            raise
         except Exception as e:
             print(f"Error loading {h}: {e}")
     print(f"Found {len(entries)} Pareto members.")
