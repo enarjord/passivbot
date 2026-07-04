@@ -45,29 +45,16 @@ approval, and merge only after both reviewers approve the same head.
 - [x] #1071 - Install DEAP evaluator once per worker.
 - [x] #1072 - Avoid forced optimizer data pre-copy.
 - [x] #1073 - Stream resume result validation.
+- [x] #1074 - Bound DEAP pending offspring evaluations.
+- [x] #1075 - Remove unused opt_utils helpers.
+- [x] #1076 - Correct optimizer limit stat docs.
 
 ## Open PRs
 
-- [ ] #1074 - Bound DEAP pending offspring evaluations.
-  - Status: mergeable.
-  - Gate: Hermes approved head `6d329686146ece961bf3d706e748851e10097f09`;
-    waiting for fresh Claude approval on that same head.
-- [ ] #1075 - Remove unused opt_utils helpers.
-  - Status: mergeable.
-  - Gate: Hermes approved head
-    `65a30da5fcdc999dbafa7581e6710818c7344f0d`; waiting for Claude approval on
-    that same head.
-- [ ] #1076 - Correct optimizer limit stat docs.
-  - Status: mergeable after rebase repair.
-  - Gate: Hermes approved repaired head
-    `7e96a50a0fe9544d1649c66bf7cc034b2cff22bb`; waiting for Claude approval on
-    that same head.
 - [ ] #1077 - Track optimizer audit PR progress.
   - Status: mergeable.
-  - Gate: Hermes approved older head
-    `3a87beb82ac9076307ab7cc91128a0e9fc6a711f`; waiting for Claude and fresh
-    Hermes review on current head `9288b038ecc8babba4afc5e99ba7bc9a0c83e093`
-    after tracker updates.
+  - Gate: waiting for Claude and Hermes review on the current PR head after
+    tracker updates.
 - [ ] #1078 - Reuse pymoo starting seed evaluations.
   - Status: mergeable.
   - Gate: Hermes approved head
