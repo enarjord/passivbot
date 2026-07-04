@@ -12,6 +12,7 @@ from optimization.backend_shared import drain_async_results
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
 from optimization.evaluation_payload import unpack_evaluation_payload
+from optimization.random_seed import seed_worker_rngs
 
 
 _PYMOO_WORKER_EVALUATOR = None
@@ -31,24 +32,35 @@ def _optimize_profile_enabled() -> bool:
     }
 
 
-def initialize_pymoo_worker(
+def _set_pymoo_worker_globals(
     evaluator,
     overrides_list: Sequence[str] | None,
     n_obj: int,
     has_constraints: bool,
-    ignore_sigint_in_worker=None,
 ) -> None:
     global _PYMOO_WORKER_EVALUATOR
     global _PYMOO_WORKER_OVERRIDES_LIST
     global _PYMOO_WORKER_N_OBJ
     global _PYMOO_WORKER_HAS_CONSTRAINTS
 
-    if ignore_sigint_in_worker is not None:
-        ignore_sigint_in_worker()
     _PYMOO_WORKER_EVALUATOR = evaluator
     _PYMOO_WORKER_OVERRIDES_LIST = list(overrides_list or [])
     _PYMOO_WORKER_N_OBJ = int(n_obj)
     _PYMOO_WORKER_HAS_CONSTRAINTS = bool(has_constraints)
+
+
+def initialize_pymoo_worker(
+    evaluator,
+    overrides_list: Sequence[str] | None,
+    n_obj: int,
+    has_constraints: bool,
+    rng_seed: int | None = None,
+    ignore_sigint_in_worker=None,
+) -> None:
+    seed_worker_rngs(rng_seed, context="pymoo optimizer")
+    if ignore_sigint_in_worker is not None:
+        ignore_sigint_in_worker()
+    _set_pymoo_worker_globals(evaluator, overrides_list, n_obj, has_constraints)
 
 
 def _evaluate_pymoo_worker(
@@ -172,7 +184,7 @@ class PymooAsyncRecordingRunner:
 
     def __call__(self, _f, X):
         xs = list(X)
-        initialize_pymoo_worker(
+        _set_pymoo_worker_globals(
             self.evaluator,
             self.overrides_list,
             self.n_obj,
