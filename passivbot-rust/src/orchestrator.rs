@@ -4098,26 +4098,41 @@ mod core {
         }
 
         #[test]
-        fn panic_close_respects_panic_close_market_flag() {
+        fn panic_close_respects_side_local_hsl_order_type() {
             let mut global = make_basic_global();
+            global.global_bot_params.long.hsl_enabled = true;
+            global.global_bot_params.long.hsl_panic_close_order_type = "market".to_string();
+            global.global_bot_params.short.hsl_enabled = true;
+            global.global_bot_params.short.hsl_panic_close_order_type = "limit".to_string();
             let order_book = OrderBook {
                 bid: 100.0,
                 ask: 100.0,
             };
-            let order = IdealOrder {
+            let long_order = IdealOrder {
                 symbol_idx: 0,
                 pside: PositionSide::Long,
                 qty: -1.0,
                 price: 50.0,
                 order_type: OrderType::ClosePanicLong,
             };
+            let short_order = IdealOrder {
+                symbol_idx: 0,
+                pside: PositionSide::Short,
+                qty: 1.0,
+                price: 150.0,
+                order_type: OrderType::ClosePanicShort,
+            };
             assert_eq!(
-                to_executable_order(order.clone(), &global, &order_book).execution_type,
+                to_executable_order(long_order.clone(), &global, &order_book).execution_type,
+                ExecutionType::Market
+            );
+            assert_eq!(
+                to_executable_order(short_order.clone(), &global, &order_book).execution_type,
                 ExecutionType::Limit
             );
             global.panic_close_market = true;
             assert_eq!(
-                to_executable_order(order, &global, &order_book).execution_type,
+                to_executable_order(short_order, &global, &order_book).execution_type,
                 ExecutionType::Market
             );
         }

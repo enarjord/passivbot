@@ -737,7 +737,7 @@ Remaining implementation details:
 
 - [x] Live `risk_twel_enforcer_policy` plumbing and BotParams coverage tests.
       This is the cleanest confirmed live/backtest parity breach.
-- [ ] HSL per-pside panic order type plus Rust enum/default validation.
+- [x] HSL per-pside panic order type plus Rust enum/default validation.
       Keep market/limit intent side-local unless an explicit emergency global
       override is added.
 - [ ] Numeric validation/clamping for HSL EMA spans and risk/unstuck config.

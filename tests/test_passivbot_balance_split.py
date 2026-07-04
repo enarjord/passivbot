@@ -5452,7 +5452,7 @@ async def test_protective_panic_orchestrator_payload_omits_ema_dependencies(monk
     rust_symbol = captured["input"]["symbols"][0]
     assert rust_symbol["long"]["mode"] == "panic"
     assert rust_symbol["short"]["mode"] == "manual"
-    assert captured["input"]["global"]["panic_close_market"] is True
+    assert captured["input"]["global"]["panic_close_market"] is False
     assert len(captured["input"]["symbols"]) == 1
     assert rust_symbol["emas"] == {
         "m1": {"close": [], "log_range": [], "volume": []},

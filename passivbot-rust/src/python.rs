@@ -2452,6 +2452,21 @@ fn validate_forager_score_weights_pair(bot_params: &BotParamsPair) -> PyResult<(
     Ok(())
 }
 
+fn validate_hsl_panic_close_order_type_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_panic_close_order_type.as_str() {
+            "market" | "limit" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_panic_close_order_type must be one of: market, limit; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
     dict.get_item(key)
         .map_err(|_| {
@@ -3750,6 +3765,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
             ))
         })?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
+    validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {
         pyo3::exceptions::PyValueError::new_err(format!(

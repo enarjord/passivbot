@@ -13642,18 +13642,6 @@ class Passivbot:
 
         if not hasattr(self, "effective_min_cost") or self.effective_min_cost is None:
             self.effective_min_cost = {}
-        target_psides = {
-            pside for psides in target_psides_by_symbol.values() for pside in psides
-        }
-        panic_close_market = bool(
-            any(
-                Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                == "market"
-                for pside in target_psides
-                if Passivbot._equity_hard_stop_enabled(self, pside)
-            )
-        )
-        input_dict["global"]["panic_close_market"] = panic_close_market
         for symbol in symbols:
             idx = symbol_to_idx[symbol]
             snap = market_snapshots.get(symbol)
@@ -14304,14 +14292,7 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "panic_close_market": bool(
-                    any(
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                        == "market"
-                        for pside in ("long", "short")
-                        if Passivbot._equity_hard_stop_enabled(self, pside)
-                    )
-                ),
+                "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),
@@ -16152,14 +16133,7 @@ class Passivbot:
                 "market_order_near_touch_threshold": float(
                     self.live_value("market_order_near_touch_threshold")
                 ),
-                "panic_close_market": bool(
-                    any(
-                        Passivbot._equity_hard_stop_panic_close_order_type(self, pside)
-                        == "market"
-                        for pside in ("long", "short")
-                        if Passivbot._equity_hard_stop_enabled(self, pside)
-                    )
-                ),
+                "panic_close_market": False,
                 "auto_unstuck_allowed": auto_unstuck_allowed,
                 "unstuck_allowance_long": float(unstuck_allowances.get("long", 0.0)),
                 "unstuck_allowance_short": float(unstuck_allowances.get("short", 0.0)),

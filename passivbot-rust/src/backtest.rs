@@ -1548,11 +1548,7 @@ impl<'a> Backtest<'a> {
                     .backtest_params
                     .market_order_near_touch_threshold,
                 market_order_slippage_pct: self.backtest_params.market_order_slippage_pct,
-                panic_close_market: self
-                    .backtest_params
-                    .equity_hard_stop_loss
-                    .panic_close_order_type
-                    == "market",
+                panic_close_market: false,
                 auto_unstuck_allowed: Some(true),
                 unstuck_allowance_long: long_allowance,
                 unstuck_allowance_short: short_allowance,
