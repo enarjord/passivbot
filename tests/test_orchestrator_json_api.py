@@ -2450,8 +2450,39 @@ def test_balance_raw_absent_falls_back_to_balance():
     assert isinstance(out, dict)
 
 
-def test_balance_raw_zero_gate_returns_early():
-    """When balance_raw is 0.0, the loss gate returns early (non-positive guard)."""
+@pytest.mark.parametrize(
+    ("mutator", "match"),
+    [
+        (lambda inp: inp.__setitem__("balance", 0.0), r"balance must be finite and > 0"),
+        (
+            lambda inp: inp["global"].__setitem__("max_realized_loss_pct", -0.01),
+            r"global\.max_realized_loss_pct must be finite and >= 0",
+        ),
+        (
+            lambda inp: inp["global"].__setitem__("unstuck_allowance_long", -1.0),
+            r"global\.unstuck_allowance_long must be finite and >= 0",
+        ),
+        (
+            lambda inp: inp["global"].__setitem__("unstuck_allowance_short", -1.0),
+            r"global\.unstuck_allowance_short must be finite and >= 0",
+        ),
+    ],
+)
+def test_json_rejects_invalid_account_risk_globals(mutator, match):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[make_symbol(0, bid=100.0, ask=100.0)],
+    )
+    mutator(inp)
+
+    with pytest.raises(ValueError, match=match):
+        compute(pbr, inp)
+
+
+def test_balance_raw_zero_rejected():
+    """Non-positive balance_raw is rejected instead of disabling realized-loss gates."""
     import passivbot_rust as pbr
 
     long_bp = {}
@@ -2474,14 +2505,12 @@ def test_balance_raw_zero_gate_returns_early():
     inp["global"]["realized_pnl_cumsum_max"] = 10.0
     inp["global"]["realized_pnl_cumsum_last"] = 5.0
 
-    out = compute(pbr, inp)
-    # Gate skips with non-positive balance_raw, close orders should still appear
-    close_orders = [o for o in out["orders"] if o["order_type"].startswith("close_")]
-    assert len(close_orders) > 0
+    with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
+        compute(pbr, inp)
 
 
-def test_balance_raw_negative_gate_returns_early():
-    """When balance_raw is -1.0, the loss gate returns early (non-positive guard)."""
+def test_balance_raw_negative_rejected():
+    """Negative balance_raw is rejected instead of disabling realized-loss gates."""
     import passivbot_rust as pbr
 
     long_bp = {}
@@ -2504,10 +2533,8 @@ def test_balance_raw_negative_gate_returns_early():
     inp["global"]["realized_pnl_cumsum_max"] = 10.0
     inp["global"]["realized_pnl_cumsum_last"] = 5.0
 
-    out = compute(pbr, inp)
-    # Gate skips with negative balance_raw, close orders should still appear
-    close_orders = [o for o in out["orders"] if o["order_type"].startswith("close_")]
-    assert len(close_orders) > 0
+    with pytest.raises(ValueError, match=r"balance_raw must be finite and > 0"):
+        compute(pbr, inp)
 
 
 def test_balance_raw_inf_rejected():

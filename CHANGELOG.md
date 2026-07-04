@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- The Rust orchestrator JSON boundary now rejects invalid account/risk globals
+  such as non-positive raw balance, negative realized-loss limits, and negative
+  unstuck allowances before risk gates or order planning can silently skip.
 - HSL/risk/unstuck config validation now clamps HSL EMA spans below `1.0`
   during config preparation and rejects malformed HSL, risk, and unstuck
   numeric inputs at the Rust orchestrator JSON boundary before order planning.

@@ -2660,6 +2660,54 @@ fn validate_hsl_risk_unstuck_orchestrator_input(
     Ok(())
 }
 
+fn validate_orchestrator_account_risk_inputs(
+    input: &crate::orchestrator::OrchestratorInput,
+) -> PyResult<()> {
+    validate_finite_range("balance", input.balance, 0.0, None, false)?;
+    let balance_raw = if input.balance_raw.is_finite() {
+        input.balance_raw
+    } else {
+        input.balance
+    };
+    validate_finite_range("balance_raw", balance_raw, 0.0, None, false)?;
+    validate_finite_range(
+        "global.max_realized_loss_pct",
+        input.global.max_realized_loss_pct,
+        0.0,
+        None,
+        true,
+    )?;
+    for (path, value) in [
+        (
+            "global.realized_pnl_cumsum_max",
+            input.global.realized_pnl_cumsum_max,
+        ),
+        (
+            "global.realized_pnl_cumsum_last",
+            input.global.realized_pnl_cumsum_last,
+        ),
+    ] {
+        if !value.is_finite() {
+            return Err(PyValueError::new_err(format!("{path} must be finite")));
+        }
+    }
+    validate_finite_range(
+        "global.unstuck_allowance_long",
+        input.global.unstuck_allowance_long,
+        0.0,
+        None,
+        true,
+    )?;
+    validate_finite_range(
+        "global.unstuck_allowance_short",
+        input.global.unstuck_allowance_short,
+        0.0,
+        None,
+        true,
+    )?;
+    Ok(())
+}
+
 fn extract_value<'a, T: pyo3::FromPyObject<'a>>(dict: &'a PyDict, key: &str) -> PyResult<T> {
     dict.get_item(key)
         .map_err(|_| {
@@ -3957,6 +4005,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
                 e
             ))
         })?;
+    validate_orchestrator_account_risk_inputs(&input)?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
