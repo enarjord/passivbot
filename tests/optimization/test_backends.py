@@ -16,6 +16,7 @@ from optimization.backends import get_backend_runner
 from optimization.backends.deap_backend import (
     DEFAULT_DEAP_POPULATION_SIZE,
     _clone_evaluated_individual,
+    _evaluate_deap_worker,
     _initialize_deap_worker,
     _resolve_deap_population_size,
 )
@@ -216,6 +217,20 @@ def test_clone_evaluated_individual_preserves_fitness_and_metrics():
 
 def test_deap_worker_seed_initializer_is_pickleable():
     ForkingPickler.dumps(functools.partial(_initialize_deap_worker, None, None))
+
+
+def test_deap_worker_evaluate_uses_initializer_globals():
+    class Evaluator:
+        def evaluate(self, individual, overrides_list):
+            return tuple(individual), tuple(overrides_list)
+
+    _initialize_deap_worker(None, None, Evaluator(), ["override.a"])
+
+    assert _evaluate_deap_worker([1.0, 2.0]) == ((1.0, 2.0), ("override.a",))
+
+
+def test_deap_worker_task_evaluator_is_pickleable_without_bound_evaluator():
+    ForkingPickler.dumps(_evaluate_deap_worker)
 
 
 def test_get_backend_runner_resolves_supported_backends():

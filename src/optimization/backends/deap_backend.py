@@ -7,7 +7,7 @@ import os
 import pickle
 import random
 from copy import deepcopy
-from typing import Any, Callable
+from typing import Any, Callable, Sequence
 
 import numpy as np
 
@@ -33,6 +33,8 @@ from optimization.random_seed import seed_worker_rngs
 from config.scoring import engine_space_fitness_weights
 
 DEFAULT_DEAP_POPULATION_SIZE = 500
+_DEAP_WORKER_EVALUATOR = None
+_DEAP_WORKER_OVERRIDES_LIST: list[Any] = []
 
 
 def _resolve_deap_population_size(config: dict[str, Any]) -> int:
@@ -62,10 +64,30 @@ def _clone_evaluated_individual(individual):
     return clone
 
 
-def _initialize_deap_worker(rng_seed, ignore_sigint_in_worker=None):
+def _set_deap_worker_globals(evaluator, overrides_list: Sequence[Any] | None) -> None:
+    global _DEAP_WORKER_EVALUATOR
+    global _DEAP_WORKER_OVERRIDES_LIST
+
+    _DEAP_WORKER_EVALUATOR = evaluator
+    _DEAP_WORKER_OVERRIDES_LIST = list(overrides_list or [])
+
+
+def _initialize_deap_worker(
+    rng_seed,
+    ignore_sigint_in_worker=None,
+    evaluator=None,
+    overrides_list: Sequence[Any] | None = None,
+):
     seed_worker_rngs(rng_seed, context="DEAP optimizer")
     if ignore_sigint_in_worker is not None:
         ignore_sigint_in_worker()
+    _set_deap_worker_globals(evaluator, overrides_list)
+
+
+def _evaluate_deap_worker(individual):
+    if _DEAP_WORKER_EVALUATOR is None:
+        raise RuntimeError("DEAP worker evaluator not initialized")
+    return _DEAP_WORKER_EVALUATOR.evaluate(individual, _DEAP_WORKER_OVERRIDES_LIST)
 
 
 def run_backend(
@@ -146,13 +168,15 @@ def run_backend(
             bounds=bounds,
         )
         toolbox.register("select", tools.selNSGA2)
-        toolbox.register("evaluate", evaluator_for_pool.evaluate, overrides_list=overrides_list)
+        toolbox.register("evaluate", _evaluate_deap_worker)
 
         logging.info("Initializing multiprocessing pool. N cpus: %s", config["optimize"]["n_cpus"])
         worker_initializer = functools.partial(
             _initialize_deap_worker,
             config["optimize"].get("seed"),
             ignore_sigint_in_worker,
+            evaluator_for_pool,
+            overrides_list,
         )
         pool = multiprocessing.Pool(
             processes=config["optimize"]["n_cpus"],
