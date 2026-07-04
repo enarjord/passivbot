@@ -32,6 +32,7 @@ from optimize import (
     _record_individual_result,
     _resolve_cli_limits_override,
     _set_candidate_metrics,
+    _terminate_optimizer_pool,
     _format_objectives,
     individual_to_config,
     config_to_individual,
@@ -76,6 +77,24 @@ def test_optimizer_exit_code_reports_fatal_failure():
     assert _optimizer_exit_code(interrupted=False, failed=True) == 1
     assert _optimizer_exit_code(interrupted=True, failed=False) == 130
     assert _optimizer_exit_code(interrupted=True, failed=True) == 130
+
+
+def test_terminate_optimizer_pool_handles_missing_pool():
+    assert _terminate_optimizer_pool(None, False) is False
+
+
+def test_terminate_optimizer_pool_skips_already_terminated_pool():
+    pool = MagicMock()
+
+    assert _terminate_optimizer_pool(pool, True) is True
+    pool.terminate.assert_not_called()
+
+
+def test_terminate_optimizer_pool_terminates_active_pool():
+    pool = MagicMock()
+
+    assert _terminate_optimizer_pool(pool, False) is True
+    pool.terminate.assert_called_once_with()
 
 
 def test_candidate_metrics_sidecars_only_attach_to_objects():
