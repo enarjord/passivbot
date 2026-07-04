@@ -188,6 +188,7 @@ from optimization.config_adapter import (
     get_optimization_key_paths,
     resolve_optimization_bound_path,
 )
+from optimization.evaluation_payload import apply_evaluation_payload, build_evaluation_payload
 from optimization.warmup import (
     build_optimizer_vector_config,
     compute_optimizer_per_coin_warmup_minutes,
@@ -954,11 +955,8 @@ def ea_mu_plus_lambda_stream(
 
         def _on_result(idx, payload):
             nonlocal liquidation_total
-            fit_values, penalty, metrics = payload
             ind = individuals[idx]
-            ind.fitness.values = fit_values
-            ind.fitness.constraint_violation = penalty
-            ind.constraint_violation = penalty
+            metrics = apply_evaluation_payload(ind, payload)
             if metrics and isinstance(metrics, dict):
                 suite = metrics.get("suite_metrics", {}) or {}
                 metric_map = suite.get("metrics", {}) or {}
@@ -1548,7 +1546,12 @@ class Evaluator:
                 else:
                     if existing_score is not None:
                         self.duplicate_counter["reused"] += 1
-                        return tuple(existing_score), existing_penalty, None
+                        return build_evaluation_payload(
+                            existing_score,
+                            existing_penalty,
+                            None,
+                            individual,
+                        )
             else:
                 self.seen_hashes[individual_hash] = None
         analyses = {}
@@ -1590,7 +1593,12 @@ class Evaluator:
                 _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                return tuple(objectives), total_penalty, metrics_payload
+                return build_evaluation_payload(
+                    objectives,
+                    total_penalty,
+                    metrics_payload,
+                    individual,
+                )
             analyses[exchange] = analysis
             liquidated = liquidated or _analysis_indicates_liquidation(analysis, config)
 
@@ -1621,7 +1629,12 @@ class Evaluator:
             actual_hash = calc_hash(individual)
             if self.use_duplicate_guard:
                 self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-            return tuple(objectives), total_penalty, metrics_payload
+            return build_evaluation_payload(
+                objectives,
+                total_penalty,
+                metrics_payload,
+                individual,
+            )
         metrics_payload = {
             "stats": aggregate_stats,
             "objectives": raw_objectives,
@@ -1632,7 +1645,7 @@ class Evaluator:
         actual_hash = calc_hash(individual)
         if self.use_duplicate_guard:
             self.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return tuple(objectives), total_penalty, metrics_payload
+        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def build_limit_checks(self, aggregate_cfg: Dict[str, Any] | None = None):
         limits = self.config["optimize"].get("limits", [])
@@ -1876,7 +1889,12 @@ class SuiteEvaluator:
                 else:
                     if existing_score is not None:
                         duplicate_counter["reused"] += 1
-                        return tuple(existing_score), existing_penalty, None
+                        return build_evaluation_payload(
+                            existing_score,
+                            existing_penalty,
+                            None,
+                            individual,
+                        )
             else:
                 seen_hashes[individual_hash] = None
 
@@ -1974,7 +1992,12 @@ class SuiteEvaluator:
                     _set_candidate_metrics(individual, metrics_payload)
                     actual_hash = calc_hash(individual)
                     self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                    return tuple(objectives), total_penalty, metrics_payload
+                    return build_evaluation_payload(
+                        objectives,
+                        total_penalty,
+                        metrics_payload,
+                        individual,
+                    )
                 analyses[exchange] = analysis
                 liquidated = liquidated or _analysis_indicates_liquidation(
                     analysis, scenario_config
@@ -2005,7 +2028,12 @@ class SuiteEvaluator:
                 _set_candidate_metrics(individual, metrics_payload)
                 actual_hash = calc_hash(individual)
                 self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-                return tuple(objectives), total_penalty, metrics_payload
+                return build_evaluation_payload(
+                    objectives,
+                    total_penalty,
+                    metrics_payload,
+                    individual,
+                )
             _profile_add(timings, "combine_metrics_ms", phase_start)
             stats = combined_metrics.get("stats", {})
             logging.debug(
@@ -2094,7 +2122,7 @@ class SuiteEvaluator:
         actual_hash = calc_hash(individual)
         if self.base.use_duplicate_guard:
             self.base.seen_hashes[actual_hash] = (tuple(objectives), total_penalty)
-        return tuple(objectives), total_penalty, metrics_payload
+        return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def __del__(self):
         for ctx in self.contexts:

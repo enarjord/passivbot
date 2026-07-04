@@ -11,6 +11,7 @@ from pymoo.core.problem import ElementwiseProblem
 from optimization.backend_shared import drain_async_results
 from optimization.bounds import Bound
 from optimization.callback import build_pymoo_record_entry
+from optimization.evaluation_payload import unpack_evaluation_payload
 
 
 _PYMOO_WORKER_EVALUATOR = None
@@ -58,10 +59,14 @@ def _evaluate_pymoo_worker(
     has_constraints: bool,
 ) -> dict[str, Any]:
     evaluated_vector = list(float(v) for v in vector)
-    objectives, constraint_violation, metrics = evaluator.evaluate(
-        evaluated_vector,
-        list(overrides_list or []),
+    objectives, constraint_violation, metrics, payload_vector = unpack_evaluation_payload(
+        evaluator.evaluate(
+            evaluated_vector,
+            list(overrides_list or []),
+        )
     )
+    if payload_vector is not None:
+        evaluated_vector = list(float(v) for v in payload_vector)
     objectives_arr = np.asarray(objectives, dtype=np.float64)
     if len(objectives_arr) != int(n_obj):
         raise ValueError(
@@ -104,10 +109,14 @@ class PymooEvaluatorAdapter:
 
     def evaluate(self, vector: Sequence[float]) -> dict[str, Any]:
         evaluated_vector = list(float(v) for v in vector)
-        objectives, constraint_violation, metrics = self.evaluator.evaluate(
-            evaluated_vector,
-            self.overrides_list,
+        objectives, constraint_violation, metrics, payload_vector = unpack_evaluation_payload(
+            self.evaluator.evaluate(
+                evaluated_vector,
+                self.overrides_list,
+            )
         )
+        if payload_vector is not None:
+            evaluated_vector = list(float(v) for v in payload_vector)
         return {
             "objectives": list(objectives),
             "constraint_violation": float(constraint_violation),
