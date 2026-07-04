@@ -61,7 +61,6 @@ from backtest import (
     get_backtest_execution_settings,
 )
 import asyncio
-import argparse
 import mmap
 import multiprocessing
 import random
