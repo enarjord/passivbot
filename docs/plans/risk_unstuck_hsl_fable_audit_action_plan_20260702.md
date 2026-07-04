@@ -746,6 +746,8 @@ Remaining implementation details:
 - [ ] Risk-input fail-loud validation boundary.
       Invalid balance, position, exchange params, PnL stats, or active gate
       inputs must not disable risk gates permissively.
+      Partial: Rust orchestrator JSON now rejects invalid account/risk globals
+      before realized-loss or unstuck gates can silently skip.
 - [ ] Rust reducer priority: one reducer per coin+pside per ideal-order batch.
       Priority is HSL panic, WEL/TWEL reducer, auto-unstuck, then any other
       close order, with bid/ask-reachable reducers prioritized before farther
