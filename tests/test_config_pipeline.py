@@ -1887,6 +1887,71 @@ def test_prepare_config_rejects_invalid_staged_live_controls(field, value, match
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_clamps_hsl_ema_span_to_minimum():
+    source = get_template_config()
+    source["bot"]["long"]["hsl"]["ema_span_minutes"] = 0.25
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["hsl"]["ema_span_minutes"] == pytest.approx(1.0)
+
+
+def test_prepare_config_clamps_hsl_no_restart_threshold_to_red_threshold():
+    source = get_template_config()
+    source["bot"]["long"]["hsl"]["red_threshold"] = 0.20
+    source["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] = 0.10
+
+    prepared = prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+    assert prepared["bot"]["long"]["hsl"]["no_restart_drawdown_threshold"] == pytest.approx(0.20)
+
+
+@pytest.mark.parametrize(
+    ("group", "field", "value", "match"),
+    [
+        ("hsl", "red_threshold", 0.0, r"bot\.long\.hsl\.red_threshold must be finite and > 0\.0"),
+        (
+            "hsl",
+            "cooldown_minutes_after_red",
+            -1.0,
+            r"bot\.long\.hsl\.cooldown_minutes_after_red must be finite and >= 0\.0",
+        ),
+        (
+            "hsl",
+            "tier_ratios",
+            {"yellow": 0.9, "orange": 0.8},
+            r"bot\.long\.hsl\.tier_ratios\.yellow must be <= bot\.long\.hsl\.tier_ratios\.orange",
+        ),
+        (
+            "risk",
+            "we_excess_allowance_pct",
+            -0.01,
+            r"bot\.long\.risk\.we_excess_allowance_pct must be finite and >= 0\.0",
+        ),
+        (
+            "unstuck",
+            "close_pct",
+            1.01,
+            r"bot\.long\.unstuck\.close_pct must be finite and <= 1\.0",
+        ),
+        (
+            "unstuck",
+            "loss_allowance_pct",
+            float("nan"),
+            r"bot\.long\.unstuck\.loss_allowance_pct must be finite",
+        ),
+    ],
+)
+def test_prepare_config_rejects_invalid_hsl_risk_unstuck_numerics(
+    group, field, value, match
+):
+    source = get_template_config()
+    source["bot"]["long"][group][field] = value
+
+    with pytest.raises((TypeError, ValueError), match=match):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_preserves_live_candle_budget_controls():
     source = get_template_config()
     source["live"]["defer_broad_candle_warmup"] = False

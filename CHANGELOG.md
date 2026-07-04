@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL/risk/unstuck config validation now clamps HSL EMA spans below `1.0`
+  during config preparation and rejects malformed HSL, risk, and unstuck
+  numeric inputs at the Rust orchestrator JSON boundary before order planning.
 - HSL panic close execution now preserves side-local
   `bot.long/short.hsl.panic_close_order_type` in live and backtests; configuring
   one side as `market` no longer market-promotes panic closes for the other side

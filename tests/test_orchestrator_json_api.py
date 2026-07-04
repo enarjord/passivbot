@@ -1346,6 +1346,51 @@ def test_panic_close_order_type_rejects_invalid_values():
         compute(pbr, inp)
 
 
+@pytest.mark.parametrize(
+    ("overrides", "match"),
+    [
+        ({"hsl_ema_span_minutes": 0.5}, r"bot\.long\.hsl_ema_span_minutes"),
+        ({"hsl_red_threshold": 0.0}, r"bot\.long\.hsl_red_threshold"),
+        (
+            {"hsl_red_threshold": 0.2, "hsl_no_restart_drawdown_threshold": 0.1},
+            r"bot\.long\.hsl_no_restart_drawdown_threshold",
+        ),
+        ({"risk_we_excess_allowance_pct": -0.01}, r"bot\.long\.risk_we_excess_allowance_pct"),
+        ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
+    ],
+)
+def test_json_rejects_invalid_global_hsl_risk_unstuck_values(overrides, match):
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides=overrides),
+        symbols=[],
+    )
+
+    with pytest.raises(ValueError, match=match):
+        compute(pbr, inp)
+
+
+def test_json_rejects_invalid_symbol_hsl_risk_unstuck_values():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=101.0,
+                long_bp={"unstuck_close_pct": 1.01},
+            )
+        ],
+    )
+
+    with pytest.raises(ValueError, match=r"symbols\[0\]\.long\.bot_params\.unstuck_close_pct"):
+        compute(pbr, inp)
+
+
 def test_graceful_stop_blocks_initial_entries_only():
     import passivbot_rust as pbr
 

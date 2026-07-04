@@ -740,7 +740,7 @@ Remaining implementation details:
 - [x] HSL per-pside panic order type plus Rust enum/default validation.
       Keep market/limit intent side-local unless an explicit emergency global
       override is added.
-- [ ] Numeric validation/clamping for HSL EMA spans and risk/unstuck config.
+- [x] Numeric validation/clamping for HSL EMA spans and risk/unstuck config.
       Clamp EMA spans to at least `1.0`; fail loudly or normalize visibly for
       other risk numerics.
 - [ ] Risk-input fail-loud validation boundary.
