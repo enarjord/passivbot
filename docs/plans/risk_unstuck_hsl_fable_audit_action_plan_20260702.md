@@ -735,7 +735,7 @@ Remaining implementation details:
 
 ## Recommended PR Order / Checklist
 
-- [ ] Live `risk_twel_enforcer_policy` plumbing and BotParams coverage tests.
+- [x] Live `risk_twel_enforcer_policy` plumbing and BotParams coverage tests.
       This is the cleanest confirmed live/backtest parity breach.
 - [ ] HSL per-pside panic order type plus Rust enum/default validation.
       Keep market/limit intent side-local unless an explicit emergency global
