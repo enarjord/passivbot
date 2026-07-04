@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL panic close execution now preserves side-local
+  `bot.long/short.hsl.panic_close_order_type` in live and backtests; configuring
+  one side as `market` no longer market-promotes panic closes for the other side
+  when that side is configured as `limit`.
 - Live TWEL auto-reduce now honors configured
   `risk_twel_enforcer_policy` when building Rust orchestrator payloads instead
   of always falling back to `reduce_overweight`, aligning live behavior with
