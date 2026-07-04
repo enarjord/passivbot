@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -8,13 +7,6 @@ import numpy as np
 
 from config.scoring import ObjectiveSpec, dominates_objectives, extract_objective_specs, from_engine_value
 from config.metrics import canonicalize_metric_name, resolve_metric_value
-
-
-@dataclass(frozen=True)
-class ParetoPoint:
-    hash_id: str
-    objectives: Tuple[float, ...]
-    violation: float = 0.0
 
 
 def _canonicalized_objective_map(objectives_map: Dict[str, Any]) -> Dict[str, Any]:
