@@ -153,7 +153,7 @@ except ImportError:  # pragma: no cover - allow import in minimal test envs
     tools = algorithms = None
 import math
 import fcntl
-from optimizer_overrides import optimizer_overrides
+from optimizer_overrides import optimizer_overrides, validate_optimizer_overrides
 from opt_utils import make_json_serializable, generate_incremental_diff, round_floats, quantize_floats
 from limit_utils import expand_limit_checks, compute_limit_violation
 from pareto_store import ParetoStore
@@ -2879,6 +2879,7 @@ async def main():
         verbose=False,
         raw_snapshot=raw_snapshot,
     )
+    validate_optimizer_overrides(config.get("optimize", {}).get("enable_overrides", []))
     config_logging_value = get_optional_config_value(config, "logging.level", None)
     effective_log_level = resolve_log_level(args.log_level, config_logging_value, fallback=1)
     if effective_log_level != initial_log_level:
