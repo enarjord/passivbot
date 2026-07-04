@@ -583,6 +583,19 @@ def _terminate_optimizer_pool(pool, pool_terminated: bool) -> bool:
     return True
 
 
+def _close_evaluator_for_pool(evaluator_for_pool) -> bool:
+    close = getattr(evaluator_for_pool, "close", None)
+    if not callable(close):
+        return False
+    logging.info("Closing evaluator resources...")
+    try:
+        close()
+    except Exception:
+        logging.exception("Failed to close evaluator resources")
+        return False
+    return True
+
+
 def _suite_config_implies_suite_mode(args) -> bool:
     return bool(getattr(args, "suite_config", None)) and getattr(args, "suite", None) is None
 
@@ -3218,6 +3231,8 @@ async def main():
                 manager.shutdown()
             except Exception:
                 logging.exception("Failed to shut down multiprocessing manager")
+        if "evaluator_for_pool" in locals():
+            _close_evaluator_for_pool(evaluator_for_pool)
         if "array_manager" in locals():
             logging.info("Releasing shared memory...")
             try:
