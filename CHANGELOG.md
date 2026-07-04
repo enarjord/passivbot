@@ -15,6 +15,9 @@ All notable user-facing changes will be documented in this file.
   evaluator is cleaned up, avoiding attachment churn across evaluations.
 - Pareto pruning now rejects non-finite objective matrices before selecting
   required extremes, preventing NaN values from being retained as best/worst axes.
+- Pareto bootstrap now uses non-empty scoring metadata from existing entries
+  before rebuilding the front, preventing legacy unscored files from forcing
+  minimize-all dominance for scored results.
 - Suite scenarios now reject unknown scenario fields before running, catching
   typos such as `coin` instead of silently ignoring them.
 - Resumed pymoo optimizer checkpoints now refresh the active problem,

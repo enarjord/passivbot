@@ -234,15 +234,59 @@ class ParetoStore:
         # bootstrap from disk if any
         self._bootstrap_from_disk()
 
+    @staticmethod
+    def _scoring_signature(specs: Sequence[Any]) -> tuple[tuple[str, str], ...]:
+        return tuple((spec.metric, spec.goal) for spec in specs)
+
+    def _apply_entry_scoring_specs(self, entry: dict) -> None:
+        entry_specs = extract_objective_specs(entry)
+        if entry_specs:
+            if self.scoring_specs:
+                if self._scoring_signature(self.scoring_specs) != self._scoring_signature(
+                    entry_specs
+                ):
+                    raise ValueError(
+                        "Pareto entry optimize.scoring differs from store scoring: "
+                        f"{self._scoring_signature(entry_specs)!r} != "
+                        f"{self._scoring_signature(self.scoring_specs)!r}"
+                    )
+                return
+            if self._front:
+                raise ValueError(
+                    "Pareto entry defines optimize.scoring after unscored entries were added; "
+                    "start from a clean pareto directory or ensure all entries include scoring"
+                )
+            self.scoring_specs = entry_specs
+            self.scoring_keys = [spec.metric for spec in entry_specs]
+
+    def _apply_bootstrap_scoring_specs(self, entries: Sequence[tuple[str, dict[str, Any]]]) -> None:
+        bootstrap_specs = None
+        bootstrap_source = None
+        for fp, entry in entries:
+            entry_specs = extract_objective_specs(entry)
+            if not entry_specs:
+                continue
+            if bootstrap_specs is None:
+                bootstrap_specs = entry_specs
+                bootstrap_source = fp
+                continue
+            if self._scoring_signature(bootstrap_specs) != self._scoring_signature(entry_specs):
+                raise ValueError(
+                    "Existing Pareto files have inconsistent optimize.scoring definitions: "
+                    f"{bootstrap_source}: {self._scoring_signature(bootstrap_specs)!r}; "
+                    f"{fp}: {self._scoring_signature(entry_specs)!r}"
+                )
+        if bootstrap_specs and not self.scoring_specs:
+            self.scoring_specs = bootstrap_specs
+            self.scoring_keys = [spec.metric for spec in bootstrap_specs]
+
     def add_entry(self, entry: dict, *, source_path: str | None = None) -> bool:
         """
         Add a new entry, update Pareto front in‑memory.
         Return True if the store actually changed.
         """
         self.n_iters += 1
-        if self.scoring_keys is None:
-            self.scoring_specs = extract_objective_specs(entry)
-            self.scoring_keys = [spec.metric for spec in self.scoring_specs]
+        self._apply_entry_scoring_specs(entry)
         h = calc_hash(entry)
         with self._lock:
             if h in self._entries:  # fast‑dedupe
@@ -380,13 +424,15 @@ class ParetoStore:
                 self._log.error("Could not load existing Pareto file %s: %s", fp, e)
             else:
                 entries.append((fp, entry))
-        bootstrap_specs = None
+        try:
+            self._apply_bootstrap_scoring_specs(entries)
+        except Exception as e:
+            errors.append(str(e))
         for fp, entry in entries:
-            if bootstrap_specs is None:
-                bootstrap_specs = extract_objective_specs(entry)
             try:
                 obj, _ = extract_objectives(
-                    entry, scoring_keys=bootstrap_specs or entry.get("optimize", {}).get("scoring")
+                    entry,
+                    scoring_keys=self.scoring_specs or entry.get("optimize", {}).get("scoring"),
                 )
                 self._validate_objective_vector(obj)
                 violation = extract_violation(entry)
@@ -433,7 +479,8 @@ class ParetoStore:
         maxs = [max(col) for col in zip(*objs)]
 
         metrics = []
-        for i, key in enumerate(self.scoring_keys):
+        scoring_keys = self.scoring_keys or [f"objective_{idx}" for idx in range(len(mins))]
+        for i, key in enumerate(scoring_keys):
             metrics.append(
                 f"{key}:(" f"{pbr.round_dynamic(mins[i], 3)}," f"{pbr.round_dynamic(maxs[i], 3)}),"
             )
