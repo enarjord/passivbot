@@ -59,13 +59,14 @@ approval, and merge only after both reviewers approve the same head.
     that same head.
 - [ ] #1076 - Correct optimizer limit stat docs.
   - Status: mergeable after rebase repair.
-  - Gate: stale Hermes review correctly found the branch was stacked on #1075;
-    branch was rebased onto `origin/v8` and now contains only
-    `docs/configuration.md`. Waiting for fresh Claude and Hermes review on head
-    `7e96a50a0fe9544d1649c66bf7cc034b2cff22bb`.
+  - Gate: Hermes approved repaired head
+    `7e96a50a0fe9544d1649c66bf7cc034b2cff22bb`; waiting for Claude approval on
+    that same head.
 - [ ] #1077 - Track optimizer audit PR progress.
   - Status: mergeable.
-  - Gate: waiting for Claude and Hermes review on the current PR head.
+  - Gate: Hermes approved older head
+    `3a87beb82ac9076307ab7cc91128a0e9fc6a711f`; waiting for Claude and fresh
+    Hermes review on the current PR head after tracker updates.
 - [ ] #1078 - Reuse pymoo starting seed evaluations.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on head
