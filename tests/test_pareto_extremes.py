@@ -140,3 +140,17 @@ def test_pareto_store_rejects_missing_objective_values(tmp_path):
 
     with pytest.raises(ValueError, match="missing or non-numeric"):
         store.add_entry(entry)
+
+
+def test_pareto_store_rejects_nan_objective_values(tmp_path):
+    entry = {
+        "metrics": {
+            "objectives": {"metric1": math.nan},
+            "constraint_violation": 0.0,
+        },
+        "optimize": {"scoring": ["metric1"]},
+    }
+    store = ParetoStore(directory=str(tmp_path), sig_digits=6, flush_interval=10_000, max_size=50)
+
+    with pytest.raises(ValueError, match="non-finite"):
+        store.add_entry(entry)

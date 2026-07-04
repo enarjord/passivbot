@@ -150,6 +150,13 @@ def prune_front_with_extremes(
         return []
     objs = [objectives_map[idx] for idx in front_hashes]
     arr = np.asarray(objs, dtype=float)
+    if not np.all(np.isfinite(arr)):
+        row, col = np.argwhere(~np.isfinite(arr))[0]
+        raise ValueError(
+            "Pareto objective matrix contains non-finite value "
+            f"for {front_hashes[int(row)]!r} at objective index {int(col)}: "
+            f"{arr[int(row), int(col)]!r}"
+        )
     required: set[str] = set()
     for dim in range(arr.shape[1]):
         min_idx = int(np.argmin(arr[:, dim]))
