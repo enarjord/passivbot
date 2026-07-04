@@ -167,8 +167,9 @@ def _suite_override_from_section(section: Dict[str, Any], *, source_label: str) 
         raise ValueError(f"Suite config {source_label} field 'scenarios' must be a list.")
     suite_override: Dict[str, Any] = {
         "scenarios": deepcopy(scenarios),
-        "aggregate": deepcopy(section.get("aggregate", {"default": "mean"})),
     }
+    if "aggregate" in section:
+        suite_override["aggregate"] = deepcopy(section["aggregate"])
     for key in ("exchanges", "volume_normalization"):
         if key in section:
             suite_override[key] = deepcopy(section[key])
