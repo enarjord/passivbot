@@ -10,6 +10,9 @@ All notable user-facing changes will be documented in this file.
 - Fixed DEAP optimizer candidate recording so duplicate-guard perturbations and
   evaluated starting seeds keep the fitness attached to the actual evaluated
   parameter vector.
+- Suite optimizer context preparation now matches suite-runner exchange and
+  coin-universe setup, and fails loudly when a scenario cannot be prepared
+  instead of silently dropping scenarios or falling back to other exchanges.
 - The `cache` live-event debug profile now enriches existing cache load,
   flush, and warmup-decision events with bounded key/count/source metadata
   without changing default event payloads or console output.
