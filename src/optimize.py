@@ -349,10 +349,10 @@ def _register_exchange_data(
     config["backtest"]["coins"][exchange] = coins
     msss[exchange] = mss
     validate_array(hlcvs, "hlcvs")
-    hlcvs_array = np.array(hlcvs, dtype=np.float64, copy=True, order="C")
+    hlcvs_array = np.asarray(hlcvs, dtype=np.float64, order="C")
     hlcvs_spec, _ = array_manager.create_from(hlcvs_array)
     hlcvs_specs[exchange] = hlcvs_spec
-    btc_usd_array = np.array(btc_usd_prices, dtype=np.float64, copy=True, order="C")
+    btc_usd_array = np.asarray(btc_usd_prices, dtype=np.float64, order="C")
     validate_array(btc_usd_array, f"btc_usd_data for {exchange}", allow_nan=False)
     btc_usd_spec, _ = array_manager.create_from(btc_usd_array)
     btc_usd_specs[exchange] = btc_usd_spec
