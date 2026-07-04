@@ -48,6 +48,7 @@ approval, and merge only after both reviewers approve the same head.
 - [x] #1074 - Bound DEAP pending offspring evaluations.
 - [x] #1075 - Remove unused opt_utils helpers.
 - [x] #1076 - Correct optimizer limit stat docs.
+- [x] #1078 - Reuse pymoo starting seed evaluations.
 - [x] #1080 - Remove unused all_results seed skip branch.
 
 ## Open PRs
@@ -56,16 +57,12 @@ approval, and merge only after both reviewers approve the same head.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on the current PR head after
     tracker updates.
-- [ ] #1078 - Reuse pymoo starting seed evaluations.
-  - Status: mergeable.
-  - Gate: rebased onto current `v8` after #1074-#1076 merged; waiting for fresh
-    Claude and Hermes review on head
-    `1bd99a86c9ceb10937fa37e077cb412ff1a00981`.
 - [ ] #1079 - Check Pareto dominance in one pass.
   - Status: mergeable.
-  - Gate: rebased onto current `v8` after #1074-#1076 merged; waiting for fresh
+  - Gate: rebased onto current `v8` after #1078 merged; waiting for fresh
     Claude and Hermes review on head
-    `f35daa3a93ca54fc85d00a323eabe2e400327f4e`.
+    `475cb29a13d058ade04c9d83a54228f9a2522d06`.
+
 ## Remaining Or Paused Audit Items
 
 - [ ] ParetoStore add-entry performance.
