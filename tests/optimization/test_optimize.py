@@ -1157,10 +1157,10 @@ class TestIndividualToConfig:
         )
         assert vector[key_to_idx["short_close_retracement_base_pct"]] == pytest.approx(0.002)
         assert vector[key_to_idx["short_close_retracement_volatility_1h_weight"]] == pytest.approx(
-            41.0
+            40.0
         )
         assert long_close["retracement_base_pct"] == pytest.approx(0.0)
-        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(41.0)
+        assert short_close["retracement_volatility_1h_weight"] == pytest.approx(40.0)
 
     def test_anchored_fine_tune_materializes_fixed_values_from_anchor(self):
         template = {
