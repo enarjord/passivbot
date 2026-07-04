@@ -368,8 +368,8 @@ be constrained through `drawdown_worst_strategy_eq`, `drawdown_worst_ema_strateg
 `drawdown_worst_mean_1pct_strategy_eq`, `drawdown_worst_mean_1pct_ema_strategy_eq`, and
 `strategy_eq_recovery_days_max` instead of being prematurely truncated.
 
-When you provide many starting configs, optimizer now also bounds how many seed evaluations may be
-in flight at once:
+When you provide many starting configs, optimizer bounds how many seed evaluations may be in flight
+at once. For the DEAP backend, the same cap also applies to generation offspring evaluations:
 
 ```json
 "optimize": {
@@ -383,9 +383,9 @@ Effective cap:
 - All provided starting configs are still evaluated before the optimizer trims them down to the
   backend's initial population.
 
-This is mainly a memory-control knob for large seed pools, especially in suite mode where each
-candidate returns a larger metrics payload. Lower it first if the VPS spikes RAM during initial
-seed evaluation.
+This is mainly a memory-control knob for large seed pools and DEAP generation batches, especially
+in suite mode where each candidate returns a larger metrics payload. Lower it first if the VPS
+spikes RAM during seed or offspring evaluation.
 
 ### Optimizer Suites
 

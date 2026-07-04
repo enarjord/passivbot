@@ -13,6 +13,7 @@ import json
 import logging
 from multiprocessing.reduction import ForkingPickler
 import tempfile
+from collections import defaultdict
 from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock, MagicMock, patch
@@ -37,6 +38,7 @@ from optimize import (
     _terminate_optimizer_pool,
     _suite_config_implies_suite_mode,
     _format_objectives,
+    ea_mu_plus_lambda_stream,
     individual_to_config,
     config_to_individual,
     validate_array,
@@ -212,6 +214,65 @@ def test_deap_evaluation_payload_accepts_legacy_tuple_payload_without_mutating_v
     assert individual.fitness.constraint_violation == 2.0
     assert individual.constraint_violation == 2.0
     assert metrics is None
+
+
+def test_deap_evolution_forwards_max_pending_to_stream(monkeypatch):
+    class Fitness:
+        def __init__(self):
+            self.values = ()
+            self.constraint_violation = 0.0
+
+        @property
+        def valid(self):
+            return bool(self.values)
+
+    class Candidate(list):
+        def __init__(self, values):
+            super().__init__(values)
+            self.fitness = Fitness()
+
+    captured = {}
+
+    def fake_stream(items, *, submit, on_result, max_pending=None, **_kwargs):
+        captured["max_pending"] = max_pending
+        for idx, individual in items:
+            on_result(
+                idx,
+                build_evaluation_payload(
+                    (0.1,),
+                    0.0,
+                    {"liquidated": False},
+                    individual,
+                ),
+            )
+        return 1
+
+    monkeypatch.setattr(optimize, "stream_async_results", fake_stream)
+    monkeypatch.setattr(optimize, "_record_individual_result", lambda *args, **kwargs: None)
+    population = [Candidate([1.0])]
+
+    ea_mu_plus_lambda_stream(
+        population,
+        toolbox=object(),
+        mu=1,
+        lambda_=1,
+        cxpb=0.0,
+        mutpb=0.0,
+        ngen=1,
+        stats=None,
+        halloffame=None,
+        verbose=False,
+        recorder=MagicMock(),
+        evaluator_config={"bot": {}, "backtest": {}, "optimize": {}},
+        overrides_list=[],
+        pool=object(),
+        duplicate_counter=defaultdict(int),
+        pool_state={"terminated": False},
+        max_pending_evals=3,
+    )
+
+    assert captured["max_pending"] == 3
+    assert population[0].fitness.valid
 
 
 class TestApplyConfigOverrides:
