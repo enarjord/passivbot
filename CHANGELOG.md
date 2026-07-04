@@ -6,6 +6,9 @@ All notable user-facing changes will be documented in this file.
 
 - Suite scenarios now reject unknown scenario fields before running, catching
   typos such as `coin` instead of silently ignoring them.
+- Resumed pymoo optimizer checkpoints now refresh the active problem,
+  termination target, and checkpoint callback before continuing, so increasing
+  `optimize.iters` on resume takes effect.
 - Optimizer overrides now reject unknown `optimize.enable_overrides` names before
   the run starts, and `forward_tp_grid` / `backward_tp_grid` now reorder
   `trailing_grid_v7` close-grid markup bounds as intended.

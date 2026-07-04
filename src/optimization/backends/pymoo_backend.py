@@ -69,6 +69,27 @@ def _build_random_sampling(bounds, population_size: int) -> np.ndarray:
     return np.asarray(population, dtype=np.float64)
 
 
+def _prepare_resumed_algorithm(
+    algorithm,
+    *,
+    problem,
+    termination,
+    seed: int | None,
+    callback,
+) -> None:
+    saved_random_state = getattr(algorithm, "random_state", None)
+    algorithm.has_terminated = False
+    algorithm.setup(
+        problem,
+        termination=termination,
+        seed=seed,
+        verbose=False,
+        callback=callback,
+    )
+    if saved_random_state is not None:
+        algorithm.random_state = saved_random_state
+
+
 def _population_from_payloads(
     vectors: np.ndarray,
     payloads: list[dict[str, Any]],
@@ -634,6 +655,12 @@ def run_backend(
             elementwise_runner=runner,
         )
 
+        ngen = max(1, int(config["optimize"]["iters"] / population_size))
+        termination = get_termination("n_gen", ngen)
+        checkpoint_callback = (
+            PymooCheckpointCallback(checkpoint_path) if checkpoint_path is not None else None
+        )
+
         algorithm = None
         if resume:
             if checkpoint_path is None:
@@ -643,17 +670,13 @@ def run_backend(
             logging.info(f"Loading PyMoo checkpoint from {checkpoint_path}...")
             with open(checkpoint_path, "rb") as f:
                 algorithm = pickle.load(f)
-            algorithm.has_terminated = False
-
-            # Restore the active runner (pool) and evaluator
-            if hasattr(algorithm, "problem"):
-                algorithm.problem.elementwise_runner = runner
-                if hasattr(algorithm.problem, "evaluator_adapter"):
-                    algorithm.problem.evaluator_adapter.evaluator = evaluator_for_pool
-            if hasattr(algorithm, "evaluator") and hasattr(algorithm.evaluator, "problem"):
-                algorithm.evaluator.problem.elementwise_runner = runner
-                if hasattr(algorithm.evaluator.problem, "evaluator_adapter"):
-                    algorithm.evaluator.problem.evaluator_adapter.evaluator = evaluator_for_pool
+            _prepare_resumed_algorithm(
+                algorithm,
+                problem=problem,
+                termination=termination,
+                seed=rng_seed,
+                callback=checkpoint_callback,
+            )
 
         if algorithm is None:
             algorithm = _build_algorithm(
@@ -688,7 +711,6 @@ def run_backend(
                     bounds=bounds,
                     rng_seed=rng_seed,
                 )
-        ngen = max(1, int(config["optimize"]["iters"] / population_size))
         logging.info("Starting optimize...")
 
         minimize_kwargs = {
@@ -696,13 +718,13 @@ def run_backend(
             "verbose": False,
             "copy_algorithm": False,
         }
-        if checkpoint_path is not None:
-            minimize_kwargs["callback"] = PymooCheckpointCallback(checkpoint_path)
+        if checkpoint_callback is not None:
+            minimize_kwargs["callback"] = checkpoint_callback
 
         pymoo_minimize(
             problem,
             algorithm,
-            get_termination("n_gen", ngen),
+            termination,
             **minimize_kwargs
         )
         logging.info("Optimization complete.")
