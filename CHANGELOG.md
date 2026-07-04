@@ -4,6 +4,10 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Live TWEL auto-reduce now honors configured
+  `risk_twel_enforcer_policy` when building Rust orchestrator payloads instead
+  of always falling back to `reduce_overweight`, aligning live behavior with
+  backtests for configs using `reduce_portfolio`.
 - Live coin-mode HSL now computes slot drawdown from configured
   `n_positions` and current raw balance only, so TWEL or excess allowance no
   longer makes the configured RED drawdown threshold tolerate a larger
