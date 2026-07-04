@@ -52,12 +52,18 @@ approval, and merge only after both reviewers approve the same head.
     waiting for fresh Claude approval on that same head.
 - [ ] #1075 - Remove unused opt_utils helpers.
   - Status: mergeable.
-  - Gate: waiting for Claude and Hermes review on head
-    `65a30da5fcdc999dbafa7581e6710818c7344f0d`.
+  - Gate: Hermes approved head
+    `65a30da5fcdc999dbafa7581e6710818c7344f0d`; waiting for Claude approval on
+    that same head.
 - [ ] #1076 - Correct optimizer limit stat docs.
   - Status: mergeable after rebase repair.
-  - Gate: waiting for Claude and Hermes review on head
+  - Gate: stale Hermes review correctly found the branch was stacked on #1075;
+    branch was rebased onto `origin/v8` and now contains only
+    `docs/configuration.md`. Waiting for fresh Claude and Hermes review on head
     `7e96a50a0fe9544d1649c66bf7cc034b2cff22bb`.
+- [ ] #1077 - Track optimizer audit PR progress.
+  - Status: mergeable.
+  - Gate: waiting for Claude and Hermes review on the current PR head.
 
 ## Remaining Or Paused Audit Items
 
