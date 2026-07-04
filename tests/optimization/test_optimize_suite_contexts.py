@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,14 @@ from suite_runner import ExchangeDataset
 class _NoSharedArrayManager:
     def create_from(self, _array):
         raise AssertionError("test dataset should use lazy master specs")
+
+
+class _FakeAttachment:
+    def __init__(self):
+        self.closed = 0
+
+    def close(self):
+        self.closed += 1
 
 
 def _make_lazy_dataset(
@@ -98,6 +108,44 @@ async def test_prepare_suite_contexts_keeps_directional_scenarios_with_default_s
     )
 
     assert [ctx.label for ctx in contexts] == ["base", "long_only", "short_only"]
+
+
+def test_suite_evaluator_close_releases_context_and_master_attachments():
+    from optimize import SuiteEvaluator
+
+    context_hlcvs = _FakeAttachment()
+    context_btc = _FakeAttachment()
+    master_hlcvs = _FakeAttachment()
+    master_btc = _FakeAttachment()
+
+    evaluator = object.__new__(SuiteEvaluator)
+    evaluator.contexts = [
+        SimpleNamespace(
+            attachments={
+                "hlcvs": {"binance": context_hlcvs},
+                "btc": {"binance": context_btc},
+            }
+        )
+    ]
+    evaluator._master_attachments = {
+        "hlcvs": {"master-hlcvs": master_hlcvs},
+        "btc": {"master-btc": master_btc},
+    }
+    evaluator._master_arrays = {
+        "hlcvs": {"master-hlcvs": np.empty((1,))},
+        "btc": {"master-btc": np.empty((1,))},
+    }
+
+    evaluator.close()
+    evaluator.close()
+
+    assert context_hlcvs.closed == 1
+    assert context_btc.closed == 1
+    assert master_hlcvs.closed == 1
+    assert master_btc.closed == 1
+    assert evaluator.contexts[0].attachments == {"hlcvs": {}, "btc": {}}
+    assert evaluator._master_attachments == {"hlcvs": {}, "btc": {}}
+    assert evaluator._master_arrays == {"hlcvs": {}, "btc": {}}
 
 
 @pytest.mark.asyncio

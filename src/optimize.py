@@ -2140,17 +2140,27 @@ class SuiteEvaluator:
         return build_evaluation_payload(objectives, total_penalty, metrics_payload, individual)
 
     def __del__(self):
-        for ctx in self.contexts:
-            for attachment in ctx.attachments.get("hlcvs", {}).values():
+        self.close()
+
+    def close(self):
+        for ctx in getattr(self, "contexts", []):
+            attachments = getattr(ctx, "attachments", {}) or {}
+            for attachment_map in attachments.values():
+                for attachment in attachment_map.values():
+                    try:
+                        attachment.close()
+                    except Exception:
+                        pass
+                attachment_map.clear()
+        for attachment_map in getattr(self, "_master_attachments", {}).values():
+            for attachment in attachment_map.values():
                 try:
                     attachment.close()
                 except Exception:
                     pass
-            for attachment in ctx.attachments.get("btc", {}).values():
-                try:
-                    attachment.close()
-                except Exception:
-                    pass
+            attachment_map.clear()
+        for array_map in getattr(self, "_master_arrays", {}).values():
+            array_map.clear()
 
 
 def add_extra_options(parser, *, help_all: bool):

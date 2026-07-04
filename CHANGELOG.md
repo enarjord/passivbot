@@ -9,6 +9,8 @@ All notable user-facing changes will be documented in this file.
   leaking into later entries.
 - Pareto limit filters now fail loudly when a configured limit metric is missing
   instead of silently retaining candidates that cannot be checked.
+- Suite optimizer workers now close lazy-slicing master shared-memory attachments when the
+  evaluator is cleaned up, avoiding attachment churn across evaluations.
 - Suite scenarios now reject unknown scenario fields before running, catching
   typos such as `coin` instead of silently ignoring them.
 - Resumed pymoo optimizer checkpoints now refresh the active problem,
