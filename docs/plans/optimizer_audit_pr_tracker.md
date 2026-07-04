@@ -64,13 +64,13 @@ approval, and merge only after both reviewers approve the same head.
 - [ ] #1077 - Track optimizer audit PR progress.
   - Status: mergeable.
   - Gate: waiting for Claude and Hermes review on the current PR head.
+- [ ] #1078 - Reuse pymoo starting seed evaluations.
+  - Status: mergeable.
+  - Gate: waiting for Claude and Hermes review on head
+    `1a288908a02041eac8f4997b122087f2f7105aba`.
 
 ## Remaining Or Paused Audit Items
 
-- [ ] Pymoo starting-seed double evaluation.
-  - Current note: local probing showed pymoo still evaluates sampled
-    `Population` objects even when `F` and evaluated markers are set. Needs a
-    careful design rather than a drive-by deletion.
 - [ ] ParetoStore add-entry performance.
   - Current note: exact objective-vector lookup is already in place. Remaining
     loops are dominance/crowding behavior and need profiling before changing.
