@@ -381,7 +381,6 @@ class ResultRecorder:
         self.store = ParetoStore(
             directory=results_dir,
             sig_digits=sig_digits,
-            bounds=bounds,
             flush_interval=flush_interval,
             log_name="optimizer.pareto",
             max_size=pareto_max_size,
