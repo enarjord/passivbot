@@ -2718,9 +2718,8 @@ def configs_to_individuals_streaming(
         and optimization_shape.key_paths
         and optimization_shape.key_paths[0][0] == ANCHOR_GENE_KEY
     )
-    anchor_count = 0
     clamp_collector = {}
-    for cfg in cfgs:
+    for anchor_idx, cfg in enumerate(cfgs):
         raw_count += 1
         try:
             fcfg = _build_starting_seed_config(cfg)
@@ -2730,7 +2729,7 @@ def configs_to_individuals_streaming(
                 sig_digits,
                 key_paths=key_paths,
                 optimization_shape=optimization_shape,
-                anchor_id=anchor_count if anchored_shape else None,
+                anchor_id=anchor_idx if anchored_shape else None,
                 clamp_context="starting config",
                 source=cfg.get("_starting_config_source", "<memory>")
                 if isinstance(cfg, dict)
@@ -2738,8 +2737,6 @@ def configs_to_individuals_streaming(
                 clamp_collector=clamp_collector,
             )
             inds.add(tuple(individual))
-            if anchored_shape:
-                anchor_count += 1
         except Exception as e:
             logging.warning(f"failed to use starting config as optimizer seed: {e}")
     _flush_seed_bounds_adjustments(clamp_collector)
