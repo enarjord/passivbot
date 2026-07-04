@@ -7,6 +7,9 @@ All notable user-facing changes will be documented in this file.
 - DEAP optimizer generation evaluations now honor
   `optimize.max_pending_starting_evals_per_cpu`, bounding queued offspring
   evaluations with the same memory-control cap used for starting seeds.
+- Pymoo optimizer starting configs now reuse their precomputed seed evaluations
+  during initial population setup instead of backtesting the same seed vectors a
+  second time.
 - Optimizer vector-shape extraction now rejects empty `config.optimize.bounds`
   instead of generating key paths that fail later without matching bounds.
 - Compressed `all_results.bin` optimizer history now preserves deleted keys

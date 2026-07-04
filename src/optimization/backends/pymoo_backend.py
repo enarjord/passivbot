@@ -105,7 +105,16 @@ def _population_from_payloads(
             [payload.get("G", np.asarray([-1.0], dtype=np.float64)) for payload in payloads],
             dtype=np.float64,
         )
-    return Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
+    return _mark_population_evaluated(
+        Population.new(*sum(([key, value] for key, value in kwargs.items()), []))
+    )
+
+
+def _mark_population_evaluated(population: Population) -> Population:
+    # pymoo's default evaluator requests F/G/H and re-evaluates unless all are marked.
+    for individual in population:
+        individual.evaluated.update(("F", "G", "H"))
+    return population
 
 
 def _reduce_starting_population(
@@ -128,7 +137,12 @@ def _reduce_starting_population(
         array_bytes=int(seed_vectors.nbytes),
     )
     if len(seed_vectors) <= population_size:
-        return _extend_sampling_to_size(seed_vectors, bounds, population_size)
+        pop = _population_from_payloads(
+            seed_vectors,
+            payloads,
+            has_constraints=bool(problem.n_ieq_constr),
+        )
+        return _extend_sampling_to_size(pop, bounds, population_size)
 
     pop = _population_from_payloads(
         seed_vectors,
@@ -147,8 +161,7 @@ def _reduce_starting_population(
         algorithm.__class__.__name__.lower(),
         len(reduced),
     )
-    reduced_vectors = np.asarray(reduced.get("X"), dtype=np.float64)
-    return _extend_sampling_to_size(reduced_vectors, bounds, population_size)
+    return _extend_sampling_to_size(_mark_population_evaluated(reduced), bounds, population_size)
 
 
 def _evaluate_starting_individuals(
@@ -219,7 +232,7 @@ def _evaluate_starting_individuals(
     return slim_payloads
 
 
-def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> np.ndarray:
+def _extend_sampling_to_size(sampling, bounds, target_size: int):
     current_size = int(len(sampling))
     if current_size >= target_size:
         return sampling
@@ -229,7 +242,10 @@ def _extend_sampling_to_size(sampling: np.ndarray, bounds, target_size: int) -> 
     ]
     if not extra:
         return sampling
-    return np.vstack([sampling, np.asarray(extra, dtype=np.float64)])
+    extra_array = np.asarray(extra, dtype=np.float64)
+    if isinstance(sampling, Population):
+        return Population.merge(sampling, Population.new("X", extra_array))
+    return np.vstack([sampling, extra_array])
 
 
 def _resolve_requested_population_size(config: dict[str, Any]) -> int | None:

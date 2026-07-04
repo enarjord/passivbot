@@ -22,6 +22,10 @@ from optimization.backends.deap_backend import (
 )
 from optimization.backends.deap_backend import run_backend as run_deap_backend
 from optimization.backends.pymoo_backend import run_backend as run_pymoo_backend
+from optimization.backends.pymoo_backend import (
+    _population_from_payloads,
+    _reduce_starting_population,
+)
 from optimization.evaluation_payload import apply_evaluation_payload
 
 
@@ -231,6 +235,87 @@ def test_deap_worker_evaluate_uses_initializer_globals():
 
 def test_deap_worker_task_evaluator_is_pickleable_without_bound_evaluator():
     ForkingPickler.dumps(_evaluate_deap_worker)
+
+
+def test_pymoo_reuses_pre_evaluated_starting_seed_payloads():
+    pymoo_minimize = pytest.importorskip("pymoo.optimize").minimize
+    NSGA2 = pytest.importorskip("pymoo.algorithms.moo.nsga2").NSGA2
+    ElementwiseProblem = pytest.importorskip("pymoo.core.problem").ElementwiseProblem
+    np = pytest.importorskip("numpy")
+
+    class CountingProblem(ElementwiseProblem):
+        def __init__(self):
+            super().__init__(
+                n_var=1,
+                n_obj=1,
+                xl=np.asarray([0.0], dtype=np.float64),
+                xu=np.asarray([1.0], dtype=np.float64),
+            )
+            self.calls = []
+
+        def _evaluate(self, x, out, *args, **kwargs):
+            value = float(x[0])
+            self.calls.append(value)
+            out["F"] = np.asarray([value], dtype=np.float64)
+
+    class Bound:
+        low = 0.0
+        high = 1.0
+
+        def __init__(self):
+            self.next_value = 0.8
+
+        def random_on_grid(self):
+            value = self.next_value
+            self.next_value += 0.1
+            return value
+
+    problem = CountingProblem()
+    bounds = [Bound()]
+    seed_vectors = [[0.1], [0.2]]
+    seed_payloads = [
+        {"F": np.asarray([0.1], dtype=np.float64)},
+        {"F": np.asarray([0.2], dtype=np.float64)},
+    ]
+    sampling = _reduce_starting_population(
+        problem=problem,
+        algorithm=NSGA2(pop_size=4, eliminate_duplicates=False),
+        starting_individuals=seed_vectors,
+        payloads=seed_payloads,
+        population_size=4,
+        bounds=bounds,
+        rng_seed=1,
+    )
+    algorithm = NSGA2(pop_size=4, sampling=sampling, eliminate_duplicates=False)
+
+    pymoo_minimize(
+        problem,
+        algorithm,
+        ("n_gen", 1),
+        seed=1,
+        verbose=False,
+        copy_algorithm=False,
+    )
+
+    assert problem.calls == [0.8, 0.9]
+    assert algorithm.evaluator.n_eval == 2
+    assert algorithm.pop.get("F").ravel().tolist() == [0.1, 0.2, 0.8, 0.9]
+
+
+def test_pymoo_seed_population_marks_all_default_evaluator_values():
+    np = pytest.importorskip("numpy")
+
+    pop = _population_from_payloads(
+        np.asarray([[0.1], [0.2]], dtype=np.float64),
+        [
+            {"F": np.asarray([0.1], dtype=np.float64)},
+            {"F": np.asarray([0.2], dtype=np.float64)},
+        ],
+        has_constraints=False,
+    )
+
+    for individual in pop:
+        assert {"F", "G", "H"}.issubset(individual.evaluated)
 
 
 def test_get_backend_runner_resolves_supported_backends():
