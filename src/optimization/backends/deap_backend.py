@@ -343,6 +343,11 @@ def run_backend(
             start_gen=start_gen,
             logbook=logbook,
             checkpoint_path=checkpoint_path,
+            max_pending_evals=max(
+                1,
+                int(config["optimize"]["n_cpus"])
+                * int(config["optimize"].get("max_pending_starting_evals_per_cpu", 1)),
+            ),
         )
         logging.info("Optimization complete.")
         return {

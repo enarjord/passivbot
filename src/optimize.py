@@ -180,7 +180,7 @@ from optimization.bounds import (
     round_to_sig_digits,
 )
 from optimization.fine_tune_anchors import ANCHOR_GENE_KEY, ANCHOR_PLAN_KEY, get_anchor_plan
-from optimization.backend_shared import cancel_pending_async_results, drain_async_results
+from optimization.backend_shared import cancel_pending_async_results, stream_async_results
 from optimization.backends import get_backend_runner
 from optimization.random_seed import seed_rngs
 from optimization.config_adapter import (
@@ -957,6 +957,7 @@ def ea_mu_plus_lambda_stream(
     start_gen=1,
     logbook=None,
     checkpoint_path=None,
+    max_pending_evals=None,
 ):
     import pickle
     if logbook is None:
@@ -973,9 +974,6 @@ def ea_mu_plus_lambda_stream(
         if not individuals:
             return 0
         logging.debug("Evaluating %d candidates", len(individuals))
-        pending = {}
-        for idx, ind in enumerate(individuals):
-            pending[pool.apply_async(toolbox.evaluate, (ind,))] = idx
 
         completed = {"count": 0}
 
@@ -1023,11 +1021,13 @@ def ea_mu_plus_lambda_stream(
                 logging.info("Terminating worker pool immediately due to interrupt...")
                 pool.terminate()
                 pool_state["terminated"] = True
-        drain_async_results(
-            pending,
+        stream_async_results(
+            enumerate(individuals),
+            submit=lambda item: (pool.apply_async(toolbox.evaluate, (item[1],)), item[0]),
             poll_interval_seconds=0.1,
             on_result=_on_result,
             on_interrupt=_on_interrupt,
+            max_pending=max_pending_evals,
         )
 
         total_evals += completed["count"]
