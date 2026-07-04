@@ -31,6 +31,7 @@ from optimize import (
     _normalize_optional_bool_flag,
     _optimizer_exit_code,
     _record_individual_result,
+    _register_exchange_data,
     _resolve_cli_limits_override,
     _set_candidate_metrics,
     _terminate_optimizer_pool,
@@ -1662,6 +1663,37 @@ class TestValidateArray:
         arr = np.array([])
         with pytest.raises(ValueError, match="is entirely NaN"):
             validate_array(arr, "test_array")
+
+    def test_register_exchange_data_preserves_contiguous_arrays_before_shared_copy(self):
+        class RecordingArrayManager:
+            def __init__(self):
+                self.arrays = []
+
+            def create_from(self, array):
+                self.arrays.append(array)
+                return object(), array
+
+        hlcvs = np.zeros((4, 2, 5), dtype=np.float64, order="C")
+        btc_usd_prices = np.ones(4, dtype=np.float64)
+        timestamps = np.arange(4, dtype=np.int64)
+        mss = {"BTC": {"first_valid_index": 0, "last_valid_index": 3}}
+        config = {"backtest": {"coins": {}, "candle_interval_minutes": 1}}
+        manager = RecordingArrayManager()
+
+        with patch("optimize._stamp_optimizer_warmup"):
+            _register_exchange_data(
+                "binance",
+                (["BTC"], hlcvs, mss, None, None, btc_usd_prices, timestamps),
+                config,
+                msss={},
+                hlcvs_specs={},
+                btc_usd_specs={},
+                timestamps_dict={},
+                array_manager=manager,
+            )
+
+        assert manager.arrays[0] is hlcvs
+        assert manager.arrays[1] is btc_usd_prices
 
 
 class TestApplyPolishBounds:
