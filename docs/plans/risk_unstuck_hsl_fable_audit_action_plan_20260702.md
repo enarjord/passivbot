@@ -238,6 +238,10 @@ Contract:
 - `pside`: ORANGE blocks all entries for that pside, including initial entries.
 - `coin`: ORANGE blocks entries for that coin+pside, including initial entries.
 
+Implemented: live ORANGE `tp_only_with_active_entry_cancellation` now blocks
+flat initial entries in the affected scope instead of only symbols with an open
+position.
+
 ### A2.3 - Bounded `we_excess` Invalid Base/TWEL
 
 Plan: code fix.

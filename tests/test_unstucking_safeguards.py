@@ -2400,7 +2400,25 @@ def test_orange_overlay_graceful_stop_preserves_restrictive_modes():
     assert bot.PB_modes["short"][symbol] == "manual"
 
 
-def test_orange_overlay_tp_only_with_active_entry_cancellation_only_for_open_positions():
+def test_orange_mode_override_blocks_flat_initial_entries():
+    cfg = _dummy_config()
+    bot = _make_dummy_bot(cfg)
+    symbol = _set_basic_state(bot)
+
+    _hsl_cfg(bot)["enabled"] = True
+    _hsl_cfg(bot)["orange_tier_mode"] = "tp_only_with_active_entry_cancellation"
+    _hsl_state(bot)["runtime"]._initialized = True
+    _hsl_state(bot)["runtime"]._tier = "orange"
+    _hsl_state(bot)["runtime"]._red_latched = False
+    bot.positions[symbol]["long"]["size"] = 0.0
+
+    assert (
+        bot._orchestrator_mode_override("long", symbol)
+        == "tp_only_with_active_entry_cancellation"
+    )
+
+
+def test_orange_overlay_tp_only_with_active_entry_cancellation_blocks_initial_entries():
     cfg = _dummy_config()
     bot = _make_dummy_bot(cfg)
     symbol = _set_basic_state(bot)
@@ -2412,7 +2430,7 @@ def test_orange_overlay_tp_only_with_active_entry_cancellation_only_for_open_pos
     _hsl_state(bot)["runtime"]._red_latched = False
     bot.PB_modes["long"][symbol] = "normal"
     bot.PB_modes["short"][symbol] = "normal"
-    bot.positions[symbol]["long"]["size"] = 1.0
+    bot.positions[symbol]["long"]["size"] = 0.0
     bot.positions[symbol]["short"]["size"] = 0.0
 
     bot._apply_equity_hard_stop_orange_overlay()

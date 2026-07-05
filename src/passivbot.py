@@ -14135,12 +14135,7 @@ class Passivbot:
                 if orange_mode == "graceful_stop":
                     return "graceful_stop"
                 if orange_mode == "tp_only_with_active_entry_cancellation":
-                    size = float(
-                        self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0)
-                        or 0.0
-                    )
-                    if size != 0.0:
-                        return "tp_only_with_active_entry_cancellation"
+                    return "tp_only_with_active_entry_cancellation"
 
         runtime_forced = (
             getattr(self, "_runtime_forced_modes", {}).get(pside, {}).get(symbol)
