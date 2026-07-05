@@ -1477,6 +1477,35 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 
+def test_prepare_config_rejects_positive_twel_with_zero_positions():
+    source = get_template_config()
+    risk = source["bot"]["long"]["risk"]
+    risk["total_wallet_exposure_limit"] = 1.0
+    risk["n_positions"] = 0
+    risk["total_exposure_entry_gate_enabled"] = False
+    risk["total_exposure_enforcer_enabled"] = False
+
+    with pytest.raises(
+        ValueError,
+        match=(
+            r"bot\.long\.risk\.n_positions must be > 0 when "
+            r"bot\.long\.risk\.total_wallet_exposure_limit is > 0"
+        ),
+    ):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+@pytest.mark.parametrize("n_positions", [-1, -0.1])
+def test_prepare_config_rejects_negative_positions_even_when_side_disabled(n_positions):
+    source = get_template_config()
+    risk = source["bot"]["short"]["risk"]
+    risk["total_wallet_exposure_limit"] = 0.0
+    risk["n_positions"] = n_positions
+
+    with pytest.raises(ValueError, match=r"bot\.short\.risk\.n_positions"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
 def test_prepare_config_normalizes_we_excess_allowance_mode_and_runtime_flattening():
     source = get_template_config()
     source["bot"]["long"]["risk"]["we_excess_allowance_mode"] = "LEGACY_RAW"

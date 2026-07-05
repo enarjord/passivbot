@@ -134,13 +134,20 @@ def validate_bot_config(result: dict) -> None:
             path=f"bot.{pside}.risk.total_exposure_enforcer_policy",
         )
         twel = float(get_grouped_bot_value(bot_side, "total_wallet_exposure_limit"))
-        n_positions = int(round(float(get_grouped_bot_value(bot_side, "n_positions"))))
-        twel_enabled = bool(get_grouped_bot_value(bot_side, "risk_twel_enforcer_enabled"))
+        raw_n_positions = get_grouped_bot_value(bot_side, "n_positions")
+        try:
+            n_positions_value = float(raw_n_positions)
+        except (TypeError, ValueError) as exc:
+            raise TypeError(f"bot.{pside}.risk.n_positions must be numeric") from exc
+        if not math.isfinite(n_positions_value) or n_positions_value < 0.0:
+            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+        n_positions = int(round(n_positions_value))
         if twel < 0.0 or not math.isfinite(twel):
             raise ValueError(f"bot.{pside}.risk.total_wallet_exposure_limit must be finite and >= 0.0")
-        if twel > 0.0 and (entry_gate_enabled or twel_enabled) and n_positions <= 0:
+        if twel > 0.0 and n_positions <= 0:
             raise ValueError(
-                f"bot.{pside}.risk.n_positions must be > 0 when TWEL entry gate or enforcer is enabled"
+                f"bot.{pside}.risk.n_positions must be > 0 when "
+                f"bot.{pside}.risk.total_wallet_exposure_limit is > 0"
             )
         _validate_bool(
             get_grouped_bot_value(bot_side, "unstuck_enabled"),
@@ -784,9 +791,12 @@ def normalize_position_counts(result: dict, *, tracker: Optional[object] = None)
         if current is None:
             continue
         try:
-            rounded = int(round(float(current)))
+            current_value = float(current)
         except (TypeError, ValueError) as exc:
             raise TypeError(f"bot.{pside}.n_positions must be numeric") from exc
+        if not math.isfinite(current_value) or current_value < 0.0:
+            raise ValueError(f"bot.{pside}.risk.n_positions must be finite and >= 0")
+        rounded = int(round(current_value))
         if tracker is not None and current != rounded:
             tracker.update(["bot", pside, "risk", "n_positions"], current, rounded)
         risk_cfg["n_positions"] = rounded
