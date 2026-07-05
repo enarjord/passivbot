@@ -759,7 +759,10 @@ Remaining implementation details:
       Partial: protective reducers now prune lower-priority same-position
       ordinary closes before size trimming; ordinary strategy-only close
       multiplicity is intentionally unchanged.
-- [ ] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
+      Remaining: keep or split out explicit bid/ask-reachable reducer ordering
+      if future review finds the existing close trimming/order sorting is not
+      sufficient.
+- [x] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
 - [ ] HSL restart policy enum.
