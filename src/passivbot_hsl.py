@@ -633,7 +633,6 @@ def _equity_hard_stop_format_remaining_time(seconds: float) -> str:
 
 def _equity_hard_stop_replay_marker_confirms_red(metrics: dict) -> bool:
     try:
-        drawdown_raw = float(metrics["drawdown_raw"])
         drawdown_score = float(metrics["drawdown_score"])
         red_threshold = float(metrics["red_threshold"])
     except (KeyError, TypeError, ValueError) as exc:
@@ -642,7 +641,6 @@ def _equity_hard_stop_replay_marker_confirms_red(metrics: dict) -> bool:
     return (
         str(metrics.get("tier")) == "red"
         or drawdown_score >= threshold
-        or drawdown_raw >= threshold
     )
 
 
