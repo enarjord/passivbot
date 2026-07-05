@@ -50,6 +50,16 @@ def make_fake_pnls_manager(events, *, covered_start_ms=1, history_scope="all"):
     )
 
 
+def test_hsl_signal_mode_requires_normalized_live_config():
+    bot = FakeHslBot(config={"live": {"hsl_signal_mode": "coin"}})
+
+    assert hsl._equity_hard_stop_signal_mode(bot) == "coin"
+
+    bot.config = {"live": {}}
+    with pytest.raises(KeyError, match="live.hsl_signal_mode"):
+        hsl._equity_hard_stop_signal_mode(bot)
+
+
 def bind_hsl_methods(bot):
     for name in (
         "_hsl_psides",

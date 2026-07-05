@@ -553,7 +553,7 @@ def _equity_hard_stop_enabled(self, pside: Optional[str] = None) -> bool:
 
 def _equity_hard_stop_signal_mode(self) -> str:
     config = getattr(self, "config", {})
-    return normalize_hsl_signal_mode(get_optional_live_value(config, "hsl_signal_mode", "unified"))
+    return normalize_hsl_signal_mode(require_live_value(config, "hsl_signal_mode"))
 
 
 def _equity_hard_stop_balance_override_active(self) -> bool:

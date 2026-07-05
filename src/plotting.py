@@ -1018,7 +1018,7 @@ def create_forager_hard_stop_drawdown_figure(
     if return_figures is None:
         return_figures = not autoplot
     hsl_signal_mode = str(
-        (((config or {}).get("live") or {}).get("hsl_signal_mode", "unified") or "unified")
+        (((config or {}).get("live") or {}).get("hsl_signal_mode", "coin") or "coin")
     ).strip().lower()
 
     pside_cfgs = {

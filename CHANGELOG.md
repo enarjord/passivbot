@@ -30,6 +30,9 @@ All notable user-facing changes will be documented in this file.
   simultaneous staging is enabled; any positive cooldown, including fractional
   sub-minute values, stages at most one position-adding entry order and blocks
   further adds until the exact cooldown window expires.
+- Live and backtest HSL runtime paths now require normalized
+  `live.hsl_signal_mode` instead of silently treating a missing raw key as
+  `unified`; raw-config diagnostics now report the schema default `coin`.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.

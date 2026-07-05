@@ -13,6 +13,7 @@ from live.smoke_report import _user_safe_display_path
 
 DEFAULT_SAMPLE_SIZE = 8
 HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
+DEFAULT_HSL_SIGNAL_MODE = "coin"
 SIDES = ("long", "short")
 _MISSING = object()
 CACHE_LIVE_KEYS = (
@@ -531,7 +532,7 @@ def _balance_hysteresis_report(
 
 
 def _effective_hsl_signal_mode(live: dict[str, Any]) -> str:
-    raw = live.get("hsl_signal_mode", "unified")
+    raw = live.get("hsl_signal_mode", DEFAULT_HSL_SIGNAL_MODE)
     return str(raw)
 
 

@@ -665,6 +665,9 @@ provide required managers. Test-only no-manager paths should be isolated.
 
 ### C1 - `live.hsl_signal_mode` Defaults Differ
 
+Status: implementation aligns live/backtest runtime paths and raw-config
+diagnostics.
+
 Plan: code fix.
 
 Prefer fail-loud missing-key behavior in live/backtest after schema
@@ -793,6 +796,9 @@ Remaining implementation details:
       multiple position-adding orders. Any positive `entry_cooldown_minutes`
       both limits staged adds to one order and enforces the exact post-fill
       cooldown window.
+- [x] `live.hsl_signal_mode` runtime/default alignment.
+      Runtime paths should require normalized `live.hsl_signal_mode`, while
+      raw-config diagnostics should report the schema default `coin`.
 - [ ] Canonical HSL equity-history signal design.
       Align coin, pside, and unified around one raw per-minute `pnl + upnl`
       data-store model, keep scoped modes on base slot-budget-style
