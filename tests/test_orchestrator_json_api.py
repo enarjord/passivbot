@@ -735,18 +735,18 @@ def test_entry_ladder_throttle_keeps_only_one_position_adding_order_when_disable
     assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
-def test_entry_cooldown_below_one_minute_does_not_throttle_ladder_by_itself():
+def test_entry_ladder_can_stage_simultaneously_only_with_zero_cooldown():
     import passivbot_rust as pbr
 
     inp = make_input(
         balance=1_000.0,
-        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.0}),
         symbols=[
             make_symbol(
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_bp={"risk_entry_cooldown_minutes": 0.5},
+                long_bp={"risk_entry_cooldown_minutes": 0.0},
             )
         ],
     )
@@ -760,6 +760,34 @@ def test_entry_cooldown_below_one_minute_does_not_throttle_ladder_by_itself():
     ]
 
     assert len(long_add_orders) > 1
+
+
+def test_positive_fractional_entry_cooldown_throttles_ladder_to_one_order():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.05}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 0.05},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
 def test_entry_retracement_throttles_ladder_even_when_simultaneous_enabled():
@@ -789,7 +817,7 @@ def test_entry_retracement_throttles_ladder_even_when_simultaneous_enabled():
     assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
-def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_expires():
+def test_entry_cooldown_blocks_position_adding_orders_until_exact_window_expires():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -804,7 +832,7 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -817,7 +845,7 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
     assert long_add_orders == []
 
 
-def test_entry_cooldown_above_one_minute_does_not_throttle_ladder_after_window():
+def test_entry_cooldown_keeps_one_add_order_after_window_expires():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -842,7 +870,8 @@ def test_entry_cooldown_above_one_minute_does_not_throttle_ladder_after_window()
         if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
     ]
 
-    assert len(long_add_orders) > 1
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
 def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
@@ -862,7 +891,7 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -881,22 +910,22 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
     assert long_close_orders
 
 
-def test_fractional_entry_cooldown_allows_next_minute_ladder_updates():
+def test_fractional_entry_cooldown_blocks_until_seconds_elapsed_then_keeps_one_add():
     import passivbot_rust as pbr
 
     inp = make_input(
         balance=1_000.0,
-        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.5}),
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 0.05}),
         symbols=[
             make_symbol(
                 0,
                 bid=100.0,
                 ask=100.0,
-                long_bp={"risk_entry_cooldown_minutes": 0.5},
+                long_bp={"risk_entry_cooldown_minutes": 0.05},
             )
         ],
     )
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 63_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 61_000
 
     out = compute(pbr, inp)
@@ -906,7 +935,18 @@ def test_fractional_entry_cooldown_allows_next_minute_ladder_updates():
         if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
     ]
 
-    assert len(long_add_orders) > 1
+    assert long_add_orders == []
+
+    inp["timestamp_ms"] = 64_000
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
 def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
@@ -937,7 +977,7 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
         ],
     )
     inp["global"]["hedge_mode"] = True
-    inp["timestamp_ms"] = 120_000
+    inp["timestamp_ms"] = 119_999
     inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
 
     out = compute(pbr, inp)
@@ -953,7 +993,8 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
     ]
 
     assert long_add_orders == []
-    assert len(short_add_orders) > 1
+    assert len(short_add_orders) == 1
+    assert short_add_orders[0]["order_type"] == "entry_initial_normal_short"
 
 
 def test_ema_anchor_long_position_emits_single_entry_and_close():

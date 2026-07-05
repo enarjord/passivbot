@@ -350,11 +350,13 @@ Contract:
 - If `allow_simultaneous_grid_entries=false` or
   `bot.{pside}.entry.retracement_base_pct > 0.0`, allow only one entry order on
   the book at a time.
-- If `entry_cooldown_minutes < 1.0`, no cooldown is enforced.
-- If `entry_cooldown_minutes == 1.0`, do not allow the next entry inside the
-  same minute as the previous filled entry.
-- If `entry_cooldown_minutes > 1.0`, block any entry for coin+pside whose
-  previous entry fill happened less than the configured duration ago.
+- If `entry_cooldown_minutes == 0.0`, cooldown is disabled and full
+  simultaneous entry ladders may be emitted only when
+  `allow_simultaneous_grid_entries=true` and entry retracement is disabled.
+- If `entry_cooldown_minutes > 0.0`, stage at most one position-adding entry
+  order and block any entry for coin+pside whose previous entry fill happened
+  less than the configured duration ago, including fractional sub-minute
+  durations.
 
 Keep float logic internally to support possible future sub-minute backtests.
 
@@ -663,7 +665,8 @@ provide required managers. Test-only no-manager paths should be isolated.
 
 ### C1 - `live.hsl_signal_mode` Defaults Differ
 
-Status: implementation PR opened in `codex/v8-fable-hsl-signal-mode`.
+Status: implementation aligns live/backtest runtime paths and raw-config
+diagnostics.
 
 Plan: code fix.
 
@@ -789,11 +792,11 @@ Remaining implementation details:
 - [x] Entry cooldown config split design and migration plan.
       Separate simultaneous ladder permission from time-based cooldown.
       Implemented: `bot.long/short.risk.allow_simultaneous_grid_entries`
-      controls whether non-retracement entry ladders may stage multiple
-      position-adding orders. `entry_cooldown_minutes` now only controls the
-      post-fill time window, with values below one minute treated as no time
-      cooldown.
-- [ ] `live.hsl_signal_mode` runtime/default alignment.
+      controls whether zero-cooldown, non-retracement entry ladders may stage
+      multiple position-adding orders. Any positive `entry_cooldown_minutes`
+      both limits staged adds to one order and enforces the exact post-fill
+      cooldown window.
+- [x] `live.hsl_signal_mode` runtime/default alignment.
       Runtime paths should require normalized `live.hsl_signal_mode`, while
       raw-config diagnostics should report the schema default `coin`.
 - [ ] Canonical HSL equity-history signal design.
