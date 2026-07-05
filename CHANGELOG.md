@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Rust WEL auto-reduce now takes priority over same-position auto-unstuck
+  reducers in the same ideal-order batch, matching the documented reducer
+  priority before auto-unstuck is admitted.
 - Rust TWEL auto-reduce now takes priority over same-position auto-unstuck
   reducers in the same ideal-order batch, preventing two reducer closes from
   stacking on one coin+pside when portfolio exposure enforcement is active.

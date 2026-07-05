@@ -514,6 +514,18 @@ mod core {
         )
     }
 
+    fn is_higher_priority_reducer_than_unstuck(order_type: OrderType, pside: PositionSide) -> bool {
+        matches!(
+            (pside, order_type),
+            (PositionSide::Long, OrderType::ClosePanicLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+                | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+                | (PositionSide::Short, OrderType::ClosePanicShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+                | (PositionSide::Short, OrderType::CloseAutoReduceWelShort)
+        )
+    }
+
     fn is_twel_close_order_type(order_type: OrderType, pside: PositionSide) -> bool {
         matches!(
             (pside, order_type),
@@ -3189,12 +3201,26 @@ mod core {
                 match ideal.pside {
                     PositionSide::Long => {
                         if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                            s.closes.push(ideal);
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Long,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
                         }
                     }
                     PositionSide::Short => {
                         if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                            s.closes.push(ideal);
+                            if !s.closes.iter().any(|o| {
+                                is_higher_priority_reducer_than_unstuck(
+                                    o.order_type,
+                                    PositionSide::Short,
+                                )
+                            }) {
+                                s.closes.push(ideal);
+                            }
                         }
                     }
                 }
