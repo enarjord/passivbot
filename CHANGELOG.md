@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- HSL-enabled startup and live-config preflight now surface a history
+  reinterpretation caveat and point operators to a dedicated HSL risks doc for
+  deposits, withdrawals, balance overrides, and HSL config changes.
 - Rust close-reducer pruning now keeps only the closest-to-fill reducer when
   multiple same-priority protective reducers target one coin+pside in the same
   ideal-order batch; ordinary grid/trailing close ladders remain preserved.

@@ -14,6 +14,7 @@ from live.smoke_report import _user_safe_display_path
 DEFAULT_SAMPLE_SIZE = 8
 HIGH_BALANCE_HYSTERESIS_WARNING_PCT = 0.05
 DEFAULT_HSL_SIGNAL_MODE = "coin"
+HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
 SIDES = ("long", "short")
 _MISSING = object()
 CACHE_LIVE_KEYS = (
@@ -722,6 +723,17 @@ def _cache_readiness_report(
     if _any_hsl_enabled(hsl_sides):
         hsl["evidence"].append(
             {"code": "hsl_enabled", "message": "one or more HSL sides are enabled"}
+        )
+        hsl["evidence"].append(
+            {
+                "code": "hsl_history_reinterpretation_caveat",
+                "doc": HSL_RISKS_DOC,
+                "message": (
+                    "HSL reconstructs history from exchange state plus config; deposits, "
+                    "withdrawals, balance overrides, HSL mode changes, and HSL budget/"
+                    "threshold changes can reinterpret historical drawdown"
+                ),
+            }
         )
         signal_mode = _effective_hsl_signal_mode(live)
         if (
