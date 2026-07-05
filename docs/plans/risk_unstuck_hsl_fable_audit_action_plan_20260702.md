@@ -784,8 +784,13 @@ Remaining implementation details:
       reports `balance_hysteresis_snap_pct` and warns when it is invalid or
       above `0.05`; docs now spell out snapped-balance sizing/gating versus
       raw-balance exposure-repair surfaces.
-- [ ] Entry cooldown config split design and migration plan.
+- [x] Entry cooldown config split design and migration plan.
       Separate simultaneous ladder permission from time-based cooldown.
+      Implemented: `bot.long/short.risk.allow_simultaneous_grid_entries`
+      controls whether non-retracement entry ladders may stage multiple
+      position-adding orders. `entry_cooldown_minutes` now only controls the
+      post-fill time window, with values below one minute treated as no time
+      cooldown.
 - [ ] Canonical HSL equity-history signal design.
       Align coin, pside, and unified around one raw per-minute `pnl + upnl`
       data-store model, keep scoped modes on base slot-budget-style

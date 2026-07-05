@@ -43,10 +43,10 @@ mod core {
     };
     use crate::strategies::{
         generate_orders as generate_strategy_orders, parse_strategy_params, strategy_ema_spans,
-        strategy_entry_volatility_span_hours, strategy_initial_entry_offset,
-        strategy_initial_qty_pct, strategy_needs_log_range_1h, strategy_needs_log_range_1m,
-        strategy_offset_volatility_span_minutes, EmaGateMode, NextStepHint, PeekBehavior,
-        StrategyKind, StrategyParams, StrategyRequest, StrategySide,
+        strategy_entry_retracement_enabled, strategy_entry_volatility_span_hours,
+        strategy_initial_entry_offset, strategy_initial_qty_pct, strategy_needs_log_range_1h,
+        strategy_needs_log_range_1m, strategy_offset_volatility_span_minutes, EmaGateMode,
+        NextStepHint, PeekBehavior, StrategyKind, StrategyParams, StrategyRequest, StrategySide,
     };
     use crate::types::{
         BotParams, BotParamsPair, EMABands, ExchangeParams, OrderBook, OrderType, Position,
@@ -454,24 +454,7 @@ mod core {
         now_timestamp_ms < until_ms
     }
 
-    fn apply_add_order_cooldown(
-        orders: &mut Vec<IdealOrder>,
-        pside: PositionSide,
-        now_timestamp_ms: u64,
-        last_increase_fill_timestamp_ms: Option<u64>,
-        cooldown_minutes: f64,
-    ) {
-        if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
-            return;
-        }
-        if add_order_cooldown_active(
-            now_timestamp_ms,
-            last_increase_fill_timestamp_ms,
-            cooldown_minutes,
-        ) {
-            orders.retain(|order| !order_increases_position(pside, order.qty));
-            return;
-        }
+    fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
         let mut seen_add_order = false;
         orders.retain(|order| {
             if !order_increases_position(pside, order.qty) {
@@ -484,6 +467,28 @@ mod core {
                 true
             }
         });
+    }
+
+    fn apply_add_order_gates(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        now_timestamp_ms: u64,
+        last_increase_fill_timestamp_ms: Option<u64>,
+        cooldown_minutes: f64,
+        allow_simultaneous_grid_entries: bool,
+        entry_retracement_enabled: bool,
+    ) {
+        if add_order_cooldown_active(
+            now_timestamp_ms,
+            last_increase_fill_timestamp_ms,
+            cooldown_minutes,
+        ) {
+            orders.retain(|order| !order_increases_position(pside, order.qty));
+            return;
+        }
+        if !allow_simultaneous_grid_entries || entry_retracement_enabled {
+            keep_only_first_add_order(orders, pside);
+        }
     }
 
     pub fn is_close_order_type(order_type: OrderType) -> bool {
@@ -2910,12 +2915,14 @@ mod core {
                             s.symbol_idx,
                             PositionSide::Long,
                         );
-                        apply_add_order_cooldown(
+                        apply_add_order_gates(
                             &mut entries,
                             PositionSide::Long,
                             input.timestamp_ms,
                             s.long.last_increase_fill_timestamp_ms,
                             s.long.bot_params.risk_entry_cooldown_minutes,
+                            s.long.bot_params.risk_allow_simultaneous_grid_entries,
+                            strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,
@@ -3075,12 +3082,14 @@ mod core {
                             s.symbol_idx,
                             PositionSide::Short,
                         );
-                        apply_add_order_cooldown(
+                        apply_add_order_gates(
                             &mut entries,
                             PositionSide::Short,
                             input.timestamp_ms,
                             s.short.last_increase_fill_timestamp_ms,
                             s.short.bot_params.risk_entry_cooldown_minutes,
+                            s.short.bot_params.risk_allow_simultaneous_grid_entries,
+                            strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
                             &mut closes,

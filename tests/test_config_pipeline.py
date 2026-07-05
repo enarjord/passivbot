@@ -234,6 +234,7 @@ def test_migrate_v7_trailing_grid_config_outputs_canonical_v8_strategy_shape():
     assert long_strategy["close"]["grid_markup_end"] == pytest.approx(0.00241)
     assert migrated["backtest"]["candle_interval_minutes"] == 1
     assert migrated["bot"]["long"]["risk"]["n_positions"] == 7
+    assert migrated["bot"]["long"]["risk"]["allow_simultaneous_grid_entries"] is True
     assert migrated["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(0.0)
     assert migrated["bot"]["long"]["risk"]["we_excess_allowance_mode"] == "bounded"
     assert migrated["bot"]["long"]["forager"]["volatility_ema_span_1m"] == 120
@@ -1443,6 +1444,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     compiled = compile_runtime_config(prepared, runtime="backtest")
 
     assert prepared["live"]["strategy_kind"] == "ema_anchor"
+    assert prepared["bot"]["long"]["risk"]["allow_simultaneous_grid_entries"] is True
     assert prepared["bot"]["long"]["risk"]["entry_cooldown_minutes"] == pytest.approx(2.5)
     assert _strategy_side(prepared, "long")["base_qty_pct"] == pytest.approx(0.02)
     assert _strategy_side(prepared, "long")["entry_double_down_factor"] == pytest.approx(0.8)
@@ -1451,6 +1453,7 @@ def test_prepare_config_supports_ema_anchor_canonical_strategy_section():
     assert "base_qty_pct" not in compiled["bot"]["long"]
     assert "offset" not in compiled["bot"]["short"]
     assert compiled["bot"]["long"]["risk_entry_cooldown_minutes"] == pytest.approx(2.5)
+    assert compiled["bot"]["long"]["risk_allow_simultaneous_grid_entries"] is True
 
 
 def test_prepare_config_hydrates_ema_anchor_defaults_when_strategy_section_missing():
@@ -1474,6 +1477,14 @@ def test_prepare_config_rejects_negative_entry_cooldown_minutes():
     source["bot"]["long"]["risk"]["entry_cooldown_minutes"] = -0.1
 
     with pytest.raises(ValueError, match="bot.long.risk.entry_cooldown_minutes"):
+        prepare_config(source, verbose=False, target="canonical", runtime=None)
+
+
+def test_prepare_config_rejects_non_bool_allow_simultaneous_grid_entries():
+    source = get_template_config()
+    source["bot"]["long"]["risk"]["allow_simultaneous_grid_entries"] = "yes"
+
+    with pytest.raises(ValueError, match="bot.long.risk.allow_simultaneous_grid_entries"):
         prepare_config(source, verbose=False, target="canonical", runtime=None)
 
 

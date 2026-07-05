@@ -111,6 +111,7 @@ COIN_OVERRIDE_SIDE_PASSTHROUGH_KEYS = {
 COIN_OVERRIDE_SUPPORTED_SHARED_FLAT_KEYS = allowed_flat_bot_side_modification_keys()
 
 V7_ABSENT_RISK_DEFAULTS = {
+    "risk_allow_simultaneous_grid_entries": True,
     "risk_entry_cooldown_minutes": 0.0,
     "risk_we_excess_allowance_mode": WE_EXCESS_ALLOWANCE_MODE_BOUNDED,
 }
@@ -130,6 +131,7 @@ V7_INSERTED_DEFAULT_TOP_LEVEL_PATHS = (
     ("live", "hsl_signal_mode"),
 )
 V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
+    "risk_allow_simultaneous_grid_entries",
     "risk_entry_cooldown_minutes",
     "risk_twel_enforcer_enabled",
     "risk_twel_enforcer_threshold",
