@@ -415,6 +415,65 @@ mod core {
         }
     }
 
+    fn validate_account_risk_inputs(input: &OrchestratorInput) -> Result<(), OrchestratorError> {
+        if !(input.balance.is_finite() && input.balance > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance",
+                symbol_idx: None,
+            });
+        }
+        let balance_raw = input_balance_raw(input);
+        if !(balance_raw.is_finite() && balance_raw > 0.0) {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "balance_raw",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.max_realized_loss_pct.is_finite()
+            && input.global.max_realized_loss_pct >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.max_realized_loss_pct",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_max.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max",
+                symbol_idx: None,
+            });
+        }
+        if !input.global.realized_pnl_cumsum_last.is_finite() {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_last",
+                symbol_idx: None,
+            });
+        }
+        if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.realized_pnl_cumsum_max_lt_last",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_long.is_finite()
+            && input.global.unstuck_allowance_long >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_long",
+                symbol_idx: None,
+            });
+        }
+        if !(input.global.unstuck_allowance_short.is_finite()
+            && input.global.unstuck_allowance_short >= 0.0)
+        {
+            return Err(OrchestratorError::NonFiniteInput {
+                field: "global.unstuck_allowance_short",
+                symbol_idx: None,
+            });
+        }
+        Ok(())
+    }
+
     fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
         if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
             0
@@ -2367,18 +2426,7 @@ mod core {
         input: &OrchestratorInput,
         workspace: &mut OrchestratorWorkspace,
     ) -> Result<OrchestratorOutput, OrchestratorError> {
-        if !input.balance.is_finite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance",
-                symbol_idx: None,
-            });
-        }
-        if input.balance_raw.is_infinite() {
-            return Err(OrchestratorError::NonFiniteInput {
-                field: "balance_raw",
-                symbol_idx: None,
-            });
-        }
+        validate_account_risk_inputs(input)?;
         let mut diagnostics = OrchestratorDiagnostics::default();
 
         // Validate invariants:
@@ -5739,7 +5787,7 @@ mod core {
         }
 
         #[test]
-        fn realized_loss_gate_non_positive_balance_raw_returns_early() {
+        fn account_risk_validation_rejects_non_positive_balance_raw() {
             for raw_balance in [0.0, -1.0] {
                 let mut sym = make_basic_symbol(0);
                 sym.long.position = Position {
@@ -5784,20 +5832,37 @@ mod core {
                     peek_hints: None,
                     forager_hysteresis: None,
                 };
-                let out = compute_ideal_orders_for_test(&input).unwrap();
-                assert!(
-                    out.orders
-                        .iter()
-                        .any(|o| o.order_type == OrderType::CloseAutoReduceWelLong),
-                    "expected non-positive balance_raw={} to early-return and keep close order",
-                    raw_balance
-                );
-                assert!(
-                    out.diagnostics.loss_gate_blocks.is_empty(),
-                    "expected non-positive balance_raw={} to skip loss-gate diagnostics",
-                    raw_balance
+                assert_eq!(
+                    compute_ideal_orders_for_test(&input).unwrap_err(),
+                    OrchestratorError::NonFiniteInput {
+                        field: "balance_raw",
+                        symbol_idx: None,
+                    }
                 );
             }
+        }
+
+        #[test]
+        fn account_risk_validation_rejects_pnl_peak_below_current() {
+            let mut input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: make_basic_global(),
+                symbols: vec![make_basic_symbol(0)],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            input.global.realized_pnl_cumsum_max = 5.0;
+            input.global.realized_pnl_cumsum_last = 10.0;
+
+            assert_eq!(
+                compute_ideal_orders_for_test(&input).unwrap_err(),
+                OrchestratorError::NonFiniteInput {
+                    field: "global.realized_pnl_cumsum_max_lt_last",
+                    symbol_idx: None,
+                }
+            );
         }
 
         #[test]

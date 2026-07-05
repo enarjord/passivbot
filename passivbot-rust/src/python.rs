@@ -2730,6 +2730,11 @@ fn validate_orchestrator_account_risk_inputs(
             return Err(PyValueError::new_err(format!("{path} must be finite")));
         }
     }
+    if input.global.realized_pnl_cumsum_max < input.global.realized_pnl_cumsum_last {
+        return Err(PyValueError::new_err(
+            "global.realized_pnl_cumsum_max must be >= global.realized_pnl_cumsum_last",
+        ));
+    }
     validate_finite_range(
         "global.unstuck_allowance_long",
         input.global.unstuck_allowance_long,
