@@ -817,6 +817,34 @@ def test_entry_cooldown_blocks_position_adding_orders_until_whole_minute_window_
     assert long_add_orders == []
 
 
+def test_entry_cooldown_above_one_minute_does_not_throttle_ladder_after_window():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(long_overrides={"risk_entry_cooldown_minutes": 2.0}),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_entry_cooldown_minutes": 2.0},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 240_000
+    inp["symbols"][0]["long"]["last_increase_fill_timestamp_ms"] = 60_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) > 1
+
+
 def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
     import passivbot_rust as pbr
 
