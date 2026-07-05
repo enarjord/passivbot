@@ -2405,11 +2405,6 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         hsl_tier_ratio_orange,
         hsl_orange_tier_mode,
         hsl_panic_close_order_type,
-        risk_allow_simultaneous_grid_entries: extract_optional_bool(
-            dict,
-            "risk_allow_simultaneous_grid_entries",
-            true,
-        )?,
         risk_entry_cooldown_minutes: extract_optional_f64(dict, "risk_entry_cooldown_minutes")?,
         n_positions,
         total_wallet_exposure_limit,

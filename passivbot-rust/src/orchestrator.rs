@@ -447,13 +447,9 @@ mod core {
 
     fn allow_full_entry_ladder_simultaneously(
         cooldown_minutes: f64,
-        allow_simultaneous_grid_entries: bool,
         entry_retracement_enabled: bool,
     ) -> bool {
-        !entry_retracement_enabled
-            && allow_simultaneous_grid_entries
-            && cooldown_minutes.is_finite()
-            && cooldown_minutes == 0.0
+        !entry_retracement_enabled && cooldown_minutes.is_finite() && cooldown_minutes == 0.0
     }
 
     fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
@@ -477,7 +473,6 @@ mod core {
         now_timestamp_ms: u64,
         last_increase_fill_timestamp_ms: Option<u64>,
         cooldown_minutes: f64,
-        allow_simultaneous_grid_entries: bool,
         entry_retracement_enabled: bool,
     ) {
         if add_order_cooldown_active(
@@ -488,11 +483,7 @@ mod core {
             orders.retain(|order| !order_increases_position(pside, order.qty));
             return;
         }
-        if !allow_full_entry_ladder_simultaneously(
-            cooldown_minutes,
-            allow_simultaneous_grid_entries,
-            entry_retracement_enabled,
-        ) {
+        if !allow_full_entry_ladder_simultaneously(cooldown_minutes, entry_retracement_enabled) {
             keep_only_first_add_order(orders, pside);
         }
     }
@@ -2927,7 +2918,6 @@ mod core {
                             input.timestamp_ms,
                             s.long.last_increase_fill_timestamp_ms,
                             s.long.bot_params.risk_entry_cooldown_minutes,
-                            s.long.bot_params.risk_allow_simultaneous_grid_entries,
                             strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(
@@ -3094,7 +3084,6 @@ mod core {
                             input.timestamp_ms,
                             s.short.last_increase_fill_timestamp_ms,
                             s.short.bot_params.risk_entry_cooldown_minutes,
-                            s.short.bot_params.risk_allow_simultaneous_grid_entries,
                             strategy_entry_retracement_enabled(&strategy_params),
                         );
                         append_strategy_orders_as_ideal(

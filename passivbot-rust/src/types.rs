@@ -594,8 +594,6 @@ pub struct BotParams {
     pub hsl_orange_tier_mode: String,
     #[serde(default = "default_hsl_panic_close_order_type")]
     pub hsl_panic_close_order_type: String,
-    #[serde(default = "default_true")]
-    pub risk_allow_simultaneous_grid_entries: bool,
     #[serde(default)]
     pub risk_entry_cooldown_minutes: f64,
     pub n_positions: usize,
@@ -663,7 +661,6 @@ impl Default for BotParams {
             hsl_tier_ratio_orange: default_hsl_tier_ratio_orange(),
             hsl_orange_tier_mode: default_hsl_orange_tier_mode(),
             hsl_panic_close_order_type: default_hsl_panic_close_order_type(),
-            risk_allow_simultaneous_grid_entries: true,
             risk_entry_cooldown_minutes: 0.0,
             n_positions: 0,
             total_wallet_exposure_limit: 0.0,

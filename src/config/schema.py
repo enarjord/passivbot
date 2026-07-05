@@ -36,7 +36,6 @@ def _get_shared_bot_defaults():
                 }
             },
             "risk": {
-                "allow_simultaneous_grid_entries": True,
                 "entry_cooldown_minutes": 7.1,
                 "n_positions": 5.0,
                 "position_exposure_enforcer_enabled": False,
@@ -84,7 +83,6 @@ def _get_shared_bot_defaults():
                 }
             },
             "risk": {
-                "allow_simultaneous_grid_entries": True,
                 "entry_cooldown_minutes": 0.0,
                 "n_positions": 1.0,
                 "position_exposure_enforcer_enabled": True,
