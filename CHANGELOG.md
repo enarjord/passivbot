@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Rust close-reducer pruning now keeps only the closest-to-fill reducer when
+  multiple same-priority protective reducers target one coin+pside in the same
+  ideal-order batch; ordinary grid/trailing close ladders remain preserved.
 - Bounded `we_excess_allowance_mode` now treats non-positive or non-finite base
   WEL as zero allowed exposure and non-positive/non-finite TWEL as zero excess
   headroom instead of falling back to the raw excess percentage.
