@@ -3257,8 +3257,12 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_long.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes
-                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelLong);
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelLong | OrderType::CloseUnstuckLong
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Long,
@@ -3323,8 +3327,12 @@ mod core {
             );
             for (idx, order) in actions {
                 if let Some(s) = per_short.get_mut(idx).and_then(|v| v.as_mut()) {
-                    s.closes
-                        .retain(|o| o.order_type != OrderType::CloseAutoReduceWelShort);
+                    s.closes.retain(|o| {
+                        !matches!(
+                            o.order_type,
+                            OrderType::CloseAutoReduceWelShort | OrderType::CloseUnstuckShort
+                        )
+                    });
                     s.closes.push(IdealOrder {
                         symbol_idx: idx,
                         pside: PositionSide::Short,

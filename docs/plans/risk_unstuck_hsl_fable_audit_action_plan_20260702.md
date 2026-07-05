@@ -752,6 +752,8 @@ Remaining implementation details:
       Priority is HSL panic, WEL/TWEL reducer, auto-unstuck, then any other
       close order, with bid/ask-reachable reducers prioritized before farther
       passive closes.
+      Partial: TWEL auto-reduce now removes same-position WEL and auto-unstuck
+      reducers before insertion, with long/short JSON API regression coverage.
 - [ ] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
