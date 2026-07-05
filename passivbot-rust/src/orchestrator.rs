@@ -4282,6 +4282,66 @@ mod core {
         }
 
         #[test]
+        fn close_pruning_prefers_reachable_long_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 100.9,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelLong);
+            assert!((closes[0].price - 100.9).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_prefers_reachable_short_reducer_with_same_priority() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 99.9,
+                    order_type: OrderType::CloseAutoReduceTwelShort,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Short,
+                    qty: 0.3,
+                    price: 100.1,
+                    order_type: OrderType::CloseAutoReduceWelShort,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Short, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceWelShort);
+            assert!((closes[0].price - 100.1).abs() < 1e-12);
+        }
+
+        #[test]
         fn close_pruning_preserves_ordinary_close_ladder() {
             let order_book = OrderBook {
                 bid: 100.0,
