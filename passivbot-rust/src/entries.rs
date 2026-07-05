@@ -25,8 +25,12 @@ pub fn effective_we_excess_allowance_pct(bot_params: &BotParams, base_limit: f64
     if bot_params.risk_we_excess_allowance_mode == WeExcessAllowanceMode::LegacyRaw {
         return raw;
     }
-    if base_limit <= 0.0 || bot_params.total_wallet_exposure_limit <= 0.0 {
-        return raw;
+    if !(base_limit.is_finite()
+        && base_limit > 0.0
+        && bot_params.total_wallet_exposure_limit.is_finite()
+        && bot_params.total_wallet_exposure_limit > 0.0)
+    {
+        return 0.0;
     }
     let max_effective = (bot_params.total_wallet_exposure_limit / base_limit - 1.0).max(0.0);
     raw.min(max_effective)
@@ -37,8 +41,8 @@ pub fn wallet_exposure_limit_with_allowance_from_base(
     base_limit: f64,
 ) -> f64 {
     let base = base_limit;
-    if base <= 0.0 {
-        base
+    if !(base.is_finite() && base > 0.0) {
+        0.0
     } else {
         base * (1.0 + effective_we_excess_allowance_pct(bot_params, base))
     }
@@ -1168,6 +1172,34 @@ mod tests {
         assert_eq!(
             wallet_exposure_limit_with_allowance_from_base(&bot, 0.5),
             0.75
+        );
+    }
+
+    #[test]
+    fn test_bounded_we_excess_invalid_budget_returns_zero_not_raw() {
+        let mut bot = BotParams {
+            total_wallet_exposure_limit: 1.0,
+            risk_we_excess_allowance_pct: 1.5,
+            risk_we_excess_allowance_mode: WeExcessAllowanceMode::Bounded,
+            ..Default::default()
+        };
+
+        assert_eq!(effective_we_excess_allowance_pct(&bot, 0.0), 0.0);
+        assert_eq!(
+            wallet_exposure_limit_with_allowance_from_base(&bot, 0.0),
+            0.0
+        );
+        assert_eq!(effective_we_excess_allowance_pct(&bot, f64::NAN), 0.0);
+        assert_eq!(
+            wallet_exposure_limit_with_allowance_from_base(&bot, f64::NAN),
+            0.0
+        );
+
+        bot.total_wallet_exposure_limit = 0.0;
+        assert_eq!(effective_we_excess_allowance_pct(&bot, 0.5), 0.0);
+        assert_eq!(
+            wallet_exposure_limit_with_allowance_from_base(&bot, 0.5),
+            0.5
         );
     }
 
