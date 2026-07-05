@@ -780,7 +780,10 @@ Remaining implementation details:
       Partial: Rust TWEL `reduce_overweight` now uses the dynamic effective
       slot count when selecting overweight positions, with Rust and
       orchestrator-JSON regression coverage. Existing raw-balance TWEL reducer
-      and snapped-balance TWEL entry-gate tests remain in place.
+      and snapped-balance TWEL entry-gate tests remain in place. Preflight now
+      reports `balance_hysteresis_snap_pct` and warns when it is invalid or
+      above `0.05`; docs now spell out snapped-balance sizing/gating versus
+      raw-balance exposure-repair surfaces.
 - [ ] Entry cooldown config split design and migration plan.
       Separate simultaneous ladder permission from time-based cooldown.
 - [ ] Canonical HSL equity-history signal design.
