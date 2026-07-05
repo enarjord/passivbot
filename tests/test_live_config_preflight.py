@@ -85,6 +85,19 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     assert report["hsl"]["sides"]["long"]["enabled"] is True
     assert report["hsl"]["sides"]["long"]["red_threshold"] == 0.05
     assert report["hsl"]["sides"]["short"]["enabled"] is False
+    hsl_evidence = report["cache"]["readiness"]["surfaces"]["hsl"]["evidence"]
+    assert {
+        item["code"]
+        for item in hsl_evidence
+    } >= {"hsl_enabled", "hsl_history_reinterpretation_caveat"}
+    caveat = next(
+        item
+        for item in hsl_evidence
+        if item["code"] == "hsl_history_reinterpretation_caveat"
+    )
+    assert caveat["doc"] == "docs/equity_hard_stop_loss_risks.md"
+    assert "deposits" in caveat["message"]
+    assert "HSL mode changes" in caveat["message"]
     assert report["universe"]["approved_coins"]["long"] == {
         "count": 4,
         "mode": "list",

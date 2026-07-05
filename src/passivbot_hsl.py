@@ -28,6 +28,9 @@ from passivbot_exceptions import RestartBotException
 from utils import make_get_filepath
 
 
+_HSL_RISKS_DOC = "docs/equity_hard_stop_loss_risks.md"
+
+
 def _hsl_key_sample(value: Any, *, limit: int = 32) -> list[str]:
     if not isinstance(value, dict):
         return []
@@ -506,6 +509,13 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
             "restart_after_red_policy": restart_after_red_policy,
         }
         if enabled:
+            logging.warning(
+                "[risk] HSL[%s] enabled; review %s. Deposits, withdrawals, "
+                "balance overrides, HSL mode changes, and HSL budget/threshold "
+                "changes can reinterpret reconstructed history.",
+                pside,
+                _HSL_RISKS_DOC,
+            )
             logging.info(
                 "[risk] HSL[%s] enabled | red_threshold=%.6f ema_span_minutes=%.3f "
                 "cooldown_minutes_after_red=%.3f "

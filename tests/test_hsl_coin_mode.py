@@ -60,6 +60,38 @@ def test_hsl_signal_mode_requires_normalized_live_config():
         hsl._equity_hard_stop_signal_mode(bot)
 
 
+def test_parse_hsl_config_warns_about_history_reinterpretation(caplog):
+    bot = FakeHslBot(config={"live": {"hsl_signal_mode": "coin"}})
+    values = {
+        "hsl_enabled": True,
+        "hsl_red_threshold": 0.05,
+        "hsl_ema_span_minutes": 120.0,
+        "hsl_cooldown_minutes_after_red": 60.0,
+        "hsl_no_restart_drawdown_threshold": 0.08,
+        "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
+        "hsl_tier_ratios.yellow": 0.5,
+        "hsl_tier_ratios.orange": 0.75,
+        "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
+        "hsl_panic_close_order_type": "limit",
+        "hsl_restart_after_red_policy": "threshold",
+    }
+    bot._hsl_psides = lambda: ["long"]
+    bot._equity_hard_stop_signal_mode = MethodType(
+        hsl._equity_hard_stop_signal_mode,
+        bot,
+    )
+    bot.bot_value = lambda pside, key: values[key]
+
+    with caplog.at_level(logging.WARNING):
+        parsed = hsl._parse_hsl_config(bot)
+
+    assert parsed["long"]["enabled"] is True
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("docs/equity_hard_stop_loss_risks.md" in message for message in messages)
+    assert any("Deposits, withdrawals" in message for message in messages)
+    assert any("HSL mode changes" in message for message in messages)
+
+
 def bind_hsl_methods(bot):
     for name in (
         "_hsl_psides",
