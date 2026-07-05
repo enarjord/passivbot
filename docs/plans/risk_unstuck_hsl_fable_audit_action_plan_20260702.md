@@ -827,6 +827,9 @@ Remaining implementation details:
       by an ordinary, non-panic close before a later re-entry. Panic-marker
       cooldown/no-restart handling is unchanged; broader terminal no-restart
       accounting from canonical RED timestamps remains future work.
+      Partial: historical panic markers now require reconstructed confirmed RED
+      tier/score, not raw-only drawdown. Raw RED pending remains diagnostic and
+      does not reconstruct a cooldown/no-restart event by itself.
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense

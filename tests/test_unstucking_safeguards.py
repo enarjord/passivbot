@@ -1169,6 +1169,47 @@ def test_hsl_replay_marker_confirmation_fails_loudly_on_incomplete_metrics():
         )
 
 
+def test_hsl_replay_marker_confirmation_requires_confirmed_red_not_raw_only():
+    import passivbot_hsl
+
+    assert (
+        passivbot_hsl._equity_hard_stop_replay_marker_confirms_red(
+            {
+                "tier": "orange",
+                "drawdown_raw": 0.20,
+                "drawdown_ema": 0.05,
+                "drawdown_score": 0.05,
+                "red_threshold": 0.10,
+            }
+        )
+        is False
+    )
+    assert (
+        passivbot_hsl._equity_hard_stop_replay_marker_confirms_red(
+            {
+                "tier": "red",
+                "drawdown_raw": 0.20,
+                "drawdown_ema": 0.05,
+                "drawdown_score": 0.05,
+                "red_threshold": 0.10,
+            }
+        )
+        is True
+    )
+    assert (
+        passivbot_hsl._equity_hard_stop_replay_marker_confirms_red(
+            {
+                "tier": "orange",
+                "drawdown_raw": 0.20,
+                "drawdown_ema": 0.10,
+                "drawdown_score": 0.10,
+                "red_threshold": 0.10,
+            }
+        )
+        is True
+    )
+
+
 def _make_order(
     symbol="TEST/USDT",
     *,
