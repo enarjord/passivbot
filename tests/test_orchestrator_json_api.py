@@ -132,7 +132,6 @@ def bot_params(**overrides):
         "risk_twel_enforcer_policy": "reduce_overweight",
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
-        "risk_allow_simultaneous_grid_entries": True,
         "risk_entry_cooldown_minutes": 0.0,
         "unstuck_ema_gating_enabled": True,
         "unstuck_close_pct": 0.0,
@@ -705,36 +704,6 @@ def test_adaptive_grid_short_entry_output_regression():
     ]
 
 
-def test_entry_ladder_throttle_keeps_only_one_position_adding_order_when_disabled():
-    import passivbot_rust as pbr
-
-    inp = make_input(
-        balance=1_000.0,
-        global_bp=bot_params_pair(
-            long_overrides={"risk_allow_simultaneous_grid_entries": False}
-        ),
-        symbols=[
-            make_symbol(
-                0,
-                bid=100.0,
-                ask=100.0,
-                long_bp={"risk_allow_simultaneous_grid_entries": False},
-            )
-        ],
-    )
-    inp["timestamp_ms"] = 120_000
-
-    out = compute(pbr, inp)
-    long_add_orders = [
-        o
-        for o in out["orders"]
-        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
-    ]
-
-    assert len(long_add_orders) == 1
-    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
-
-
 def test_entry_ladder_can_stage_simultaneously_only_with_zero_cooldown():
     import passivbot_rust as pbr
 
@@ -790,7 +759,7 @@ def test_positive_fractional_entry_cooldown_throttles_ladder_to_one_order():
     assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
 
 
-def test_entry_retracement_throttles_ladder_even_when_simultaneous_enabled():
+def test_entry_retracement_throttles_ladder_even_with_zero_cooldown():
     import passivbot_rust as pbr
 
     inp = make_input(

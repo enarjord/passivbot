@@ -23,13 +23,12 @@ All notable user-facing changes will be documented in this file.
   `balance_hysteresis_snap_pct` and warns when it is invalid or above `0.05`,
   where snapped-balance entry sizing/gating can diverge noticeably from
   raw-balance exposure repair near risk boundaries.
-- Entry ladder throttling is now controlled separately from time-based entry
-  cooldown via `bot.long/short.risk.allow_simultaneous_grid_entries`.
-  Full simultaneous entry ladders are allowed only when
-  `entry_cooldown_minutes = 0.0`, entry retracement is disabled, and
-  simultaneous staging is enabled; any positive cooldown, including fractional
-  sub-minute values, stages at most one position-adding entry order and blocks
-  further adds until the exact cooldown window expires.
+- Entry ladder throttling now uses `entry_cooldown_minutes` as the single
+  control: full simultaneous ladders are allowed only when
+  `entry_cooldown_minutes = 0.0` and entry retracement is disabled. Any
+  positive cooldown, including fractional sub-minute values, stages at most one
+  position-adding entry order and blocks further adds until the exact cooldown
+  window expires.
 - Live and backtest HSL runtime paths now require normalized
   `live.hsl_signal_mode` instead of silently treating a missing raw key as
   `unified`; raw-config diagnostics now report the schema default `coin`.

@@ -335,28 +335,27 @@ inflexible. Splitting knobs can be revisited later, but is not high priority.
 
 ### A4 - Entry Cooldown Semantics
 
-Plan: redesign config surface.
+Plan: simplify config surface.
 
-Introduce two concepts:
-
-- `allow_simultaneous_grid_entries: bool`
-- `entry_cooldown_minutes: float`
+Use `entry_cooldown_minutes` as the single entry-ladder/cooldown control.
 
 Contract:
 
-- If `allow_simultaneous_grid_entries=true` and
-  `bot.{pside}.entry.retracement_base_pct <= 0.0`, allow a ladder of entries on
-  the book simultaneously.
-- If `allow_simultaneous_grid_entries=false` or
+- If `entry_cooldown_minutes == 0.0` and
+  `bot.{pside}.entry.retracement_base_pct <= 0.0`, cooldown is disabled and
+  full simultaneous entry ladders may be emitted.
+- If `entry_cooldown_minutes == 0.0` and
   `bot.{pside}.entry.retracement_base_pct > 0.0`, allow only one entry order on
-  the book at a time.
-- If `entry_cooldown_minutes == 0.0`, cooldown is disabled and full
-  simultaneous entry ladders may be emitted only when
-  `allow_simultaneous_grid_entries=true` and entry retracement is disabled.
+  the book at a time because the next entry price depends on threshold and
+  retracement state.
 - If `entry_cooldown_minutes > 0.0`, stage at most one position-adding entry
   order and block any entry for coin+pside whose previous entry fill happened
   less than the configured duration ago, including fractional sub-minute
   durations.
+- Backtests evaluate on one-minute steps, so any positive sub-minute cooldown
+  prevents same-minute replacement/add and effectively waits until the next
+  backtest decision minute. Live trading checks intra-minute and enforces the
+  actual millisecond duration.
 
 Keep float logic internally to support possible future sub-minute backtests.
 
@@ -789,13 +788,12 @@ Remaining implementation details:
       reports `balance_hysteresis_snap_pct` and warns when it is invalid or
       above `0.05`; docs now spell out snapped-balance sizing/gating versus
       raw-balance exposure-repair surfaces.
-- [x] Entry cooldown config split design and migration plan.
-      Separate simultaneous ladder permission from time-based cooldown.
-      Implemented: `bot.long/short.risk.allow_simultaneous_grid_entries`
-      controls whether zero-cooldown, non-retracement entry ladders may stage
-      multiple position-adding orders. Any positive `entry_cooldown_minutes`
-      both limits staged adds to one order and enforces the exact post-fill
-      cooldown window.
+- [x] Entry cooldown design and migration plan.
+      `entry_cooldown_minutes` is the sole ladder/cooldown control. Zero
+      cooldown with entry retracement disabled may stage multiple
+      position-adding orders. Any positive cooldown or enabled entry
+      retracement limits staged adds to one order, and positive cooldowns
+      enforce the exact post-fill cooldown window.
 - [x] `live.hsl_signal_mode` runtime/default alignment.
       Runtime paths should require normalized `live.hsl_signal_mode`, while
       raw-config diagnostics should report the schema default `coin`.
