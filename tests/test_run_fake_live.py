@@ -333,6 +333,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
                 "hsl_ema_span_minutes": 1.0,
                 "hsl_cooldown_minutes_after_red": 1.0,
                 "hsl_no_restart_drawdown_threshold": 0.9,
+                "hsl_restart_after_red_policy": "threshold",
                 "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                 "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                 "hsl_panic_close_order_type": "market",
@@ -366,6 +367,7 @@ def test_bot_params_to_rust_dict_includes_hsl_fields():
     assert out["hsl_red_threshold"] == pytest.approx(0.05)
     assert out["hsl_tier_ratio_yellow"] == pytest.approx(0.5)
     assert out["hsl_tier_ratio_orange"] == pytest.approx(0.75)
+    assert out["hsl_restart_after_red_policy"] == "threshold"
     assert out["hsl_orange_tier_mode"] == "tp_only_with_active_entry_cancellation"
     assert out["hsl_panic_close_order_type"] == "market"
     assert out["risk_twel_enforcer_policy"] == "reduce_portfolio"
@@ -424,6 +426,7 @@ def test_bot_params_to_rust_dict_ignores_removed_entry_grid_inflation_flag():
                         "hsl_ema_span_minutes": 1.0,
                         "hsl_cooldown_minutes_after_red": 1.0,
                         "hsl_no_restart_drawdown_threshold": 0.9,
+                        "hsl_restart_after_red_policy": "threshold",
                         "hsl_tier_ratios": {"yellow": 0.5, "orange": 0.75},
                         "hsl_orange_tier_mode": "tp_only_with_active_entry_cancellation",
                         "hsl_panic_close_order_type": "market",

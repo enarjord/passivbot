@@ -272,6 +272,7 @@ def _hsl_side_report(side_config: dict[str, Any]) -> dict[str, Any]:
             ("red_threshold", "hsl_red_threshold"),
             ("cooldown_minutes_after_red", "hsl_cooldown_minutes_after_red"),
             ("no_restart_drawdown_threshold", "hsl_no_restart_drawdown_threshold"),
+            ("restart_after_red_policy", "hsl_restart_after_red_policy"),
             ("ema_span_minutes", "hsl_ema_span_minutes"),
             ("tier_ratios", "hsl_tier_ratios"),
             ("orange_tier_mode", "hsl_orange_tier_mode"),

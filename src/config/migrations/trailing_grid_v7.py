@@ -147,6 +147,7 @@ V7_INSERTED_DEFAULT_SHARED_FLAT_KEYS = (
     "hsl_orange_tier_mode",
     "hsl_panic_close_order_type",
     "hsl_red_threshold",
+    "hsl_restart_after_red_policy",
     "hsl_tier_ratios",
     "unstuck_close_pct",
     "unstuck_ema_dist",

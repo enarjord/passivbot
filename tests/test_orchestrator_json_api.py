@@ -1355,6 +1355,7 @@ def test_panic_close_order_type_rejects_invalid_values():
             {"hsl_red_threshold": 0.2, "hsl_no_restart_drawdown_threshold": 0.1},
             r"bot\.long\.hsl_no_restart_drawdown_threshold",
         ),
+        ({"hsl_restart_after_red_policy": "sometimes"}, r"bot\.long\.hsl_restart_after_red_policy"),
         ({"risk_we_excess_allowance_pct": -0.01}, r"bot\.long\.risk_we_excess_allowance_pct"),
         ({"unstuck_ema_dist": -1.0}, r"bot\.long\.unstuck_ema_dist"),
     ],

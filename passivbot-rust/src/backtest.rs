@@ -440,6 +440,22 @@ struct HardStopStopSnapshot {
     drawdown_raw: f64,
 }
 
+fn hsl_no_restart_latched(
+    restart_after_red_policy: &str,
+    persistent_drawdown_raw: f64,
+    no_restart_drawdown_threshold: f64,
+) -> Result<bool, String> {
+    match restart_after_red_policy {
+        "always" => Ok(false),
+        "threshold" => Ok(persistent_drawdown_raw >= no_restart_drawdown_threshold),
+        "never" => Ok(true),
+        raw => Err(format!(
+            "hsl_restart_after_red_policy must be one of always, threshold, never; got {:?}",
+            raw
+        )),
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 struct HardStopPsideRuntime {
     state: Option<ehsl::HardStopState>,
@@ -1011,6 +1027,7 @@ impl<'a> Backtest<'a> {
             bp.hsl_ema_span_minutes = common_hsl.ema_span_minutes;
             bp.hsl_cooldown_minutes_after_red = common_hsl.cooldown_minutes_after_red;
             bp.hsl_no_restart_drawdown_threshold = common_hsl.no_restart_drawdown_threshold;
+            bp.hsl_restart_after_red_policy = common_hsl.restart_after_red_policy.clone();
             bp.hsl_tier_ratio_yellow = common_hsl.tier_ratios.yellow;
             bp.hsl_tier_ratio_orange = common_hsl.tier_ratios.orange;
             bp.hsl_orange_tier_mode = common_hsl.orange_tier_mode.clone();
@@ -3497,6 +3514,7 @@ impl<'a> Backtest<'a> {
         let hsl_tier_ratio_orange = cfg.hsl_tier_ratio_orange;
         let hsl_no_restart_drawdown_threshold =
             cfg.hsl_no_restart_drawdown_threshold.max(hsl_red_threshold);
+        let hsl_restart_after_red_policy = cfg.hsl_restart_after_red_policy.clone();
         let hsl_cooldown_minutes_after_red = cfg.hsl_cooldown_minutes_after_red;
         if !(hsl_no_restart_drawdown_threshold.is_finite()
             && hsl_red_threshold.is_finite()
@@ -3630,7 +3648,11 @@ impl<'a> Backtest<'a> {
                         - stop_snapshot.equity
                             / runtime.no_restart_peak_strategy_equity.max(f64::EPSILON))
                     .max(0.0);
-                    if persistent_drawdown_raw >= hsl_no_restart_drawdown_threshold {
+                    if hsl_no_restart_latched(
+                        hsl_restart_after_red_policy.as_str(),
+                        persistent_drawdown_raw,
+                        hsl_no_restart_drawdown_threshold,
+                    )? {
                         runtime.no_restart_latched = true;
                         runtime.cooldown_until_ms = None;
                     } else {
@@ -3695,6 +3717,7 @@ impl<'a> Backtest<'a> {
         let hsl_tier_ratio_orange = cfg.hsl_tier_ratio_orange;
         let hsl_no_restart_drawdown_threshold =
             cfg.hsl_no_restart_drawdown_threshold.max(hsl_red_threshold);
+        let hsl_restart_after_red_policy = cfg.hsl_restart_after_red_policy.clone();
         let hsl_cooldown_minutes_after_red = cfg.hsl_cooldown_minutes_after_red;
         if !(hsl_no_restart_drawdown_threshold.is_finite()
             && hsl_red_threshold.is_finite()
@@ -3815,7 +3838,11 @@ impl<'a> Backtest<'a> {
                         - stop_snapshot.equity
                             / runtime.no_restart_peak_strategy_equity.max(f64::EPSILON))
                     .max(0.0);
-                    if persistent_drawdown_raw >= hsl_no_restart_drawdown_threshold {
+                    if hsl_no_restart_latched(
+                        hsl_restart_after_red_policy.as_str(),
+                        persistent_drawdown_raw,
+                        hsl_no_restart_drawdown_threshold,
+                    )? {
                         runtime.no_restart_latched = true;
                         runtime.cooldown_until_ms = None;
                     } else {
@@ -8089,6 +8116,15 @@ mod tests {
         assert!(bt.hard_stop_no_restart_latched);
         assert_eq!(bt.hard_stop_cooldown_until_ms, None);
         assert!(!bt.try_restart_after_hard_stop(10_000_000));
+    }
+
+    #[test]
+    fn hard_stop_restart_after_red_policy_controls_terminal_latch() {
+        assert!(!hsl_no_restart_latched("always", 1.0, 0.10).unwrap());
+        assert!(!hsl_no_restart_latched("threshold", 0.09, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("threshold", 0.10, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("never", 0.0, 0.10).unwrap());
+        assert!(hsl_no_restart_latched("sometimes", 1.0, 0.10).is_err());
     }
 
     #[test]

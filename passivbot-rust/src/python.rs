@@ -1931,6 +1931,17 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
                 signal_mode
             )));
         }
+        let restart_after_red_policy =
+            extract_optional_string(cfg, "restart_after_red_policy", "threshold")?;
+        match restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "{key}.restart_after_red_policy must be one of {{always, threshold, never}}, got {:?}",
+                    raw
+                )));
+            }
+        }
         Ok(EquityHardStopLossConfig {
             enabled: extract_value(cfg, "enabled")?,
             signal_mode,
@@ -1938,6 +1949,7 @@ fn backtest_params_from_dict(dict: &PyDict) -> PyResult<BacktestParams> {
             ema_span_minutes: extract_value(cfg, "ema_span_minutes")?,
             cooldown_minutes_after_red: extract_value(cfg, "cooldown_minutes_after_red")?,
             no_restart_drawdown_threshold: extract_value(cfg, "no_restart_drawdown_threshold")?,
+            restart_after_red_policy,
             tier_ratios: EquityHardStopLossTierRatios {
                 yellow: extract_value(ratios, "yellow")?,
                 orange: extract_value(ratios, "orange")?,
@@ -2301,6 +2313,8 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         extract_value(dict, "hsl_cooldown_minutes_after_red")?;
     let hsl_no_restart_drawdown_threshold: f64 =
         extract_value(dict, "hsl_no_restart_drawdown_threshold")?;
+    let hsl_restart_after_red_policy: String =
+        extract_optional_string(dict, "hsl_restart_after_red_policy", "threshold")?;
     let hsl_tier_ratios = dict
         .get_item("hsl_tier_ratios")?
         .ok_or_else(|| PyValueError::new_err("position missing 'hsl_tier_ratios'"))?
@@ -2386,6 +2400,7 @@ fn bot_params_from_dict(dict: &PyDict) -> PyResult<BotParams> {
         hsl_ema_span_minutes,
         hsl_cooldown_minutes_after_red,
         hsl_no_restart_drawdown_threshold,
+        hsl_restart_after_red_policy,
         hsl_tier_ratio_yellow,
         hsl_tier_ratio_orange,
         hsl_orange_tier_mode,
@@ -2467,6 +2482,21 @@ fn validate_hsl_panic_close_order_type_pair(bot_params: &BotParamsPair) -> PyRes
     Ok(())
 }
 
+fn validate_hsl_restart_after_red_policy_pair(bot_params: &BotParamsPair) -> PyResult<()> {
+    for (pside, params) in [("long", &bot_params.long), ("short", &bot_params.short)] {
+        match params.hsl_restart_after_red_policy.as_str() {
+            "always" | "threshold" | "never" => {}
+            raw => {
+                return Err(PyValueError::new_err(format!(
+                    "bot.{pside}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                    raw
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
 fn validate_finite_range(
     path: &str,
     value: f64,
@@ -2528,6 +2558,15 @@ fn validate_hsl_risk_unstuck_bot_params(
         return Err(PyValueError::new_err(format!(
             "{path_prefix}.hsl_no_restart_drawdown_threshold must be >= {path_prefix}.hsl_red_threshold"
         )));
+    }
+    match params.hsl_restart_after_red_policy.as_str() {
+        "always" | "threshold" | "never" => {}
+        raw => {
+            return Err(PyValueError::new_err(format!(
+                "{path_prefix}.hsl_restart_after_red_policy must be one of: always, threshold, never; got {:?}",
+                raw
+            )));
+        }
     }
     validate_finite_range(
         &format!("{path_prefix}.hsl_cooldown_minutes_after_red"),
@@ -4008,6 +4047,7 @@ pub fn compute_ideal_orders_json(input_json: &str) -> PyResult<String> {
     validate_orchestrator_account_risk_inputs(&input)?;
     validate_forager_score_weights_pair(&input.global.global_bot_params)?;
     validate_hsl_panic_close_order_type_pair(&input.global.global_bot_params)?;
+    validate_hsl_restart_after_red_policy_pair(&input.global.global_bot_params)?;
     validate_hsl_risk_unstuck_orchestrator_input(&input)?;
 
     let out = crate::orchestrator::compute_ideal_orders(&input).map_err(|e| {

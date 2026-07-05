@@ -23,6 +23,11 @@ All notable user-facing changes will be documented in this file.
   `bot.long/short.hsl.panic_close_order_type` in live and backtests; configuring
   one side as `market` no longer market-promotes panic closes for the other side
   when that side is configured as `limit`.
+- HSL restart behavior after RED is now controlled by explicit
+  `bot.long/short.hsl.restart_after_red_policy` values: `threshold` preserves
+  the previous no-restart-threshold behavior, `never` makes any RED terminal,
+  and `always` restarts after cooldown while disabling the no-restart safety
+  latch for that HSL scope.
 - Live TWEL auto-reduce now honors configured
   `risk_twel_enforcer_policy` when building Rust orchestrator payloads instead
   of always falling back to `reduce_overweight`, aligning live behavior with
