@@ -820,6 +820,11 @@ Remaining implementation details:
       cooldown rules.
       Current panic eligibility should be based on the current trading episode;
       terminal no-restart accounting remains broader.
+      Partial: live coin-HSL replay now resets current-episode realized-PnL
+      and runtime drawdown state when fill replay proves a coin+pside flattened
+      by an ordinary, non-panic close before a later re-entry. Panic-marker
+      cooldown/no-restart handling is unchanged; broader terminal no-restart
+      accounting from canonical RED timestamps remains future work.
 - [ ] HSL replay performance/readiness slice.
       Persist verified non-authoritative HSL time series/checkpoints, add doctor
       tools, prioritize held scopes, keep timing/source evidence, and move dense
@@ -830,8 +835,11 @@ Remaining implementation details:
       orders.
       Python should reconcile ideal vs actual orders, not re-decide trading
       policy where Rust can own it.
-- [ ] Dead legacy HSL cleanup after parity tests cover active
+- [x] Dead legacy HSL cleanup after parity tests cover active
       `src/passivbot_hsl.py`.
+      Implemented: removed shadowed legacy HSL method definitions from
+      `src/passivbot.py`; active behavior is bound from `src/passivbot_hsl.py`
+      with an AST regression guard.
 
 ## Non-Goals For First PRs
 

@@ -2893,10 +2893,12 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
 
                 replay_event_idx = 0
                 replay_size = 0.0
+                replay_was_nonflat = False
+                replay_flattened_at_ms: Optional[int] = None
                 ignored_panic_marker_timestamps: set[int] = set()
 
                 def replay_size_at(row_ts_ms: int) -> float:
-                    nonlocal replay_event_idx, replay_size
+                    nonlocal replay_event_idx, replay_size, replay_flattened_at_ms
                     boundary_ts_ms = int(row_ts_ms) + 60_000
                     while replay_event_idx < len(replay_events):
                         event_ts, action, qty = replay_events[replay_event_idx]
@@ -2906,6 +2908,8 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                             replay_size += qty
                         else:
                             replay_size = max(0.0, replay_size - qty)
+                            if replay_size <= 1e-12:
+                                replay_flattened_at_ms = int(event_ts)
                         replay_event_idx += 1
                     return float(replay_size)
 
@@ -2948,6 +2952,7 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     )
                     if not require_coin_timeline_value:
                         continue
+                    replay_position_size = replay_size_at(ts)
                     abs_realized = _equity_hard_stop_history_coin_value(
                         row,
                         "realized_pnl_by_coin_pside",
@@ -2984,7 +2989,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         ),
                     )
                     if not has_unrealized and require_coin_timeline_value:
-                        replay_position_size = replay_size_at(ts)
                         if replay_ambiguous or replay_position_size > 1e-12:
                             if not require_coin_timeline_fields:
                                 continue
@@ -3022,7 +3026,34 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                     applied_rows += 1
                     rows += 1
                     pair_rows_applied[(pside, symbol)] = int(applied_rows)
+                    replay_is_nonflat = replay_position_size > 1e-12
+                    replay_flattened_this_row = (
+                        not replay_ambiguous
+                        and replay_was_nonflat
+                        and not replay_is_nonflat
+                        and replay_flattened_at_ms is not None
+                        and replay_flattened_at_ms < ts + 60_000
+                    )
+                    if replay_is_nonflat:
+                        replay_was_nonflat = True
                     if marker is None:
+                        if replay_flattened_this_row:
+                            # Ordinary, non-panic flattening ends the current coin episode.
+                            # Cooldown/no-restart accounting remains driven by panic markers.
+                            reset_ts = int(replay_flattened_at_ms) + 1
+                            state["pnl_reset_timestamp_ms"] = reset_ts
+                            reset_baseline_realized = abs_realized
+                            self._equity_hard_stop_reset_coin_after_restart(pside, symbol)
+                            state = self._hsl_coin_state(pside, symbol)
+                            reset_rolling_window()
+                            replay_was_nonflat = False
+                            logging.info(
+                                "[risk] HSL[%s:%s] replay reset current episode after flat fill | flat_ts=%s",
+                                pside,
+                                symbol,
+                                int(replay_flattened_at_ms),
+                            )
+                            replay_flattened_at_ms = None
                         continue
                     stop_ts = int(marker["timestamp"])
                     if not _equity_hard_stop_replay_marker_confirms_red(metrics):
