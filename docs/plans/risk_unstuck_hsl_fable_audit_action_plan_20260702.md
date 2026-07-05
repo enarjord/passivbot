@@ -748,7 +748,7 @@ Remaining implementation details:
       inputs must not disable risk gates permissively.
       Partial: Rust orchestrator JSON now rejects invalid account/risk globals
       before realized-loss or unstuck gates can silently skip.
-- [x] Rust reducer priority: one reducer per coin+pside per ideal-order batch.
+- [ ] Rust reducer priority: one reducer per coin+pside per ideal-order batch.
       Priority is HSL panic, WEL/TWEL reducer, auto-unstuck, then any other
       close order, with bid/ask-reachable reducers prioritized before farther
       passive closes.
@@ -759,6 +759,9 @@ Remaining implementation details:
       Partial: protective reducers now prune lower-priority same-position
       ordinary closes before size trimming; ordinary strategy-only close
       multiplicity is intentionally unchanged.
+      Remaining: keep or split out explicit bid/ask-reachable reducer ordering
+      if future review finds the existing close trimming/order sorting is not
+      sufficient.
 - [x] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
