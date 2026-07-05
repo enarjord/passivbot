@@ -94,6 +94,17 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert report["forager"]["sides"]["long"]["n_positions"] == 3
     assert report["forager"]["total_configured_n_positions"] == 4.0
+    assert report["risk"]["balance_hysteresis_snap_pct"] == {
+        "basis": (
+            "snapped balance is used for sizing/gating surfaces where hysteresis "
+            "is intentional; raw balance remains the basis for exact exposure repair"
+        ),
+        "default_value": 0.02,
+        "effective_value": 0.02,
+        "present": False,
+        "status": "defaulted",
+        "warning_threshold": 0.05,
+    }
     assert report["cache"]["live_settings"]["pnls_max_lookback_days"] == 7
     assert report["cache"]["readiness"]["status"] == "attention"
     assert report["cache"]["readiness"]["summary"] == {
@@ -117,6 +128,60 @@ def test_live_config_preflight_reports_risk_relevant_shape_and_bounds_symbols(tm
     }
     assert "super-secret-api-key" not in rendered
     assert "api_key" not in rendered
+
+
+def test_live_config_preflight_warns_on_high_balance_hysteresis(tmp_path):
+    config = _sample_config()
+    config["live"]["balance_hysteresis_snap_pct"] = 0.06
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+
+    assert report["ok"] is True
+    assert report["summary"]["warning_count"] == 1
+    assert report["risk"]["balance_hysteresis_snap_pct"] == {
+        "basis": (
+            "snapped balance is used for sizing/gating surfaces where hysteresis "
+            "is intentional; raw balance remains the basis for exact exposure repair"
+        ),
+        "default_value": 0.02,
+        "present": True,
+        "raw_value": 0.06,
+        "status": "high",
+        "value": 0.06,
+        "warning_threshold": 0.05,
+    }
+    assert report["issues"] == [
+        {
+            "code": "balance_hysteresis_snap_pct_high",
+            "message": (
+                "live.balance_hysteresis_snap_pct is above 5%; snapped-balance "
+                "entry sizing/gating may diverge noticeably from raw-balance "
+                "exposure repair near risk boundaries"
+            ),
+            "path": "live.balance_hysteresis_snap_pct",
+            "severity": "warning",
+        }
+    ]
+
+
+@pytest.mark.parametrize("value", [-0.01, "wide", True])
+def test_live_config_preflight_warns_on_invalid_balance_hysteresis(tmp_path, value):
+    config = _sample_config()
+    config["live"]["balance_hysteresis_snap_pct"] = value
+    config_path = tmp_path / "live.json"
+    _write_config(config_path, config)
+
+    report = live_config_preflight.build_live_config_preflight_report(config_path)
+
+    assert report["ok"] is True
+    assert report["summary"]["warning_count"] == 1
+    assert report["risk"]["balance_hysteresis_snap_pct"]["status"] in {
+        "invalid",
+        "invalid_bool",
+    }
+    assert report["issues"][0]["path"] == "live.balance_hysteresis_snap_pct"
 
 
 def test_live_config_preflight_reports_cache_readiness_without_artifact_claims(tmp_path):

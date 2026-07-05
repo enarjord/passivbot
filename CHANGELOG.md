@@ -15,7 +15,14 @@ All notable user-facing changes will be documented in this file.
   stacking on one coin+pside when portfolio exposure enforcement is active.
 - Rust TWEL `reduce_overweight` auto-reduce now uses the dynamic currently
   tradable slot count when deciding which positions are overweight, matching
-  dynamic WEL sizing instead of the configured `n_positions` floor.
+  dynamic WEL sizing instead of the configured `n_positions` floor. If no
+  symbols are eligible for new entries but positions remain open, TWEL repair
+  falls back to the held-position count so protective reduce-only closes can
+  still be emitted.
+- `passivbot tool live-config-preflight` now reports
+  `balance_hysteresis_snap_pct` and warns when it is invalid or above `0.05`,
+  where snapped-balance entry sizing/gating can diverge noticeably from
+  raw-balance exposure repair near risk boundaries.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.
