@@ -13,6 +13,9 @@ All notable user-facing changes will be documented in this file.
 - Rust TWEL auto-reduce now takes priority over same-position auto-unstuck
   reducers in the same ideal-order batch, preventing two reducer closes from
   stacking on one coin+pside when portfolio exposure enforcement is active.
+- Rust TWEL `reduce_overweight` auto-reduce now uses the dynamic currently
+  tradable slot count when deciding which positions are overweight, matching
+  dynamic WEL sizing instead of the configured `n_positions` floor.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.

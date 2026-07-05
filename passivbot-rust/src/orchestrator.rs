@@ -1654,6 +1654,17 @@ mod core {
         base.max(forced_normals_len)
     }
 
+    fn twel_repair_effective_n_positions(
+        effective_n_positions: usize,
+        open_position_count: usize,
+    ) -> usize {
+        if effective_n_positions > 0 {
+            effective_n_positions
+        } else {
+            open_position_count
+        }
+    }
+
     fn fill_forced_normal_indices(
         symbols: &[SymbolInput],
         pside: PositionSide,
@@ -3288,6 +3299,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_long, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 LONG,
                 input
@@ -3300,7 +3313,7 @@ mod core {
                     .global_bot_params
                     .long
                     .total_wallet_exposure_limit,
-                input.global.global_bot_params.long.n_positions,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -3358,6 +3371,8 @@ mod core {
                     min_cost: sym.exchange.min_cost,
                 });
             }
+            let twel_effective_n_positions =
+                twel_repair_effective_n_positions(enp_short, workspace.twel_positions.len());
             let actions = calc_twel_enforcer_actions(
                 SHORT,
                 input
@@ -3370,7 +3385,7 @@ mod core {
                     .global_bot_params
                     .short
                     .total_wallet_exposure_limit,
-                input.global.global_bot_params.short.n_positions,
+                twel_effective_n_positions,
                 input_balance_raw(input),
                 &workspace.twel_positions,
                 input
@@ -5840,6 +5855,158 @@ mod core {
                 "TWEL enforcer should trigger using raw balance (WE=0.625 > 0.6), \
                  not snapped balance (WE=0.5 < 0.6). Orders: {:?}",
                 out.orders.iter().map(|o| &o.order_type).collect::<Vec<_>>()
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_uses_effective_tradable_slots() {
+            // Configured n_positions=4 but only two symbols are currently eligible.
+            // TWEL target is 0.50, so the dynamic overweight floor is 0.25.
+            // idx0 is exactly at the dynamic floor and less adverse; using the old
+            // configured floor 0.125 would wrongly select idx0 first.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.long.position = Position {
+                size: 2.5,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair total exposure"
+            );
+            assert!(
+                twel_closes.iter().all(|o| o.symbol_idx == 1),
+                "dynamic floor should leave idx0 at WE=0.25 untouched; orders: {:?}",
+                twel_closes
+            );
+        }
+
+        #[test]
+        fn twel_reduce_overweight_repairs_when_no_symbols_eligible() {
+            // No symbols are eligible for new entries, but held positions still need
+            // protective TWEL repair. The enforcer should fall back to the current
+            // open-position count instead of no-oping on effective_n_positions=0.
+            let mut sym0 = make_basic_symbol(0);
+            sym0.tradable = false;
+            sym0.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym0.order_book = OrderBook {
+                bid: 100.0,
+                ask: 100.0,
+            };
+            sym0.long.bot_params.wallet_exposure_limit = 0.4;
+            sym0.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut sym1 = make_basic_symbol(1);
+            sym1.tradable = false;
+            sym1.long.position = Position {
+                size: 2.6,
+                price: 100.0,
+            };
+            sym1.order_book = OrderBook {
+                bid: 95.0,
+                ask: 95.0,
+            };
+            sym1.long.bot_params.wallet_exposure_limit = 0.4;
+            sym1.long.bot_params.risk_wel_enforcer_threshold = 2.0;
+
+            let mut global_bp = BotParamsPair::default();
+            global_bp.long.total_wallet_exposure_limit = 0.5;
+            global_bp.long.risk_twel_enforcer_threshold = 1.0;
+            global_bp.long.risk_twel_enforcer_policy = TwelEnforcerPolicy::ReduceOverweight;
+            global_bp.long.n_positions = 4;
+
+            let input = OrchestratorInput {
+                balance: 1000.0,
+                balance_raw: 1000.0,
+                timestamp_ms: 0,
+                global: OrchestratorGlobal {
+                    filter_by_min_effective_cost: false,
+                    market_orders_allowed: false,
+                    market_order_near_touch_threshold: 0.001,
+                    market_order_slippage_pct: 0.0,
+                    panic_close_market: false,
+                    auto_unstuck_allowed: Some(true),
+                    unstuck_allowance_long: 0.0,
+                    unstuck_allowance_short: 0.0,
+                    max_realized_loss_pct: 1.0,
+                    realized_pnl_cumsum_max: 0.0,
+                    realized_pnl_cumsum_last: 0.0,
+                    sort_global: true,
+                    global_bot_params: global_bp,
+                    hedge_mode: true,
+                    strategy_kind: StrategyKind::TrailingMartingale,
+                },
+                symbols: vec![sym0, sym1],
+                peek_hints: None,
+                forager_hysteresis: None,
+            };
+            let out = compute_ideal_orders_for_test(&input).unwrap();
+            let twel_closes = out
+                .orders
+                .iter()
+                .filter(|o| o.order_type == OrderType::CloseAutoReduceTwelLong)
+                .collect::<Vec<_>>();
+            assert!(
+                !twel_closes.is_empty(),
+                "TWEL reduce-overweight should still repair held positions when eligibility is zero"
             );
         }
 
