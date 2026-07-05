@@ -23,6 +23,10 @@ All notable user-facing changes will be documented in this file.
   `balance_hysteresis_snap_pct` and warns when it is invalid or above `0.05`,
   where snapped-balance entry sizing/gating can diverge noticeably from
   raw-balance exposure repair near risk boundaries.
+- Entry ladder throttling is now controlled separately from time-based entry
+  cooldown via `bot.long/short.risk.allow_simultaneous_grid_entries`.
+  `entry_cooldown_minutes` now only controls the post-fill time window; values
+  below one minute no longer imply single-order ladder staging by themselves.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.

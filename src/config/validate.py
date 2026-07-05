@@ -35,6 +35,13 @@ def validate_config(
     for pside in BOT_POSITION_SIDES:
         bot_side = require_config_dict(config, f"bot.{pside}")
         require_config_dict(bot_side, "strategy")
+        allow_simultaneous_grid_entries = get_grouped_bot_value(
+            bot_side, "risk_allow_simultaneous_grid_entries", True
+        )
+        if not isinstance(allow_simultaneous_grid_entries, bool):
+            raise ValueError(
+                f"bot.{pside}.risk.allow_simultaneous_grid_entries must be boolean"
+            )
         entry_cooldown_minutes = float(
             get_grouped_bot_value(bot_side, "risk_entry_cooldown_minutes", 0.0) or 0.0
         )

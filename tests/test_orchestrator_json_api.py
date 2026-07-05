@@ -132,6 +132,7 @@ def bot_params(**overrides):
         "risk_twel_enforcer_policy": "reduce_overweight",
         "risk_twel_enforcer_threshold": 0.0,
         "risk_we_excess_allowance_pct": 0.0,
+        "risk_allow_simultaneous_grid_entries": True,
         "risk_entry_cooldown_minutes": 0.0,
         "unstuck_ema_gating_enabled": True,
         "unstuck_close_pct": 0.0,
@@ -704,7 +705,37 @@ def test_adaptive_grid_short_entry_output_regression():
     ]
 
 
-def test_entry_cooldown_keeps_only_one_position_adding_order_when_enabled():
+def test_entry_ladder_throttle_keeps_only_one_position_adding_order_when_disabled():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        global_bp=bot_params_pair(
+            long_overrides={"risk_allow_simultaneous_grid_entries": False}
+        ),
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_bp={"risk_allow_simultaneous_grid_entries": False},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) == 1
+    assert long_add_orders[0]["order_type"] == "entry_initial_normal_long"
+
+
+def test_entry_cooldown_below_one_minute_does_not_throttle_ladder_by_itself():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -716,6 +747,32 @@ def test_entry_cooldown_keeps_only_one_position_adding_order_when_enabled():
                 bid=100.0,
                 ask=100.0,
                 long_bp={"risk_entry_cooldown_minutes": 0.5},
+            )
+        ],
+    )
+    inp["timestamp_ms"] = 120_000
+
+    out = compute(pbr, inp)
+    long_add_orders = [
+        o
+        for o in out["orders"]
+        if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
+    ]
+
+    assert len(long_add_orders) > 1
+
+
+def test_entry_retracement_throttles_ladder_even_when_simultaneous_enabled():
+    import passivbot_rust as pbr
+
+    inp = make_input(
+        balance=1_000.0,
+        symbols=[
+            make_symbol(
+                0,
+                bid=100.0,
+                ask=100.0,
+                long_strategy=adaptive_strategy_params(entry={"retracement_base_pct": 0.001}),
             )
         ],
     )
@@ -796,7 +853,7 @@ def test_entry_cooldown_keeps_close_orders_while_blocking_adds():
     assert long_close_orders
 
 
-def test_fractional_entry_cooldown_allows_next_minute_updates():
+def test_fractional_entry_cooldown_allows_next_minute_ladder_updates():
     import passivbot_rust as pbr
 
     inp = make_input(
@@ -821,7 +878,7 @@ def test_fractional_entry_cooldown_allows_next_minute_updates():
         if o["pside"] == "long" and o["qty"] > 0.0 and o["order_type"].startswith("entry_")
     ]
 
-    assert len(long_add_orders) == 1
+    assert len(long_add_orders) > 1
 
 
 def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
@@ -868,7 +925,7 @@ def test_entry_cooldown_is_separated_by_pside_in_hedge_mode():
     ]
 
     assert long_add_orders == []
-    assert len(short_add_orders) == 1
+    assert len(short_add_orders) > 1
 
 
 def test_ema_anchor_long_position_emits_single_entry_and_close():
@@ -2875,8 +2932,8 @@ def test_twel_enforcer_uses_balance_raw_not_snapped():
     )
 
 
-def test_loss_gate_returns_early_when_raw_is_non_positive():
-    """Non-positive balance_raw causes the loss gate to early-return (gate disabled)."""
+def test_loss_gate_rejects_non_positive_raw_balance():
+    """Non-positive balance_raw fails loudly before loss-gate planning."""
     import passivbot_rust as pbr
 
     global_bp = bot_params_pair(
@@ -2904,8 +2961,5 @@ def test_loss_gate_returns_early_when_raw_is_non_positive():
     for raw_balance in [0.0, -1.0]:
         inp_case = copy.deepcopy(inp)
         inp_case["balance_raw"] = raw_balance
-        out = compute(pbr, inp_case)
-        order_types = [o["order_type"] for o in out["orders"]]
-        assert "close_auto_reduce_wel_long" in order_types
-        blocks = out.get("diagnostics", {}).get("loss_gate_blocks", [])
-        assert not blocks
+        with pytest.raises(ValueError, match="balance_raw must be finite and > 0"):
+            compute(pbr, inp_case)

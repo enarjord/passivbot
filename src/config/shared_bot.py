@@ -7,6 +7,7 @@ BOT_SHARED_GROUPS = ("risk", "forager", "hsl", "unstuck")
 
 BOT_GROUP_FIELD_MAP = {
     "risk": {
+        "allow_simultaneous_grid_entries": "risk_allow_simultaneous_grid_entries",
         "entry_cooldown_minutes": "risk_entry_cooldown_minutes",
         "n_positions": "n_positions",
         "total_wallet_exposure_limit": "total_wallet_exposure_limit",
