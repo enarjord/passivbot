@@ -610,7 +610,11 @@ mod core {
         }
     }
 
-    fn prune_lower_priority_closes(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
+    fn prune_lower_priority_closes(
+        orders: &mut Vec<IdealOrder>,
+        pside: PositionSide,
+        ob: &OrderBook,
+    ) {
         let highest = orders
             .iter()
             .filter_map(|order| close_reducer_priority(order.order_type, pside))
@@ -620,6 +624,24 @@ mod core {
                 orders.retain(|order| {
                     close_reducer_priority(order.order_type, pside).unwrap_or(3) == priority
                 });
+                orders.sort_by(|a, b| {
+                    let da = order_price_diff_strict(a, ob);
+                    let db = order_price_diff_strict(b, ob);
+                    da.partial_cmp(&db)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.order_type.id().cmp(&b.order_type.id()))
+                        .then_with(|| {
+                            a.price
+                                .partial_cmp(&b.price)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                        .then_with(|| {
+                            a.qty
+                                .partial_cmp(&b.qty)
+                                .unwrap_or(std::cmp::Ordering::Equal)
+                        })
+                });
+                orders.truncate(1);
             }
         }
     }
@@ -3473,7 +3495,7 @@ mod core {
         // Trim closes per symbol to position size (furthest-first).
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
-            prune_lower_priority_closes(&mut s.closes, PositionSide::Long);
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Long, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Long,
                 &mut s.closes,
@@ -3484,7 +3506,7 @@ mod core {
         }
         for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
-            prune_lower_priority_closes(&mut s.closes, PositionSide::Short);
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Short, &sym.order_book);
             trim_closes_to_position(
                 PositionSide::Short,
                 &mut s.closes,
@@ -4227,6 +4249,71 @@ mod core {
                 to_executable_order(order, &global, &order_book).execution_type,
                 ExecutionType::Limit
             );
+        }
+
+        #[test]
+        fn close_pruning_keeps_single_closest_same_priority_reducer() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseAutoReduceWelLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseAutoReduceTwelLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 1);
+            assert_eq!(closes[0].order_type, OrderType::CloseAutoReduceTwelLong);
+            assert!((closes[0].price - 101.1).abs() < 1e-12);
+        }
+
+        #[test]
+        fn close_pruning_preserves_ordinary_close_ladder() {
+            let order_book = OrderBook {
+                bid: 100.0,
+                ask: 101.0,
+            };
+            let mut closes = vec![
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 102.0,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.1,
+                    order_type: OrderType::CloseGridLong,
+                },
+                IdealOrder {
+                    symbol_idx: 0,
+                    pside: PositionSide::Long,
+                    qty: -0.3,
+                    price: 101.5,
+                    order_type: OrderType::CloseGridLong,
+                },
+            ];
+
+            prune_lower_priority_closes(&mut closes, PositionSide::Long, &order_book);
+
+            assert_eq!(closes.len(), 3);
         }
 
         #[test]
