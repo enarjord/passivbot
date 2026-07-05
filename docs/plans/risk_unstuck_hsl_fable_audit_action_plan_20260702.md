@@ -149,6 +149,11 @@ Required risk inputs should be validated at the Rust/orchestrator boundary and
 fail loudly. Do not rely on `log::error!` inside individual calculators as the
 safety mechanism.
 
+Implemented: Rust orchestrator core and PyO3 JSON entrypoints now reject
+invalid account/risk globals before realized-loss or unstuck gates can
+silently skip. Coverage includes non-positive raw balance and realized-PnL
+peak/current inconsistencies.
+
 ### A1.3 - Pside HSL Side-Local Equity <= 0
 
 Plan: code/design plus docs.
@@ -747,11 +752,12 @@ Remaining implementation details:
 - [x] Numeric validation/clamping for HSL EMA spans and risk/unstuck config.
       Clamp EMA spans to at least `1.0`; fail loudly or normalize visibly for
       other risk numerics.
-- [ ] Risk-input fail-loud validation boundary.
+- [x] Risk-input fail-loud validation boundary.
       Invalid balance, position, exchange params, PnL stats, or active gate
       inputs must not disable risk gates permissively.
-      Partial: Rust orchestrator JSON now rejects invalid account/risk globals
-      before realized-loss or unstuck gates can silently skip.
+      Implemented: Rust core and JSON API validation reject invalid account/risk
+      globals before realized-loss or unstuck gates can silently skip, including
+      non-positive raw balance and realized-PnL peak/current inconsistencies.
 - [ ] Rust reducer priority: one reducer per coin+pside per ideal-order batch.
       Priority is HSL panic, WEL/TWEL reducer, auto-unstuck, then any other
       close order, with bid/ask-reachable reducers prioritized before farther

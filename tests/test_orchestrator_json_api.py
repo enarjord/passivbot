@@ -2797,6 +2797,13 @@ def test_balance_raw_absent_falls_back_to_balance():
             lambda inp: inp["global"].__setitem__("unstuck_allowance_short", -1.0),
             r"global\.unstuck_allowance_short must be finite and >= 0",
         ),
+        (
+            lambda inp: (
+                inp["global"].__setitem__("realized_pnl_cumsum_max", 5.0),
+                inp["global"].__setitem__("realized_pnl_cumsum_last", 10.0),
+            ),
+            r"global\.realized_pnl_cumsum_max must be >= global\.realized_pnl_cumsum_last",
+        ),
     ],
 )
 def test_json_rejects_invalid_account_risk_globals(mutator, match):
