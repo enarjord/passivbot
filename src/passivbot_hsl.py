@@ -18,6 +18,7 @@ from config.access import (
 )
 from config.coerce import (
     normalize_hsl_cooldown_position_policy,
+    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
 from config.pnl_lookback import parse_pnls_max_lookback_days
@@ -457,6 +458,10 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
         ratio_orange = float(self.bot_value(pside, "hsl_tier_ratios.orange"))
         orange_tier_mode = str(self.bot_value(pside, "hsl_orange_tier_mode"))
         panic_close_order_type = str(self.bot_value(pside, "hsl_panic_close_order_type"))
+        restart_after_red_policy = normalize_hsl_restart_after_red_policy(
+            self.bot_value(pside, "hsl_restart_after_red_policy"),
+            path=f"bot.{pside}.hsl_restart_after_red_policy",
+        )
 
         if enabled and red_threshold <= 0.0:
             raise ValueError(f"bot.{pside}.hsl_red_threshold must be > 0.0 when enabled")
@@ -498,6 +503,7 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
             "tier_ratios": {"yellow": ratio_yellow, "orange": ratio_orange},
             "orange_tier_mode": orange_tier_mode,
             "panic_close_order_type": panic_close_order_type,
+            "restart_after_red_policy": restart_after_red_policy,
         }
         if enabled:
             logging.info(
@@ -505,7 +511,7 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
                 "cooldown_minutes_after_red=%.3f "
                 "no_restart_drawdown_threshold=%.6f signal_mode=%s "
                 "yellow_ratio=%.3f orange_ratio=%.3f "
-                "orange_mode=%s panic_close=%s",
+                "orange_mode=%s panic_close=%s restart_after_red=%s",
                 pside,
                 red_threshold,
                 ema_span_minutes,
@@ -516,8 +522,21 @@ def _parse_hsl_config(self) -> dict[str, dict[str, Any]]:
                 ratio_orange,
                 orange_tier_mode,
                 panic_close_order_type,
+                restart_after_red_policy,
             )
     return out
+
+
+def _equity_hard_stop_no_restart_latched(cfg: dict[str, Any], drawdown_raw: float) -> bool:
+    policy = normalize_hsl_restart_after_red_policy(
+        cfg.get("restart_after_red_policy", "threshold"),
+        path="hsl.restart_after_red_policy",
+    )
+    if policy == "always":
+        return False
+    if policy == "never":
+        return True
+    return bool(float(drawdown_raw) >= float(cfg["no_restart_drawdown_threshold"]))
 
 
 def _equity_hard_stop_enabled(self, pside: Optional[str] = None) -> bool:
@@ -2312,7 +2331,6 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
             cfg = self.hsl[pside]
             contract = replay_contracts[pside]
             cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-            no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
             cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
             if contract["intervention_entry_ts"] is not None and contract["policy"] == "normal":
                 self._equity_hard_stop_reset_after_restart(pside)
@@ -2420,8 +2438,8 @@ async def _equity_hard_stop_initialize_from_history(self) -> None:
                             "peak_strategy_equity": float(current_metrics["peak_strategy_equity"]),
                         },
                     )
-                    no_restart_latched = bool(
-                        no_restart_drawdown_raw >= no_restart_drawdown_threshold
+                    no_restart_latched = _equity_hard_stop_no_restart_latched(
+                        cfg, no_restart_drawdown_raw
                     )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
@@ -2825,7 +2843,6 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
             cfg = self.hsl[pside]
             cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
             cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
-            no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
             for symbol in sorted(replay_symbols):
                 check_shutdown("hsl_coin_history_replay_pair")
                 pair_idx += 1
@@ -3014,7 +3031,9 @@ async def _equity_hard_stop_initialize_coin_from_history(self) -> None:
                         )
                         continue
                     stop_drawdown_raw = float(metrics["drawdown_raw"])
-                    no_restart_latched = bool(stop_drawdown_raw >= no_restart_drawdown_threshold)
+                    no_restart_latched = _equity_hard_stop_no_restart_latched(
+                        cfg, stop_drawdown_raw
+                    )
                     cooldown_until_ms = None
                     if not no_restart_latched and cooldown_ms > 0:
                         cooldown_until_ms = stop_ts + cooldown_ms
@@ -3888,7 +3907,7 @@ async def _equity_hard_stop_finalize_red_stop(
         no_restart_peak_strategy_equity,
         no_restart_drawdown_raw,
     ) = self._equity_hard_stop_record_no_restart_stop(pside, stop_event)
-    no_restart_latched = bool(no_restart_drawdown_raw >= no_restart_drawdown_threshold)
+    no_restart_latched = _equity_hard_stop_no_restart_latched(cfg, no_restart_drawdown_raw)
     cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
     cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
     payload = self._equity_hard_stop_build_latch_payload(
@@ -4029,8 +4048,7 @@ async def _equity_hard_stop_finalize_coin_red_stop(
     else:
         stop_ts_ms = int(stop_event["stop_event_timestamp_ms"])
     cooldown_minutes = float(cfg["cooldown_minutes_after_red"])
-    no_restart_drawdown_threshold = float(cfg["no_restart_drawdown_threshold"])
-    no_restart_latched = bool(stop_event["drawdown_raw"] >= no_restart_drawdown_threshold)
+    no_restart_latched = _equity_hard_stop_no_restart_latched(cfg, stop_event["drawdown_raw"])
     cooldown_ms = int(round(cooldown_minutes * 60_000.0)) if cooldown_minutes > 0.0 else 0
     cooldown_until_ms = None if no_restart_latched or cooldown_ms <= 0 else int(stop_ts_ms + cooldown_ms)
     payload = self._equity_hard_stop_build_latch_payload(

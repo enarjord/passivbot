@@ -89,6 +89,7 @@ from config.access import (
 )
 from config.coerce import (
     normalize_hsl_cooldown_position_policy,
+    normalize_hsl_restart_after_red_policy,
     normalize_hsl_signal_mode,
 )
 from config.bot import normalize_twel_enforcer_policy
@@ -13906,6 +13907,10 @@ class Passivbot:
                 ),
                 "hsl_no_restart_drawdown_threshold": float(
                     self.bot_value(pside, "hsl_no_restart_drawdown_threshold")
+                ),
+                "hsl_restart_after_red_policy": normalize_hsl_restart_after_red_policy(
+                    self.bot_value(pside, "hsl_restart_after_red_policy"),
+                    path=f"bot.{pside}.hsl_restart_after_red_policy",
                 ),
                 "hsl_tier_ratio_yellow": float(
                     self.bot_value(pside, "hsl_tier_ratios.yellow")

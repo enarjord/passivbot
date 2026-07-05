@@ -137,6 +137,7 @@ def make_coin_bot(policy="panic"):
             "ema_span_minutes": 1.0,
             "cooldown_minutes_after_red": 5.0,
             "no_restart_drawdown_threshold": 0.9,
+            "restart_after_red_policy": "threshold",
             "orange_tier_mode": "tp_only_with_active_entry_cancellation",
             "panic_close_order_type": "market",
         },
@@ -147,6 +148,7 @@ def make_coin_bot(policy="panic"):
             "ema_span_minutes": 1.0,
             "cooldown_minutes_after_red": 5.0,
             "no_restart_drawdown_threshold": 0.9,
+            "restart_after_red_policy": "threshold",
             "orange_tier_mode": "tp_only_with_active_entry_cancellation",
             "panic_close_order_type": "market",
         },
@@ -1028,11 +1030,22 @@ async def test_coin_hsl_history_replay_rebases_lookback_window_realized_points()
     assert state["last_metrics"]["drawdown_raw"] == pytest.approx(0.70)
 
 
+@pytest.mark.parametrize(
+    ("restart_after_red_policy", "expected_latched", "expected_cooldown_until_ms"),
+    [
+        ("threshold", True, None),
+        ("always", False, 420_500),
+        ("never", True, None),
+    ],
+)
 @pytest.mark.asyncio
-async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
+async def test_coin_hsl_history_replay_honors_restart_after_red_policy(
+    restart_after_red_policy, expected_latched, expected_cooldown_until_ms
+):
     bot = make_coin_bot()
     symbol = "A"
     bot.hsl["long"]["no_restart_drawdown_threshold"] = 0.7
+    bot.hsl["long"]["restart_after_red_policy"] = restart_after_red_policy
 
     async def fake_history(current_balance=None, **kwargs):
         return {
@@ -1076,8 +1089,8 @@ async def test_coin_hsl_history_replay_uses_stop_drawdown_for_no_restart():
 
     state = bot._hsl_coin_state("long", symbol)
     assert state["halted"] is True
-    assert state["no_restart_latched"] is True
-    assert state["cooldown_until_ms"] is None
+    assert state["no_restart_latched"] is expected_latched
+    assert state["cooldown_until_ms"] == expected_cooldown_until_ms
     assert state["last_stop_event"]["drawdown_raw"] == pytest.approx(1.0)
 
 

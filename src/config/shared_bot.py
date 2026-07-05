@@ -33,6 +33,7 @@ BOT_GROUP_FIELD_MAP = {
         "orange_tier_mode": "hsl_orange_tier_mode",
         "panic_close_order_type": "hsl_panic_close_order_type",
         "red_threshold": "hsl_red_threshold",
+        "restart_after_red_policy": "hsl_restart_after_red_policy",
         "tier_ratios": "hsl_tier_ratios",
     },
     "unstuck": {

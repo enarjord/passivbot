@@ -276,6 +276,7 @@ pub struct EquityHardStopLossConfig {
     pub ema_span_minutes: f64,
     pub cooldown_minutes_after_red: f64,
     pub no_restart_drawdown_threshold: f64,
+    pub restart_after_red_policy: String,
     pub tier_ratios: EquityHardStopLossTierRatios,
     pub orange_tier_mode: String,
     #[allow(dead_code)]
@@ -292,6 +293,7 @@ impl Default for EquityHardStopLossConfig {
             ema_span_minutes: 60.0,
             cooldown_minutes_after_red: 0.0,
             no_restart_drawdown_threshold: 1.0,
+            restart_after_red_policy: "threshold".to_string(),
             tier_ratios: EquityHardStopLossTierRatios::default(),
             orange_tier_mode: "tp_only_with_active_entry_cancellation".to_string(),
             panic_close_order_type: "market".to_string(),
@@ -428,6 +430,10 @@ fn default_hsl_cooldown_minutes_after_red() -> f64 {
 
 fn default_hsl_no_restart_drawdown_threshold() -> f64 {
     1.0
+}
+
+fn default_hsl_restart_after_red_policy() -> String {
+    "threshold".to_string()
 }
 
 fn default_hsl_tier_ratio_yellow() -> f64 {
@@ -578,6 +584,8 @@ pub struct BotParams {
     pub hsl_cooldown_minutes_after_red: f64,
     #[serde(default = "default_hsl_no_restart_drawdown_threshold")]
     pub hsl_no_restart_drawdown_threshold: f64,
+    #[serde(default = "default_hsl_restart_after_red_policy")]
+    pub hsl_restart_after_red_policy: String,
     #[serde(default = "default_hsl_tier_ratio_yellow")]
     pub hsl_tier_ratio_yellow: f64,
     #[serde(default = "default_hsl_tier_ratio_orange")]
@@ -648,6 +656,7 @@ impl Default for BotParams {
             hsl_ema_span_minutes: default_hsl_ema_span_minutes(),
             hsl_cooldown_minutes_after_red: default_hsl_cooldown_minutes_after_red(),
             hsl_no_restart_drawdown_threshold: default_hsl_no_restart_drawdown_threshold(),
+            hsl_restart_after_red_policy: default_hsl_restart_after_red_policy(),
             hsl_tier_ratio_yellow: default_hsl_tier_ratio_yellow(),
             hsl_tier_ratio_orange: default_hsl_tier_ratio_orange(),
             hsl_orange_tier_mode: default_hsl_orange_tier_mode(),

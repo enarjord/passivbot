@@ -19,6 +19,7 @@ from .shared_bot import (
 )
 from .schema import get_template_config
 from .access import require_config_dict
+from .coerce import normalize_hsl_restart_after_red_policy
 from .tree_ops import add_missing_keys_recursively
 from risk_limits import normalize_we_excess_allowance_mode
 
@@ -527,6 +528,27 @@ def normalize_hsl_risk_unstuck_numerics(
             raise ValueError(
                 f"{hsl_path}.tier_ratios.yellow must be <= {hsl_path}.tier_ratios.orange"
             )
+        restart_after_red_policy = normalize_hsl_restart_after_red_policy(
+            get_grouped_bot_value(bot_side, "hsl_restart_after_red_policy"),
+            path=f"{hsl_path}.restart_after_red_policy",
+        )
+        if tracker is not None:
+            current_restart_policy = get_grouped_bot_value(
+                bot_side, "hsl_restart_after_red_policy"
+            )
+            if current_restart_policy != restart_after_red_policy:
+                tracker.update(
+                    ["bot", pside, "hsl", "restart_after_red_policy"],
+                    current_restart_policy,
+                    restart_after_red_policy,
+                )
+        _set_grouped_bot_value(
+            result,
+            pside=pside,
+            flat_key="hsl_restart_after_red_policy",
+            value=restart_after_red_policy,
+            tracker=None,
+        )
 
         _validate_ratio(
             get_grouped_bot_value(bot_side, "risk_we_excess_allowance_pct"),

@@ -765,10 +765,14 @@ Remaining implementation details:
 - [x] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
-- [ ] HSL restart policy enum.
+- [x] HSL restart policy enum.
       Add `restart_after_red_policy = always | threshold | never`, scoped by
       HSL signal mode, and migrate no-restart semantics onto that explicit
       surface.
+      Implemented: Python live HSL replay/finalization and Rust backtest HSL
+      finalization now use the explicit policy, with `threshold` as the
+      behavior-preserving default and config/JSON validation for invalid
+      values.
 - [ ] Dynamic WEL and snapped/raw balance docs/tests.
       Make `reduce_overweight` use dynamic currently-tradable slot count, keep
       snapped/raw balance separation, and add high-hysteresis warning/preflight
