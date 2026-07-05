@@ -534,6 +534,35 @@ mod core {
         )
     }
 
+    fn close_reducer_priority(order_type: OrderType, pside: PositionSide) -> Option<u8> {
+        match (pside, order_type) {
+            (PositionSide::Long, OrderType::ClosePanicLong)
+            | (PositionSide::Short, OrderType::ClosePanicShort) => Some(0),
+            (PositionSide::Long, OrderType::CloseAutoReduceTwelLong)
+            | (PositionSide::Long, OrderType::CloseAutoReduceWelLong)
+            | (PositionSide::Short, OrderType::CloseAutoReduceTwelShort)
+            | (PositionSide::Short, OrderType::CloseAutoReduceWelShort) => Some(1),
+            (PositionSide::Long, OrderType::CloseUnstuckLong)
+            | (PositionSide::Short, OrderType::CloseUnstuckShort) => Some(2),
+            _ if is_close_order_type(order_type) => Some(3),
+            _ => None,
+        }
+    }
+
+    fn prune_lower_priority_closes(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
+        let highest = orders
+            .iter()
+            .filter_map(|order| close_reducer_priority(order.order_type, pside))
+            .min();
+        if let Some(priority) = highest {
+            if priority < 3 {
+                orders.retain(|order| {
+                    close_reducer_priority(order.order_type, pside).unwrap_or(3) == priority
+                });
+            }
+        }
+    }
+
     fn current_market_price(order_book: &OrderBook) -> f64 {
         if order_book.bid.is_finite()
             && order_book.ask.is_finite()
@@ -3377,6 +3406,7 @@ mod core {
         // Trim closes per symbol to position size (furthest-first).
         for s in per_long.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Long);
             trim_closes_to_position(
                 PositionSide::Long,
                 &mut s.closes,
@@ -3387,6 +3417,7 @@ mod core {
         }
         for s in per_short.iter_mut().filter_map(|v| v.as_mut()) {
             let sym = &input.symbols[s.symbol_idx];
+            prune_lower_priority_closes(&mut s.closes, PositionSide::Short);
             trim_closes_to_position(
                 PositionSide::Short,
                 &mut s.closes,

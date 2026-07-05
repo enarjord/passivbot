@@ -4,6 +4,9 @@ All notable user-facing changes will be documented in this file.
 
 ## Unreleased
 
+- Rust protective reducers now suppress lower-priority same-position ordinary
+  close orders in the same ideal-order batch, so panic, TWEL/WEL auto-reduce,
+  and auto-unstuck no longer stack with grid/trailing closes for one coin+pside.
 - Rust WEL auto-reduce now takes priority over same-position auto-unstuck
   reducers in the same ideal-order batch, matching the documented reducer
   priority before auto-unstuck is admitted.

@@ -1579,7 +1579,7 @@ def test_json_output_is_deterministic():
     assert out1 == out2
 
 
-def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
+def test_unstuck_takes_priority_over_close_grid_and_is_capped():
     import passivbot_rust as pbr
 
     balance = 1_000.0
@@ -1615,7 +1615,7 @@ def test_unstuck_is_added_in_addition_to_close_grid_and_capped():
     out = compute(pbr, inp)
     order_types = [o["order_type"] for o in out["orders"]]
     assert "close_unstuck_long" in order_types
-    assert "close_grid_long" in order_types
+    assert "close_grid_long" not in order_types
 
     closes = [
         o
@@ -2192,6 +2192,7 @@ def test_wel_auto_reduce_takes_priority_over_unstuck_for_same_position():
 
     assert "close_auto_reduce_wel_long" in order_types
     assert "close_unstuck_long" not in order_types
+    assert "close_grid_long" not in order_types
 
 
 def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
@@ -2225,6 +2226,7 @@ def test_wel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
 
     assert "close_auto_reduce_wel_short" in order_types
     assert "close_unstuck_short" not in order_types
+    assert "close_grid_short" not in order_types
 
 
 def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
@@ -2259,6 +2261,7 @@ def test_twel_auto_reduce_takes_priority_over_unstuck_for_same_position():
 
     assert "close_auto_reduce_twel_long" in order_types
     assert "close_unstuck_long" not in order_types
+    assert "close_grid_long" not in order_types
 
 
 def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
@@ -2293,6 +2296,7 @@ def test_twel_auto_reduce_takes_priority_over_short_unstuck_for_same_position():
 
     assert "close_auto_reduce_twel_short" in order_types
     assert "close_unstuck_short" not in order_types
+    assert "close_grid_short" not in order_types
 
 
 def test_twel_auto_reduce_includes_managed_modes_and_excludes_manual_panic():
