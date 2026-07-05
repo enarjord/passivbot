@@ -25,9 +25,11 @@ All notable user-facing changes will be documented in this file.
   raw-balance exposure repair near risk boundaries.
 - Entry ladder throttling is now controlled separately from time-based entry
   cooldown via `bot.long/short.risk.allow_simultaneous_grid_entries`.
-  `entry_cooldown_minutes` now only controls the post-fill time window; values
-  above or below one minute no longer imply single-order ladder staging outside
-  the active cooldown window by themselves.
+  Full simultaneous entry ladders are allowed only when
+  `entry_cooldown_minutes = 0.0`, entry retracement is disabled, and
+  simultaneous staging is enabled; any positive cooldown, including fractional
+  sub-minute values, stages at most one position-adding entry order and blocks
+  further adds until the exact cooldown window expires.
 - The Rust orchestrator JSON boundary now rejects invalid account/risk globals
   such as non-positive raw balance, negative realized-loss limits, and negative
   unstuck allowances before risk gates or order planning can silently skip.

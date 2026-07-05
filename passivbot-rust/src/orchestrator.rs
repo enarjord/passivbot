@@ -415,20 +415,12 @@ mod core {
         }
     }
 
-    fn cooldown_delay_minutes(cooldown_minutes: f64) -> u64 {
+    fn cooldown_delay_ms(cooldown_minutes: f64) -> u64 {
         if !cooldown_minutes.is_finite() || cooldown_minutes <= 0.0 {
             0
-        } else if cooldown_minutes < 1.0 {
-            0
         } else {
-            cooldown_minutes.ceil() as u64
+            (cooldown_minutes * 60_000.0).ceil() as u64
         }
-    }
-
-    fn effective_fill_timestamp_ms(fill_timestamp_ms: u64) -> u64 {
-        let minute_ms = 60_000_u64;
-        let minute = fill_timestamp_ms / minute_ms;
-        minute.saturating_add(1).saturating_mul(minute_ms)
     }
 
     fn order_increases_position(pside: PositionSide, qty: f64) -> bool {
@@ -449,9 +441,19 @@ mod core {
         let Some(last_fill_ts) = last_increase_fill_timestamp_ms else {
             return false;
         };
-        let until_ms = effective_fill_timestamp_ms(last_fill_ts)
-            .saturating_add(cooldown_delay_minutes(cooldown_minutes).saturating_mul(60_000));
+        let until_ms = last_fill_ts.saturating_add(cooldown_delay_ms(cooldown_minutes));
         now_timestamp_ms < until_ms
+    }
+
+    fn allow_full_entry_ladder_simultaneously(
+        cooldown_minutes: f64,
+        allow_simultaneous_grid_entries: bool,
+        entry_retracement_enabled: bool,
+    ) -> bool {
+        !entry_retracement_enabled
+            && allow_simultaneous_grid_entries
+            && cooldown_minutes.is_finite()
+            && cooldown_minutes == 0.0
     }
 
     fn keep_only_first_add_order(orders: &mut Vec<IdealOrder>, pside: PositionSide) {
@@ -486,7 +488,11 @@ mod core {
             orders.retain(|order| !order_increases_position(pside, order.qty));
             return;
         }
-        if !allow_simultaneous_grid_entries || entry_retracement_enabled {
+        if !allow_full_entry_ladder_simultaneously(
+            cooldown_minutes,
+            allow_simultaneous_grid_entries,
+            entry_retracement_enabled,
+        ) {
             keep_only_first_add_order(orders, pside);
         }
     }
