@@ -3684,7 +3684,7 @@ async def _equity_hard_stop_check_coin(self) -> Optional[dict]:
                     self._equity_hard_stop_set_coin_runtime_forced_mode(
                         pside, symbol, "graceful_stop"
                     )
-                elif self._equity_hard_stop_has_open_position_symbol(pside, symbol):
+                elif target == "tp_only_with_active_entry_cancellation":
                     self._equity_hard_stop_set_coin_runtime_forced_mode(
                         pside, symbol, "tp_only_with_active_entry_cancellation"
                     )
@@ -4351,8 +4351,5 @@ def _apply_equity_hard_stop_orange_overlay(self) -> None:
                 if current_mode == "normal":
                     self.PB_modes[pside][symbol] = "graceful_stop"
             else:
-                size = float(self.positions.get(symbol, {}).get(pside, {}).get("size", 0.0) or 0.0)
-                if size == 0.0:
-                    continue
                 if current_mode in ("normal", "graceful_stop"):
                     self.PB_modes[pside][symbol] = "tp_only_with_active_entry_cancellation"
