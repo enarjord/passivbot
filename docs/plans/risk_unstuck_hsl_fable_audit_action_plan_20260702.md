@@ -756,6 +756,9 @@ Remaining implementation details:
       reducers before insertion, with long/short JSON API regression coverage.
       Partial: auto-unstuck admission now skips same-position panic, TWEL, or
       WEL reducers already queued, with long/short WEL regression coverage.
+      Partial: protective reducers now prune lower-priority same-position
+      ordinary closes before size trimming; ordinary strategy-only close
+      multiplicity is intentionally unchanged.
 - [ ] Contract docs batch: unstuck min-qty overshoot, inherited lookbacks,
       HSL/config-change risks, statelessness, `pnls_max_lookback_days`, and
       HSL-enabled startup warning.
